@@ -155,7 +155,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Unified search endpoint: IGDB + RAWG
+// Unified search endpoint: IGDB + RAWG + TheGamesDB
 app.get('/api/games/search', async (req, res) => {
   const query = req.query.q;
   if (!query) {
@@ -242,17 +242,93 @@ app.get('/api/games/search', async (req, res) => {
       return detailedGames;
     }).catch(() => []);
 
-    // Wait for both
-    const [igdbResults, rawgResults] = await Promise.all([igdbPromise, rawgPromise]);
+    // TheGamesDB request (optional - only if API key is configured)
+    const thegamesdbPromise = process.env.THEGAMESDB_API_KEY
+      ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
+          params: {
+            apikey: process.env.THEGAMESDB_API_KEY,
+            name: query,
+          }
+        }).then(async response => {
+          const data = response.data;
+          if (!data || !data.data || !data.data.games) {
+            return [];
+          }
+          const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
+          const baseUrl = data.include?.base_url?.image_base || data.data?.base_url?.image_base || 'https://cdn.thegamesdb.net/images/';
+          
+          return games.slice(0, 10).map(game => {
+            // Find cover/boxart image
+            let coverUrl = null;
+            if (data.include && data.include.boxart) {
+              const gameBoxart = data.include.boxart[game.id];
+              if (gameBoxart && Array.isArray(gameBoxart)) {
+                const frontCover = gameBoxart.find(img => img.side === 'front');
+                if (frontCover) {
+                  coverUrl = `${baseUrl}${frontCover.filename}`;
+                } else if (gameBoxart[0]) {
+                  coverUrl = `${baseUrl}${gameBoxart[0].filename}`;
+                }
+              } else if (gameBoxart && gameBoxart.filename) {
+                coverUrl = `${baseUrl}${gameBoxart.filename}`;
+              }
+            }
+            
+            // Parse release date
+            let releaseDate = null;
+            if (game.release_date) {
+              // TheGamesDB date format can vary, try to parse it
+              const date = new Date(game.release_date);
+              if (!isNaN(date.getTime())) {
+                releaseDate = date.toISOString().split('T')[0];
+              }
+            }
+            
+            return {
+              id: 'thegamesdb_' + game.id,
+              name: game.game_title || game.game_name || '',
+              releaseDate: releaseDate,
+              coverUrl: coverUrl,
+              source: 'thegamesdb',
+              steamAppId: null, // TheGamesDB doesn't provide Steam App IDs
+            };
+          }).filter(game => game.name); // Filter out games without names
+        }).catch(() => [])
+      : Promise.resolve([]);
+
+    // Wait for all three
+    const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
 
     // Merge and deduplicate by name (case-insensitive)
     const seen = new Set();
-    const merged = [...igdbResults, ...rawgResults].map(game => {
-      // If RAWG didn't provide a steamAppId, but IGDB did for the same game name, use IGDB's steamAppId
+    const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(game => {
+      // If game didn't provide a steamAppId, try to find one from IGDB or RAWG for the same game name
       if (!game.steamAppId) {
         const igdbMatch = igdbResults.find(igdbGame => igdbGame.name.toLowerCase() === game.name.toLowerCase() && igdbGame.steamAppId);
         if (igdbMatch) {
           return { ...game, steamAppId: igdbMatch.steamAppId };
+        }
+        const rawgMatch = rawgResults.find(rawgGame => rawgGame.name.toLowerCase() === game.name.toLowerCase() && rawgGame.steamAppId);
+        if (rawgMatch) {
+          return { ...game, steamAppId: rawgMatch.steamAppId };
+        }
+      }
+      // If game didn't provide a coverUrl, try to find one from other sources
+      if (!game.coverUrl) {
+        const coverMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
+          otherGame.name.toLowerCase() === game.name.toLowerCase() && otherGame.coverUrl
+        );
+        if (coverMatch) {
+          return { ...game, coverUrl: coverMatch.coverUrl };
+        }
+      }
+      // If game didn't provide a releaseDate, try to find one from other sources
+      if (!game.releaseDate) {
+        const dateMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
+          otherGame.name.toLowerCase() === game.name.toLowerCase() && otherGame.releaseDate
+        );
+        if (dateMatch) {
+          return { ...game, releaseDate: dateMatch.releaseDate };
         }
       }
       return game;
@@ -876,16 +952,92 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
             return detailedGames;
           }).catch(() => []);
 
-          // Wait for both APIs
-          const [igdbResults, rawgResults] = await Promise.all([igdbPromise, rawgPromise]);
+          // TheGamesDB request (optional - only if API key is configured)
+          const thegamesdbPromise = process.env.THEGAMESDB_API_KEY
+            ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
+                params: {
+                  apikey: process.env.THEGAMESDB_API_KEY,
+                  name: query,
+                }
+              }).then(async response => {
+                const data = response.data;
+                if (!data || !data.data || !data.data.games) {
+                  return [];
+                }
+                const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
+                const baseUrl = data.include?.base_url?.image_base || data.data?.base_url?.image_base || 'https://cdn.thegamesdb.net/images/';
+                
+                return games.slice(0, 10).map(game => {
+                  // Find cover/boxart image
+                  let coverUrl = null;
+                  if (data.include && data.include.boxart) {
+                    const gameBoxart = data.include.boxart[game.id];
+                    if (gameBoxart && Array.isArray(gameBoxart)) {
+                      const frontCover = gameBoxart.find(img => img.side === 'front');
+                      if (frontCover) {
+                        coverUrl = `${baseUrl}${frontCover.filename}`;
+                      } else if (gameBoxart[0]) {
+                        coverUrl = `${baseUrl}${gameBoxart[0].filename}`;
+                      }
+                    } else if (gameBoxart && gameBoxart.filename) {
+                      coverUrl = `${baseUrl}${gameBoxart.filename}`;
+                    }
+                  }
+                  
+                  // Parse release date
+                  let releaseDate = null;
+                  if (game.release_date) {
+                    const date = new Date(game.release_date);
+                    if (!isNaN(date.getTime())) {
+                      releaseDate = date.toISOString().split('T')[0];
+                    }
+                  }
+                  
+                  return {
+                    id: 'thegamesdb_' + game.id,
+                    name: game.game_title || game.game_name || '',
+                    releaseDate: releaseDate,
+                    coverUrl: coverUrl,
+                    source: 'thegamesdb',
+                    steamAppId: null,
+                  };
+                }).filter(game => game.name);
+              }).catch(() => [])
+            : Promise.resolve([]);
+
+          // Wait for all three APIs
+          const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
 
           // Merge and deduplicate by name (case-insensitive)
           const seen = new Set();
-          const merged = [...igdbResults, ...rawgResults].map(g => {
+          const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(g => {
+            // If game didn't provide a steamAppId, try to find one from IGDB or RAWG
             if (!g.steamAppId) {
               const igdbMatch = igdbResults.find(igdbGame => igdbGame.name.toLowerCase() === g.name.toLowerCase() && igdbGame.steamAppId);
               if (igdbMatch) {
                 return { ...g, steamAppId: igdbMatch.steamAppId };
+              }
+              const rawgMatch = rawgResults.find(rawgGame => rawgGame.name.toLowerCase() === g.name.toLowerCase() && rawgGame.steamAppId);
+              if (rawgMatch) {
+                return { ...g, steamAppId: rawgMatch.steamAppId };
+              }
+            }
+            // If game didn't provide a coverUrl, try to find one from other sources
+            if (!g.coverUrl) {
+              const coverMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
+                otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.coverUrl
+              );
+              if (coverMatch) {
+                return { ...g, coverUrl: coverMatch.coverUrl };
+              }
+            }
+            // If game didn't provide a releaseDate, try to find one from other sources
+            if (!g.releaseDate) {
+              const dateMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
+                otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.releaseDate
+              );
+              if (dateMatch) {
+                return { ...g, releaseDate: dateMatch.releaseDate };
               }
             }
             return g;
