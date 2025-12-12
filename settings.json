@@ -1,0 +1,20 @@
+{
+  "smtp": {
+    "host": "mail.etech.ink",
+    "port": "25",
+    "from": "GameTracker@etech.ink",
+    "to": ""
+  },
+  "ntfy": {
+    "url": "https://ntfy.etech.ink",
+    "topic": "Etech"
+  },
+  "ldap": {
+    "url": "ldap://etechdc.etech.com",
+    "base": "DC=Etech,DC=com",
+    "userDn": "CN={username},OU=Accounts,OU=Etech,DC=Etech,DC=com",
+    "bindDn": "CN=GameTrackerusr,OU=Service Users,OU=Etech,DC=Etech,DC=com",
+    "bindPass": "Qq123456",
+    "requiredGroup": "CN=GameTrackerGrp,OU=Security Groups,OU=Etech,DC=Etech,DC=com"
+  }
+}

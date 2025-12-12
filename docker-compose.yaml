@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  backend:
+    image: local/gametracker-backend:latest
+    pull_policy: never
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./gametracker.db:/app/gametracker.db
+      - ./settings.json:/app/settings.json
+      - ./sent_notifications.json:/app/sent_notifications.json
+    environment:
+      - NODE_ENV=production
+      - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
+      - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}
+      - RAWG_API_KEY=${RAWG_API_KEY}
+      - JWT_SECRET=${JWT_SECRET:-supersecretkey}
+    restart: unless-stopped
+
+  frontend:
+    image: local/gametracker-frontend:latest
+    pull_policy: never
+    ports:
+      - "8080:80"
+    restart: unless-stopped 
