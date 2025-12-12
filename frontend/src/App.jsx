@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
@@ -611,6 +611,10 @@ function LibraryPage({ user }) {
   const [showPrices, setShowPrices] = useState(false)
   const [gamePrices, setGamePrices] = useState({}) // { [game_id]: { price, loading, error } }
   const [searchTerm, setSearchTerm] = useState('')
+  const [refreshingMetadata, setRefreshingMetadata] = useState(false)
+  const [refreshMetadataResult, setRefreshMetadataResult] = useState(null)
+  const [refreshMetadataError, setRefreshMetadataError] = useState('')
+  const { showToast } = useToast()
   const gamesPerPage = 15
 
   useEffect(() => {
@@ -750,6 +754,29 @@ function LibraryPage({ user }) {
     }
   }
 
+  // Refresh metadata for all games
+  const refreshMetadata = async () => {
+    if (!user) return
+    setRefreshingMetadata(true)
+    setRefreshMetadataError('')
+    setRefreshMetadataResult(null)
+    try {
+      const res = await axios.post(`${API_BASE}/user/${user.username}/refresh-metadata`)
+      setRefreshMetadataResult(res.data)
+      showToast('success', `Metadata refreshed! ${res.data.results.updated} games updated.`)
+      
+      // Refresh the library data after successful metadata refresh
+      const timestamp = Date.now()
+      const gamesRes = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
+      setUserGames(gamesRes.data)
+    } catch (err) {
+      const errorMsg = err.response?.data?.error || 'Failed to refresh metadata. Please try again.'
+      setRefreshMetadataError(errorMsg)
+      showToast('error', errorMsg)
+    }
+    setRefreshingMetadata(false)
+  }
+
   const sortOptions = [
     { label: 'Name', value: 'name' },
     { label: 'Release Date', value: 'release' },
@@ -786,7 +813,7 @@ function LibraryPage({ user }) {
           </div>
         </div>
       </div>
-      <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <input
           type="text"
           placeholder="Search your library..."
@@ -802,6 +829,33 @@ function LibraryPage({ user }) {
             color: 'var(--color-fg)',
           }}
         />
+        <button
+          className="action-btn playing-btn"
+          onClick={refreshMetadata}
+          disabled={refreshingMetadata || loading}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '0.6em 1.2em',
+            borderRadius: 12,
+            fontWeight: 600,
+            fontSize: '1em',
+            background: refreshingMetadata ? 'var(--color-card)' : 'linear-gradient(135deg, #2196f3 0%, #1976d2 100%)',
+            color: '#fff',
+            border: 'none',
+            cursor: refreshingMetadata ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s',
+            boxShadow: refreshingMetadata ? 'none' : '0 2px 8px #2196f344',
+            opacity: refreshingMetadata ? 0.7 : 1,
+          }}
+          title="Refresh metadata (release date and wallpaper) for all games"
+        >
+          <FaSync style={{ 
+            animation: refreshingMetadata ? 'spin 1s linear infinite' : 'none'
+          }} />
+          {refreshingMetadata ? 'Refreshing...' : 'Refresh Metadata'}
+        </button>
       </div>
       <div className="filter-bar">
         {FILTERS.map(f => (
@@ -836,6 +890,20 @@ function LibraryPage({ user }) {
 
       {statusError && <div className="error-msg">{statusError}</div>}
       {removeError && <div className="error-msg">{removeError}</div>}
+      {refreshMetadataError && <div className="error-msg">{refreshMetadataError}</div>}
+      {refreshMetadataResult && (
+        <div style={{
+          padding: '0.8em 1.2em',
+          borderRadius: 8,
+          background: 'rgba(33, 150, 243, 0.1)',
+          border: '1.5px solid rgba(33, 150, 243, 0.3)',
+          color: '#2196f3',
+          marginBottom: '1rem',
+          fontSize: '0.95em'
+        }}>
+          <strong>Metadata refresh completed:</strong> {refreshMetadataResult.results.updated} out of {refreshMetadataResult.results.total} games updated.
+        </div>
+      )}
       
       {loading ? (
         <p>Loading...</p>
