@@ -6,9 +6,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./gametracker.db:/app/gametracker.db
-      - ./settings.json:/app/settings.json
-      - ./sent_notifications.json:/app/sent_notifications.json
+      - /home/docker/gametracker/data/gametracker.db:/app/gametracker.db
+      - /home/docker/gametracker/data/settings.json:/app/settings.json
+      - /home/docker/gametracker/data/sent_notifications.json:/app/sent_notifications.json
     environment:
       - NODE_ENV=production
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
@@ -22,4 +22,4 @@ services:
     pull_policy: never
     ports:
       - "8080:80"
-    restart: unless-stopped 
+    restart: unless-stopped
