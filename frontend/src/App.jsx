@@ -463,18 +463,24 @@ function SearchPage({ user }) {
     setSearchError('')
     try {
       const res = await axios.get(`${API_BASE}/games/search?q=${encodeURIComponent(search)}`)
-      // For demo: mock a Steam App ID for the first result (e.g., Cyberpunk 2077 = 1091500)
-      const resultsWithSteam = res.data.map((g, i) => i === 0 ? { ...g, steamAppId: '1091500' } : g)
-      setSearchResults(resultsWithSteam)
+      // Ensure res.data is an array
+      const results = Array.isArray(res.data) ? res.data : []
+      setSearchResults(results)
       // Fetch price for games with a Steam App ID
-      resultsWithSteam.forEach(game => {
+      results.forEach(game => {
         if (game.steamAppId) {
           fetchGamePrice(game.id, game.steamAppId)
         }
       })
+      if (results.length === 0) {
+        setSearchError('No games found. Try a different search term.')
+      }
     } catch (err) {
+      console.error('Search error:', err)
       setSearchResults([])
-      setSearchError('Failed to search games. Please try again.')
+      const errorMsg = err.response?.data?.error || err.message || 'Failed to search games. Please try again.'
+      setSearchError(errorMsg)
+      showToast('error', errorMsg)
     }
     setLoading(false)
   }

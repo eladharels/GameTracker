@@ -163,9 +163,14 @@ app.get('/api/games/search', async (req, res) => {
   }
   try {
     // IGDB request
+    const hasIgdbCredentials = process.env.IGDB_CLIENT_ID && process.env.IGDB_BEARER_TOKEN;
+    if (!hasIgdbCredentials) {
+      console.warn('[IGDB] Missing credentials - IGDB_CLIENT_ID or IGDB_BEARER_TOKEN not set');
+    }
+    
     const igdbPromise = axios.post(
       'https://api.igdb.com/v4/games',
-      `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
+      `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 20;`,
       {
         headers: {
           'Client-ID': process.env.IGDB_CLIENT_ID,
@@ -175,6 +180,7 @@ app.get('/api/games/search', async (req, res) => {
       }
     ).then(async response => {
       const games = response.data || [];
+      console.log(`[IGDB] Query: "${query}", Found ${games.length} games`);
       // For each game, fetch external_games for Steam (category 1)
       return games.map(game => {
         let steamAppId = null;
@@ -197,7 +203,18 @@ app.get('/api/games/search', async (req, res) => {
           steamAppId,
         };
       });
-    }).catch(() => []);
+    }).catch((err) => {
+      console.error('[IGDB Search Error]', {
+        message: err.message,
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        hasCredentials: hasIgdbCredentials,
+        clientId: process.env.IGDB_CLIENT_ID ? 'SET' : 'MISSING',
+        bearerToken: process.env.IGDB_BEARER_TOKEN ? 'SET' : 'MISSING'
+      });
+      return [];
+    });
 
     // RAWG request
     const rawgPromise = axios.get(
@@ -206,7 +223,7 @@ app.get('/api/games/search', async (req, res) => {
         params: {
           key: process.env.RAWG_API_KEY,
           search: query,
-          page_size: 10,
+          page_size: 20,
         }
       }
     ).then(async response => {
@@ -240,7 +257,10 @@ app.get('/api/games/search', async (req, res) => {
         };
       }));
       return detailedGames;
-    }).catch(() => []);
+    }).catch((err) => {
+      console.error('[RAWG Search Error]', err.response?.data || err.message);
+      return [];
+    });
 
     // TheGamesDB request (optional - only if API key is configured)
     const thegamesdbPromise = process.env.THEGAMESDB_API_KEY
@@ -257,7 +277,7 @@ app.get('/api/games/search', async (req, res) => {
           const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
           const baseUrl = data.include?.base_url?.image_base || data.data?.base_url?.image_base || 'https://cdn.thegamesdb.net/images/';
           
-          return games.slice(0, 10).map(game => {
+          return games.slice(0, 20).map(game => {
             // Find cover/boxart image
             let coverUrl = null;
             if (data.include && data.include.boxart) {
@@ -293,7 +313,10 @@ app.get('/api/games/search', async (req, res) => {
               steamAppId: null, // TheGamesDB doesn't provide Steam App IDs
             };
           }).filter(game => game.name); // Filter out games without names
-        }).catch(() => [])
+        }).catch((err) => {
+          console.error('[TheGamesDB Search Error]', err.response?.data || err.message);
+          return [];
+        })
       : Promise.resolve([]);
 
     // Wait for all three
@@ -339,9 +362,74 @@ app.get('/api/games/search', async (req, res) => {
       return true;
     });
 
+    console.log(`[Search] Query: "${query}", Results: ${merged.length} games (IGDB: ${igdbResults.length}, RAWG: ${rawgResults.length}, TheGamesDB: ${thegamesdbResults.length})`);
     res.json(merged);
   } catch (error) {
+    console.error('[Search Error]', error);
     res.status(500).json({ error: 'Failed to fetch games from providers', details: error.message });
+  }
+});
+
+// Test endpoint for IGDB connectivity
+app.get('/api/test/igdb', async (req, res) => {
+  const testQuery = req.query.q || 'Mario';
+  const hasClientId = !!process.env.IGDB_CLIENT_ID;
+  const hasBearerToken = !!process.env.IGDB_BEARER_TOKEN;
+  
+  const testInfo = {
+    credentials: {
+      clientId: hasClientId ? 'SET' : 'MISSING',
+      bearerToken: hasBearerToken ? 'SET' : 'MISSING',
+      bothPresent: hasClientId && hasBearerToken
+    },
+    testQuery: testQuery
+  };
+  
+  if (!hasClientId || !hasBearerToken) {
+    return res.status(400).json({
+      error: 'IGDB credentials missing',
+      ...testInfo
+    });
+  }
+  
+  try {
+    const response = await axios.post(
+      'https://api.igdb.com/v4/games',
+      `search "${testQuery}"; fields id,name,first_release_date,cover.image_id; limit 5;`,
+      {
+        headers: {
+          'Client-ID': process.env.IGDB_CLIENT_ID,
+          'Authorization': `Bearer ${process.env.IGDB_BEARER_TOKEN}`,
+          'Accept': 'application/json',
+        },
+      }
+    );
+    
+    const games = response.data || [];
+    res.json({
+      success: true,
+      ...testInfo,
+      results: {
+        count: games.length,
+        games: games.map(g => ({
+          id: g.id,
+          name: g.name,
+          releaseDate: g.first_release_date ? new Date(g.first_release_date * 1000).toISOString().split('T')[0] : null,
+          hasCover: !!g.cover?.image_id
+        }))
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      ...testInfo,
+      error: {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      }
+    });
   }
 });
 
