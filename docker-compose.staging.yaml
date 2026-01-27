@@ -2,7 +2,7 @@ version: '3.8'
 services:
   backend:
     image: local/gametracker-backend:staging
-    name: gametracker-backend-staging
+    container_name: gametracker-backend-staging
     pull_policy: never
     ports:
       - "${BACKEND_PORT_STAGING:-3001}:${BACKEND_PORT_STAGING:-3001}"
@@ -21,7 +21,7 @@ services:
 
   frontend:
     image: local/gametracker-frontend:staging
-    name: gametracker-frontend-staging
+    container_name: gametracker-frontend-staging
     pull_policy: never
     ports:
       - "8085:80"
