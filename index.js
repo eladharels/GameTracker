@@ -1142,6 +1142,276 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
   });
 });
 
+// Refresh metadata for a specific game in a user's library
+app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) => {
+  const { username, gameId } = req.params;
+  const normalizedUsername = username ? username.toLowerCase() : '';
+
+  if (!normalizedUsername || !gameId) {
+    return res.status(400).json({ error: 'Missing username or gameId' });
+  }
+
+  getOrCreateUser(normalizedUsername, async (err, user) => {
+    if (err) {
+      return res.status(500).json({ error: 'DB error' });
+    }
+
+    db.get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, game) => {
+      if (err) {
+        return res.status(500).json({ error: 'DB error' });
+      }
+      if (!game) {
+        return res.status(404).json({ error: 'Game not found in user library' });
+      }
+
+      const results = {
+        total: 1,
+        updated: 0,
+        errors: [],
+        details: []
+      };
+
+      try {
+        const query = game.game_name;
+
+        const igdbPromise = axios.post(
+          'https://api.igdb.com/v4/games',
+          `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
+          {
+            headers: {
+              'Client-ID': process.env.IGDB_CLIENT_ID,
+              'Authorization': `Bearer ${process.env.IGDB_BEARER_TOKEN}`,
+              'Accept': 'application/json',
+            },
+          }
+        ).then(async response => {
+          const games = response.data || [];
+          return games.map(game => {
+            let steamAppId = null;
+            if (Array.isArray(game.external_games)) {
+              const steamExternal = game.external_games.find(ext => ext.category === 1 && ext.uid);
+              if (steamExternal) {
+                steamAppId = steamExternal.uid;
+              }
+            }
+            return {
+              id: 'igdb_' + game.id,
+              name: game.name,
+              releaseDate: game.first_release_date
+                ? new Date(game.first_release_date * 1000).toISOString().split('T')[0]
+                : null,
+              coverUrl: game.cover?.image_id
+                ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${game.cover.image_id}.jpg`
+                : null,
+              source: 'igdb',
+              steamAppId,
+            };
+          });
+        }).catch(() => []);
+
+        const rawgPromise = axios.get(
+          'https://api.rawg.io/api/games',
+          {
+            params: {
+              key: process.env.RAWG_API_KEY,
+              search: query,
+              page_size: 10,
+            }
+          }
+        ).then(async response => {
+          const games = response.data.results || [];
+          const detailedGames = await Promise.all(games.map(async (game) => {
+            let steamAppId = null;
+            try {
+              const detailRes = await axios.get(`https://api.rawg.io/api/games/${game.id}`, {
+                params: { key: process.env.RAWG_API_KEY }
+              });
+              const stores = detailRes.data.stores || [];
+              const steamStore = stores.find(s => s.store && s.store.id === 1 && s.url_en);
+              if (steamStore && steamStore.url_en) {
+                const match = steamStore.url_en.match(/\/app\/(\d+)/);
+                if (match) {
+                  steamAppId = match[1];
+                }
+              }
+            } catch (e) {
+              // Ignore errors
+            }
+            return {
+              id: 'rawg_' + game.id,
+              name: game.name,
+              releaseDate: game.released,
+              coverUrl: game.background_image,
+              source: 'rawg',
+              steamAppId,
+            };
+          }));
+          return detailedGames;
+        }).catch(() => []);
+
+        const thegamesdbPromise = process.env.THEGAMESDB_API_KEY
+          ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
+              params: {
+                apikey: process.env.THEGAMESDB_API_KEY,
+                name: query,
+              }
+            }).then(async response => {
+              const data = response.data;
+              if (!data || !data.data || !data.data.games) {
+                return [];
+              }
+              const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
+              const baseUrl = data.include?.base_url?.image_base || data.data?.base_url?.image_base || 'https://cdn.thegamesdb.net/images/';
+              
+              return games.slice(0, 10).map(game => {
+                let coverUrl = null;
+                if (data.include && data.include.boxart) {
+                  const gameBoxart = data.include.boxart[game.id];
+                  if (gameBoxart && Array.isArray(gameBoxart)) {
+                    const frontCover = gameBoxart.find(img => img.side === 'front');
+                    if (frontCover) {
+                      coverUrl = `${baseUrl}${frontCover.filename}`;
+                    } else if (gameBoxart[0]) {
+                      coverUrl = `${baseUrl}${gameBoxart[0].filename}`;
+                    }
+                  } else if (gameBoxart && gameBoxart.filename) {
+                    coverUrl = `${baseUrl}${gameBoxart.filename}`;
+                  }
+                }
+                
+                let releaseDate = null;
+                if (game.release_date) {
+                  const date = new Date(game.release_date);
+                  if (!isNaN(date.getTime())) {
+                    releaseDate = date.toISOString().split('T')[0];
+                  }
+                }
+                
+                return {
+                  id: 'thegamesdb_' + game.id,
+                  name: game.game_title || game.game_name || '',
+                  releaseDate: releaseDate,
+                  coverUrl: coverUrl,
+                  source: 'thegamesdb',
+                  steamAppId: null,
+                };
+              }).filter(game => game.name);
+            }).catch(() => [])
+          : Promise.resolve([]);
+
+        const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
+
+        const seen = new Set();
+        const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(g => {
+          if (!g.steamAppId) {
+            const igdbMatch = igdbResults.find(igdbGame => igdbGame.name.toLowerCase() === g.name.toLowerCase() && igdbGame.steamAppId);
+            if (igdbMatch) return { ...g, steamAppId: igdbMatch.steamAppId };
+            const rawgMatch = rawgResults.find(rawgGame => rawgGame.name.toLowerCase() === g.name.toLowerCase() && rawgGame.steamAppId);
+            if (rawgMatch) return { ...g, steamAppId: rawgMatch.steamAppId };
+          }
+          if (!g.coverUrl) {
+            const coverMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame =>
+              otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.coverUrl
+            );
+            if (coverMatch) return { ...g, coverUrl: coverMatch.coverUrl };
+          }
+          if (!g.releaseDate) {
+            const dateMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame =>
+              otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.releaseDate
+            );
+            if (dateMatch) return { ...g, releaseDate: dateMatch.releaseDate };
+          }
+          return g;
+        }).filter(g => {
+          const key = g.name.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        const match = merged.find(g => g.name.toLowerCase() === game.game_name.toLowerCase());
+
+        if (match) {
+          let updated = false;
+          const updates = [];
+          const params = [];
+
+          if (match.releaseDate !== game.release_date) {
+            updates.push('release_date = ?');
+            params.push(match.releaseDate);
+            updated = true;
+          }
+          if (match.coverUrl !== game.cover_url) {
+            updates.push('cover_url = ?');
+            params.push(match.coverUrl);
+            updated = true;
+          }
+          if (match.steamAppId && !game.steam_app_id) {
+            updates.push('steam_app_id = ?');
+            params.push(match.steamAppId);
+            updated = true;
+          }
+
+          if (updated) {
+            params.push(user.id, game.game_id);
+            await new Promise((resolve, reject) => {
+              db.run(
+                `UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`,
+                params,
+                function (err) {
+                  if (err) reject(err);
+                  else resolve();
+                }
+              );
+            });
+            results.updated++;
+            results.details.push({
+              gameName: game.game_name,
+              gameId: game.game_id,
+              changes: updates.map(u => u.split(' = ')[0])
+            });
+          } else {
+            results.details.push({
+              gameName: game.game_name,
+              gameId: game.game_id,
+              changes: []
+            });
+          }
+        } else {
+          results.errors.push({
+            gameName: game.game_name,
+            gameId: game.game_id,
+            error: 'Game not found in API search results'
+          });
+          results.details.push({
+            gameName: game.game_name,
+            gameId: game.game_id,
+            changes: [],
+            error: 'Not found'
+          });
+        }
+
+        return res.json({
+          success: true,
+          results,
+          message: `Metadata refresh completed for game ${game.game_name}.`,
+        });
+      } catch (error) {
+        console.error(`Error refreshing metadata for game_id ${gameId}:`, error);
+        results.errors.push({
+          gameName: game.game_name,
+          gameId: game.game_id,
+          error: error.message || 'Unknown error'
+        });
+        return res.status(500).json({
+          error: 'Failed to refresh metadata for game',
+          results
+        });
+      }
+    });
+  });
+});
+
 // --- Auth Middleware ---
 function authRequired(req, res, next) {
   const auth = req.headers.authorization;

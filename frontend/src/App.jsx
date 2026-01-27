@@ -609,6 +609,7 @@ function LibraryPage({ user }) {
   const [refreshingMetadata, setRefreshingMetadata] = useState(false)
   const [refreshMetadataResult, setRefreshMetadataResult] = useState(null)
   const [refreshMetadataError, setRefreshMetadataError] = useState('')
+  const [refreshingGameIds, setRefreshingGameIds] = useState({})
   const { showToast } = useToast()
   const gamesPerPage = 15
 
@@ -738,6 +739,27 @@ function LibraryPage({ user }) {
       setRemoveError('Failed to remove game. Please try again.')
     }
     setStatusUpdating(false)
+  }
+
+  // Refresh metadata for a single game
+  const refreshGameMetadata = async (game) => {
+    if (!user) return
+    const id = game.game_id
+    setRefreshingGameIds(prev => ({ ...prev, [id]: true }))
+    try {
+      await axios.post(`${API_BASE}/user/${user.username}/games/${id}/refresh-metadata`)
+
+      // Refresh the library data after successful metadata refresh for this game
+      const timestamp = Date.now()
+      const gamesRes = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
+      setUserGames(gamesRes.data)
+
+      showToast('success', `Metadata refreshed for "${game.game_name}".`)
+    } catch (err) {
+      const errorMsg = err.response?.data?.error || 'Failed to refresh metadata for this game. Please try again.'
+      showToast('error', errorMsg)
+    }
+    setRefreshingGameIds(prev => ({ ...prev, [id]: false }))
   }
 
   const handleSortClick = (value) => {
@@ -960,6 +982,17 @@ function LibraryPage({ user }) {
                           ))}
                         </select>
                       )}
+                      <button
+                        className="remove-btn-icon"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          refreshGameMetadata(game);
+                        }}
+                        disabled={!!refreshingGameIds[game.game_id]}
+                        title="Refresh metadata for this game"
+                      >
+                        <FaSync style={{ animation: refreshingGameIds[game.game_id] ? 'spin 1s linear infinite' : 'none' }} />
+                      </button>
                       <button 
                         className="remove-btn-icon"
                         onClick={(e) => {
