@@ -4,12 +4,13 @@ services:
     image: local/gametracker-backend:latest
     pull_policy: never
     ports:
-      - "3000:3000"
+      - "${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}"
     volumes:
       - /home/docker/gametracker/data/gametracker.db:/app/gametracker.db
       - /home/docker/gametracker/data/settings.json:/app/settings.json
       - /home/docker/gametracker/data/sent_notifications.json:/app/sent_notifications.json
     environment:
+      - PORT=${BACKEND_PORT:-3000}
       - NODE_ENV=production
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}

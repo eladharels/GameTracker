@@ -2,14 +2,16 @@ version: '3.8'
 services:
   backend:
     image: local/gametracker-backend:staging
+    name: gametracker-backend-staging
     pull_policy: never
     ports:
-      - "3001:3000"
+      - "${BACKEND_PORT_STAGING:-3001}:${BACKEND_PORT_STAGING:-3001}"
     volumes:
       - /home/docker/gametracker/data-stag/gametracker.db:/app/gametracker.db
       - /home/docker/gametracker/data-stag/settings.json:/app/settings.json
       - /home/docker/gametracker/data-stag/sent_notifications.json:/app/sent_notifications.json
     environment:
+      - PORT=${BACKEND_PORT_STAGING:-3001}
       - NODE_ENV=staging
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}
@@ -19,6 +21,7 @@ services:
 
   frontend:
     image: local/gametracker-frontend:staging
+    name: gametracker-frontend-staging
     pull_policy: never
     ports:
       - "8085:80"

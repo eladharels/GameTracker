@@ -6,13 +6,8 @@ import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSor
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
-// Dynamic API base URL that works from any device
-const API_BASE =
-window.location.hostname === "gametracker.etech.ink"
-  ? "https://gametracker.etech.ink/api"
-  : "http://10.0.0.30:3000/api";
-//const API_BASE = "http://10.0.0.30:3000/api"
-//const API_BASE = "/api"
+// Dynamic API base URL: always hit the current origin's /api
+const API_BASE = `${window.location.origin}/api`;
 
 const STATUSES = ['wishlist', 'playing', 'done']
 
