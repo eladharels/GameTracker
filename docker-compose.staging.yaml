@@ -6,9 +6,9 @@ services:
     ports:
       - "3001:3000"
     volumes:
-      - ./gametracker.db:/app/gametracker.db
-      - ./settings.json:/app/settings.json
-      - ./sent_notifications.json:/app/sent_notifications.json
+      - /home/docker/gametracker/data-stag/gametracker.db:/app/gametracker.db
+      - /home/docker/gametracker/data-stag/settings.json:/app/settings.json
+      - /home/docker/gametracker/data-stag/sent_notifications.json:/app/sent_notifications.json
     environment:
       - NODE_ENV=staging
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
@@ -21,7 +21,7 @@ services:
     image: local/gametracker-frontend:staging
     pull_policy: never
     ports:
-      - "8081:80"
+      - "8085:80"
     restart: unless-stopped
 
 
