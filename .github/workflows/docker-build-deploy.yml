@@ -1,0 +1,63 @@
+name: Build & Deploy Docker Images
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+
+    env:
+      BACKEND_IMAGE_BASE: local/gametracker-backend
+      FRONTEND_IMAGE_BASE: local/gametracker-frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Decide tags and compose file based on branch
+        id: vars
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "env_tag=latest" >> $GITHUB_OUTPUT
+            echo "compose_file=docker-compose.yaml" >> $GITHUB_OUTPUT
+          elif [ "${GITHUB_REF_NAME}" = "staging" ]; then
+            echo "env_tag=staging" >> $GITHUB_OUTPUT
+            echo "compose_file=docker-compose.staging.yaml" >> $GITHUB_OUTPUT
+          else
+            echo "Unsupported branch: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t ${BACKEND_IMAGE_BASE}:${{ steps.vars.outputs.env_tag }} \
+            .
+
+      - name: Build frontend image
+        run: |
+          docker build \
+            -t ${FRONTEND_IMAGE_BASE}:${{ steps.vars.outputs.env_tag }} \
+            ./frontend
+
+      - name: Stop existing stack (ignore errors)
+        run: |
+          docker compose -f ${{ steps.vars.outputs.compose_file }} down || true
+
+      - name: Start stack
+        env:
+          IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
+          IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
+          RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          docker compose -f ${{ steps.vars.outputs.compose_file }} up -d
+
+
