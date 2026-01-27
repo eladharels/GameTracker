@@ -168,13 +168,29 @@ app.get('/api/games/search', async (req, res) => {
       console.warn('[IGDB] Missing credentials - IGDB_CLIENT_ID or IGDB_BEARER_TOKEN not set');
     }
     
+    // Verify credentials are loaded before making the API call
+    const clientId = process.env.IGDB_CLIENT_ID;
+    const bearerToken = process.env.IGDB_BEARER_TOKEN;
+    
+    if (!clientId || !bearerToken) {
+      console.error('[IGDB] Credentials check failed:', {
+        clientId: clientId ? 'SET (length: ' + clientId.length + ')' : 'MISSING',
+        bearerToken: bearerToken ? 'SET (length: ' + bearerToken.length + ')' : 'MISSING'
+      });
+    } else {
+      console.log('[IGDB] Credentials verified:', {
+        clientId: 'SET (length: ' + clientId.length + ')',
+        bearerToken: 'SET (length: ' + bearerToken.length + ')'
+      });
+    }
+    
     const igdbPromise = axios.post(
       'https://api.igdb.com/v4/games',
       `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 20;`,
       {
         headers: {
-          'Client-ID': process.env.IGDB_CLIENT_ID,
-          'Authorization': `Bearer ${process.env.IGDB_BEARER_TOKEN}`,
+          'Client-ID': clientId,
+          'Authorization': `Bearer ${bearerToken}`,
           'Accept': 'application/json',
         },
       }
