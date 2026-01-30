@@ -339,7 +339,6 @@ app.get('/api/games/search', async (req, res) => {
     const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
 
     // Merge and deduplicate by name (case-insensitive)
-    const seen = new Set();
     const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(game => {
       // If game didn't provide a steamAppId, try to find one from IGDB or RAWG for the same game name
       if (!game.steamAppId) {
@@ -361,25 +360,24 @@ app.get('/api/games/search', async (req, res) => {
           return { ...game, coverUrl: coverMatch.coverUrl };
         }
       }
-      // If game didn't provide a releaseDate, try to find one from other sources
-      if (!game.releaseDate) {
-        const dateMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
-          otherGame.name.toLowerCase() === game.name.toLowerCase() && otherGame.releaseDate
-        );
-        if (dateMatch) {
-          return { ...game, releaseDate: dateMatch.releaseDate };
-        }
-      }
+      // Do NOT fill releaseDate from another result by name only — different games
+      // can share the same name (e.g. "Judas" 2017 vs unreleased "Judas"), so we
+      // only use each result's own releaseDate to avoid wrong dates.
       return game;
-    }).filter(game => {
-      const key = game.name.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
     });
+    // Dedupe by name: prefer entry with no release date (unreleased) when multiple same-name results
+    const byName = {};
+    merged.forEach(g => {
+      const k = g.name.toLowerCase();
+      if (!byName[k]) byName[k] = [];
+      byName[k].push(g);
+    });
+    const mergedDeduped = Object.values(byName).map(games =>
+      games.find(g => !g.releaseDate) || games[0]
+    );
 
-    console.log(`[Search] Query: "${query}", Results: ${merged.length} games (IGDB: ${igdbResults.length}, RAWG: ${rawgResults.length}, TheGamesDB: ${thegamesdbResults.length})`);
-    res.json(merged);
+    console.log(`[Search] Query: "${query}", Results: ${mergedDeduped.length} games (IGDB: ${igdbResults.length}, RAWG: ${rawgResults.length}, TheGamesDB: ${thegamesdbResults.length})`);
+    res.json(mergedDeduped);
   } catch (error) {
     console.error('[Search Error]', error);
     res.status(500).json({ error: 'Failed to fetch games from providers', details: error.message });
@@ -1115,7 +1113,6 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
           const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
 
           // Merge and deduplicate by name (case-insensitive)
-          const seen = new Set();
           const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(g => {
             // If game didn't provide a steamAppId, try to find one from IGDB or RAWG
             if (!g.steamAppId) {
@@ -1137,25 +1134,22 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
                 return { ...g, coverUrl: coverMatch.coverUrl };
               }
             }
-            // If game didn't provide a releaseDate, try to find one from other sources
-            if (!g.releaseDate) {
-              const dateMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
-                otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.releaseDate
-              );
-              if (dateMatch) {
-                return { ...g, releaseDate: dateMatch.releaseDate };
-              }
-            }
+            // Do NOT fill releaseDate from another result by name only (avoids wrong date from different game with same name)
             return g;
-          }).filter(g => {
-            const key = g.name.toLowerCase();
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
           });
+          // Dedupe by name: prefer entry with no release date (unreleased) when multiple same-name results
+          const byNameBulk = {};
+          merged.forEach(g => {
+            const k = g.name.toLowerCase();
+            if (!byNameBulk[k]) byNameBulk[k] = [];
+            byNameBulk[k].push(g);
+          });
+          const mergedDedupedBulk = Object.values(byNameBulk).map(games =>
+            games.find(g => !g.releaseDate) || games[0]
+          );
 
           // Find the best match (exact name match, case-insensitive)
-          const match = merged.find(g => g.name.toLowerCase() === game.game_name.toLowerCase());
+          const match = mergedDedupedBulk.find(g => g.name.toLowerCase() === game.game_name.toLowerCase());
           
           if (match) {
             let updated = false;
@@ -1414,7 +1408,6 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
 
         const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
 
-        const seen = new Set();
         const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(g => {
           if (!g.steamAppId) {
             const igdbMatch = igdbResults.find(igdbGame => igdbGame.name.toLowerCase() === g.name.toLowerCase() && igdbGame.steamAppId);
@@ -1428,21 +1421,21 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
             );
             if (coverMatch) return { ...g, coverUrl: coverMatch.coverUrl };
           }
-          if (!g.releaseDate) {
-            const dateMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame =>
-              otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.releaseDate
-            );
-            if (dateMatch) return { ...g, releaseDate: dateMatch.releaseDate };
-          }
+          // Do NOT fill releaseDate from another result by name only (avoids wrong date from different game with same name)
           return g;
-        }).filter(g => {
-          const key = g.name.toLowerCase();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
         });
+        // Dedupe by name: prefer entry with no release date (unreleased) when multiple same-name results
+        const byNameSingle = {};
+        merged.forEach(g => {
+          const k = g.name.toLowerCase();
+          if (!byNameSingle[k]) byNameSingle[k] = [];
+          byNameSingle[k].push(g);
+        });
+        const mergedDedupedSingle = Object.values(byNameSingle).map(games =>
+          games.find(g => !g.releaseDate) || games[0]
+        );
 
-        const match = merged.find(g => g.name.toLowerCase() === game.game_name.toLowerCase());
+        const match = mergedDedupedSingle.find(g => g.name.toLowerCase() === game.game_name.toLowerCase());
 
         if (match) {
           let updated = false;

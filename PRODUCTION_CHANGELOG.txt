@@ -9,6 +9,20 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2025-01-30 (from Staging Change #4) ---
+Summary: Fix wrong release date for same-name games (e.g. "Judas" showing
+         2017) — no cross-fill of release date by name; prefer unreleased
+         when deduping same-name results.
+
+Files changed in production:
+  • index.js
+
+What was done:
+  • Search, bulk refresh, and single-game refresh: removed filling
+    releaseDate from another result by name only; dedupe by name now
+    prefers entry with no release date (unreleased) when multiple
+    same-name results exist.
+
 --- APPLIED 2025-01-30 (from Staging Change #3) ---
 Summary: Pipeline — prune old Docker images after deploy (non-interactive).
 
