@@ -614,7 +614,6 @@ function LibraryPage({ user }) {
   const [searchTerm, setSearchTerm] = useState('')
   const [refreshingMetadata, setRefreshingMetadata] = useState(false)
   const [refreshMetadataResult, setRefreshMetadataResult] = useState(null)
-  const [refreshMetadataError, setRefreshMetadataError] = useState('')
   const [refreshingGameIds, setRefreshingGameIds] = useState({})
   const { showToast } = useToast()
   const gamesPerPage = 15
@@ -781,10 +780,11 @@ function LibraryPage({ user }) {
   const refreshMetadata = async () => {
     if (!user) return
     setRefreshingMetadata(true)
-    setRefreshMetadataError('')
     setRefreshMetadataResult(null)
     try {
-      const res = await axios.post(`${API_BASE}/user/${user.username}/refresh-metadata`)
+      const res = await axios.post(`${API_BASE}/user/${user.username}/refresh-metadata`, null, {
+        timeout: 300000 // 5 minutes for bulk refresh (many games = many API calls)
+      })
       setRefreshMetadataResult(res.data)
       showToast('success', `Metadata refreshed! ${res.data.results.updated} games updated.`)
       
@@ -793,8 +793,10 @@ function LibraryPage({ user }) {
       const gamesRes = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
       setUserGames(gamesRes.data)
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Failed to refresh metadata. Please try again.'
-      setRefreshMetadataError(errorMsg)
+      const errorMsg =
+        err.response?.data?.error ||
+        (err.code === 'ECONNABORTED' ? 'Refresh timed out. Try again or refresh fewer games.' : err.message) ||
+        'Failed to refresh metadata. Please try again.'
       showToast('error', errorMsg)
     }
     setRefreshingMetadata(false)
@@ -913,7 +915,6 @@ function LibraryPage({ user }) {
 
       {statusError && <div className="error-msg">{statusError}</div>}
       {removeError && <div className="error-msg">{removeError}</div>}
-      {refreshMetadataError && <div className="error-msg">{refreshMetadataError}</div>}
       {refreshMetadataResult && (
         <div style={{
           padding: '0.8em 1.2em',

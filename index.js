@@ -955,16 +955,18 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
     return res.status(400).json({ error: 'Missing username' });
   }
 
-  getOrCreateUser(normalizedUsername, async (err, user) => {
+  getOrCreateUser(normalizedUsername, (err, user) => {
     if (err) {
       return res.status(500).json({ error: 'DB error' });
     }
 
-    // Get all games for the user
-    db.all('SELECT * FROM user_games WHERE user_id = ?', [user.id], async (err, userGames) => {
-      if (err) {
-        return res.status(500).json({ error: 'DB error' });
-      }
+    const run = async () => {
+      const userGames = await new Promise((resolve, reject) => {
+        db.all('SELECT * FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows || []);
+        });
+      });
 
       const results = {
         total: userGames.length,
@@ -1242,6 +1244,13 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
         message: `Metadata refresh completed. ${results.updated} games updated out of ${results.total} total games.`,
         results
       });
+    };
+
+    run().catch((e) => {
+      console.error('Bulk refresh metadata error:', e);
+      if (!res.headersSent) {
+        res.status(500).json({ error: e.message || 'Failed to refresh metadata' });
+      }
     });
   });
 });

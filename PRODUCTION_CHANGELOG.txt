@@ -1,0 +1,40 @@
+================================================================================
+  PRODUCTION CHANGELOG — Changes applied from staging (GameTracker-stg)
+================================================================================
+Purpose: Record of changes promoted from GameTracker-stg to this production app.
+When you apply an entry from STAGING_CHANGELOG.txt to production, add it here
+with the date applied.
+
+--------------------------------------------------------------------------------
+APPLIED CHANGES (newest first)
+--------------------------------------------------------------------------------
+
+--- APPLIED 2025-01-30 (from Staging Change #2) ---
+Summary: Fix bulk "Refresh Metadata" failing — proper async/await + error
+         handling on backend; 5-min client timeout and clearer error message
+         on frontend.
+
+Files changed in production:
+  • index.js
+  • frontend/src/App.jsx
+
+What was done:
+  • Backend: Bulk refresh endpoint now uses run() + run().catch() so errors
+    are caught and returned as 500 with the real error message; userGames
+    loaded via await new Promise(db.all(...)).
+  • Frontend: Bulk refresh POST has timeout: 300000 (5 min); catch block
+    shows server error, timeout message, or generic fallback.
+
+--- APPLIED 2025-01-30 (from Staging Change #1) ---
+Summary: Fix bulk "Refresh Metadata" error stuck on page — show error via
+         toast only so it fades like single-game refresh.
+
+Files changed in production:
+  • frontend/src/App.jsx
+
+What was done:
+  • Removed refreshMetadataError state and its inline <div> display.
+  • Bulk refresh errors now only use showToast('error', ...), which
+    auto-fades after a few seconds.
+
+--------------------------------------------------------------------------------
