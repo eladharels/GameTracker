@@ -60,4 +60,5 @@ jobs:
         run: |
           docker compose -f ${{ steps.vars.outputs.compose_file }} up -d
 
-
+      - name: Prune old Docker images (non-interactive)
+        run: docker system prune -a -f

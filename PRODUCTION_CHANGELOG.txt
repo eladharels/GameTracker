@@ -9,6 +9,15 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2025-01-30 (from Staging Change #3) ---
+Summary: Pipeline — prune old Docker images after deploy (non-interactive).
+
+Files changed in production:
+  • .github/workflows/docker-build-deploy.yml
+
+What was done:
+  • Added step after "Start stack": docker system prune -a -f (no prompt).
+
 --- APPLIED 2025-01-30 (from Staging Change #2) ---
 Summary: Fix bulk "Refresh Metadata" failing — proper async/await + error
          handling on backend; 5-min client timeout and clearer error message
