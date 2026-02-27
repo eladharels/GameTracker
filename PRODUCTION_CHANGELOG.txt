@@ -9,6 +9,19 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-02-27 (from Staging Change #5) ---
+Summary: Improve LDAP compatibility (support FreeIPA uid) and add admin DB utility scripts.
+
+Files changed in production:
+  • index.js
+  • create-local-admin.js
+  • reset-root-password.js
+
+What was done:
+  • Backend LDAP now searches for users and email addresses using an OR filter over both sAMAccountName and uid so that both Active Directory and FreeIPA accounts are supported consistently for login and email lookups.
+  • Added create-local-admin.js to create a new local admin user with a bcrypt-hashed password, origin='local', can_manage_users=1, and optional display_name; it respects DB_PATH so you can point at the correct gametracker.db.
+  • Added reset-root-password.js to safely reset the 'root' user password in the users table with bcrypt, also honoring DB_PATH to target the same database file the app uses.
+
 --- APPLIED 2025-01-30 (from Staging Change #4) ---
 Summary: Fix wrong release date for same-name games (e.g. "Judas" showing
          2017) — no cross-fill of release date by name; prefer unreleased

@@ -580,7 +580,7 @@ async function getLdapEmail(username) {
       resolve(null);
       return;
     }
-    
+
     const client = ldap.createClient({ url: ldapSettings.url });
     client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
       if (err) {
@@ -590,8 +590,14 @@ async function getLdapEmail(username) {
         return;
       }
       
+      // Try multiple username attributes: first sAMAccountName (AD), then uid (FreeIPA).
+      // Using an OR filter means if either matches, we get a result.
+      const usernameFilters = [
+        `(sAMAccountName=${normalizedUsername})`,
+        `(uid=${normalizedUsername})`,
+      ];
       const searchOptions = {
-        filter: `(sAMAccountName=${normalizedUsername})`,
+        filter: `(|${usernameFilters.join('')})`,
         scope: 'sub',
         attributes: ['mail', 'email']
       };
@@ -1656,9 +1662,14 @@ app.post('/api/auth/login', (req, res) => {
       }
       console.log('[LDAP] Service account bind succeeded.');
 
-      // 2. Search for the user by sAMAccountName
+      // 2. Search for the user by username using multiple attributes:
+      //    Active Directory: sAMAccountName, FreeIPA: uid
+      const usernameFilters = [
+        `(sAMAccountName=${normalizedUsername})`,
+        `(uid=${normalizedUsername})`,
+      ];
       const searchOptions = {
-        filter: `(sAMAccountName=${normalizedUsername})`,
+        filter: `(|${usernameFilters.join('')})`,
         scope: 'sub',
         attributes: ['dn', 'memberOf', 'displayName', 'cn', 'mail', 'email']
       };
