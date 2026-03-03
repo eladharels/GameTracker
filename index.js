@@ -70,6 +70,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
       steam_app_id TEXT,
       last_price TEXT,
       last_price_updated TEXT,
+      crack_status TEXT,
       UNIQUE(user_id, game_id),
       FOREIGN KEY(user_id) REFERENCES users(id)
     )`);
@@ -79,6 +80,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
     db.run(`ALTER TABLE user_games ADD COLUMN steam_app_id TEXT`, () => {});
     db.run(`ALTER TABLE user_games ADD COLUMN last_price TEXT`, () => {});
     db.run(`ALTER TABLE user_games ADD COLUMN last_price_updated TEXT`, () => {});
+    db.run(`ALTER TABLE user_games ADD COLUMN crack_status TEXT`, () => {});
     console.log('Database initialized');
   }
 });
@@ -445,6 +447,78 @@ app.get('/api/test/igdb', async (req, res) => {
       }
     });
   }
+});
+
+// --- CrackRelease: crack status from crackrelease.com (per-game page scrape) ---
+function slugifyForCrackRelease(name) {
+  if (!name || typeof name !== 'string') return '';
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+}
+
+async function getCrackReleaseStatus(gameName) {
+  const slug = slugifyForCrackRelease(gameName);
+  if (!slug) {
+    return { status: 'unknown', url: null, slug, gameName };
+  }
+  const url = `https://crackrelease.com/${slug}/`;
+  try {
+    const response = await axios.get(url, { timeout: 15000 });
+    const html = String(response.data || '');
+    const statusMatch = html.match(/>\s*(UNCRACKED|CRACKED|UNRELEASED)\s*</i);
+    const raw = statusMatch ? statusMatch[1].toUpperCase() : null;
+    let status = 'unknown';
+    if (raw === 'CRACKED') status = 'cracked';
+    else if (raw === 'UNCRACKED') status = 'uncracked';
+    else if (raw === 'UNRELEASED') status = 'unreleased';
+    return { status, url, slug, gameName };
+  } catch (err) {
+    console.warn('[CrackRelease] Error fetching status for', gameName, '-', err.message);
+    return { status: 'unknown', url, slug, gameName, error: err.message };
+  }
+}
+
+// Admin: check CrackRelease status for a specific game name (Settings test)
+app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_manage_users'), async (req, res) => {
+  const { gameName } = req.body || {};
+  if (!gameName || typeof gameName !== 'string' || !gameName.trim()) {
+    return res.status(400).json({ error: 'Missing or invalid gameName' });
+  }
+  try {
+    const result = await getCrackReleaseStatus(gameName);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: err.message });
+  }
+});
+
+// Update a user's game with CrackRelease status and persist to DB
+app.post('/api/user/:username/games/:gameId/crackrelease-status', async (req, res) => {
+  const { username, gameId } = req.params;
+  const normalizedUsername = username ? username.toLowerCase() : '';
+  if (!normalizedUsername || !gameId) {
+    return res.status(400).json({ error: 'Missing username or gameId' });
+  }
+  getOrCreateUser(normalizedUsername, (err, user) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+    db.get('SELECT game_name FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, row) => {
+      if (err) return res.status(500).json({ error: 'DB error' });
+      if (!row) return res.status(404).json({ error: 'Game not found for this user' });
+      try {
+        const result = await getCrackReleaseStatus(row.game_name);
+        db.run('UPDATE user_games SET crack_status = ? WHERE user_id = ? AND game_id = ?', [result.status, user.id, gameId], (updateErr) => {
+          if (updateErr) console.error('[CrackRelease] Failed to update crack_status in DB:', updateErr);
+        });
+        res.json(result);
+      } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: e.message });
+      }
+    });
+  });
 });
 
 // Remove the in-memory cache for Steam prices
@@ -916,10 +990,11 @@ app.get('/api/user/:username/games', (req, res) => {
         });
       }
       
-      // Ensure steamAppId is included in the response
+      // Ensure steamAppId and crackStatus are included in the response
       const mapped = rows.map(row => ({
         ...row,
-        steamAppId: row.steam_app_id || null
+        steamAppId: row.steam_app_id || null,
+        crackStatus: row.crack_status || null
       }));
       
       console.log(`[DEBUG] Sending response with ${mapped.length} games`);

@@ -611,6 +611,8 @@ function LibraryPage({ user }) {
   const [currentPage, setCurrentPage] = useState(1)
   const [showPrices, setShowPrices] = useState(false)
   const [gamePrices, setGamePrices] = useState({}) // { [game_id]: { price, loading, error } }
+  const [showCrackStatus, setShowCrackStatus] = useState(false)
+  const [crackStatusMap, setCrackStatusMap] = useState({}) // { [game_id]: 'cracked'|'uncracked'|'unknown' }
   const [searchTerm, setSearchTerm] = useState('')
   const [refreshingMetadata, setRefreshingMetadata] = useState(false)
   const [refreshMetadataResult, setRefreshMetadataResult] = useState(null)
@@ -703,6 +705,26 @@ function LibraryPage({ user }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPrices, currentGames])
+
+  const fetchCrackStatus = async (game) => {
+    try {
+      const res = await axios.post(`${API_BASE}/user/${user.username}/games/${game.game_id}/crackrelease-status`)
+      setCrackStatusMap(prev => ({ ...prev, [game.game_id]: res.data.status || 'unknown' }))
+      setUserGames(prev => prev.map(g => g.game_id === game.game_id ? { ...g, crackStatus: res.data.status } : g))
+    } catch (err) {
+      setCrackStatusMap(prev => ({ ...prev, [game.game_id]: 'unknown' }))
+    }
+  }
+
+  // When showCrackStatus is toggled on, fetch crack status for visible games that don't have it yet
+  useEffect(() => {
+    if (!showCrackStatus || !user) return
+    currentGames.forEach(game => {
+      const existing = game.crackStatus || crackStatusMap[game.game_id]
+      if (!existing) fetchCrackStatus(game)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCrackStatus, currentGames, user])
 
   // Change status
   const setGameStatus = async (game, status) => {
@@ -832,6 +854,26 @@ function LibraryPage({ user }) {
           >
             {showPrices ? 'Hide Prices' : 'Show Prices'}
           </button>
+          <button
+            className="toggle-price-btn"
+            style={{
+              background: showCrackStatus ? 'var(--color-accent)' : 'var(--color-card)',
+              color: showCrackStatus ? 'var(--color-accent-contrast)' : 'var(--color-fg-muted)',
+              border: '1.5px solid var(--color-border)',
+              borderRadius: 12,
+              padding: '0.5em 1.2em',
+              fontWeight: 600,
+              fontSize: '1em',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: showCrackStatus ? '0 4px 15px #0ea5e933' : 'none',
+            }}
+            onClick={() => setShowCrackStatus(v => !v)}
+            aria-pressed={showCrackStatus}
+            title="Show crack status from CrackRelease (green = cracked, red = not cracked)"
+          >
+            {showCrackStatus ? 'Hide crack status' : 'Show crack status'}
+          </button>
           <div className="view-toggle">
             <button onClick={() => setViewMode('grid')} className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}><FaTh /></button>
             <button onClick={() => setViewMode('list')} className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}><FaList /></button>
@@ -938,8 +980,16 @@ function LibraryPage({ user }) {
           <div className={`games-list ${viewMode === 'list' ? 'list-view' : ''}`}>
             {currentGames.map(game => {
               const isUnreleased = game.status === 'unreleased' || !game.release_date;
+              const effectiveCrackStatus = game.crackStatus || crackStatusMap[game.game_id] || 'unknown';
               return (
                 <div key={game.game_id} className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`} >
+                  {showCrackStatus && (
+                    <span
+                      className={`crack-status-dot crack-status-dot--${effectiveCrackStatus}`}
+                      title={effectiveCrackStatus === 'cracked' ? 'Cracked' : effectiveCrackStatus === 'uncracked' ? 'Not cracked' : 'Unknown'}
+                      aria-hidden
+                    />
+                  )}
                   {game.cover_url && (
                     <div className="game-cover-container">
                       <img src={game.cover_url} alt={game.game_name} className="game-cover" />
@@ -1176,9 +1226,38 @@ function SettingsPage() {
   const [selectedService, setSelectedService] = useState('both');
   const [testNotificationLoading, setTestNotificationLoading] = useState(false);
   const [testNotificationResult, setTestNotificationResult] = useState(null);
+  const [crackwatchLoading, setCrackwatchLoading] = useState(false);
+  const [crackwatchInfo, setCrackwatchInfo] = useState(null);
+  const [crackwatchError, setCrackwatchError] = useState('');
   const [activeTab, setActiveTab] = useState('email');
   const user = JSON.parse(localStorage.getItem('token_payload') || '{}');
   const isAdmin = user && user.can_manage_users;
+
+  const handleCrackwatchTest = async () => {
+    if (!selectedGame) {
+      setError('Please select a game to test CrackRelease status');
+      return;
+    }
+    setCrackwatchLoading(true);
+    setCrackwatchError('');
+    setCrackwatchInfo(null);
+    try {
+      const token = localStorage.getItem('token');
+      const game = userGames.find(g => g.game_id.toString() === selectedGame);
+      if (!game) {
+        setCrackwatchError('Selected game not found in your library');
+      } else {
+        const res = await axios.post(`${API_BASE}/admin/crackrelease-status`, { gameName: game.game_name }, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        setCrackwatchInfo(res.data);
+      }
+    } catch (err) {
+      setCrackwatchError(err.response?.data?.error || err.message || 'Failed to call CrackRelease');
+    } finally {
+      setCrackwatchLoading(false);
+    }
+  };
 
   const handleSmtpChange = e => setSmtp({ ...smtp, [e.target.name]: e.target.value });
   const handleNtfyChange = e => setNtfy({ ...ntfy, [e.target.name]: e.target.value });
@@ -1410,6 +1489,7 @@ function SettingsPage() {
                     <option value="both">Both Email & NTFY</option>
                     <option value="email">Email Only</option>
                     <option value="ntfy">NTFY Only</option>
+                    <option value="crackwatch">CrackRelease status test only</option>
                   </select>
                 </div>
                 <div className="input-group">
@@ -1443,11 +1523,20 @@ function SettingsPage() {
                 <div className="input-group">
                   <button 
                     type="button" 
-                    onClick={handleTestNotification}
-                    disabled={testNotificationLoading || !selectedGame}
+                    onClick={() => {
+                      if (selectedService === 'crackwatch') handleCrackwatchTest();
+                      else handleTestNotification();
+                    }}
+                    disabled={
+                      selectedService === 'crackwatch'
+                        ? crackwatchLoading || !selectedGame
+                        : testNotificationLoading || !selectedGame
+                    }
                     className="test-notification-btn"
                   >
-                    {testNotificationLoading ? (
+                    {selectedService === 'crackwatch' ? (
+                      crackwatchLoading ? 'Checking CrackRelease…' : 'Test CrackRelease status'
+                    ) : testNotificationLoading ? (
                       <>
                         <span style={{marginRight: '8px'}}>⏳</span>
                         Sending Test Notification...
@@ -1459,10 +1548,27 @@ function SettingsPage() {
                       </>
                     )}
                   </button>
-                  <p className="test-notification-help">
-                    This will send a test notification using your configured email and/or NTFY settings. 
-                    The notification will include the exact days until release for the selected game.
-                  </p>
+                  {selectedService === 'crackwatch' ? (
+                    <p className="test-notification-help">
+                      This will call CrackRelease for the selected game and show its reported crack status. No emails or NTFY notifications are sent.
+                      {crackwatchInfo && (
+                        <span style={{ display: 'block', marginTop: 4 }}>
+                          Status: <strong>{(crackwatchInfo.status || 'unknown').toUpperCase()}</strong>
+                          {crackwatchInfo.url && (
+                            <> (source: <a href={crackwatchInfo.url} target="_blank" rel="noreferrer">CrackRelease</a>)</>
+                          )}
+                        </span>
+                      )}
+                      {crackwatchError && (
+                        <span style={{ display: 'block', marginTop: 4, color: '#f44336' }}>{crackwatchError}</span>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="test-notification-help">
+                      This will send a test notification using your configured email and/or NTFY settings. 
+                      The notification will include the exact days until release for the selected game.
+                    </p>
+                  )}
                 </div>
               </div>
               

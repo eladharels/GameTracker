@@ -9,6 +9,38 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-03-02 (Crack status from CrackRelease.com) ---
+Summary: Crack status feature using CrackRelease.com (per-game page scrape). Same behavior as staging.
+
+Files changed in production:
+  • index.js
+  • frontend/src/App.jsx
+  • frontend/src/App.css
+
+What was done:
+  • Backend:
+    - Added CrackRelease HTML scraper helpers (slugify game name, fetch https://crackrelease.com/<slug>/, parse CRACKED/UNCRACKED/UNRELEASED).
+    - New admin endpoint: POST /api/admin/crackrelease-status { gameName } → { status, url, slug } for manual testing.
+    - New per-user endpoint: POST /api/user/:username/games/:gameId/crackrelease-status
+      which:
+        · Looks up the game_name in user_games for that userId/gameId.
+        · Calls CrackRelease helper and persists the result into user_games.crack_status.
+        · Returns the CrackRelease status payload.
+    - Schema: added nullable TEXT column crack_status to user_games (production),
+      and included crack_status in /api/user/:username/games responses as crackStatus.
+  • Frontend (staging Settings → Test Notifications tab):
+    - “Notification Service” dropdown gained option “CrackRelease status test only”.
+    - When selected, the button calls /api/admin/crackrelease-status for the chosen game
+      and shows the status (CRACKED / UNCRACKED / UNRELEASED / UNKNOWN) plus a link
+      back to CrackRelease.
+  • Frontend (staging Library):
+    - “Show crack status” toggle now:
+      · For visible games without crackStatus, calls
+        POST /api/user/:username/games/:gameId/crackrelease-status.
+      · Reads crack status from user_games.crack_status and shows a glowing dot in the
+        top‑right corner of each game card (green = cracked, red = uncracked, gray = unknown).
+
+Applied in production 2026-03-02.
 --- APPLIED 2026-02-27 (from Staging Change #5) ---
 Summary: Improve LDAP compatibility (support FreeIPA uid) and add admin DB utility scripts.
 
