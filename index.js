@@ -81,6 +81,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
     db.run(`ALTER TABLE user_games ADD COLUMN last_price TEXT`, () => {});
     db.run(`ALTER TABLE user_games ADD COLUMN last_price_updated TEXT`, () => {});
     db.run(`ALTER TABLE user_games ADD COLUMN crack_status TEXT`, () => {});
+    db.run(`ALTER TABLE user_games ADD COLUMN backlog_order INTEGER`, () => {});
     console.log('Database initialized');
   }
 });
@@ -858,21 +859,38 @@ app.post('/api/user/:username/games', async (req, res) => {
         console.log(`[DEBUG] New game being added`);
       }
       
+      // Determine backlog_order
+      const wasInBacklog = row && row.status === 'backlog';
+      const isGoingToBacklog = status === 'backlog';
+      let backlogOrder = null;
+      if (isGoingToBacklog) {
+        if (wasInBacklog) {
+          backlogOrder = row.backlog_order;
+        } else {
+          const maxRow = await new Promise((resolve, reject) => {
+            db.get('SELECT MAX(backlog_order) as maxOrder FROM user_games WHERE user_id = ?', [user.id], (err, r) => {
+              if (err) reject(err); else resolve(r);
+            });
+          });
+          backlogOrder = (maxRow && maxRow.maxOrder != null ? maxRow.maxOrder : 0) + 1;
+        }
+      }
+
       db.run(
-        `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status, steam_app_id=excluded.steam_app_id`,
-        [user.id, gameId, gameName, coverUrl, releaseDate, status, steamAppId],
+        `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id, backlog_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status, steam_app_id=excluded.steam_app_id, backlog_order=excluded.backlog_order`,
+        [user.id, gameId, gameName, coverUrl, releaseDate, status, steamAppId, backlogOrder],
         async function (err) {
           if (err) {
             console.log(`[DEBUG] Error updating game:`, err);
             return res.status(500).json({ error: 'DB error' });
           }
-          
+
           // Add debug logging after update
           console.log(`[DEBUG] Status updated successfully for user ${normalizedUsername}, game ${gameId} to status: ${status}`);
           console.log(`[DEBUG] Rows affected: ${this.changes}, Last ID: ${this.lastID}`);
-          
+
           await notifyEvent(eventType, { gameName }, normalizedUsername, status);
           res.json({ success: true });
         }
@@ -1019,6 +1037,41 @@ app.delete('/api/user/:username/games/:gameId', (req, res) => {
       function (err) {
         if (err) return res.status(500).json({ error: 'DB error' });
         res.json({ success: true });
+      }
+    );
+  });
+});
+
+// Reorder a game within the user's backlog (move up or down)
+app.put('/api/user/:username/games/:gameId/backlog-order', (req, res) => {
+  const { username, gameId } = req.params;
+  const { direction } = req.body; // 'up' or 'down'
+  const normalizedUsername = username ? username.toLowerCase() : '';
+  if (!normalizedUsername || !gameId || !['up', 'down'].includes(direction)) {
+    return res.status(400).json({ error: 'Missing or invalid parameters' });
+  }
+  getOrCreateUser(normalizedUsername, (err, user) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+    db.all(
+      'SELECT id, game_id, backlog_order FROM user_games WHERE user_id = ? AND status = ? ORDER BY backlog_order ASC',
+      [user.id, 'backlog'],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: 'DB error' });
+        const idx = rows.findIndex(r => String(r.game_id) === String(gameId));
+        if (idx === -1) return res.status(404).json({ error: 'Game not in backlog' });
+        const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+        if (swapIdx < 0 || swapIdx >= rows.length) {
+          return res.json({ success: true }); // already at boundary
+        }
+        const game = rows[idx];
+        const swapGame = rows[swapIdx];
+        db.run('UPDATE user_games SET backlog_order = ? WHERE id = ?', [swapGame.backlog_order, game.id], (err) => {
+          if (err) return res.status(500).json({ error: 'DB error' });
+          db.run('UPDATE user_games SET backlog_order = ? WHERE id = ?', [game.backlog_order, swapGame.id], (err) => {
+            if (err) return res.status(500).json({ error: 'DB error' });
+            res.json({ success: true });
+          });
+        });
       }
     );
   });

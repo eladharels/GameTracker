@@ -2,14 +2,14 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
 // Dynamic API base URL: always hit the current origin's /api
 const API_BASE = `${window.location.origin}/api`;
 
-const STATUSES = ['wishlist', 'playing', 'done']
+const STATUSES = ['wishlist', 'playing', 'done', 'backlog']
 
 // Helper function to normalize status values
 function normalizeStatus(status) {
@@ -640,6 +640,7 @@ function LibraryPage({ user }) {
     { label: 'Playing', value: 'playing' },
     { label: 'Done', value: 'done' },
     { label: 'Unreleased', value: 'unreleased' },
+    { label: 'Backlog', value: 'backlog' },
   ]
   
   let filteredUserGames = filter === 'all'
@@ -661,6 +662,10 @@ function LibraryPage({ user }) {
 
   // Sorting logic
   filteredUserGames = [...filteredUserGames].sort((a, b) => {
+    // Backlog is always sorted by queue position
+    if (filter === 'backlog') {
+      return (a.backlog_order ?? 999999) - (b.backlog_order ?? 999999)
+    }
     if (sortBy === 'name') {
       return sortDir === 'asc'
         ? a.game_name.localeCompare(b.game_name)
@@ -766,6 +771,19 @@ function LibraryPage({ user }) {
       setRemoveError('Failed to remove game. Please try again.')
     }
     setStatusUpdating(false)
+  }
+
+  // Move a game up or down in the backlog queue
+  const moveBacklogGame = async (gameId, direction) => {
+    if (!user) return
+    try {
+      await axios.put(`${API_BASE}/user/${user.username}/games/${gameId}/backlog-order`, { direction })
+      const timestamp = Date.now()
+      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
+      setUserGames(res.data)
+    } catch (err) {
+      showToast('error', 'Failed to reorder backlog.')
+    }
   }
 
   // Refresh metadata for a single game
@@ -983,6 +1001,9 @@ function LibraryPage({ user }) {
               const effectiveCrackStatus = game.crackStatus || crackStatusMap[game.game_id] || 'unknown';
               return (
                 <div key={game.game_id} className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`} >
+                  {filter === 'backlog' && game.backlog_order != null && (
+                    <div className="backlog-position-badge">#{game.backlog_order}</div>
+                  )}
                   {showCrackStatus && (
                     <span
                       className={`crack-status-dot crack-status-dot--${effectiveCrackStatus}`}
@@ -1025,9 +1046,9 @@ function LibraryPage({ user }) {
                           <FaLock /> Unreleased
                         </div>
                       ) : (
-                        <select 
-                          className="status-select" 
-                          value={normalizeStatus(game.status)} 
+                        <select
+                          className="status-select"
+                          value={normalizeStatus(game.status)}
                           onChange={(e) => {
                             e.stopPropagation();
                             setGameStatus(game, e.target.value);
@@ -1038,6 +1059,24 @@ function LibraryPage({ user }) {
                             <option key={status} value={status}>{status}</option>
                           ))}
                         </select>
+                      )}
+                      {filter === 'backlog' && (
+                        <>
+                          <button
+                            className="remove-btn-icon"
+                            onClick={(e) => { e.stopPropagation(); moveBacklogGame(game.game_id, 'up'); }}
+                            title="Move up in backlog"
+                          >
+                            <FaArrowUp />
+                          </button>
+                          <button
+                            className="remove-btn-icon"
+                            onClick={(e) => { e.stopPropagation(); moveBacklogGame(game.game_id, 'down'); }}
+                            title="Move down in backlog"
+                          >
+                            <FaArrowDown />
+                          </button>
+                        </>
                       )}
                       <button
                         className="remove-btn-icon"
