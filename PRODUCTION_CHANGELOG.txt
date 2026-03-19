@@ -9,6 +9,45 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-03-20 (Mobile app UI upgrade) ---
+Summary: Massive UI redesign of the Android mobile app (GameTracker-mobile).
+  All screens redesigned with clean dark professional look.
+
+Files changed:
+  • GameTracker-mobile/app/src/main/res/layout/activity_login.xml
+  • GameTracker-mobile/app/src/main/res/layout/item_game.xml
+  • GameTracker-mobile/app/src/main/res/layout/fragment_library.xml
+  • GameTracker-mobile/app/src/main/res/layout/fragment_search.xml
+  • GameTracker-mobile/app/src/main/res/layout/fragment_game_details.xml
+  • GameTracker-mobile/app/src/main/res/layout/fragment_profile.xml
+  • GameTracker-mobile/app/src/main/res/values/colors.xml
+  • GameTracker-mobile/app/src/main/res/values/themes.xml
+  • GameTracker-mobile/app/src/main/res/drawable/rounded_image_bg.xml
+  • GameTracker-mobile/app/src/main/res/drawable/ic_gamepad.xml (new)
+  • GameTracker-mobile/app/src/main/res/drawable/ic_lock.xml (new)
+  • GameTracker-mobile/app/src/main/res/drawable/stat_card_bg.xml (new)
+
+What was done:
+  • Login: Full-screen branding redesign — gamepad icon + "GameTracker" title + tagline,
+    icon-prefixed input fields, no card wrapper, dark text on blue button.
+  • Game cards: Larger cover (64x86), dark placeholder (#2D3142), tighter accent bar,
+    add button with dark text, better spacing.
+  • Library stats: Replaced 2x2 grid with horizontal scrollable row of 4 colored stat pills.
+  • Search: Flat search bar with leading icon + compact "Go" button, gamepad icon on
+    welcome state, ALL CAPS muted results header.
+  • Game details: Full-width 220dp hero cover image, vertical content layout below,
+    labeled status card, price+refresh in horizontal row.
+  • Profile: Accent-tinted circular avatar, stats row under header, icon squares for
+    settings items, "Sign Out" label.
+  • Misc: rounded_image_bg fixed from light gray to dark (#2D3142), new colors
+    gt_card_elevated and gt_accent_dim added.
+
+--- APPLIED 2026-03-20 (Production LDAP settings fix) ---
+Summary: LDAP service account bind was failing in production with InvalidCredentialsError.
+  Root cause: volume-mounted settings.json on server had stale/incorrect bindPass.
+  Fix: reset root password via reset-root-password.js script inside the container,
+  logged in to production Settings UI, re-saved LDAP section — no code changes needed.
+
 --- APPLIED 2026-03-19 (UI improvements, enterprise settings, LDAP fix) ---
 Summary: UI polish (drag-and-drop backlog, hover-reveal actions, card animations, cover portrait fix,
   filter counters, theme accent picker), enterprise settings page redesign, LDAP bcrypt crash fix.
