@@ -793,9 +793,15 @@ app.get('/api/settings', (req, res) => {
 });
 app.post('/api/settings', express.json(), (req, res) => {
   console.log('POST /api/settings called');
-  console.log('Received settings:', req.body);
   try {
-    saveSettings(req.body);
+    // Merge incoming sections with existing — only overwrite sections that were sent
+    const existing = loadSettings();
+    const merged = {
+      smtp: req.body.smtp !== undefined ? req.body.smtp : (existing.smtp || {}),
+      ntfy: req.body.ntfy !== undefined ? req.body.ntfy : (existing.ntfy || {}),
+      ldap: req.body.ldap !== undefined ? req.body.ldap : (existing.ldap || {}),
+    };
+    saveSettings(merged);
     res.json({ success: true });
   } catch (err) {
     console.error('Error in /api/settings:', err);
@@ -1074,6 +1080,35 @@ app.put('/api/user/:username/games/:gameId/backlog-order', (req, res) => {
         });
       }
     );
+  });
+});
+
+// Reorder entire backlog by providing a new ordered array of game IDs
+app.put('/api/user/:username/backlog-reorder', (req, res) => {
+  const { username } = req.params;
+  const { order } = req.body; // array of game_ids in desired order
+  const normalizedUsername = username ? username.toLowerCase() : '';
+  if (!normalizedUsername || !Array.isArray(order) || order.length === 0) {
+    return res.status(400).json({ error: 'Missing or invalid parameters' });
+  }
+  getOrCreateUser(normalizedUsername, (err, user) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+    let completed = 0;
+    let hasError = false;
+    order.forEach((gameId, index) => {
+      db.run(
+        'UPDATE user_games SET backlog_order = ? WHERE user_id = ? AND game_id = ?',
+        [index + 1, user.id, gameId],
+        (err) => {
+          if (err) hasError = true;
+          completed++;
+          if (completed === order.length) {
+            if (hasError) return res.status(500).json({ error: 'DB error' });
+            res.json({ success: true });
+          }
+        }
+      );
+    });
   });
 });
 
@@ -1734,9 +1769,18 @@ app.post('/api/auth/login', (req, res) => {
         trackFailedAttempt(clientIP);
         return res.status(401).json({ error: 'Invalid credentials' });
       }
-      console.log('[Auth] Found user in database:', { id: user.id, username: user.username });
+      console.log('[Auth] Found user in database:', { id: user.id, username: user.username, origin: user.origin });
       try {
-        const valid = await bcrypt.compare(password, user.password);
+        // LDAP users have no local password — reject cleanly instead of crashing bcrypt
+        if (!user.password || typeof user.password !== 'string') {
+          console.log('[Auth] User has no local password (likely an LDAP account). Local auth not possible.');
+          trackFailedAttempt(clientIP);
+          const hint = user.origin === 'ldap'
+            ? 'This account uses LDAP authentication. Check your LDAP configuration.'
+            : 'Invalid credentials';
+          return res.status(401).json({ error: hint });
+        }
+        const valid = await bcrypt.compare(String(password), user.password);
         if (!valid) {
           console.log('[Auth] Local password validation failed for user:', normalizedUsername);
           // Track failed attempt

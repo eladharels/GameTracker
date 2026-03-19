@@ -2,9 +2,17 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
+
+const ACCENT_PRESETS = [
+  { name: 'Sky',    value: '#0ea5e9' },
+  { name: 'Purple', value: '#a855f7' },
+  { name: 'Green',  value: '#22c55e' },
+  { name: 'Orange', value: '#f97316' },
+  { name: 'Pink',   value: '#ec4899' },
+]
 
 // Dynamic API base URL: always hit the current origin's /api
 const API_BASE = `${window.location.origin}/api`;
@@ -40,6 +48,14 @@ function App() {
   const [user, setUser] = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+
+  const [accentColor, setAccentColor] = useState(
+    () => localStorage.getItem('accent_color') || '#0ea5e9'
+  )
+  useEffect(() => {
+    document.documentElement.style.setProperty('--color-accent', accentColor)
+    localStorage.setItem('accent_color', accentColor)
+  }, [accentColor])
 
   // Logout function
   const logout = () => {
@@ -104,6 +120,17 @@ function App() {
             <FaSignOutAlt className="nav-icon" />
             <span className="nav-label">Logout</span>
           </button>
+          <div className="theme-picker">
+            {ACCENT_PRESETS.map(p => (
+              <button
+                key={p.value}
+                className={`theme-dot${accentColor === p.value ? ' active' : ''}`}
+                style={{ background: p.value }}
+                onClick={() => setAccentColor(p.value)}
+                title={p.name}
+              />
+            ))}
+          </div>
         </nav>
       </aside>
       <main className="main-content">
@@ -568,12 +595,17 @@ function SearchPage({ user }) {
                 else if (priceInfo && priceInfo.price === null) priceDisplay = 'Price: Not found';
               }
               return (
-                <div key={game.id} className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`} >
-                  {game.coverUrl && (
-                    <div className="game-cover-container">
+                <div key={game.id} className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`} style={{ animationDelay: `${searchResults.indexOf(game) * 0.04}s` }}>
+                  <div className="game-cover-container">
+                    {game.coverUrl ? (
                       <img src={game.coverUrl} alt={game.name} className="game-cover" />
-                    </div>
-                  )}
+                    ) : (
+                      <div className="cover-placeholder">
+                        <FaGamepad className="cover-placeholder-icon" />
+                        <span className="cover-placeholder-name">{game.name}</span>
+                      </div>
+                    )}
+                  </div>
                   <div className="game-info">
                     <div className="game-title">{game.name}</div>
                     <div className="game-release-date">
@@ -617,6 +649,8 @@ function LibraryPage({ user }) {
   const [refreshingMetadata, setRefreshingMetadata] = useState(false)
   const [refreshMetadataResult, setRefreshMetadataResult] = useState(null)
   const [refreshingGameIds, setRefreshingGameIds] = useState({})
+  const [draggedGameId, setDraggedGameId] = useState(null)
+  const [dragOverGameId, setDragOverGameId] = useState(null)
   const { showToast } = useToast()
   const gamesPerPage = 15
 
@@ -633,6 +667,15 @@ function LibraryPage({ user }) {
       setUserGames([])
     }
   }, [user, statusUpdating])
+
+  const statusCounts = {
+    all:        userGames.length,
+    wishlist:   userGames.filter(g => normalizeStatus(g.status) === 'wishlist').length,
+    playing:    userGames.filter(g => normalizeStatus(g.status) === 'playing').length,
+    done:       userGames.filter(g => normalizeStatus(g.status) === 'done').length,
+    unreleased: userGames.filter(g => g.status === 'unreleased' || !g.release_date).length,
+    backlog:    userGames.filter(g => normalizeStatus(g.status) === 'backlog').length,
+  }
 
   const FILTERS = [
     { label: 'All', value: 'all' },
@@ -773,13 +816,25 @@ function LibraryPage({ user }) {
     setStatusUpdating(false)
   }
 
-  // Move a game up or down in the backlog queue
-  const moveBacklogGame = async (gameId, direction) => {
-    if (!user) return
+  // Drag-and-drop reorder for backlog
+  const handleBacklogDrop = async (targetGameId) => {
+    if (!draggedGameId || draggedGameId === targetGameId) {
+      setDraggedGameId(null)
+      setDragOverGameId(null)
+      return
+    }
+    const sorted = [...filteredUserGames]
+    const fromIdx = sorted.findIndex(g => String(g.game_id) === String(draggedGameId))
+    const toIdx   = sorted.findIndex(g => String(g.game_id) === String(targetGameId))
+    if (fromIdx === -1 || toIdx === -1) return
+    const newOrder = sorted.map(g => g.game_id)
+    const [moved] = newOrder.splice(fromIdx, 1)
+    newOrder.splice(toIdx, 0, moved)
+    setDraggedGameId(null)
+    setDragOverGameId(null)
     try {
-      await axios.put(`${API_BASE}/user/${user.username}/games/${gameId}/backlog-order`, { direction })
-      const timestamp = Date.now()
-      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
+      await axios.put(`${API_BASE}/user/${user.username}/backlog-reorder`, { order: newOrder })
+      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
       setUserGames(res.data)
     } catch (err) {
       showToast('error', 'Failed to reorder backlog.')
@@ -951,6 +1006,9 @@ function LibraryPage({ user }) {
             disabled={statusUpdating}
           >
             {f.label}
+            {statusCounts[f.value] > 0 && (
+              <span className="filter-count">{statusCounts[f.value]}</span>
+            )}
           </button>
         ))}
       </div>
@@ -995,34 +1053,58 @@ function LibraryPage({ user }) {
         <p>No games in your library yet.</p>
       ) : (
         <>
-          <div className={`games-list ${viewMode === 'list' ? 'list-view' : ''}`}>
-            {currentGames.map(game => {
+          <div key={`${filter}-${currentPage}`} className={`games-list ${viewMode === 'list' ? 'list-view' : ''}`}>
+            {currentGames.map((game, index) => {
               const isUnreleased = game.status === 'unreleased' || !game.release_date;
               const effectiveCrackStatus = game.crackStatus || crackStatusMap[game.game_id] || 'unknown';
+              const isDragging  = filter === 'backlog' && String(draggedGameId) === String(game.game_id);
+              const isDragOver  = filter === 'backlog' && String(dragOverGameId) === String(game.game_id);
               return (
-                <div key={game.game_id} className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`} >
+                <div
+                  key={game.game_id}
+                  className={`game-card ${viewMode === 'list' ? 'list-item' : ''}${isDragging ? ' card-dragging' : ''}${isDragOver ? ' card-drag-over' : ''}`}
+                  style={{ animationDelay: `${index * 0.04}s` }}
+                  draggable={filter === 'backlog'}
+                  onDragStart={() => setDraggedGameId(game.game_id)}
+                  onDragOver={(e) => { if (filter === 'backlog') { e.preventDefault(); setDragOverGameId(game.game_id); } }}
+                  onDrop={() => handleBacklogDrop(game.game_id)}
+                  onDragEnd={() => { setDraggedGameId(null); setDragOverGameId(null); }}
+                >
                   {filter === 'backlog' && game.backlog_order != null && (
                     <div className="backlog-position-badge">#{game.backlog_order}</div>
+                  )}
+                  {filter === 'backlog' && viewMode === 'grid' && (
+                    <div className="drag-handle" title="Drag to reorder"><FaGripVertical /></div>
                   )}
                   {showCrackStatus && (
                     <span
                       className={`crack-status-dot crack-status-dot--${effectiveCrackStatus}`}
-                      title={effectiveCrackStatus === 'cracked' ? 'Cracked' : effectiveCrackStatus === 'uncracked' ? 'Not cracked' : 'Unknown'}
+                      title={
+                        effectiveCrackStatus === 'cracked'
+                          ? 'Cracked'
+                          : effectiveCrackStatus === 'uncracked'
+                            ? 'Not cracked'
+                            : 'Unknown'
+                      }
                       aria-hidden
                     />
                   )}
-                  {game.cover_url && (
-                    <div className="game-cover-container">
+                  <div className="game-cover-container">
+                    {game.cover_url ? (
                       <img src={game.cover_url} alt={game.game_name} className="game-cover" />
-                    </div>
-                  )}
+                    ) : (
+                      <div className="cover-placeholder">
+                        <FaGamepad className="cover-placeholder-icon" />
+                        <span className="cover-placeholder-name">{game.game_name}</span>
+                      </div>
+                    )}
+                  </div>
                   <div className="game-info">
                     <div>
                       <div className="game-title">{game.game_name}</div>
                       <div className="game-release-date">Release: {game.release_date ? game.release_date : 'Unreleased'}</div>
                       {showPrices && (
                         <div className="game-price" style={{ margin: '0.5em 0', color: 'var(--color-fg-muted)', fontWeight: 400, fontSize: '0.98em', letterSpacing: 0.1, lineHeight: 1.2 }}>
-                          {/* Prefer cached price, fallback to live fetch */}
                           {game.last_price ? (
                             <>
                               Price: {game.last_price}
@@ -1060,24 +1142,6 @@ function LibraryPage({ user }) {
                           ))}
                         </select>
                       )}
-                      {filter === 'backlog' && (
-                        <>
-                          <button
-                            className="remove-btn-icon"
-                            onClick={(e) => { e.stopPropagation(); moveBacklogGame(game.game_id, 'up'); }}
-                            title="Move up in backlog"
-                          >
-                            <FaArrowUp />
-                          </button>
-                          <button
-                            className="remove-btn-icon"
-                            onClick={(e) => { e.stopPropagation(); moveBacklogGame(game.game_id, 'down'); }}
-                            title="Move down in backlog"
-                          >
-                            <FaArrowDown />
-                          </button>
-                        </>
-                      )}
                       <button
                         className="remove-btn-icon"
                         onClick={(e) => {
@@ -1089,7 +1153,7 @@ function LibraryPage({ user }) {
                       >
                         <FaSync style={{ animation: refreshingGameIds[game.game_id] ? 'spin 1s linear infinite' : 'none' }} />
                       </button>
-                      <button 
+                      <button
                         className="remove-btn-icon"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1254,420 +1318,369 @@ function CalendarPage({ user }) {
   );
 }
 
+function SettingsSection({ icon: Icon, title, description, configured, children }) {
+  return (
+    <div className="ent-section">
+      <div className="ent-section-header">
+        <div className="ent-section-title-row">
+          <div className="ent-section-icon-wrap"><Icon /></div>
+          <div className="ent-section-title-group">
+            <h3 className="ent-section-title">{title}</h3>
+            <p className="ent-section-desc">{description}</p>
+          </div>
+          {configured === true  && <span className="ent-status ent-status--on"><span className="ent-status-dot" />Configured</span>}
+          {configured === false && <span className="ent-status ent-status--off"><span className="ent-status-dot" />Not configured</span>}
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function SettingsField({ label, hint, saved, wide, children }) {
+  return (
+    <div className={`ent-field${wide ? ' ent-field--wide' : ''}`}>
+      <div className="ent-field-label-row">
+        <label className="ent-field-label">{label}</label>
+        {saved && <span className="ent-field-saved" title="Value saved on server">● saved</span>}
+      </div>
+      {children}
+      {hint && <span className="ent-field-hint">{hint}</span>}
+    </div>
+  )
+}
+
+function SectionSaveBar({ sectionKey, saving, saveStatus, dirty, onSave, label }) {
+  const status = saveStatus[sectionKey]
+  return (
+    <div className="ent-save-bar">
+      <span className={`ent-unsaved-hint${dirty ? ' visible' : ''}`}>
+        <FaExclamationCircle /> Unsaved changes
+      </span>
+      <button
+        type="button"
+        className={`ent-save-btn${dirty ? ' ent-save-btn--dirty' : ''}${status === 'saved' ? ' ent-save-btn--saved' : ''}${status === 'error' ? ' ent-save-btn--error' : ''}`}
+        onClick={onSave}
+        disabled={saving[sectionKey]}
+      >
+        {saving[sectionKey] ? <><FaSync className="ent-spin" /> Saving…</>
+          : status === 'saved'  ? <><FaCheckCircle /> Saved</>
+          : status === 'error'  ? <><FaExclamationCircle /> Failed — retry</>
+          : <>Save {label}</>}
+      </button>
+    </div>
+  )
+}
+
+// ── Main SettingsPage ───────────────────────────────────────────────────────
 function SettingsPage() {
-  const [smtp, setSmtp] = useState(() => JSON.parse(localStorage.getItem('smtp_settings') || '{}'));
-  const [ntfy, setNtfy] = useState(() => JSON.parse(localStorage.getItem('ntfy_settings') || '{}'));
-  const [ldap, setLdap] = useState(() => JSON.parse(localStorage.getItem('ldap_settings') || '{}'));
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState('');
-  const [userGames, setUserGames] = useState([]);
-  const [selectedGame, setSelectedGame] = useState('');
-  const [selectedService, setSelectedService] = useState('both');
-  const [testNotificationLoading, setTestNotificationLoading] = useState(false);
-  const [testNotificationResult, setTestNotificationResult] = useState(null);
-  const [crackwatchLoading, setCrackwatchLoading] = useState(false);
-  const [crackwatchInfo, setCrackwatchInfo] = useState(null);
-  const [crackwatchError, setCrackwatchError] = useState('');
-  const [activeTab, setActiveTab] = useState('email');
-  const user = JSON.parse(localStorage.getItem('token_payload') || '{}');
-  const isAdmin = user && user.can_manage_users;
+  // Server-synced state
+  const [serverSettings, setServerSettings] = useState({ smtp: {}, ntfy: {}, ldap: {} })
+  const [smtp, setSmtp] = useState({})
+  const [ntfy, setNtfy] = useState({})
+  const [ldap, setLdap] = useState({})
+  const [loadingSettings, setLoadingSettings] = useState(true)
+  const [saving, setSaving]       = useState({})
+  const [saveStatus, setSaveStatus] = useState({})
 
-  const handleCrackwatchTest = async () => {
-    if (!selectedGame) {
-      setError('Please select a game to test CrackRelease status');
-      return;
-    }
-    setCrackwatchLoading(true);
-    setCrackwatchError('');
-    setCrackwatchInfo(null);
-    try {
-      const token = localStorage.getItem('token');
-      const game = userGames.find(g => g.game_id.toString() === selectedGame);
-      if (!game) {
-        setCrackwatchError('Selected game not found in your library');
-      } else {
-        const res = await axios.post(`${API_BASE}/admin/crackrelease-status`, { gameName: game.game_name }, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {}
-        });
-        setCrackwatchInfo(res.data);
-      }
-    } catch (err) {
-      setCrackwatchError(err.response?.data?.error || err.message || 'Failed to call CrackRelease');
-    } finally {
-      setCrackwatchLoading(false);
-    }
-  };
+  // Testing tab state (preserved)
+  const [userGames, setUserGames]             = useState([])
+  const [selectedGame, setSelectedGame]       = useState('')
+  const [selectedService, setSelectedService] = useState('both')
+  const [testLoading, setTestLoading]         = useState(false)
+  const [testResult, setTestResult]           = useState(null)
+  const [crackLoading, setCrackLoading]       = useState(false)
+  const [crackInfo, setCrackInfo]             = useState(null)
+  const [crackError, setCrackError]           = useState('')
+  const [testError, setTestError]             = useState('')
 
-  const handleSmtpChange = e => setSmtp({ ...smtp, [e.target.name]: e.target.value });
-  const handleNtfyChange = e => setNtfy({ ...ntfy, [e.target.name]: e.target.value });
-  const handleLdapChange = e => setLdap({ ...ldap, [e.target.name]: e.target.value });
+  const [activeTab, setActiveTab] = useState('email')
 
-  const handleSave = async (e) => {
-    e.preventDefault();
-    setError('');
-    try {
-      await axios.post(`${API_BASE}/settings`, { smtp, ntfy, ldap });
-      localStorage.setItem('smtp_settings', JSON.stringify(smtp));
-      localStorage.setItem('ntfy_settings', JSON.stringify(ntfy));
-      localStorage.setItem('ldap_settings', JSON.stringify(ldap));
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 2000);
-    } catch (err) {
-      setError('Failed to save settings.');
-    }
-  };
+  const token   = localStorage.getItem('token')
+  const isAdmin = (() => { try { return JSON.parse(atob(token.split('.')[1])).can_manage_users } catch { return false } })()
+  const authH   = { headers: { Authorization: `Bearer ${token}` } }
 
-  // Load user's games for notification testing
+  // ── Load from server on mount
   useEffect(() => {
-    if (isAdmin) {
-      const token = localStorage.getItem('token');
-      console.log('Loading user games for notification testing...');
-      axios.get(`${API_BASE}/user/me/games`, {
-        headers: { Authorization: `Bearer ${token}` }
-      }).then(response => {
-        console.log('User games loaded:', response.data);
-        setUserGames(response.data);
-      }).catch(err => {
-        console.error('Failed to load user games:', err);
-        setError('Failed to load your games for testing');
-      });
+    axios.get(`${API_BASE}/settings`)
+      .then(res => {
+        const s = res.data || {}
+        setServerSettings(s)
+        setSmtp(s.smtp  || {})
+        setNtfy(s.ntfy  || {})
+        setLdap(s.ldap  || {})
+      })
+      .finally(() => setLoadingSettings(false))
+  }, [])
+
+  // ── Load user games for testing tab
+  useEffect(() => {
+    if (!isAdmin) return
+    axios.get(`${API_BASE}/user/me/games`, authH)
+      .then(r => setUserGames(r.data))
+      .catch(() => {})
+  }, [isAdmin])
+
+  // ── Helpers
+  const isConfigured = data => Object.values(data || {}).some(v => v && String(v).trim())
+  const isDirty = key => {
+    const curr = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : ldap
+    return JSON.stringify(curr) !== JSON.stringify(serverSettings[key] || {})
+  }
+
+  const saveSection = async (key) => {
+    const data = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : ldap
+    setSaving(p => ({ ...p, [key]: true }))
+    setSaveStatus(p => ({ ...p, [key]: null }))
+    try {
+      await axios.post(`${API_BASE}/settings`, { [key]: data })
+      setServerSettings(p => ({ ...p, [key]: { ...data } }))
+      setSaveStatus(p => ({ ...p, [key]: 'saved' }))
+      setTimeout(() => setSaveStatus(p => ({ ...p, [key]: null })), 3000)
+    } catch {
+      setSaveStatus(p => ({ ...p, [key]: 'error' }))
     }
-  }, [isAdmin]);
+    setSaving(p => ({ ...p, [key]: false }))
+  }
+
+  // ── Test handlers (preserved)
+  const handleCrackTest = async () => {
+    if (!selectedGame) return
+    setCrackLoading(true); setCrackError(''); setCrackInfo(null)
+    try {
+      const game = userGames.find(g => g.game_id.toString() === selectedGame)
+      if (!game) { setCrackError('Game not found'); return }
+      const r = await axios.post(`${API_BASE}/admin/crackrelease-status`, { gameName: game.game_name }, authH)
+      setCrackInfo(r.data)
+    } catch (err) { setCrackError(err.response?.data?.error || err.message || 'Failed') }
+    finally { setCrackLoading(false) }
+  }
 
   const handleTestNotification = async () => {
-    if (!selectedGame) {
-      setError('Please select a game to test notifications');
-      return;
-    }
-
-    setTestNotificationLoading(true);
-    setError('');
-    setTestNotificationResult(null);
-
+    if (!selectedGame) return
+    setTestLoading(true); setTestError(''); setTestResult(null)
     try {
-      const token = localStorage.getItem('token');
-      const game = userGames.find(g => g.game_id.toString() === selectedGame);
-      
-      const response = await axios.post(`${API_BASE}/admin/test-notification`, {
-        service: selectedService,
-        gameId: selectedGame,
-        gameName: game.game_name,
-        releaseDate: game.release_date
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const game = userGames.find(g => g.game_id.toString() === selectedGame)
+      const r = await axios.post(`${API_BASE}/admin/test-notification`, {
+        service: selectedService, gameId: selectedGame,
+        gameName: game.game_name, releaseDate: game.release_date,
+      }, authH)
+      setTestResult(r.data)
+    } catch (err) { setTestError(err.response?.data?.error || 'Test notification failed') }
+    finally { setTestLoading(false) }
+  }
 
-      setTestNotificationResult(response.data);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 5000);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Test notification failed');
-    } finally {
-      setTestNotificationLoading(false);
-    }
-  };
+  // ── Nav definition
+  const NAV = [
+    { key: 'email',   label: 'Email',            sub: 'SMTP',        icon: FaEnvelope,    data: smtp },
+    { key: 'ntfy',    label: 'Push',             sub: 'NTFY',        icon: FaBell,        data: ntfy },
+    { key: 'ldap',    label: 'Directory',        sub: 'LDAP / AD',   icon: FaLock,        data: ldap },
+    { key: 'testing', label: 'Diagnostics',      sub: 'Testing',     icon: FaCheckCircle, data: null },
+  ]
 
-  // Decode token to check admin
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        localStorage.setItem('token_payload', JSON.stringify(payload));
-      } catch {}
-    }
-  }, []);
-
-  // Define tabs configuration
-  const tabs = [
-    { id: 'email', label: 'Email Settings', icon: FaEnvelope, adminOnly: true },
-    { id: 'ntfy', label: 'NTFY Settings', icon: FaBell, adminOnly: true },
-    { id: 'ldap', label: 'LDAP Settings', icon: FaLock, adminOnly: true },
-    { id: 'testing', label: 'Test Notifications', icon: FaCheckCircle, adminOnly: true }
-  ];
-
-  // Filter tabs based on admin status
-  const availableTabs = tabs.filter(tab => !tab.adminOnly || isAdmin);
+  if (loadingSettings) return (
+    <div className="ent-loading">
+      <FaSync className="ent-spin" style={{ fontSize: '1.8rem', color: 'var(--color-accent)' }} />
+      <span>Loading configuration…</span>
+    </div>
+  )
 
   return (
-    <div className="settings-page">
-      <h2><FaCog style={{marginRight:8}}/>Settings</h2>
-      
-      {/* Tab Navigation */}
-      <div className="settings-tabs">
-        {availableTabs.map(tab => {
-          const IconComponent = tab.icon;
+    <div className="ent-settings">
+
+      {/* ── Left nav ── */}
+      <nav className="ent-nav">
+        <div className="ent-nav-header">
+          <FaCog className="ent-nav-logo" />
+          <span>Configuration</span>
+        </div>
+
+        {NAV.map(s => {
+          const configured = s.data !== null ? isConfigured(s.data) : null
+          const dirty      = s.data !== null ? isDirty(s.key)       : false
           return (
             <button
-              key={tab.id}
-              className={`settings-tab ${activeTab === tab.id ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
+              key={s.key}
+              className={`ent-nav-item${activeTab === s.key ? ' active' : ''}`}
+              onClick={() => setActiveTab(s.key)}
             >
-              <IconComponent className="tab-icon" />
-              <span className="tab-label">{tab.label}</span>
+              <s.icon className="ent-nav-icon" />
+              <div className="ent-nav-text">
+                <span className="ent-nav-label">{s.label}</span>
+                <span className="ent-nav-sub">{s.sub}</span>
+              </div>
+              <div className="ent-nav-badges">
+                {dirty && <span className="ent-badge ent-badge--dirty">●</span>}
+                {!dirty && configured === true  && <span className="ent-badge ent-badge--ok">✓</span>}
+                {!dirty && configured === false && <span className="ent-badge ent-badge--off">—</span>}
+              </div>
             </button>
-          );
+          )
         })}
-      </div>
+      </nav>
 
-      {/* Tab Content */}
-      <div className="settings-content">
-        <form className="settings-form" onSubmit={handleSave}>
-          {/* Email Settings Tab */}
-          {activeTab === 'email' && isAdmin && (
-            <div className="tab-panel">
-              <div className="tab-header">
-                <FaEnvelope className="tab-header-icon" />
-                <h3>Email (SMTP) Notifications</h3>
-                <p>Configure SMTP settings for email notifications</p>
-              </div>
-              <div className="settings-grid">
-                <div className="input-group">
-                  <label htmlFor="smtp-host">SMTP Host</label>
-                  <input id="smtp-host" name="host" value={smtp.host || ''} onChange={handleSmtpChange} placeholder="e.g. smtp.example.com" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="smtp-port">SMTP Port</label>
-                  <input id="smtp-port" name="port" value={smtp.port || ''} onChange={handleSmtpChange} placeholder="e.g. 587" type="number" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="smtp-user">SMTP Username</label>
-                  <input id="smtp-user" name="user" value={smtp.user || ''} onChange={handleSmtpChange} placeholder="e.g. user@example.com" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="smtp-pass">SMTP Password</label>
-                  <input id="smtp-pass" name="pass" value={smtp.pass || ''} onChange={handleSmtpChange} placeholder="Password" type="password" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="smtp-from">From Email</label>
-                  <input id="smtp-from" name="from" value={smtp.from || ''} onChange={handleSmtpChange} placeholder="e.g. noreply@example.com" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="smtp-to">Your Email (to receive notifications)</label>
-                  <input id="smtp-to" name="to" value={smtp.to || ''} onChange={handleSmtpChange} placeholder="e.g. you@example.com" />
-                </div>
-              </div>
+      {/* ── Right panel ── */}
+      <div className="ent-panel">
+
+        {/* Email */}
+        {activeTab === 'email' && (
+          <SettingsSection icon={FaEnvelope} title="Email Notifications" description="Configure SMTP to receive release reminders and status alerts by email." configured={isConfigured(smtp)}>
+            <div className="ent-fields">
+              <SettingsField label="SMTP Host"   saved={!!serverSettings.smtp?.host}>
+                <input className="ent-input" value={smtp.host  || ''} onChange={e => setSmtp(p => ({ ...p, host:  e.target.value }))} placeholder="smtp.example.com" />
+              </SettingsField>
+              <SettingsField label="SMTP Port"   saved={!!serverSettings.smtp?.port}>
+                <input className="ent-input" type="number" value={smtp.port  || ''} onChange={e => setSmtp(p => ({ ...p, port:  e.target.value }))} placeholder="587" />
+              </SettingsField>
+              <SettingsField label="Username"    saved={!!serverSettings.smtp?.user}>
+                <input className="ent-input" value={smtp.user  || ''} onChange={e => setSmtp(p => ({ ...p, user:  e.target.value }))} placeholder="user@example.com" />
+              </SettingsField>
+              <SettingsField label="Password"    saved={!!serverSettings.smtp?.pass}>
+                <input className="ent-input" type="password" value={smtp.pass  || ''} onChange={e => setSmtp(p => ({ ...p, pass:  e.target.value }))} placeholder="App password" />
+              </SettingsField>
+              <SettingsField label="From Address" saved={!!serverSettings.smtp?.from}>
+                <input className="ent-input" value={smtp.from  || ''} onChange={e => setSmtp(p => ({ ...p, from:  e.target.value }))} placeholder="noreply@example.com" />
+              </SettingsField>
+              <SettingsField label="Recipient Address" saved={!!serverSettings.smtp?.to} hint="Address that receives notification emails">
+                <input className="ent-input" value={smtp.to    || ''} onChange={e => setSmtp(p => ({ ...p, to:    e.target.value }))} placeholder="you@example.com" />
+              </SettingsField>
             </div>
-          )}
+            <SectionSaveBar sectionKey="smtp" saving={saving} saveStatus={saveStatus} dirty={isDirty('smtp')} onSave={() => saveSection('smtp')} label="Email Settings" />
+          </SettingsSection>
+        )}
 
-          {/* NTFY Settings Tab */}
-          {activeTab === 'ntfy' && isAdmin && (
-            <div className="tab-panel">
-              <div className="tab-header">
-                <FaBell className="tab-header-icon" />
-                <h3>NTFY Notifications</h3>
-                <p>Configure NTFY server and topic for push notifications</p>
-              </div>
-              <div className="settings-grid">
-                <div className="input-group">
-                  <label htmlFor="ntfy-url">NTFY Server URL</label>
-                  <input id="ntfy-url" name="url" value={ntfy.url || ''} onChange={handleNtfyChange} placeholder="e.g. https://ntfy.example.com" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="ntfy-topic">NTFY Topic</label>
-                  <input id="ntfy-topic" name="topic" value={ntfy.topic || ''} onChange={handleNtfyChange} placeholder="e.g. mytopic" />
-                </div>
-              </div>
+        {/* NTFY */}
+        {activeTab === 'ntfy' && (
+          <SettingsSection icon={FaBell} title="Push Notifications" description="Configure NTFY for instant push notifications on any device." configured={isConfigured(ntfy)}>
+            <div className="ent-fields">
+              <SettingsField label="NTFY Server URL" saved={!!serverSettings.ntfy?.url} wide hint="Self-hosted or ntfy.sh">
+                <input className="ent-input" value={ntfy.url   || ''} onChange={e => setNtfy(p => ({ ...p, url:   e.target.value }))} placeholder="https://ntfy.sh" />
+              </SettingsField>
+              <SettingsField label="Topic" saved={!!serverSettings.ntfy?.topic} hint="Unique topic name — subscribe to this in the NTFY app">
+                <input className="ent-input" value={ntfy.topic || ''} onChange={e => setNtfy(p => ({ ...p, topic: e.target.value }))} placeholder="my-gametracker-alerts" />
+              </SettingsField>
             </div>
-          )}
+            <SectionSaveBar sectionKey="ntfy" saving={saving} saveStatus={saveStatus} dirty={isDirty('ntfy')} onSave={() => saveSection('ntfy')} label="NTFY Settings" />
+          </SettingsSection>
+        )}
 
-          {/* LDAP Settings Tab */}
-          {activeTab === 'ldap' && isAdmin && (
-            <div className="tab-panel">
-              <div className="tab-header">
-                <FaLock className="tab-header-icon" />
-                <h3>LDAP Settings</h3>
-                <p>Configure LDAP server for user authentication</p>
-              </div>
-              <div className="settings-grid">
-                <div className="input-group">
-                  <label htmlFor="ldap-url">LDAP Server URL</label>
-                  <input id="ldap-url" name="url" value={ldap.url || ''} onChange={handleLdapChange} placeholder="e.g. ldap://dc01.example.com" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="ldap-base">Base DN</label>
-                  <input id="ldap-base" name="base" value={ldap.base || ''} onChange={handleLdapChange} placeholder="e.g. dc=example,dc=com" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="ldap-userdn">User DN Pattern</label>
-                  <input id="ldap-userdn" name="userDn" value={ldap.userDn || ''} onChange={handleLdapChange} placeholder="e.g. cn={username},ou=Users,{baseDN}" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="ldap-binddn">Bind DN (optional)</label>
-                  <input id="ldap-binddn" name="bindDn" value={ldap.bindDn || ''} onChange={handleLdapChange} placeholder="e.g. cn=readonly,dc=example,dc=com" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="ldap-bindpass">Bind Password (optional)</label>
-                  <input id="ldap-bindpass" name="bindPass" value={ldap.bindPass || ''} onChange={handleLdapChange} placeholder="Password" type="password" />
-                </div>
-                <div className="input-group">
-                  <label htmlFor="ldap-requiredgroup">Required Group</label>
-                  <input id="ldap-requiredgroup" name="requiredGroup" value={ldap.requiredGroup || ''} onChange={handleLdapChange} placeholder="e.g. GameTrackerUsers or cn=..." />
-                </div>
-              </div>
+        {/* LDAP */}
+        {activeTab === 'ldap' && (
+          <SettingsSection icon={FaLock} title="Directory Services" description="Connect to Active Directory or FreeIPA for centralized user authentication." configured={isConfigured(ldap)}>
+            <div className="ent-fields">
+              <SettingsField label="LDAP Server URL"   saved={!!serverSettings.ldap?.url}           wide hint="e.g. ldap://dc01.corp.example.com">
+                <input className="ent-input" value={ldap.url          || ''} onChange={e => setLdap(p => ({ ...p, url:           e.target.value }))} placeholder="ldap://dc01.example.com" />
+              </SettingsField>
+              <SettingsField label="Base DN"            saved={!!serverSettings.ldap?.base}          wide hint="Root of the directory tree to search">
+                <input className="ent-input" value={ldap.base         || ''} onChange={e => setLdap(p => ({ ...p, base:          e.target.value }))} placeholder="dc=example,dc=com" />
+              </SettingsField>
+              <SettingsField label="User DN Pattern"    saved={!!serverSettings.ldap?.userDn}        wide hint="Use {username} and {baseDN} as placeholders">
+                <input className="ent-input" value={ldap.userDn       || ''} onChange={e => setLdap(p => ({ ...p, userDn:        e.target.value }))} placeholder="cn={username},ou=Users,{baseDN}" />
+              </SettingsField>
+              <SettingsField label="Bind DN"            saved={!!serverSettings.ldap?.bindDn}        wide hint="Service account for directory lookups">
+                <input className="ent-input" value={ldap.bindDn       || ''} onChange={e => setLdap(p => ({ ...p, bindDn:        e.target.value }))} placeholder="cn=readonly,dc=example,dc=com" />
+              </SettingsField>
+              <SettingsField label="Bind Password"      saved={!!serverSettings.ldap?.bindPass}>
+                <input className="ent-input" type="password" value={ldap.bindPass     || ''} onChange={e => setLdap(p => ({ ...p, bindPass:      e.target.value }))} placeholder="Service account password" />
+              </SettingsField>
+              <SettingsField label="Required Group"     saved={!!serverSettings.ldap?.requiredGroup} hint="Optional — only members of this group can log in">
+                <input className="ent-input" value={ldap.requiredGroup || ''} onChange={e => setLdap(p => ({ ...p, requiredGroup: e.target.value }))} placeholder="GameTrackerUsers" />
+              </SettingsField>
             </div>
-          )}
+            <SectionSaveBar sectionKey="ldap" saving={saving} saveStatus={saveStatus} dirty={isDirty('ldap')} onSave={() => saveSection('ldap')} label="LDAP Settings" />
+          </SettingsSection>
+        )}
 
-          {/* Test Notifications Tab */}
-          {activeTab === 'testing' && isAdmin && (
-            <div className="tab-panel">
-              <div className="tab-header">
-                <FaCheckCircle className="tab-header-icon" />
-                <h3>Test Notifications</h3>
-                <p>Send test notifications to verify your configuration</p>
-              </div>
-              <div className="settings-grid">
-                <div className="input-group">
-                  <label htmlFor="notification-service">Notification Service</label>
-                  <select 
-                    id="notification-service" 
-                    value={selectedService} 
-                    onChange={(e) => setSelectedService(e.target.value)}
-                    className="settings-select"
-                  >
-                    <option value="both">Both Email & NTFY</option>
-                    <option value="email">Email Only</option>
-                    <option value="ntfy">NTFY Only</option>
-                    <option value="crackwatch">CrackRelease status test only</option>
-                  </select>
+        {/* Diagnostics */}
+        {activeTab === 'testing' && isAdmin && (
+          <SettingsSection icon={FaCheckCircle} title="Diagnostics & Testing" description="Verify your notification pipeline and inspect crack status data." configured={null}>
+            <div className="ent-fields">
+              <SettingsField label="Notification Service">
+                <select className="ent-input ent-select" value={selectedService} onChange={e => setSelectedService(e.target.value)}>
+                  <option value="both">Both Email &amp; NTFY</option>
+                  <option value="email">Email only</option>
+                  <option value="ntfy">NTFY only</option>
+                  <option value="crackwatch">CrackRelease status only</option>
+                </select>
+              </SettingsField>
+              <SettingsField label="Game" hint={userGames.length ? `${userGames.length} games in library` : 'Loading…'}>
+                <select className="ent-input ent-select" value={selectedGame} onChange={e => setSelectedGame(e.target.value)}>
+                  <option value="">Choose a game…</option>
+                  {userGames.map(g => (
+                    <option key={g.game_id} value={g.game_id}>
+                      {g.game_name} {g.release_date ? `(${new Date(g.release_date).toLocaleDateString()})` : '(no date)'}
+                    </option>
+                  ))}
+                </select>
+              </SettingsField>
+            </div>
+
+            <div className="ent-test-actions">
+              <button
+                type="button"
+                className="ent-test-btn"
+                disabled={(selectedService === 'crackwatch' ? crackLoading : testLoading) || !selectedGame}
+                onClick={selectedService === 'crackwatch' ? handleCrackTest : handleTestNotification}
+              >
+                {(selectedService === 'crackwatch' ? crackLoading : testLoading)
+                  ? <><FaSync className="ent-spin" /> Running…</>
+                  : selectedService === 'crackwatch'
+                    ? 'Check CrackRelease Status'
+                    : 'Send Test Notification'}
+              </button>
+              {testError && <span className="ent-test-error"><FaExclamationCircle /> {testError}</span>}
+            </div>
+
+            {/* CrackRelease result */}
+            {crackInfo && (
+              <div className="ent-result-card">
+                <div className="ent-result-row">
+                  <span className="ent-result-label">Status</span>
+                  <span className={`ent-crack-status ent-crack-status--${crackInfo.status || 'unknown'}`}>
+                    {(crackInfo.status || 'unknown').toUpperCase()}
+                  </span>
                 </div>
-                <div className="input-group">
-                  <label htmlFor="test-game">Select Game for Testing</label>
-                  <select 
-                    id="test-game" 
-                    value={selectedGame} 
-                    onChange={(e) => setSelectedGame(e.target.value)}
-                    className="settings-select"
-                  >
-                    <option value="">Choose a game from your library...</option>
-                    {userGames.length === 0 ? (
-                      <option value="" disabled>Loading your games...</option>
-                    ) : (
-                      userGames.map(game => {
-                        const releaseDate = game.release_date ? new Date(game.release_date).toLocaleDateString() : 'Date N/A';
-                        return (
-                          <option key={game.game_id} value={game.game_id}>
-                            {game.game_name} ({releaseDate})
-                          </option>
-                        );
-                      })
-                    )}
-                  </select>
-                  {userGames.length > 0 && (
-                    <small style={{color: '#666', fontSize: '12px', marginTop: '4px'}}>
-                      Found {userGames.length} games in your library
-                    </small>
-                  )}
-                </div>
-                <div className="input-group">
-                  <button 
-                    type="button" 
-                    onClick={() => {
-                      if (selectedService === 'crackwatch') handleCrackwatchTest();
-                      else handleTestNotification();
-                    }}
-                    disabled={
-                      selectedService === 'crackwatch'
-                        ? crackwatchLoading || !selectedGame
-                        : testNotificationLoading || !selectedGame
-                    }
-                    className="test-notification-btn"
-                  >
-                    {selectedService === 'crackwatch' ? (
-                      crackwatchLoading ? 'Checking CrackRelease…' : 'Test CrackRelease status'
-                    ) : testNotificationLoading ? (
-                      <>
-                        <span style={{marginRight: '8px'}}>⏳</span>
-                        Sending Test Notification...
-                      </>
-                    ) : (
-                      <>
-                        <span style={{marginRight: '8px'}}>📧</span>
-                        Send Test Notification
-                      </>
-                    )}
-                  </button>
-                  {selectedService === 'crackwatch' ? (
-                    <p className="test-notification-help">
-                      This will call CrackRelease for the selected game and show its reported crack status. No emails or NTFY notifications are sent.
-                      {crackwatchInfo && (
-                        <span style={{ display: 'block', marginTop: 4 }}>
-                          Status: <strong>{(crackwatchInfo.status || 'unknown').toUpperCase()}</strong>
-                          {crackwatchInfo.url && (
-                            <> (source: <a href={crackwatchInfo.url} target="_blank" rel="noreferrer">CrackRelease</a>)</>
-                          )}
-                        </span>
-                      )}
-                      {crackwatchError && (
-                        <span style={{ display: 'block', marginTop: 4, color: '#f44336' }}>{crackwatchError}</span>
-                      )}
-                    </p>
-                  ) : (
-                    <p className="test-notification-help">
-                      This will send a test notification using your configured email and/or NTFY settings. 
-                      The notification will include the exact days until release for the selected game.
-                    </p>
-                  )}
-                </div>
-              </div>
-              
-              {/* Test Notification Results */}
-              {testNotificationResult && (
-                <div className="test-notification-results">
-                  <h4>
-                    <span style={{marginRight: '8px'}}>📊</span>
-                    Test Notification Results
-                  </h4>
-                  
-                  <div className="test-game-info">
-                    <h5>Game Information:</h5>
-                    <div className="game-info-content">
-                      <p><strong>Game:</strong> {testNotificationResult.gameInfo.name}</p>
-                      <p><strong>Release Date:</strong> {testNotificationResult.gameInfo.releaseDate}</p>
-                      <p><strong>Release Status:</strong> {testNotificationResult.gameInfo.releaseText}</p>
-                    </div>
+                {crackInfo.url && (
+                  <div className="ent-result-row">
+                    <span className="ent-result-label">Source</span>
+                    <a href={crackInfo.url} target="_blank" rel="noreferrer" className="ent-result-link">CrackRelease ↗</a>
                   </div>
-                  
-                  <div className="test-results-section">
-                    <h5>Notification Results:</h5>
-                    
-                    {/* Email Results */}
-                    <div className={`test-result-card ${testNotificationResult.results.email.sent ? 'success' : 'error'}`}>
-                      <span className="result-icon">📧</span>
-                      <div className="result-content">
-                        <strong>Email: {testNotificationResult.results.email.sent ? 'Sent Successfully' : 'Failed'}</strong>
-                        {testNotificationResult.results.email.error && (
-                          <p>Error: {testNotificationResult.results.email.error}</p>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {/* NTFY Results */}
-                    <div className={`test-result-card ${testNotificationResult.results.ntfy.sent ? 'success' : 'error'}`}>
-                      <span className="result-icon">🔔</span>
-                      <div className="result-content">
-                        <strong>NTFY: {testNotificationResult.results.ntfy.sent ? 'Sent Successfully' : 'Failed'}</strong>
-                        {testNotificationResult.results.ntfy.error && (
-                          <p>Error: {testNotificationResult.results.ntfy.error}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+            {crackError && <div className="ent-test-error" style={{marginTop:'1rem'}}><FaExclamationCircle /> {crackError}</div>}
 
-          {/* Save Button and Status Messages */}
-          <div className="settings-actions">
-            <button type="submit" className="save-settings-btn enhanced-btn">Save Settings</button>
-            {success && <div className="settings-success"><FaCheckCircle style={{color:'#43a047',marginRight:6}}/>Settings saved!</div>}
-            {error && <div className="error-msg">{error}</div>}
-          </div>
-        </form>
+            {/* Notification test result */}
+            {testResult && (
+              <div className="ent-result-card">
+                <div className="ent-result-row">
+                  <span className="ent-result-label">Game</span>
+                  <span>{testResult.gameInfo?.name}</span>
+                </div>
+                <div className="ent-result-row">
+                  <span className="ent-result-label">Release</span>
+                  <span>{testResult.gameInfo?.releaseText}</span>
+                </div>
+                <div className="ent-result-divider" />
+                <div className="ent-result-row">
+                  <span className="ent-result-label">Email</span>
+                  <span className={`ent-service-status ent-service-status--${testResult.results?.email?.sent ? 'ok' : 'fail'}`}>
+                    {testResult.results?.email?.sent ? '✓ Sent' : `✗ ${testResult.results?.email?.error || 'Failed'}`}
+                  </span>
+                </div>
+                <div className="ent-result-row">
+                  <span className="ent-result-label">NTFY</span>
+                  <span className={`ent-service-status ent-service-status--${testResult.results?.ntfy?.sent ? 'ok' : 'fail'}`}>
+                    {testResult.results?.ntfy?.sent ? '✓ Sent' : `✗ ${testResult.results?.ntfy?.error || 'Failed'}`}
+                  </span>
+                </div>
+              </div>
+            )}
+          </SettingsSection>
+        )}
       </div>
     </div>
-  );
+  )
 }
 
 export default App

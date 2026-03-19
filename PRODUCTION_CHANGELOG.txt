@@ -9,6 +9,63 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-03-19 (UI improvements, enterprise settings, LDAP fix) ---
+Summary: UI polish (drag-and-drop backlog, hover-reveal actions, card animations, cover portrait fix,
+  filter counters, theme accent picker), enterprise settings page redesign, LDAP bcrypt crash fix.
+
+Files changed in production:
+  • index.js
+  • frontend/src/App.jsx
+  • frontend/src/App.css
+
+What was done (CHANGE #7 – UI improvements):
+  • Backend:
+    - Added PUT /api/user/:username/backlog-reorder endpoint accepting full ordered game_id array.
+      Updates backlog_order for all items in one pass.
+  • Frontend App.jsx:
+    - Added FaGamepad, FaGripVertical to react-icons/fa import.
+    - Added ACCENT_PRESETS constant (Sky, Purple, Green, Orange, Pink).
+    - Added accentColor state + useEffect to apply --color-accent CSS variable at runtime,
+      persisted in localStorage.
+    - Added theme picker dots below logout button in sidebar.
+    - Added draggedGameId, dragOverGameId state to LibraryPage.
+    - Added statusCounts object to show per-status game counts.
+    - Replaced moveBacklogGame (▲▼ buttons) with handleBacklogDrop using new backlog-reorder API.
+    - Filter bar buttons now show <span className="filter-count"> badge.
+    - Added key={filter+'-'+currentPage} to games-list div for animation re-trigger.
+    - Game cards: drag handlers, staggered animationDelay, cover placeholder fallback,
+      drag handle icon (FaGripVertical), removed arrow buttons.
+    - Search page: cover placeholder fallback + animation delay.
+  • Frontend App.css:
+    - cardEnter keyframe + .game-card animation.
+    - Hover-reveal: .games-list:not(.list-view) .game-card-actions hidden, revealed on hover.
+    - Drag states: .card-dragging, .card-drag-over, .drag-handle.
+    - Cover container: aspect-ratio changed 1/1 → 3/4, background #1a1a2e, object-position: center top.
+    - Cover placeholder: .cover-placeholder, .cover-placeholder-icon, .cover-placeholder-name.
+    - Filter count badge: .filter-count, .filter-btn.active .filter-count.
+    - Theme picker: .theme-picker, .theme-dot, .theme-dot.active.
+
+What was done (CHANGE #8 – Enterprise settings page):
+  • Backend:
+    - POST /api/settings now does section-level merge instead of full file overwrite.
+      Only smtp/ntfy/ldap keys present in request body are updated; others are preserved.
+  • Frontend App.jsx:
+    - Added SettingsSection, SettingsField, SectionSaveBar helper components.
+    - SettingsPage rewritten: loads from GET /api/settings on mount (not localStorage),
+      tracks serverSettings vs current form for dirty detection,
+      per-section saves via saveSection(key), two-panel enterprise UI.
+  • Frontend App.css:
+    - Full .ent-* CSS block: .ent-settings, .ent-nav, .ent-panel, .ent-section,
+      .ent-fields, .ent-input, .ent-save-bar, .ent-test-*, .ent-result-*, .ent-loading.
+
+What was done (CHANGE #9 – LDAP bcrypt null crash fix):
+  • Backend index.js:
+    - In fallbackLocalAuth(), added null/type guard before bcrypt.compare():
+      if (!user.password || typeof user.password !== 'string') return 401 with LDAP hint.
+    - Wrapped password in String() before compare.
+    - Prevents crash "Illegal arguments: string, object" when LDAP user (null password)
+      falls back to local auth due to LDAP misconfiguration.
+
 --- APPLIED 2026-03-02 (Crack status from CrackRelease.com) ---
 Summary: Crack status feature using CrackRelease.com (per-game page scrape). Same behavior as staging.
 
