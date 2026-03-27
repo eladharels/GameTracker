@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
@@ -57,6 +57,17 @@ function App() {
     localStorage.setItem('accent_color', accentColor)
   }, [accentColor])
 
+  const [widescreen, setWidescreen] = useState(
+    () => localStorage.getItem('widescreen') === 'true'
+  )
+  const toggleWidescreen = () => {
+    setWidescreen(prev => {
+      const next = !prev
+      localStorage.setItem('widescreen', String(next))
+      return next
+    })
+  }
+
   // Logout function
   const logout = () => {
     localStorage.removeItem('token')
@@ -85,7 +96,7 @@ function App() {
 
   // If logged in, render the full app
   return (
-    <div className="container">
+    <div className={`container${widescreen ? ' widescreen' : ''}`}>
       <aside className="sidebar left-sidebar">
         <nav className="nav-menu">
           <Link to="/search" className={location.pathname === '/search' ? 'active' : ''}>
@@ -119,6 +130,15 @@ function App() {
           <button className="logout-btn" onClick={logout}>
             <FaSignOutAlt className="nav-icon" />
             <span className="nav-label">Logout</span>
+          </button>
+          <button
+            className={`widescreen-btn${widescreen ? ' widescreen-btn--active' : ''}`}
+            onClick={toggleWidescreen}
+            aria-label={widescreen ? 'Exit wide layout' : 'Enable wide layout'}
+            aria-pressed={widescreen}
+          >
+            {widescreen ? <FaCompress className="nav-icon" /> : <FaExpand className="nav-icon" />}
+            <span className="nav-label">{widescreen ? 'Compact' : 'Wide Screen'}</span>
           </button>
           <div className="theme-picker">
             {ACCENT_PRESETS.map(p => (
@@ -651,7 +671,8 @@ function LibraryPage({ user }) {
   const [refreshingGameIds, setRefreshingGameIds] = useState({})
   const [draggedGameId, setDraggedGameId] = useState(null)
   const [dragOverGameId, setDragOverGameId] = useState(null)
-  const { showToast } = useToast()
+  const { showToast, dismissToast } = useToast()
+  const pendingDeleteRef = useRef({})
   const gamesPerPage = 15
 
   useEffect(() => {
@@ -666,7 +687,7 @@ function LibraryPage({ user }) {
     } else {
       setUserGames([])
     }
-  }, [user, statusUpdating])
+  }, [user])
 
   const statusCounts = {
     all:        userGames.length,
@@ -774,11 +795,14 @@ function LibraryPage({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCrackStatus, currentGames, user])
 
-  // Change status
+  // Change status — optimistic update
   const setGameStatus = async (game, status) => {
     if (!user) return alert('Enter a username first!')
-    setStatusUpdating(true)
     setStatusError('')
+    const previousGames = userGames
+    setUserGames(prev => prev.map(g =>
+      String(g.game_id) === String(game.game_id) ? { ...g, status } : g
+    ))
     try {
       await axios.post(`${API_BASE}/user/${user.username}/games`, {
         gameId: game.game_id,
@@ -787,33 +811,53 @@ function LibraryPage({ user }) {
         releaseDate: game.release_date,
         status,
       })
-      
-      // Refresh the library data after successful status update
-      const timestamp = Date.now()
-      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
-      setUserGames(res.data)
     } catch (err) {
-      setStatusError('Failed to update status. Please try again.')
+      setUserGames(previousGames)
+      showToast('error', 'Failed to update status. Please try again.')
     }
-    setStatusUpdating(false)
   }
 
-  // Remove game
-  const removeGame = async (gameId) => {
+  // Remove game — optimistic with 5-second undo window
+  const removeGame = (gameId) => {
     if (!user) return
-    setStatusUpdating(true)
     setRemoveError('')
-    try {
-      await axios.delete(`${API_BASE}/user/${user.username}/games/${gameId}`)
-      
-      // Refresh the library data after successful removal
-      const timestamp = Date.now()
-      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
-      setUserGames(res.data)
-    } catch (err) {
-      setRemoveError('Failed to remove game. Please try again.')
-    }
-    setStatusUpdating(false)
+    const snapshot = userGames.find(g => String(g.game_id) === String(gameId))
+    if (!snapshot) return
+
+    setUserGames(prev => prev.filter(g => String(g.game_id) !== String(gameId)))
+
+    showToast('info', `Removed "${snapshot.game_name}"`, {
+      duration: 5300,
+      actionLabel: 'Undo',
+      onAction: () => {
+        if (pendingDeleteRef.current[gameId]) {
+          pendingDeleteRef.current[gameId].forEach(t => clearTimeout(t))
+          delete pendingDeleteRef.current[gameId]
+        }
+        setUserGames(prev => {
+          const exists = prev.some(g => String(g.game_id) === String(gameId))
+          if (exists) return prev
+          return [...prev, snapshot].sort((a, b) => (a.backlog_order ?? 9999) - (b.backlog_order ?? 9999))
+        })
+        showToast('success', `"${snapshot.game_name}" restored.`)
+      },
+    })
+
+    const deleteTimer = setTimeout(async () => {
+      delete pendingDeleteRef.current[gameId]
+      try {
+        await axios.delete(`${API_BASE}/user/${user.username}/games/${gameId}`)
+      } catch (err) {
+        setUserGames(prev => {
+          const exists = prev.some(g => String(g.game_id) === String(gameId))
+          if (exists) return prev
+          return [...prev, snapshot]
+        })
+        showToast('error', 'Failed to remove game. It has been restored.')
+      }
+    }, 5000)
+
+    pendingDeleteRef.current[gameId] = [deleteTimer]
   }
 
   // Drag-and-drop reorder for backlog
@@ -905,42 +949,18 @@ function LibraryPage({ user }) {
 
   return (
     <div className="user-games-section">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2 style={{margin: 0}}>My Library ({userGames.length})</h2>
-        <div className="view-controls" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div className="library-header">
+        <h2 className="library-title">My Library ({userGames.length})</h2>
+        <div className="view-controls library-view-controls">
           <button
-            className="toggle-price-btn"
-            style={{
-              background: showPrices ? 'var(--color-accent)' : 'var(--color-card)',
-              color: showPrices ? 'var(--color-accent-contrast)' : 'var(--color-fg-muted)',
-              border: '1.5px solid var(--color-border)',
-              borderRadius: 12,
-              padding: '0.5em 1.2em',
-              fontWeight: 600,
-              fontSize: '1em',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: showPrices ? '0 4px 15px #0ea5e933' : 'none',
-            }}
+            className={`toggle-feature-btn${showPrices ? ' toggle-feature-btn--active' : ''}`}
             onClick={() => setShowPrices(v => !v)}
             aria-pressed={showPrices}
           >
             {showPrices ? 'Hide Prices' : 'Show Prices'}
           </button>
           <button
-            className="toggle-price-btn"
-            style={{
-              background: showCrackStatus ? 'var(--color-accent)' : 'var(--color-card)',
-              color: showCrackStatus ? 'var(--color-accent-contrast)' : 'var(--color-fg-muted)',
-              border: '1.5px solid var(--color-border)',
-              borderRadius: 12,
-              padding: '0.5em 1.2em',
-              fontWeight: 600,
-              fontSize: '1em',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: showCrackStatus ? '0 4px 15px #0ea5e933' : 'none',
-            }}
+            className={`toggle-feature-btn${showCrackStatus ? ' toggle-feature-btn--active' : ''}`}
             onClick={() => setShowCrackStatus(v => !v)}
             aria-pressed={showCrackStatus}
             title="Show crack status from CrackRelease (green = cracked, red = not cracked)"
@@ -948,52 +968,48 @@ function LibraryPage({ user }) {
             {showCrackStatus ? 'Hide crack status' : 'Show crack status'}
           </button>
           <div className="view-toggle">
-            <button onClick={() => setViewMode('grid')} className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}><FaTh /></button>
-            <button onClick={() => setViewMode('list')} className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}><FaList /></button>
+            <button onClick={() => setViewMode('grid')} className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`} aria-label="Grid view" aria-pressed={viewMode === 'grid'}><FaTh /></button>
+            <button onClick={() => setViewMode('list')} className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} aria-label="List view" aria-pressed={viewMode === 'list'}><FaList /></button>
           </div>
         </div>
       </div>
-      <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      {userGames.length > 0 && (
+        <div className="library-stats-bar">
+          <div className="stats-chip stats-chip--wishlist" onClick={() => setFilter('wishlist')} title="Wishlist">
+            <FaHeart /> <span>{statusCounts.wishlist}</span>
+          </div>
+          <div className="stats-chip stats-chip--playing" onClick={() => setFilter('playing')} title="Playing">
+            <FaPlay /> <span>{statusCounts.playing}</span>
+          </div>
+          <div className="stats-chip stats-chip--done" onClick={() => setFilter('done')} title="Done">
+            <FaCheck /> <span>{statusCounts.done}</span>
+          </div>
+          <div className="stats-chip stats-chip--backlog" onClick={() => setFilter('backlog')} title="Backlog">
+            <FaList /> <span>{statusCounts.backlog}</span>
+          </div>
+          <div className="stats-chip stats-chip--unreleased" onClick={() => setFilter('unreleased')} title="Unreleased">
+            <FaLock /> <span>{statusCounts.unreleased}</span>
+          </div>
+          <div className="stats-chip stats-chip--total" onClick={() => setFilter('all')} title="All games">
+            <FaGamepad /> <span>{userGames.length} total</span>
+          </div>
+        </div>
+      )}
+      <div className="library-search-bar">
         <input
           type="text"
+          className="library-search-input"
           placeholder="Search your library..."
           value={searchTerm}
           onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-          style={{
-            padding: '0.5em 1em',
-            borderRadius: 8,
-            border: '1.5px solid var(--color-border)',
-            fontSize: '1em',
-            width: 260,
-            background: 'var(--color-card)',
-            color: 'var(--color-fg)',
-          }}
         />
         <button
-          className="action-btn playing-btn"
+          className={`refresh-metadata-btn${refreshingMetadata ? ' refresh-metadata-btn--active' : ''}`}
           onClick={refreshMetadata}
           disabled={refreshingMetadata || loading}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '0.6em 1.2em',
-            borderRadius: 12,
-            fontWeight: 600,
-            fontSize: '1em',
-            background: refreshingMetadata ? 'var(--color-card)' : 'linear-gradient(135deg, #2196f3 0%, #1976d2 100%)',
-            color: '#fff',
-            border: 'none',
-            cursor: refreshingMetadata ? 'not-allowed' : 'pointer',
-            transition: 'all 0.2s',
-            boxShadow: refreshingMetadata ? 'none' : '0 2px 8px #2196f344',
-            opacity: refreshingMetadata ? 0.7 : 1,
-          }}
           title="Refresh metadata (release date and wallpaper) for all games"
         >
-          <FaSync style={{ 
-            animation: refreshingMetadata ? 'spin 1s linear infinite' : 'none'
-          }} />
+          <FaSync className={refreshingMetadata ? 'spin-icon' : ''} />
           {refreshingMetadata ? 'Refreshing...' : 'Refresh Metadata'}
         </button>
       </div>
@@ -1003,7 +1019,6 @@ function LibraryPage({ user }) {
             key={f.value}
             className={`filter-btn${filter === f.value ? ' active' : ''}`}
             onClick={() => { setFilter(f.value); setCurrentPage(1); }}
-            disabled={statusUpdating}
           >
             {f.label}
             {statusCounts[f.value] > 0 && (
@@ -1048,9 +1063,34 @@ function LibraryPage({ user }) {
       )}
       
       {loading ? (
-        <p>Loading...</p>
+        <div className="games-list">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="skeleton-card">
+              <div className="skeleton-cover" />
+              <div className="skeleton-line skeleton-line--med" />
+              <div className="skeleton-line skeleton-line--short" />
+            </div>
+          ))}
+        </div>
       ) : filteredUserGames.length === 0 ? (
-        <p>No games in your library yet.</p>
+        <div className="empty-state">
+          {userGames.length === 0 ? (
+            <>
+              <FaGamepad className="empty-state-icon" />
+              <p className="empty-state-title">Your library is empty</p>
+              <p className="empty-state-sub">Search for games and add them to get started.</p>
+            </>
+          ) : (
+            <>
+              <FaSearch className="empty-state-icon" />
+              <p className="empty-state-title">No games match this filter</p>
+              <p className="empty-state-sub">Try a different status or clear your search.</p>
+              <button className="filter-btn active" style={{marginTop:'0.5rem'}} onClick={() => { setFilter('all'); setSearchTerm('') }}>
+                Show all games
+              </button>
+            </>
+          )}
+        </div>
       ) : (
         <>
           <div key={`${filter}-${currentPage}`} className={`games-list ${viewMode === 'list' ? 'list-view' : ''}`}>
@@ -1062,7 +1102,7 @@ function LibraryPage({ user }) {
               return (
                 <div
                   key={game.game_id}
-                  className={`game-card ${viewMode === 'list' ? 'list-item' : ''}${isDragging ? ' card-dragging' : ''}${isDragOver ? ' card-drag-over' : ''}`}
+                  className={`game-card status-${normalizeStatus(game.status)} ${viewMode === 'list' ? 'list-item' : ''}${isDragging ? ' card-dragging' : ''}${isDragOver ? ' card-drag-over' : ''}`}
                   style={{ animationDelay: `${index * 0.04}s` }}
                   draggable={filter === 'backlog'}
                   onDragStart={() => setDraggedGameId(game.game_id)}
@@ -1091,7 +1131,7 @@ function LibraryPage({ user }) {
                   )}
                   <div className="game-cover-container">
                     {game.cover_url ? (
-                      <img src={game.cover_url} alt={game.game_name} className="game-cover" />
+                      <img src={game.cover_url} alt={game.game_name} className="game-cover" loading="lazy" decoding="async" onLoad={(e) => e.currentTarget.classList.add('cover-loaded')} />
                     ) : (
                       <div className="cover-placeholder">
                         <FaGamepad className="cover-placeholder-icon" />
@@ -1128,19 +1168,21 @@ function LibraryPage({ user }) {
                           <FaLock /> Unreleased
                         </div>
                       ) : (
-                        <select
-                          className="status-select"
-                          value={normalizeStatus(game.status)}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            setGameStatus(game, e.target.value);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {STATUSES.map(status => (
-                            <option key={status} value={status}>{status}</option>
-                          ))}
-                        </select>
+                        <div className="status-select-wrapper" onClick={(e) => e.stopPropagation()}>
+                          <span className={`status-dot status-dot--${normalizeStatus(game.status)}`} aria-hidden="true" />
+                          <select
+                            className="status-select"
+                            value={normalizeStatus(game.status)}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              setGameStatus(game, e.target.value);
+                            }}
+                          >
+                            {STATUSES.map(status => (
+                              <option key={status} value={status}>{status}</option>
+                            ))}
+                          </select>
+                        </div>
                       )}
                       <button
                         className="remove-btn-icon"
@@ -1159,6 +1201,7 @@ function LibraryPage({ user }) {
                           e.stopPropagation();
                           removeGame(game.game_id);
                         }}
+                        title="Remove game (undo available)"
                       >
                         <FaTrash />
                       </button>
