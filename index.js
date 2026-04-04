@@ -576,7 +576,7 @@ function saveSettings(settings) {
 }
 
 // --- Notification Functions ---
-async function sendEmail(subject, text, toOverride) {
+async function sendEmail(subject, text, toOverride, coverUrl) {
   const { smtp } = loadSettings();
   if (!smtp.host || !smtp.port || !smtp.from) {
     console.log('[Email] SMTP settings incomplete:', { host: smtp.host, port: smtp.port, from: smtp.from });
@@ -615,12 +615,18 @@ async function sendEmail(subject, text, toOverride) {
   });
 
   const transporter = nodemailer.createTransport(options);
+  const html = coverUrl
+    ? `<div style="font-family:sans-serif;max-width:480px">` +
+      `<img src="${coverUrl}" alt="Game cover" style="max-width:200px;border-radius:6px;display:block;margin-bottom:12px">` +
+      `<p style="margin:0;font-size:15px">${text}</p></div>`
+    : null;
   try {
     const result = await transporter.sendMail({
       from: smtp.from,
       to: finalRecipient,
       subject,
       text,
+      ...(html && { html }),
     });
     console.log('[Email] Successfully sent email:', {
       messageId: result.messageId,
@@ -637,20 +643,26 @@ async function sendEmail(subject, text, toOverride) {
   }
 }
 
-async function sendNtfy(title, message, topicOverride) {
+async function sendNtfy(title, message, topicOverride, attachUrl) {
   const { ntfy } = loadSettings();
   if (!ntfy.url || !ntfy.topic) return;
+  const headers = { Title: title };
+  if (attachUrl) headers.Attach = attachUrl;
   await axios.post(`${ntfy.url.replace(/\/$/, '')}/${topicOverride || (ntfy && ntfy.topic) || process.env.DEFAULT_NTFY_TOPIC}`, message, {
-    headers: { Title: title },
+    headers,
   });
 }
 
-async function sendGotify(title, message, urlOverride, tokenOverride, priority = 5) {
+async function sendGotify(title, message, urlOverride, tokenOverride, priority = 5, imageUrl) {
   const { gotify } = loadSettings();
   const url = urlOverride || gotify?.url;
   const token = tokenOverride || gotify?.token;
   if (!url || !token) return;
-  await axios.post(`${url.replace(/\/$/, '')}/message?token=${token}`, { title, message, priority }, {
+  const body = { title, message, priority };
+  if (imageUrl) {
+    body.extras = { 'client::notification': { bigImageUrl: imageUrl } };
+  }
+  await axios.post(`${url.replace(/\/$/, '')}/message?token=${token}`, body, {
     headers: { 'Content-Type': 'application/json' },
   });
 }
@@ -725,6 +737,7 @@ async function getLdapEmail(username) {
 async function notifyEvent(type, game, username, status) {
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
+  const coverUrl = game.coverUrl || null;
   let subject, text, title, message;
   if (type === 'add') {
     subject = `Game added: ${game.gameName}`;
@@ -777,7 +790,7 @@ async function notifyEvent(type, game, username, status) {
   if (userEmail) {
     try {
       console.log('Attempting to send email to:', userEmail);
-      await sendEmail(subject, text, userEmail);
+      await sendEmail(subject, text, userEmail, coverUrl);
       console.log('Email sent successfully');
     } catch (emailErr) {
       console.error('Error sending email:', emailErr);
@@ -791,7 +804,7 @@ async function notifyEvent(type, game, username, status) {
 
   if (ntfyTopic) {
     try {
-      await sendNtfy(title, message, ntfyTopic);
+      await sendNtfy(title, message, ntfyTopic, coverUrl);
       console.log(`[Notify Event] Ntfy sent successfully to topic ${ntfyTopic} for user ${normalizedUsername}`);
     } catch (ntfyErr) {
       console.error(`[Notify Event] Error sending ntfy for user ${normalizedUsername}:`, ntfyErr);
@@ -806,7 +819,7 @@ async function notifyEvent(type, game, username, status) {
 
   if (gotifyToken && gotifyUrl) {
     try {
-      await sendGotify(title, message, gotifyUrl, gotifyToken);
+      await sendGotify(title, message, gotifyUrl, gotifyToken, 5, coverUrl);
       console.log(`[Notify Event] Gotify sent successfully for user ${normalizedUsername}`);
     } catch (gotifyErr) {
       console.error(`[Notify Event] Error sending Gotify for user ${normalizedUsername}:`, gotifyErr);
@@ -889,7 +902,7 @@ app.post('/api/user/:username/games', async (req, res) => {
         });
         if (row.status !== status) eventType = 'status';
         if (row.status === 'unreleased' && status !== 'unreleased' && releaseDate && new Date(releaseDate) <= new Date()) {
-          await notifyEvent('release', { gameName }, normalizedUsername, status);
+          await notifyEvent('release', { gameName, coverUrl }, normalizedUsername, status);
         }
       } else {
         console.log(`[DEBUG] New game being added`);
@@ -927,7 +940,7 @@ app.post('/api/user/:username/games', async (req, res) => {
           console.log(`[DEBUG] Status updated successfully for user ${normalizedUsername}, game ${gameId} to status: ${status}`);
           console.log(`[DEBUG] Rows affected: ${this.changes}, Last ID: ${this.lastID}`);
 
-          await notifyEvent(eventType, { gameName }, normalizedUsername, status);
+          await notifyEvent(eventType, { gameName, coverUrl }, normalizedUsername, status);
           res.json({ success: true });
         }
       );
@@ -985,9 +998,9 @@ app.get('/api/user/me/games', authRequired, (req, res) => {
   console.log(`[DEBUG] Getting games for user ID: ${userId}`);
   
   db.all(`
-    SELECT game_id, game_name, release_date, status 
-    FROM user_games 
-    WHERE user_id = ? 
+    SELECT game_id, game_name, cover_url, release_date, status
+    FROM user_games
+    WHERE user_id = ?
     ORDER BY game_name ASC
   `, [userId], (err, rows) => {
     if (err) {
@@ -2106,7 +2119,7 @@ app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users')
 app.post('/api/admin/test-notification', authRequired, requirePermission('can_manage_users'), async (req, res) => {
   try {
     const settings = loadSettings();
-    const { service, gameId, gameName, releaseDate } = req.body;
+    const { service, gameId, gameName, releaseDate, coverUrl } = req.body;
     
     if (!service || !gameId || !gameName) {
       return res.status(400).json({ error: 'Missing required parameters: service, gameId, gameName' });
@@ -2163,7 +2176,7 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
     if (service === 'email' || service === 'both') {
       if (userDetails && userDetails.email) {
         try {
-          await sendEmail(subject, text, userDetails.email);
+          await sendEmail(subject, text, userDetails.email, coverUrl);
           results.email.sent = true;
           console.log(`[Test Notification] Email sent successfully to ${userDetails.email}`);
         } catch (error) {
@@ -2182,7 +2195,7 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
 
       if (ntfyTopic) {
         try {
-          await sendNtfy(title, message, ntfyTopic);
+          await sendNtfy(title, message, ntfyTopic, coverUrl);
           results.ntfy.sent = true;
           console.log(`[Test Notification] Ntfy sent successfully to topic ${ntfyTopic}`);
         } catch (error) {
@@ -2201,7 +2214,7 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
 
       if (gotifyToken && gotifyUrl) {
         try {
-          await sendGotify(title, message, gotifyUrl, gotifyToken);
+          await sendGotify(title, message, gotifyUrl, gotifyToken, 5, coverUrl);
           results.gotify.sent = true;
           console.log(`[Test Notification] Gotify sent successfully`);
         } catch (error) {
@@ -2519,16 +2532,17 @@ function getUserGames(username, cb) {
 async function sendReleaseReminder(username, game, days) {
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
+  const coverUrl = game.cover_url || null;
   let when = days === 0 ? 'today' : `in ${days} days`;
   let subject = `Reminder: "${game.game_name}" releases ${when}!`;
   let text = `The game "${game.game_name}" you are following releases ${when} (${game.release_date}).`;
   let title = 'Game Release Reminder';
   let message = text;
-  
+
   // Get user's email from database or LDAP
   const userEmail = await getUserEmail(normalizedUsername);
   if (userEmail) {
-    await sendEmail(subject, text, userEmail);
+    await sendEmail(subject, text, userEmail, coverUrl);
   }
   
   // Get user's ntfy topic and gotify token
@@ -2549,7 +2563,7 @@ async function sendReleaseReminder(username, game, days) {
 
   if (ntfyTopic) {
     try {
-      await sendNtfy(title, message, ntfyTopic);
+      await sendNtfy(title, message, ntfyTopic, coverUrl);
       console.log(`[Release Reminder] Ntfy sent successfully to topic ${ntfyTopic} for user ${normalizedUsername}`);
     } catch (error) {
       console.error(`[Release Reminder] Ntfy failed for user ${normalizedUsername}:`, error.message);
@@ -2564,7 +2578,7 @@ async function sendReleaseReminder(username, game, days) {
 
   if (gotifyToken && gotifyUrl) {
     try {
-      await sendGotify(title, message, gotifyUrl, gotifyToken);
+      await sendGotify(title, message, gotifyUrl, gotifyToken, 5, coverUrl);
       console.log(`[Release Reminder] Gotify sent successfully for user ${normalizedUsername}`);
     } catch (error) {
       console.error(`[Release Reminder] Gotify failed for user ${normalizedUsername}:`, error.message);
@@ -2627,7 +2641,7 @@ cron.schedule('0 8 * * *', () => {
                   } else {
                     console.log(`[CRON] Successfully updated status for game ${game.game_name} (user: ${username}) from unreleased to wishlist`);
                     // Send release notification
-                    notifyEvent('release', { gameName: game.game_name }, username, 'wishlist').catch(err => {
+                    notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist').catch(err => {
                       console.error(`[CRON] Failed to send release notification for game ${game.game_name} (user: ${username}):`, err);
                     });
                   }
@@ -2800,7 +2814,7 @@ app.post('/api/admin/check-releases', authRequired, requirePermission('manage_us
                     updatedGames.push({ username, gameName: game.game_name, gameId: game.game_id });
                     
                     // Send release notification
-                    notifyEvent('release', { gameName: game.game_name }, username, 'wishlist').then(() => {
+                    notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist').then(() => {
                       notificationsSent.push({ username, gameName: game.game_name });
                     }).catch(err => {
                       console.error(`[MANUAL API] Failed to send release notification for game ${game.game_name} (user: ${username}):`, err);

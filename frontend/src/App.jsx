@@ -1509,6 +1509,7 @@ function SettingsPage() {
       const r = await axios.post(`${API_BASE}/admin/test-notification`, {
         service: selectedService, gameId: selectedGame,
         gameName: game.game_name, releaseDate: game.release_date,
+        coverUrl: game.cover_url,
       }, authH)
       setTestResult(r.data)
     } catch (err) { setTestError(err.response?.data?.error || 'Test notification failed') }
