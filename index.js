@@ -58,7 +58,8 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
       created_at TEXT,
       origin TEXT DEFAULT 'local',
       display_name TEXT,
-      shares_library INTEGER DEFAULT 0
+      shares_library INTEGER DEFAULT 0,
+      notification_days TEXT DEFAULT '[0,7,30]'
     )`);
     db.run(`CREATE TABLE IF NOT EXISTS user_games (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +85,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
     db.run(`ALTER TABLE user_games ADD COLUMN crack_status TEXT`, () => {});
     db.run(`ALTER TABLE user_games ADD COLUMN backlog_order INTEGER`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN gotify_token TEXT`, () => {});
+    db.run(`ALTER TABLE users ADD COLUMN notification_days TEXT`, () => {});
     console.log('Database initialized');
   }
 });
@@ -590,7 +592,7 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
     fallbackEmail: process.env.DEFAULT_EMAIL
   });
 
-  const finalRecipient = toOverride || smtp.to || process.env.DEFAULT_EMAIL;
+  const finalRecipient = toOverride;
   if (!finalRecipient) {
     console.log('[Email] No recipient email found, skipping email send');
     return;
@@ -643,20 +645,17 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
   }
 }
 
-async function sendNtfy(title, message, topicOverride, attachUrl) {
+async function sendNtfy(title, message, topic, attachUrl) {
   const { ntfy } = loadSettings();
-  if (!ntfy.url || !ntfy.topic) return;
+  if (!ntfy.url || !topic) return;
   const headers = { Title: title };
   if (attachUrl) headers.Attach = attachUrl;
-  await axios.post(`${ntfy.url.replace(/\/$/, '')}/${topicOverride || (ntfy && ntfy.topic) || process.env.DEFAULT_NTFY_TOPIC}`, message, {
-    headers,
-  });
+  await axios.post(`${ntfy.url.replace(/\/$/, '')}/${topic}`, message, { headers });
 }
 
-async function sendGotify(title, message, urlOverride, tokenOverride, priority = 5, imageUrl) {
+async function sendGotify(title, message, token, priority = 5, imageUrl) {
   const { gotify } = loadSettings();
-  const url = urlOverride || gotify?.url;
-  const token = tokenOverride || gotify?.token;
+  const url = gotify?.url;
   if (!url || !token) return;
   const body = { title, message, priority };
   if (imageUrl) {
@@ -797,35 +796,26 @@ async function notifyEvent(type, game, username, status) {
     }
   }
 
-  const settings = loadSettings();
-
-  // Try to send ntfy - use user's personal topic or fall back to global
-  const ntfyTopic = userNtfy || settings.ntfy?.topic;
-
-  if (ntfyTopic) {
+  if (userNtfy) {
     try {
-      await sendNtfy(title, message, ntfyTopic, coverUrl);
-      console.log(`[Notify Event] Ntfy sent successfully to topic ${ntfyTopic} for user ${normalizedUsername}`);
+      await sendNtfy(title, message, userNtfy, coverUrl);
+      console.log(`[Notify Event] Ntfy sent successfully to topic ${userNtfy} for user ${normalizedUsername}`);
     } catch (ntfyErr) {
       console.error(`[Notify Event] Error sending ntfy for user ${normalizedUsername}:`, ntfyErr);
     }
   } else {
-    console.log(`[Notify Event] No ntfy topic configured (neither user-specific nor global) for user ${normalizedUsername}`);
+    console.log(`[Notify Event] No personal ntfy topic set for user ${normalizedUsername}, skipping ntfy`);
   }
 
-  // Try to send Gotify - use user's personal token or fall back to global
-  const gotifyToken = userGotifyToken || settings.gotify?.token;
-  const gotifyUrl = settings.gotify?.url;
-
-  if (gotifyToken && gotifyUrl) {
+  if (userGotifyToken) {
     try {
-      await sendGotify(title, message, gotifyUrl, gotifyToken, 5, coverUrl);
+      await sendGotify(title, message, userGotifyToken, 5, coverUrl);
       console.log(`[Notify Event] Gotify sent successfully for user ${normalizedUsername}`);
     } catch (gotifyErr) {
       console.error(`[Notify Event] Error sending Gotify for user ${normalizedUsername}:`, gotifyErr);
     }
   } else {
-    console.log(`[Notify Event] No Gotify configured (url: ${!!gotifyUrl}, token: ${!!gotifyToken}) for user ${normalizedUsername}`);
+    console.log(`[Notify Event] No personal Gotify token set for user ${normalizedUsername}, skipping Gotify`);
   }
 }
 
@@ -2118,7 +2108,6 @@ app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users')
 // --- Test Notification endpoint for admins ---
 app.post('/api/admin/test-notification', authRequired, requirePermission('can_manage_users'), async (req, res) => {
   try {
-    const settings = loadSettings();
     const { service, gameId, gameName, releaseDate, coverUrl } = req.body;
     
     if (!service || !gameId || !gameName) {
@@ -2190,31 +2179,25 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
 
     // Send ntfy notification if requested
     if (service === 'ntfy' || service === 'both') {
-      // Try user's personal ntfy topic first, then fall back to global settings
-      const ntfyTopic = userDetails?.ntfy_topic || settings.ntfy?.topic;
-
-      if (ntfyTopic) {
+      if (userDetails?.ntfy_topic) {
         try {
-          await sendNtfy(title, message, ntfyTopic, coverUrl);
+          await sendNtfy(title, message, userDetails.ntfy_topic, coverUrl);
           results.ntfy.sent = true;
-          console.log(`[Test Notification] Ntfy sent successfully to topic ${ntfyTopic}`);
+          console.log(`[Test Notification] Ntfy sent successfully to topic ${userDetails.ntfy_topic}`);
         } catch (error) {
           results.ntfy.error = error.message;
           console.error(`[Test Notification] Ntfy failed:`, error.message);
         }
       } else {
-        results.ntfy.error = 'No ntfy topic configured (neither user-specific nor global)';
+        results.ntfy.error = 'No personal NTFY topic set — configure it in My Account';
       }
     }
 
     // Send Gotify notification if requested
     if (service === 'gotify' || service === 'both') {
-      const gotifyToken = userDetails?.gotify_token || settings.gotify?.token;
-      const gotifyUrl = settings.gotify?.url;
-
-      if (gotifyToken && gotifyUrl) {
+      if (userDetails?.gotify_token) {
         try {
-          await sendGotify(title, message, gotifyUrl, gotifyToken, 5, coverUrl);
+          await sendGotify(title, message, userDetails.gotify_token, 5, coverUrl);
           results.gotify.sent = true;
           console.log(`[Test Notification] Gotify sent successfully`);
         } catch (error) {
@@ -2222,7 +2205,7 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
           console.error(`[Test Notification] Gotify failed:`, error.message);
         }
       } else {
-        results.gotify.error = `No Gotify configured (url: ${!!gotifyUrl}, token: ${!!gotifyToken})`;
+        results.gotify.error = 'No personal Gotify token set — configure it in My Account';
       }
     }
     
@@ -2442,9 +2425,23 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
 
 // --- Per-user settings endpoint ---
 // Authenticated user can update their own email/ntfy_topic/gotify_token
+// --- Get current user's profile/settings ---
+app.get('/api/user/me', authRequired, (req, res) => {
+  const userId = req.user.id;
+  db.get('SELECT id, username, email, ntfy_topic, gotify_token, notification_days, display_name, shares_library FROM users WHERE id = ?', [userId], (err, row) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+    if (!row) return res.status(404).json({ error: 'User not found' });
+    let notificationDays = [0, 7, 30];
+    try { notificationDays = JSON.parse(row.notification_days); } catch {}
+    res.json({ ...row, notification_days: notificationDays });
+  });
+});
+
+// --- Per-user settings endpoint ---
+// Authenticated user can update their own email/ntfy_topic/gotify_token/notification_days
 app.put('/api/user/me/settings', authRequired, (req, res) => {
   const userId = req.user.id;
-  const { email, ntfy_topic, gotify_token } = req.body;
+  const { email, ntfy_topic, gotify_token, notification_days } = req.body;
   const updates = [];
   const params = [];
   if (typeof email !== 'undefined') {
@@ -2458,6 +2455,13 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
   if (typeof gotify_token !== 'undefined') {
     updates.push('gotify_token = ?');
     params.push(gotify_token);
+  }
+  if (typeof notification_days !== 'undefined') {
+    if (!Array.isArray(notification_days) || notification_days.length === 0 || !notification_days.every(d => Number.isInteger(d) && d >= 0)) {
+      return res.status(400).json({ error: 'notification_days must be a non-empty array of non-negative integers' });
+    }
+    updates.push('notification_days = ?');
+    params.push(JSON.stringify(notification_days));
   }
   if (updates.length === 0) {
     return res.status(400).json({ error: 'No settings to update' });
@@ -2556,35 +2560,26 @@ async function sendReleaseReminder(username, game, days) {
     });
   });
 
-  const settings = loadSettings();
-
-  // Try user's personal ntfy topic first, then fall back to global settings
-  const ntfyTopic = userPushSettings.ntfy_topic || settings.ntfy?.topic;
-
-  if (ntfyTopic) {
+  if (userPushSettings.ntfy_topic) {
     try {
-      await sendNtfy(title, message, ntfyTopic, coverUrl);
-      console.log(`[Release Reminder] Ntfy sent successfully to topic ${ntfyTopic} for user ${normalizedUsername}`);
+      await sendNtfy(title, message, userPushSettings.ntfy_topic, coverUrl);
+      console.log(`[Release Reminder] Ntfy sent successfully to topic ${userPushSettings.ntfy_topic} for user ${normalizedUsername}`);
     } catch (error) {
       console.error(`[Release Reminder] Ntfy failed for user ${normalizedUsername}:`, error.message);
     }
   } else {
-    console.log(`[Release Reminder] No ntfy topic configured (neither user-specific nor global) for user ${normalizedUsername}`);
+    console.log(`[Release Reminder] No personal ntfy topic set for user ${normalizedUsername}, skipping ntfy`);
   }
 
-  // Try Gotify - use user's personal token or fall back to global
-  const gotifyToken = userPushSettings.gotify_token || settings.gotify?.token;
-  const gotifyUrl = settings.gotify?.url;
-
-  if (gotifyToken && gotifyUrl) {
+  if (userPushSettings.gotify_token) {
     try {
-      await sendGotify(title, message, gotifyUrl, gotifyToken, 5, coverUrl);
+      await sendGotify(title, message, userPushSettings.gotify_token, 5, coverUrl);
       console.log(`[Release Reminder] Gotify sent successfully for user ${normalizedUsername}`);
     } catch (error) {
       console.error(`[Release Reminder] Gotify failed for user ${normalizedUsername}:`, error.message);
     }
   } else {
-    console.log(`[Release Reminder] No Gotify configured (url: ${!!gotifyUrl}, token: ${!!gotifyToken}) for user ${normalizedUsername}`);
+    console.log(`[Release Reminder] No personal Gotify token set for user ${normalizedUsername}, skipping Gotify`);
   }
 }
 
@@ -2615,63 +2610,67 @@ cron.schedule('0 8 * * *', () => {
   getAllUsers((err, users) => {
     if (err) return console.error('Error fetching users for notifications:', err);
     users.forEach(username => {
-      getUserGames(username, (err, games) => {
-        if (err) return;
-        let found = false;
-        games.forEach(game => {
-          if (game.status === 'unreleased' && game.release_date) {
-            const releaseDate = new Date(game.release_date);
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            releaseDate.setHours(0,0,0,0);
-            const diffDays = Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24));
-            console.log(`[CRON] User: ${username}, Game: ${game.game_name}, Release: ${game.release_date}, diffDays: ${diffDays}`);
-            
-            // Check if game has been released (diffDays <= 0)
-            if (diffDays <= 0) {
-              console.log(`[CRON] Game "${game.game_name}" has been released! Updating status from unreleased to wishlist for user ${username}`);
-              
-              // Update the game status from unreleased to wishlist
-              db.run(
-                'UPDATE user_games SET status = ? WHERE user_id = (SELECT id FROM users WHERE username = ?) AND game_id = ?',
-                ['wishlist', username.toLowerCase(), game.game_id],
-                function(err) {
-                  if (err) {
-                    console.error(`[CRON] Failed to update status for game ${game.game_name} (user: ${username}):`, err);
-                  } else {
-                    console.log(`[CRON] Successfully updated status for game ${game.game_name} (user: ${username}) from unreleased to wishlist`);
-                    // Send release notification
-                    notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist').catch(err => {
-                      console.error(`[CRON] Failed to send release notification for game ${game.game_name} (user: ${username}):`, err);
+      // Load user's notification day preferences
+      db.get('SELECT notification_days FROM users WHERE username = ?', [username.toLowerCase()], (err, userRow) => {
+        let notifDays = [0, 7, 30]; // default matches legacy behaviour
+        if (!err && userRow && userRow.notification_days) {
+          try { notifDays = JSON.parse(userRow.notification_days); } catch {}
+        }
+        getUserGames(username, (err, games) => {
+          if (err) return;
+          let found = false;
+          games.forEach(game => {
+            if (game.status === 'unreleased' && game.release_date) {
+              const releaseDate = new Date(game.release_date);
+              const today = new Date();
+              today.setHours(0,0,0,0);
+              releaseDate.setHours(0,0,0,0);
+              const diffDays = Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24));
+              console.log(`[CRON] User: ${username}, Game: ${game.game_name}, Release: ${game.release_date}, diffDays: ${diffDays}, notifDays: ${JSON.stringify(notifDays)}`);
+
+              // Check if game has been released (diffDays <= 0)
+              if (diffDays <= 0) {
+                console.log(`[CRON] Game "${game.game_name}" has been released! Updating status from unreleased to wishlist for user ${username}`);
+                db.run(
+                  'UPDATE user_games SET status = ? WHERE user_id = (SELECT id FROM users WHERE username = ?) AND game_id = ?',
+                  ['wishlist', username.toLowerCase(), game.game_id],
+                  function(err) {
+                    if (err) {
+                      console.error(`[CRON] Failed to update status for game ${game.game_name} (user: ${username}):`, err);
+                    } else {
+                      console.log(`[CRON] Successfully updated status for game ${game.game_name} (user: ${username}) from unreleased to wishlist`);
+                      // Send release notification
+                      notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist').catch(err => {
+                        console.error(`[CRON] Failed to send release notification for game ${game.game_name} (user: ${username}):`, err);
+                      });
+                    }
+                  }
+                );
+                found = true;
+              } else {
+                // Check if this diffDays value matches any of the user's configured reminder days
+                if (notifDays.includes(diffDays)) {
+                  const type = `${diffDays}days`;
+                  if (!wasNotificationSent(username, game.game_id, type)) {
+                    console.log(`[CRON] Sending ${type} reminder to ${username} for game ${game.game_name}`);
+                    sendReleaseReminder(username, game, diffDays).then(() => {
+                      markNotificationSent(username, game.game_id, type);
+                      console.log(`Sent ${type} release reminder to ${username} for game ${game.game_name}`);
+                    }).catch(err => {
+                      console.error(`Failed to send ${type} reminder to ${username} for game ${game.game_name}:`, err);
                     });
+                    found = true;
+                  } else {
+                    console.log(`[CRON] Notification already sent for ${username}, game ${game.game_name}, type ${type}`);
                   }
                 }
-              );
-              found = true;
-            } else {
-              // Handle pre-release notifications (30 days, 7 days, release day)
-              let type = null;
-              if (diffDays === 30) type = '30days';
-              if (diffDays === 7) type = '7days';
-              if (diffDays === 0) type = 'release';
-              if (type && !wasNotificationSent(username, game.game_id, type)) {
-                console.log(`[CRON] Sending ${type} reminder to ${username} for game ${game.game_name}`);
-                sendReleaseReminder(username, game, diffDays).then(() => {
-                  markNotificationSent(username, game.game_id, type);
-                  console.log(`Sent ${type} release reminder to ${username} for game ${game.game_name}`);
-                }).catch(err => {
-                  console.error(`Failed to send ${type} reminder to ${username} for game ${game.game_name}:`, err);
-                });
-                found = true;
-              } else if (type && wasNotificationSent(username, game.game_id, type)) {
-                console.log(`[CRON] Notification already sent for ${username}, game ${game.game_name}, type ${type}`);
               }
             }
+          });
+          if (!found) {
+            console.log(`[CRON] No matching unreleased games for user ${username}`);
           }
         });
-        if (!found) {
-          console.log(`[CRON] No matching unreleased games for user ${username}`);
-        }
       });
     });
   });

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
@@ -82,6 +82,7 @@ function App() {
   else if (location.pathname.startsWith('/calendar')) pageTitle = 'Calendar'
   else if (location.pathname.startsWith('/users')) pageTitle = 'User Management'
   else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings'
+  else if (location.pathname.startsWith('/account')) pageTitle = 'My Account'
   else if (location.pathname.startsWith('/game/')) pageTitle = 'Game Details'
 
   // If not logged in, render only the login page/route
@@ -121,6 +122,10 @@ function App() {
               <span className="nav-label">User Management</span>
             </Link>
           )}
+          <Link to="/account" className={location.pathname === '/account' ? 'active' : ''}>
+            <FaUser className="nav-icon" />
+            <span className="nav-label">My Account</span>
+          </Link>
           {user.can_manage_users && (
             <Link to="/settings" className={location.pathname === '/settings' ? 'active' : ''}>
               <FaCog className="nav-icon" />
@@ -162,6 +167,7 @@ function App() {
           <Route path="/calendar" element={<CalendarPage user={user} />} />
           <Route path="/users" element={<UserManagementPage user={user} />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/account" element={<AccountPage />} />
           <Route path="*" element={<Navigate to="/search" />} />
         </Routes>
       </main>
@@ -1415,6 +1421,153 @@ function SectionSaveBar({ sectionKey, saving, saveStatus, dirty, onSave, label }
   )
 }
 
+// ── AccountPage (all users) ─────────────────────────────────────────────────
+const NOTIF_DAY_OPTIONS = [
+  { days: 0,  label: 'On release day' },
+  { days: 3,  label: '3 days before' },
+  { days: 7,  label: '7 days before' },
+  { days: 14, label: '14 days before' },
+  { days: 30, label: '30 days before' },
+  { days: 60, label: '60 days before' },
+]
+
+function AccountPage() {
+  const token = localStorage.getItem('token')
+  const authH = { headers: { Authorization: `Bearer ${token}` } }
+
+  const [profile, setProfile] = useState({ email: '', ntfy_topic: '', gotify_token: '', notification_days: [0, 7, 30] })
+  const [saved, setSaved] = useState({})   // { channels: true/null, schedule: true/null }
+  const [saving, setSaving] = useState({})
+  const [error, setError] = useState({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    axios.get(`${API_BASE}/user/me`, authH)
+      .then(res => setProfile({
+        email:             res.data.email || '',
+        ntfy_topic:        res.data.ntfy_topic || '',
+        gotify_token:      res.data.gotify_token || '',
+        notification_days: Array.isArray(res.data.notification_days) ? res.data.notification_days : [0, 7, 30],
+      }))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const saveSection = async (section, body) => {
+    setSaving(p => ({ ...p, [section]: true }))
+    setError(p => ({ ...p, [section]: null }))
+    setSaved(p => ({ ...p, [section]: null }))
+    try {
+      await axios.put(`${API_BASE}/user/me/settings`, body, authH)
+      setSaved(p => ({ ...p, [section]: true }))
+      setTimeout(() => setSaved(p => ({ ...p, [section]: null })), 3000)
+    } catch (err) {
+      setError(p => ({ ...p, [section]: err.response?.data?.error || 'Save failed' }))
+    } finally {
+      setSaving(p => ({ ...p, [section]: false }))
+    }
+  }
+
+  const toggleDay = (day) => {
+    setProfile(p => {
+      const days = p.notification_days.includes(day)
+        ? p.notification_days.filter(d => d !== day)
+        : [...p.notification_days, day]
+      return { ...p, notification_days: days }
+    })
+  }
+
+  if (loading) return <div className="ent-settings"><div className="ent-loading">Loading…</div></div>
+
+  return (
+    <div className="ent-settings">
+      <nav className="ent-nav">
+        <div className="ent-nav-header">Account</div>
+        <button className="ent-nav-item ent-nav-item--active">
+          <FaUser className="ent-nav-icon" />
+          <span>My Profile</span>
+        </button>
+      </nav>
+
+      <div className="ent-panel">
+        {/* Notification Channels */}
+        <div className="ent-section">
+          <div className="ent-section-header">
+            <FaBell className="ent-section-icon" />
+            <div>
+              <div className="ent-section-title">Notification Channels</div>
+              <div className="ent-section-desc">Your personal push and email addresses for game notifications.</div>
+            </div>
+          </div>
+          <div className="ent-fields">
+            <div className="ent-field ent-field--wide">
+              <label className="ent-label">Email Address</label>
+              <input className="ent-input" type="email" value={profile.email} onChange={e => setProfile(p => ({ ...p, email: e.target.value }))} placeholder="you@example.com" />
+            </div>
+            <div className="ent-field">
+              <label className="ent-label">NTFY Topic</label>
+              <input className="ent-input" value={profile.ntfy_topic} onChange={e => setProfile(p => ({ ...p, ntfy_topic: e.target.value }))} placeholder="my-gametracker-alerts" />
+            </div>
+            <div className="ent-field">
+              <label className="ent-label">Gotify Token</label>
+              <input className="ent-input" value={profile.gotify_token} onChange={e => setProfile(p => ({ ...p, gotify_token: e.target.value }))} placeholder="AbCdEfGhIjKlMn" />
+            </div>
+          </div>
+          <div className="ent-save-bar">
+            <button
+              className="ent-save-btn"
+              disabled={!!saving.channels}
+              onClick={() => saveSection('channels', { email: profile.email, ntfy_topic: profile.ntfy_topic, gotify_token: profile.gotify_token })}
+            >
+              {saving.channels ? <><FaSync className="ent-spin" /> Saving…</> : 'Save Channels'}
+            </button>
+            {saved.channels && <span className="ent-saved-msg"><FaCheckCircle /> Saved</span>}
+            {error.channels && <span className="ent-test-error"><FaExclamationCircle /> {error.channels}</span>}
+          </div>
+        </div>
+
+        {/* Notification Schedule */}
+        <div className="ent-section" style={{ marginTop: '2rem' }}>
+          <div className="ent-section-header">
+            <FaRegCalendarAlt className="ent-section-icon" />
+            <div>
+              <div className="ent-section-title">Notification Schedule</div>
+              <div className="ent-section-desc">Choose when to receive release reminders. Select at least one.</div>
+            </div>
+          </div>
+          <div className="account-notif-grid">
+            {NOTIF_DAY_OPTIONS.map(({ days, label }) => {
+              const checked = profile.notification_days.includes(days)
+              return (
+                <label key={days} className={`account-notif-option${checked ? ' account-notif-option--active' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleDay(days)}
+                    disabled={checked && profile.notification_days.length === 1}
+                  />
+                  <span className="account-notif-label">{label}</span>
+                </label>
+              )
+            })}
+          </div>
+          <div className="ent-save-bar">
+            <button
+              className="ent-save-btn"
+              disabled={!!saving.schedule || profile.notification_days.length === 0}
+              onClick={() => saveSection('schedule', { notification_days: [...profile.notification_days].sort((a, b) => b - a) })}
+            >
+              {saving.schedule ? <><FaSync className="ent-spin" /> Saving…</> : 'Save Schedule'}
+            </button>
+            {saved.schedule && <span className="ent-saved-msg"><FaCheckCircle /> Saved</span>}
+            {error.schedule && <span className="ent-test-error"><FaExclamationCircle /> {error.schedule}</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main SettingsPage ───────────────────────────────────────────────────────
 function SettingsPage() {
   // Server-synced state
@@ -1598,13 +1751,10 @@ function SettingsPage() {
 
         {/* NTFY */}
         {activeTab === 'ntfy' && (
-          <SettingsSection icon={FaBell} title="Push Notifications (NTFY)" description="Configure NTFY for instant push notifications on any device." configured={isConfigured(ntfy)}>
+          <SettingsSection icon={FaBell} title="Push Notifications (NTFY)" description="Set the NTFY server URL. Each user subscribes using their own topic configured in My Account." configured={isConfigured(ntfy)}>
             <div className="ent-fields">
               <SettingsField label="NTFY Server URL" saved={!!serverSettings.ntfy?.url} wide hint="Self-hosted or ntfy.sh">
                 <input className="ent-input" value={ntfy.url   || ''} onChange={e => setNtfy(p => ({ ...p, url:   e.target.value }))} placeholder="https://ntfy.sh" />
-              </SettingsField>
-              <SettingsField label="Topic" saved={!!serverSettings.ntfy?.topic} hint="Unique topic name — subscribe to this in the NTFY app">
-                <input className="ent-input" value={ntfy.topic || ''} onChange={e => setNtfy(p => ({ ...p, topic: e.target.value }))} placeholder="my-gametracker-alerts" />
               </SettingsField>
             </div>
             <SectionSaveBar sectionKey="ntfy" saving={saving} saveStatus={saveStatus} dirty={isDirty('ntfy')} onSave={() => saveSection('ntfy')} label="NTFY Settings" />
@@ -1613,13 +1763,10 @@ function SettingsPage() {
 
         {/* Gotify */}
         {activeTab === 'gotify' && (
-          <SettingsSection icon={FaBell} title="Push Notifications (Gotify)" description="Configure Gotify for self-hosted push notifications." configured={isConfigured(gotify)}>
+          <SettingsSection icon={FaBell} title="Push Notifications (Gotify)" description="Set the Gotify server URL. Each user provides their own app token configured in My Account." configured={isConfigured(gotify)}>
             <div className="ent-fields">
               <SettingsField label="Gotify Server URL" saved={!!serverSettings.gotify?.url} wide hint="Your self-hosted Gotify server">
                 <input className="ent-input" value={gotify.url   || ''} onChange={e => setGotify(p => ({ ...p, url:   e.target.value }))} placeholder="https://gotify.example.com" />
-              </SettingsField>
-              <SettingsField label="App Token" saved={!!serverSettings.gotify?.token} hint="Application token from your Gotify server">
-                <input className="ent-input" value={gotify.token || ''} onChange={e => setGotify(p => ({ ...p, token: e.target.value }))} placeholder="AbCdEfGhIjKlMn" />
               </SettingsField>
             </div>
             <SectionSaveBar sectionKey="gotify" saving={saving} saveStatus={saveStatus} dirty={isDirty('gotify')} onSave={() => saveSection('gotify')} label="Gotify Settings" />
