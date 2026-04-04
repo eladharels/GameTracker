@@ -1418,9 +1418,10 @@ function SectionSaveBar({ sectionKey, saving, saveStatus, dirty, onSave, label }
 // ── Main SettingsPage ───────────────────────────────────────────────────────
 function SettingsPage() {
   // Server-synced state
-  const [serverSettings, setServerSettings] = useState({ smtp: {}, ntfy: {}, ldap: {} })
+  const [serverSettings, setServerSettings] = useState({ smtp: {}, ntfy: {}, gotify: {}, ldap: {} })
   const [smtp, setSmtp] = useState({})
   const [ntfy, setNtfy] = useState({})
+  const [gotify, setGotify] = useState({})
   const [ldap, setLdap] = useState({})
   const [loadingSettings, setLoadingSettings] = useState(true)
   const [saving, setSaving]       = useState({})
@@ -1449,9 +1450,10 @@ function SettingsPage() {
       .then(res => {
         const s = res.data || {}
         setServerSettings(s)
-        setSmtp(s.smtp  || {})
-        setNtfy(s.ntfy  || {})
-        setLdap(s.ldap  || {})
+        setSmtp(s.smtp   || {})
+        setNtfy(s.ntfy   || {})
+        setGotify(s.gotify || {})
+        setLdap(s.ldap   || {})
       })
       .finally(() => setLoadingSettings(false))
   }, [])
@@ -1467,12 +1469,12 @@ function SettingsPage() {
   // ── Helpers
   const isConfigured = data => Object.values(data || {}).some(v => v && String(v).trim())
   const isDirty = key => {
-    const curr = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : ldap
+    const curr = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : ldap
     return JSON.stringify(curr) !== JSON.stringify(serverSettings[key] || {})
   }
 
   const saveSection = async (key) => {
-    const data = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : ldap
+    const data = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : ldap
     setSaving(p => ({ ...p, [key]: true }))
     setSaveStatus(p => ({ ...p, [key]: null }))
     try {
@@ -1517,6 +1519,7 @@ function SettingsPage() {
   const NAV = [
     { key: 'email',   label: 'Email',            sub: 'SMTP',        icon: FaEnvelope,    data: smtp },
     { key: 'ntfy',    label: 'Push',             sub: 'NTFY',        icon: FaBell,        data: ntfy },
+    { key: 'gotify',  label: 'Gotify',           sub: 'Gotify Push', icon: FaBell,        data: gotify },
     { key: 'ldap',    label: 'Directory',        sub: 'LDAP / AD',   icon: FaLock,        data: ldap },
     { key: 'testing', label: 'Diagnostics',      sub: 'Testing',     icon: FaCheckCircle, data: null },
   ]
@@ -1594,7 +1597,7 @@ function SettingsPage() {
 
         {/* NTFY */}
         {activeTab === 'ntfy' && (
-          <SettingsSection icon={FaBell} title="Push Notifications" description="Configure NTFY for instant push notifications on any device." configured={isConfigured(ntfy)}>
+          <SettingsSection icon={FaBell} title="Push Notifications (NTFY)" description="Configure NTFY for instant push notifications on any device." configured={isConfigured(ntfy)}>
             <div className="ent-fields">
               <SettingsField label="NTFY Server URL" saved={!!serverSettings.ntfy?.url} wide hint="Self-hosted or ntfy.sh">
                 <input className="ent-input" value={ntfy.url   || ''} onChange={e => setNtfy(p => ({ ...p, url:   e.target.value }))} placeholder="https://ntfy.sh" />
@@ -1604,6 +1607,21 @@ function SettingsPage() {
               </SettingsField>
             </div>
             <SectionSaveBar sectionKey="ntfy" saving={saving} saveStatus={saveStatus} dirty={isDirty('ntfy')} onSave={() => saveSection('ntfy')} label="NTFY Settings" />
+          </SettingsSection>
+        )}
+
+        {/* Gotify */}
+        {activeTab === 'gotify' && (
+          <SettingsSection icon={FaBell} title="Push Notifications (Gotify)" description="Configure Gotify for self-hosted push notifications." configured={isConfigured(gotify)}>
+            <div className="ent-fields">
+              <SettingsField label="Gotify Server URL" saved={!!serverSettings.gotify?.url} wide hint="Your self-hosted Gotify server">
+                <input className="ent-input" value={gotify.url   || ''} onChange={e => setGotify(p => ({ ...p, url:   e.target.value }))} placeholder="https://gotify.example.com" />
+              </SettingsField>
+              <SettingsField label="App Token" saved={!!serverSettings.gotify?.token} hint="Application token from your Gotify server">
+                <input className="ent-input" value={gotify.token || ''} onChange={e => setGotify(p => ({ ...p, token: e.target.value }))} placeholder="AbCdEfGhIjKlMn" />
+              </SettingsField>
+            </div>
+            <SectionSaveBar sectionKey="gotify" saving={saving} saveStatus={saveStatus} dirty={isDirty('gotify')} onSave={() => saveSection('gotify')} label="Gotify Settings" />
           </SettingsSection>
         )}
 
@@ -1640,9 +1658,10 @@ function SettingsPage() {
             <div className="ent-fields">
               <SettingsField label="Notification Service">
                 <select className="ent-input ent-select" value={selectedService} onChange={e => setSelectedService(e.target.value)}>
-                  <option value="both">Both Email &amp; NTFY</option>
+                  <option value="both">All (Email, NTFY &amp; Gotify)</option>
                   <option value="email">Email only</option>
                   <option value="ntfy">NTFY only</option>
+                  <option value="gotify">Gotify only</option>
                   <option value="crackwatch">CrackRelease status only</option>
                 </select>
               </SettingsField>
@@ -1717,6 +1736,14 @@ function SettingsPage() {
                     {testResult.results?.ntfy?.sent ? '✓ Sent' : `✗ ${testResult.results?.ntfy?.error || 'Failed'}`}
                   </span>
                 </div>
+                {testResult.results?.gotify && (
+                  <div className="ent-result-row">
+                    <span className="ent-result-label">Gotify</span>
+                    <span className={`ent-service-status ent-service-status--${testResult.results.gotify.sent ? 'ok' : 'fail'}`}>
+                      {testResult.results.gotify.sent ? '✓ Sent' : `✗ ${testResult.results.gotify.error || 'Failed'}`}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </SettingsSection>

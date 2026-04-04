@@ -54,6 +54,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
       can_manage_users INTEGER DEFAULT 0,
       email TEXT,
       ntfy_topic TEXT,
+      gotify_token TEXT,
       created_at TEXT,
       origin TEXT DEFAULT 'local',
       display_name TEXT,
@@ -82,6 +83,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
     db.run(`ALTER TABLE user_games ADD COLUMN last_price_updated TEXT`, () => {});
     db.run(`ALTER TABLE user_games ADD COLUMN crack_status TEXT`, () => {});
     db.run(`ALTER TABLE user_games ADD COLUMN backlog_order INTEGER`, () => {});
+    db.run(`ALTER TABLE users ADD COLUMN gotify_token TEXT`, () => {});
     console.log('Database initialized');
   }
 });
@@ -561,7 +563,7 @@ function loadSettings() {
   try {
     return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
   } catch {
-    return { smtp: {}, ntfy: {}, ldap: {} };
+    return { smtp: {}, ntfy: {}, gotify: {}, ldap: {} };
   }
 }
 function saveSettings(settings) {
@@ -640,6 +642,16 @@ async function sendNtfy(title, message, topicOverride) {
   if (!ntfy.url || !ntfy.topic) return;
   await axios.post(`${ntfy.url.replace(/\/$/, '')}/${topicOverride || (ntfy && ntfy.topic) || process.env.DEFAULT_NTFY_TOPIC}`, message, {
     headers: { Title: title },
+  });
+}
+
+async function sendGotify(title, message, urlOverride, tokenOverride, priority = 5) {
+  const { gotify } = loadSettings();
+  const url = urlOverride || gotify?.url;
+  const token = tokenOverride || gotify?.token;
+  if (!url || !token) return;
+  await axios.post(`${url.replace(/\/$/, '')}/message?token=${token}`, { title, message, priority }, {
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
@@ -733,7 +745,7 @@ async function notifyEvent(type, game, username, status) {
   
   // Get user details from database
   const userDetails = await new Promise((resolve, reject) => {
-    db.get('SELECT email, ntfy_topic FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
+    db.get('SELECT email, ntfy_topic, gotify_token FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
       if (err) {
         reject(err);
       } else {
@@ -741,10 +753,11 @@ async function notifyEvent(type, game, username, status) {
       }
     });
   });
-  
+
   let userEmail = userDetails && userDetails.email;
   const userNtfy = userDetails && userDetails.ntfy_topic;
-  
+  const userGotifyToken = userDetails && userDetails.gotify_token;
+
   // If no email in database, try LDAP
   if (!userEmail) {
     console.log('No email found in database for user:', normalizedUsername, 'trying LDAP...');
@@ -759,7 +772,7 @@ async function notifyEvent(type, game, username, status) {
       console.error('Error getting email from LDAP:', ldapErr);
     }
   }
-  
+
   // Try to send email
   if (userEmail) {
     try {
@@ -770,11 +783,12 @@ async function notifyEvent(type, game, username, status) {
       console.error('Error sending email:', emailErr);
     }
   }
-  
-  // Try to send ntfy - use user's personal topic or fall back to global
+
   const settings = loadSettings();
+
+  // Try to send ntfy - use user's personal topic or fall back to global
   const ntfyTopic = userNtfy || settings.ntfy?.topic;
-  
+
   if (ntfyTopic) {
     try {
       await sendNtfy(title, message, ntfyTopic);
@@ -784,6 +798,21 @@ async function notifyEvent(type, game, username, status) {
     }
   } else {
     console.log(`[Notify Event] No ntfy topic configured (neither user-specific nor global) for user ${normalizedUsername}`);
+  }
+
+  // Try to send Gotify - use user's personal token or fall back to global
+  const gotifyToken = userGotifyToken || settings.gotify?.token;
+  const gotifyUrl = settings.gotify?.url;
+
+  if (gotifyToken && gotifyUrl) {
+    try {
+      await sendGotify(title, message, gotifyUrl, gotifyToken);
+      console.log(`[Notify Event] Gotify sent successfully for user ${normalizedUsername}`);
+    } catch (gotifyErr) {
+      console.error(`[Notify Event] Error sending Gotify for user ${normalizedUsername}:`, gotifyErr);
+    }
+  } else {
+    console.log(`[Notify Event] No Gotify configured (url: ${!!gotifyUrl}, token: ${!!gotifyToken}) for user ${normalizedUsername}`);
   }
 }
 
@@ -799,6 +828,7 @@ app.post('/api/settings', express.json(), (req, res) => {
     const merged = {
       smtp: req.body.smtp !== undefined ? req.body.smtp : (existing.smtp || {}),
       ntfy: req.body.ntfy !== undefined ? req.body.ntfy : (existing.ntfy || {}),
+      gotify: req.body.gotify !== undefined ? req.body.gotify : (existing.gotify || {}),
       ldap: req.body.ldap !== undefined ? req.body.ldap : (existing.ldap || {}),
     };
     saveSettings(merged);
@@ -1975,7 +2005,7 @@ app.post('/api/auth/login', (req, res) => {
 // --- User Management Endpoints ---
 // Create user (admin only)
 app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  const { username, password, can_manage_users = 0, email = '', ntfy_topic = '', shares_library = 0 } = req.body;
+  const { username, password, can_manage_users = 0, email = '', ntfy_topic = '', gotify_token = '', shares_library = 0 } = req.body;
   
   // Enhanced validation
   if (!username || !password) {
@@ -1995,8 +2025,8 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
   const normalizedUsername = username.toLowerCase();
   bcrypt.hash(password, 10).then(hash => {
     db.run(
-      'INSERT INTO users (username, password, can_manage_users, email, ntfy_topic, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [normalizedUsername, hash, can_manage_users ? 1 : 0, email, ntfy_topic, new Date().toISOString(), 'local', normalizedUsername, shares_library ? 1 : 0],
+      'INSERT INTO users (username, password, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [normalizedUsername, hash, can_manage_users ? 1 : 0, email, ntfy_topic, gotify_token, new Date().toISOString(), 'local', normalizedUsername, shares_library ? 1 : 0],
       function (err) {
         if (err) return res.status(400).json({ error: 'User already exists' });
         res.json({ success: true, id: this.lastID });
@@ -2007,7 +2037,7 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
 
 // List users (manager only)
 app.get('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  db.all('SELECT id, username, can_manage_users, email, ntfy_topic, created_at, origin, display_name, shares_library FROM users', [], (err, rows) => {
+  db.all('SELECT id, username, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library FROM users', [], (err, rows) => {
     if (err) return res.status(500).json({ error: 'DB error' });
     res.json(rows);
   });
@@ -2016,7 +2046,7 @@ app.get('/api/users', authRequired, requirePermission('can_manage_users'), (req,
 // Edit user (manager only)
 app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
   const { id } = req.params;
-  const { password, can_manage_users, email, ntfy_topic, shares_library } = req.body;
+  const { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library } = req.body;
   const updates = [];
   const params = [];
   if (typeof can_manage_users !== 'undefined') {
@@ -2030,6 +2060,10 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
   if (typeof ntfy_topic !== 'undefined') {
     updates.push('ntfy_topic = ?');
     params.push(ntfy_topic);
+  }
+  if (typeof gotify_token !== 'undefined') {
+    updates.push('gotify_token = ?');
+    params.push(gotify_token);
   }
   if (typeof shares_library !== 'undefined') {
     updates.push('shares_library = ?');
@@ -2078,21 +2112,21 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
       return res.status(400).json({ error: 'Missing required parameters: service, gameId, gameName' });
     }
     
-    if (!['email', 'ntfy', 'both'].includes(service)) {
-      return res.status(400).json({ error: 'Invalid service. Must be email, ntfy, or both' });
+    if (!['email', 'ntfy', 'gotify', 'both'].includes(service)) {
+      return res.status(400).json({ error: 'Invalid service. Must be email, ntfy, gotify, or both' });
     }
-    
+
     // Calculate days until release
     let daysUntilRelease = null;
     let releaseText = 'Date N/A';
-    
+
     if (releaseDate) {
       const releaseDateObj = new Date(releaseDate);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       releaseDateObj.setHours(0, 0, 0, 0);
       daysUntilRelease = Math.ceil((releaseDateObj - today) / (1000 * 60 * 60 * 24));
-      
+
       if (daysUntilRelease === 0) {
         releaseText = 'releases today';
       } else if (daysUntilRelease > 0) {
@@ -2101,21 +2135,22 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
         releaseText = `released ${Math.abs(daysUntilRelease)} days ago`;
       }
     }
-    
+
     const subject = `Test Notification: "${gameName}" ${releaseText}`;
     const text = `This is a test notification for "${gameName}". ${releaseText} (${releaseDate || 'Date N/A'}).`;
     const title = 'Test Notification';
     const message = text;
-    
+
     const results = {
       email: { sent: false, error: null },
-      ntfy: { sent: false, error: null }
+      ntfy: { sent: false, error: null },
+      gotify: { sent: false, error: null },
     };
-    
-    // Get current user's email and ntfy topic
+
+    // Get current user's email, ntfy topic, and gotify token
     const userId = req.user.id;
     const userDetails = await new Promise((resolve, reject) => {
-      db.get('SELECT email, ntfy_topic FROM users WHERE id = ?', [userId], (err, userRow) => {
+      db.get('SELECT email, ntfy_topic, gotify_token FROM users WHERE id = ?', [userId], (err, userRow) => {
         if (err) {
           reject(err);
         } else {
@@ -2123,7 +2158,7 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
         }
       });
     });
-    
+
     // Send email notification if requested
     if (service === 'email' || service === 'both') {
       if (userDetails && userDetails.email) {
@@ -2139,12 +2174,12 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
         results.email.error = 'No email configured for current user';
       }
     }
-    
+
     // Send ntfy notification if requested
     if (service === 'ntfy' || service === 'both') {
       // Try user's personal ntfy topic first, then fall back to global settings
       const ntfyTopic = userDetails?.ntfy_topic || settings.ntfy?.topic;
-      
+
       if (ntfyTopic) {
         try {
           await sendNtfy(title, message, ntfyTopic);
@@ -2156,6 +2191,25 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
         }
       } else {
         results.ntfy.error = 'No ntfy topic configured (neither user-specific nor global)';
+      }
+    }
+
+    // Send Gotify notification if requested
+    if (service === 'gotify' || service === 'both') {
+      const gotifyToken = userDetails?.gotify_token || settings.gotify?.token;
+      const gotifyUrl = settings.gotify?.url;
+
+      if (gotifyToken && gotifyUrl) {
+        try {
+          await sendGotify(title, message, gotifyUrl, gotifyToken);
+          results.gotify.sent = true;
+          console.log(`[Test Notification] Gotify sent successfully`);
+        } catch (error) {
+          results.gotify.error = error.message;
+          console.error(`[Test Notification] Gotify failed:`, error.message);
+        }
+      } else {
+        results.gotify.error = `No Gotify configured (url: ${!!gotifyUrl}, token: ${!!gotifyToken})`;
       }
     }
     
@@ -2374,10 +2428,10 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
 });
 
 // --- Per-user settings endpoint ---
-// Authenticated user can update their own email/ntfy_topic
+// Authenticated user can update their own email/ntfy_topic/gotify_token
 app.put('/api/user/me/settings', authRequired, (req, res) => {
   const userId = req.user.id;
-  const { email, ntfy_topic } = req.body;
+  const { email, ntfy_topic, gotify_token } = req.body;
   const updates = [];
   const params = [];
   if (typeof email !== 'undefined') {
@@ -2387,6 +2441,10 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
   if (typeof ntfy_topic !== 'undefined') {
     updates.push('ntfy_topic = ?');
     params.push(ntfy_topic);
+  }
+  if (typeof gotify_token !== 'undefined') {
+    updates.push('gotify_token = ?');
+    params.push(gotify_token);
   }
   if (updates.length === 0) {
     return res.status(400).json({ error: 'No settings to update' });
@@ -2473,21 +2531,22 @@ async function sendReleaseReminder(username, game, days) {
     await sendEmail(subject, text, userEmail);
   }
   
-  // Get user's ntfy topic and send notification
-  const userNtfy = await new Promise((resolve) => {
-    db.get('SELECT ntfy_topic FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
+  // Get user's ntfy topic and gotify token
+  const userPushSettings = await new Promise((resolve) => {
+    db.get('SELECT ntfy_topic, gotify_token FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
       if (err || !userRow) {
-        resolve(undefined);
+        resolve({});
       } else {
-        resolve(userRow.ntfy_topic);
+        resolve(userRow);
       }
     });
   });
-  
-  // Try user's personal ntfy topic first, then fall back to global settings
+
   const settings = loadSettings();
-  const ntfyTopic = userNtfy || settings.ntfy?.topic;
-  
+
+  // Try user's personal ntfy topic first, then fall back to global settings
+  const ntfyTopic = userPushSettings.ntfy_topic || settings.ntfy?.topic;
+
   if (ntfyTopic) {
     try {
       await sendNtfy(title, message, ntfyTopic);
@@ -2497,6 +2556,21 @@ async function sendReleaseReminder(username, game, days) {
     }
   } else {
     console.log(`[Release Reminder] No ntfy topic configured (neither user-specific nor global) for user ${normalizedUsername}`);
+  }
+
+  // Try Gotify - use user's personal token or fall back to global
+  const gotifyToken = userPushSettings.gotify_token || settings.gotify?.token;
+  const gotifyUrl = settings.gotify?.url;
+
+  if (gotifyToken && gotifyUrl) {
+    try {
+      await sendGotify(title, message, gotifyUrl, gotifyToken);
+      console.log(`[Release Reminder] Gotify sent successfully for user ${normalizedUsername}`);
+    } catch (error) {
+      console.error(`[Release Reminder] Gotify failed for user ${normalizedUsername}:`, error.message);
+    }
+  } else {
+    console.log(`[Release Reminder] No Gotify configured (url: ${!!gotifyUrl}, token: ${!!gotifyToken}) for user ${normalizedUsername}`);
   }
 }
 
