@@ -33,6 +33,8 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
 - **Persistent volumes**: SQLite database, settings.json, sent_notifications.json
 
+> **Dockerfile layer order (critical):** The backend `Dockerfile` must install system build tools (`python3`, `make`, `g++`, `sqlite3`) **before** running `npm install --production`. The `sqlite3` package has no prebuilt NAPI binary for the `node:18-slim` image and compiles from source via `node-gyp`, which requires Python3. Wrong order → build failure.
+
 ---
 
 ## Architecture
@@ -89,11 +91,14 @@ GameTracker/
 | password | TEXT | bcrypt hash; NULL for LDAP users |
 | can_manage_users | INTEGER | Admin flag (0/1) |
 | email | TEXT | For notifications |
-| ntfy_topic | TEXT | User-specific push topic |
+| ntfy_topic | TEXT | User-specific ntfy topic (personal, set in My Account) |
+| gotify_token | TEXT | User-specific Gotify app token (personal, set in My Account) |
+| telegram_chat_id | TEXT | User-specific Telegram chat ID (personal, set in My Account) |
 | created_at | TEXT | ISO timestamp |
 | origin | TEXT | `local` or `ldap` |
 | display_name | TEXT | LDAP sync or manual |
 | shares_library | INTEGER | Library sharing toggle (0/1) |
+| notification_days | TEXT | JSON array of days-before-release to send reminders (e.g. `[0,7,30]`) |
 
 ### `user_games`
 | Column | Type | Notes |
@@ -129,7 +134,9 @@ GameTracker/
 | **TheGamesDB** | Tertiary game source + box art | `THEGAMESDB_API_KEY` (optional) |
 | **Steam Store API** | Game pricing by region | No auth (public) |
 | **SMTP** | Email notifications | Configured in `settings.json` |
-| **ntfy.sh** | Push notifications | Topic URL in `settings.json` |
+| **ntfy.sh** | Push notifications | Server URL in `settings.json`; per-user topic in `users.ntfy_topic` |
+| **Gotify** | Self-hosted push notifications | Server URL in `settings.json`; per-user token in `users.gotify_token` |
+| **Telegram Bot API** | Push notifications via Telegram | Bot token in `settings.json`; per-user chat ID in `users.telegram_chat_id` |
 | **LDAP/Active Directory** | Enterprise authentication | Bind DN + password in `settings.json` |
 
 ---
@@ -151,11 +158,14 @@ GameTracker/
 - **Personal game library**: Track games with statuses — wishlist, playing, done, backlog, unreleased
 - **Backlog ordering**: Drag-and-drop reordering for the backlog queue with position badges
 - **Steam pricing**: Weekly price sync for all library games with Steam App IDs
-- **Release notifications**: Daily cron checks; sends 30-day, 7-day, and release-day reminders via email and ntfy
+- **Release notifications**: Daily cron checks; sends reminders per user-configured schedule (default 0/7/30 days) via email, ntfy, and Gotify, with game cover images
+- **Gotify push notifications**: Self-hosted push support; server URL in Settings, per-user token in My Account
+- **Telegram push notifications**: Bot-based push support; bot token in Settings, per-user chat ID in My Account; cover images via sendPhoto
 - **Library sharing**: Share your game library (read-only) with specific other users
 - **Admin panel**: Create/edit/delete users, manage permissions, LDAP sync
 - **Metadata refresh**: Manual and automatic refresh of game info from source APIs
-- **User settings**: Per-user email, ntfy topic, accent color, library sharing toggle
+- **My Account page**: Per-user notification channels (email, ntfy topic, Gotify token) and reminder schedule
+- **Settings page**: Server infrastructure only — SMTP, ntfy server URL, Gotify server URL, LDAP
 
 ---
 
@@ -176,7 +186,9 @@ NODE_ENV=production
 ```json
 {
   "smtp": { "host": "", "port": 587, "user": "", "pass": "", "from": "", "to": "" },
-  "ntfy": { "url": "https://ntfy.sh", "topic": "" },
+  "ntfy": { "url": "https://ntfy.sh" },
+  "gotify": { "url": "" },
+  "telegram": { "bot_token": "" },
   "ldap": { "url": "", "base": "", "bindDn": "", "bindPass": "", "requiredGroup": "" }
 }
 ```

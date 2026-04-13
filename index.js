@@ -86,6 +86,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
     db.run(`ALTER TABLE user_games ADD COLUMN backlog_order INTEGER`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN gotify_token TEXT`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN notification_days TEXT`, () => {});
+    db.run(`ALTER TABLE users ADD COLUMN telegram_chat_id TEXT`, () => {});
     console.log('Database initialized');
   }
 });
@@ -666,6 +667,27 @@ async function sendGotify(title, message, token, priority = 5, imageUrl) {
   });
 }
 
+async function sendTelegram(title, message, chatId, photoUrl) {
+  const { telegram } = loadSettings();
+  const botToken = telegram?.bot_token;
+  if (!botToken || !chatId) return;
+  const text = `*${title}*\n${message}`;
+  if (photoUrl) {
+    await axios.post(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+      chat_id: chatId,
+      photo: photoUrl,
+      caption: text,
+      parse_mode: 'Markdown',
+    });
+  } else {
+    await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+    });
+  }
+}
+
 // --- LDAP Email Lookup ---
 async function getLdapEmail(username) {
   return new Promise((resolve) => {
@@ -757,7 +779,7 @@ async function notifyEvent(type, game, username, status) {
   
   // Get user details from database
   const userDetails = await new Promise((resolve, reject) => {
-    db.get('SELECT email, ntfy_topic, gotify_token FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
+    db.get('SELECT email, ntfy_topic, gotify_token, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
       if (err) {
         reject(err);
       } else {
@@ -769,6 +791,7 @@ async function notifyEvent(type, game, username, status) {
   let userEmail = userDetails && userDetails.email;
   const userNtfy = userDetails && userDetails.ntfy_topic;
   const userGotifyToken = userDetails && userDetails.gotify_token;
+  const userTelegramChatId = userDetails && userDetails.telegram_chat_id;
 
   // If no email in database, try LDAP
   if (!userEmail) {
@@ -817,6 +840,17 @@ async function notifyEvent(type, game, username, status) {
   } else {
     console.log(`[Notify Event] No personal Gotify token set for user ${normalizedUsername}, skipping Gotify`);
   }
+
+  if (userTelegramChatId) {
+    try {
+      await sendTelegram(title, message, userTelegramChatId, coverUrl);
+      console.log(`[Notify Event] Telegram sent successfully for user ${normalizedUsername}`);
+    } catch (telegramErr) {
+      console.error(`[Notify Event] Error sending Telegram for user ${normalizedUsername}:`, telegramErr);
+    }
+  } else {
+    console.log(`[Notify Event] No personal Telegram chat ID set for user ${normalizedUsername}, skipping Telegram`);
+  }
 }
 
 // --- Settings API ---
@@ -833,6 +867,7 @@ app.post('/api/settings', express.json(), (req, res) => {
       ntfy: req.body.ntfy !== undefined ? req.body.ntfy : (existing.ntfy || {}),
       gotify: req.body.gotify !== undefined ? req.body.gotify : (existing.gotify || {}),
       ldap: req.body.ldap !== undefined ? req.body.ldap : (existing.ldap || {}),
+      telegram: req.body.telegram !== undefined ? req.body.telegram : (existing.telegram || {}),
     };
     saveSettings(merged);
     res.json({ success: true });
@@ -2114,8 +2149,8 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
       return res.status(400).json({ error: 'Missing required parameters: service, gameId, gameName' });
     }
     
-    if (!['email', 'ntfy', 'gotify', 'both'].includes(service)) {
-      return res.status(400).json({ error: 'Invalid service. Must be email, ntfy, gotify, or both' });
+    if (!['email', 'ntfy', 'gotify', 'telegram', 'both'].includes(service)) {
+      return res.status(400).json({ error: 'Invalid service. Must be email, ntfy, gotify, telegram, or both' });
     }
 
     // Calculate days until release
@@ -2147,12 +2182,13 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
       email: { sent: false, error: null },
       ntfy: { sent: false, error: null },
       gotify: { sent: false, error: null },
+      telegram: { sent: false, error: null },
     };
 
-    // Get current user's email, ntfy topic, and gotify token
+    // Get current user's email, ntfy topic, gotify token, and telegram chat id
     const userId = req.user.id;
     const userDetails = await new Promise((resolve, reject) => {
-      db.get('SELECT email, ntfy_topic, gotify_token FROM users WHERE id = ?', [userId], (err, userRow) => {
+      db.get('SELECT email, ntfy_topic, gotify_token, telegram_chat_id FROM users WHERE id = ?', [userId], (err, userRow) => {
         if (err) {
           reject(err);
         } else {
@@ -2208,7 +2244,23 @@ app.post('/api/admin/test-notification', authRequired, requirePermission('can_ma
         results.gotify.error = 'No personal Gotify token set — configure it in My Account';
       }
     }
-    
+
+    // Send Telegram notification if requested
+    if (service === 'telegram' || service === 'both') {
+      if (userDetails?.telegram_chat_id) {
+        try {
+          await sendTelegram(title, message, userDetails.telegram_chat_id, coverUrl);
+          results.telegram.sent = true;
+          console.log(`[Test Notification] Telegram sent successfully`);
+        } catch (error) {
+          results.telegram.error = error.message;
+          console.error(`[Test Notification] Telegram failed:`, error.message);
+        }
+      } else {
+        results.telegram.error = 'No personal Telegram chat ID set — configure it in My Account';
+      }
+    }
+
     res.json({
       success: true,
       message: `Test notification sent for "${gameName}"`,
@@ -2428,7 +2480,7 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
 // --- Get current user's profile/settings ---
 app.get('/api/user/me', authRequired, (req, res) => {
   const userId = req.user.id;
-  db.get('SELECT id, username, email, ntfy_topic, gotify_token, notification_days, display_name, shares_library FROM users WHERE id = ?', [userId], (err, row) => {
+  db.get('SELECT id, username, email, ntfy_topic, gotify_token, telegram_chat_id, notification_days, display_name, shares_library FROM users WHERE id = ?', [userId], (err, row) => {
     if (err) return res.status(500).json({ error: 'DB error' });
     if (!row) return res.status(404).json({ error: 'User not found' });
     let notificationDays = [0, 7, 30];
@@ -2438,10 +2490,10 @@ app.get('/api/user/me', authRequired, (req, res) => {
 });
 
 // --- Per-user settings endpoint ---
-// Authenticated user can update their own email/ntfy_topic/gotify_token/notification_days
+// Authenticated user can update their own email/ntfy_topic/gotify_token/telegram_chat_id/notification_days
 app.put('/api/user/me/settings', authRequired, (req, res) => {
   const userId = req.user.id;
-  const { email, ntfy_topic, gotify_token, notification_days } = req.body;
+  const { email, ntfy_topic, gotify_token, telegram_chat_id, notification_days } = req.body;
   const updates = [];
   const params = [];
   if (typeof email !== 'undefined') {
@@ -2455,6 +2507,10 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
   if (typeof gotify_token !== 'undefined') {
     updates.push('gotify_token = ?');
     params.push(gotify_token);
+  }
+  if (typeof telegram_chat_id !== 'undefined') {
+    updates.push('telegram_chat_id = ?');
+    params.push(telegram_chat_id);
   }
   if (typeof notification_days !== 'undefined') {
     if (!Array.isArray(notification_days) || notification_days.length === 0 || !notification_days.every(d => Number.isInteger(d) && d >= 0)) {
@@ -2549,9 +2605,9 @@ async function sendReleaseReminder(username, game, days) {
     await sendEmail(subject, text, userEmail, coverUrl);
   }
   
-  // Get user's ntfy topic and gotify token
+  // Get user's ntfy topic, gotify token, and telegram chat id
   const userPushSettings = await new Promise((resolve) => {
-    db.get('SELECT ntfy_topic, gotify_token FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
+    db.get('SELECT ntfy_topic, gotify_token, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
       if (err || !userRow) {
         resolve({});
       } else {
@@ -2580,6 +2636,17 @@ async function sendReleaseReminder(username, game, days) {
     }
   } else {
     console.log(`[Release Reminder] No personal Gotify token set for user ${normalizedUsername}, skipping Gotify`);
+  }
+
+  if (userPushSettings.telegram_chat_id) {
+    try {
+      await sendTelegram(title, message, userPushSettings.telegram_chat_id, coverUrl);
+      console.log(`[Release Reminder] Telegram sent successfully for user ${normalizedUsername}`);
+    } catch (error) {
+      console.error(`[Release Reminder] Telegram failed for user ${normalizedUsername}:`, error.message);
+    }
+  } else {
+    console.log(`[Release Reminder] No personal Telegram chat ID set for user ${normalizedUsername}, skipping Telegram`);
   }
 }
 

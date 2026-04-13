@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
@@ -1435,7 +1435,7 @@ function AccountPage() {
   const token = localStorage.getItem('token')
   const authH = { headers: { Authorization: `Bearer ${token}` } }
 
-  const [profile, setProfile] = useState({ email: '', ntfy_topic: '', gotify_token: '', notification_days: [0, 7, 30] })
+  const [profile, setProfile] = useState({ email: '', ntfy_topic: '', gotify_token: '', telegram_chat_id: '', notification_days: [0, 7, 30] })
   const [saved, setSaved] = useState({})   // { channels: true/null, schedule: true/null }
   const [saving, setSaving] = useState({})
   const [error, setError] = useState({})
@@ -1447,6 +1447,7 @@ function AccountPage() {
         email:             res.data.email || '',
         ntfy_topic:        res.data.ntfy_topic || '',
         gotify_token:      res.data.gotify_token || '',
+        telegram_chat_id:  res.data.telegram_chat_id || '',
         notification_days: Array.isArray(res.data.notification_days) ? res.data.notification_days : [0, 7, 30],
       }))
       .catch(() => {})
@@ -1512,12 +1513,16 @@ function AccountPage() {
               <label className="ent-label">Gotify Token</label>
               <input className="ent-input" value={profile.gotify_token} onChange={e => setProfile(p => ({ ...p, gotify_token: e.target.value }))} placeholder="AbCdEfGhIjKlMn" />
             </div>
+            <div className="ent-field">
+              <label className="ent-label">Telegram Chat ID</label>
+              <input className="ent-input" value={profile.telegram_chat_id} onChange={e => setProfile(p => ({ ...p, telegram_chat_id: e.target.value }))} placeholder="123456789" />
+            </div>
           </div>
           <div className="ent-save-bar">
             <button
               className="ent-save-btn"
               disabled={!!saving.channels}
-              onClick={() => saveSection('channels', { email: profile.email, ntfy_topic: profile.ntfy_topic, gotify_token: profile.gotify_token })}
+              onClick={() => saveSection('channels', { email: profile.email, ntfy_topic: profile.ntfy_topic, gotify_token: profile.gotify_token, telegram_chat_id: profile.telegram_chat_id })}
             >
               {saving.channels ? <><FaSync className="ent-spin" /> Saving…</> : 'Save Channels'}
             </button>
@@ -1571,11 +1576,12 @@ function AccountPage() {
 // ── Main SettingsPage ───────────────────────────────────────────────────────
 function SettingsPage() {
   // Server-synced state
-  const [serverSettings, setServerSettings] = useState({ smtp: {}, ntfy: {}, gotify: {}, ldap: {} })
+  const [serverSettings, setServerSettings] = useState({ smtp: {}, ntfy: {}, gotify: {}, ldap: {}, telegram: {} })
   const [smtp, setSmtp] = useState({})
   const [ntfy, setNtfy] = useState({})
   const [gotify, setGotify] = useState({})
   const [ldap, setLdap] = useState({})
+  const [telegram, setTelegram] = useState({})
   const [loadingSettings, setLoadingSettings] = useState(true)
   const [saving, setSaving]       = useState({})
   const [saveStatus, setSaveStatus] = useState({})
@@ -1603,10 +1609,11 @@ function SettingsPage() {
       .then(res => {
         const s = res.data || {}
         setServerSettings(s)
-        setSmtp(s.smtp   || {})
-        setNtfy(s.ntfy   || {})
-        setGotify(s.gotify || {})
-        setLdap(s.ldap   || {})
+        setSmtp(s.smtp       || {})
+        setNtfy(s.ntfy       || {})
+        setGotify(s.gotify   || {})
+        setLdap(s.ldap       || {})
+        setTelegram(s.telegram || {})
       })
       .finally(() => setLoadingSettings(false))
   }, [])
@@ -1622,12 +1629,12 @@ function SettingsPage() {
   // ── Helpers
   const isConfigured = data => Object.values(data || {}).some(v => v && String(v).trim())
   const isDirty = key => {
-    const curr = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : ldap
+    const curr = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : key === 'telegram' ? telegram : ldap
     return JSON.stringify(curr) !== JSON.stringify(serverSettings[key] || {})
   }
 
   const saveSection = async (key) => {
-    const data = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : ldap
+    const data = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : key === 'telegram' ? telegram : ldap
     setSaving(p => ({ ...p, [key]: true }))
     setSaveStatus(p => ({ ...p, [key]: null }))
     try {
@@ -1671,11 +1678,12 @@ function SettingsPage() {
 
   // ── Nav definition
   const NAV = [
-    { key: 'email',   label: 'Email',            sub: 'SMTP',        icon: FaEnvelope,    data: smtp },
-    { key: 'ntfy',    label: 'Push',             sub: 'NTFY',        icon: FaBell,        data: ntfy },
-    { key: 'gotify',  label: 'Gotify',           sub: 'Gotify Push', icon: FaBell,        data: gotify },
-    { key: 'ldap',    label: 'Directory',        sub: 'LDAP / AD',   icon: FaLock,        data: ldap },
-    { key: 'testing', label: 'Diagnostics',      sub: 'Testing',     icon: FaCheckCircle, data: null },
+    { key: 'email',    label: 'Email',       sub: 'SMTP',         icon: FaEnvelope,    data: smtp },
+    { key: 'ntfy',     label: 'Push',        sub: 'NTFY',         icon: FaBell,        data: ntfy },
+    { key: 'gotify',   label: 'Gotify',      sub: 'Gotify Push',  icon: FaBell,        data: gotify },
+    { key: 'telegram', label: 'Telegram',    sub: 'Telegram Bot', icon: FaTelegram,    data: telegram },
+    { key: 'ldap',     label: 'Directory',   sub: 'LDAP / AD',    icon: FaLock,        data: ldap },
+    { key: 'testing',  label: 'Diagnostics', sub: 'Testing',      icon: FaCheckCircle, data: null },
   ]
 
   if (loadingSettings) return (
@@ -1773,6 +1781,18 @@ function SettingsPage() {
           </SettingsSection>
         )}
 
+        {/* Telegram */}
+        {activeTab === 'telegram' && (
+          <SettingsSection icon={FaTelegram} title="Telegram Notifications" description="Configure a Telegram bot to send notifications. Each user sets their own Chat ID in My Account." configured={isConfigured(telegram)}>
+            <div className="ent-fields">
+              <SettingsField label="Bot Token" saved={!!serverSettings.telegram?.bot_token} wide hint="Create a bot via @BotFather and paste the token here">
+                <input className="ent-input" type="password" value={telegram.bot_token || ''} onChange={e => setTelegram(p => ({ ...p, bot_token: e.target.value }))} placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
+              </SettingsField>
+            </div>
+            <SectionSaveBar sectionKey="telegram" saving={saving} saveStatus={saveStatus} dirty={isDirty('telegram')} onSave={() => saveSection('telegram')} label="Telegram Settings" />
+          </SettingsSection>
+        )}
+
         {/* LDAP */}
         {activeTab === 'ldap' && (
           <SettingsSection icon={FaLock} title="Directory Services" description="Connect to Active Directory or FreeIPA for centralized user authentication." configured={isConfigured(ldap)}>
@@ -1806,10 +1826,11 @@ function SettingsPage() {
             <div className="ent-fields">
               <SettingsField label="Notification Service">
                 <select className="ent-input ent-select" value={selectedService} onChange={e => setSelectedService(e.target.value)}>
-                  <option value="both">All (Email, NTFY &amp; Gotify)</option>
+                  <option value="both">All (Email, NTFY, Gotify &amp; Telegram)</option>
                   <option value="email">Email only</option>
                   <option value="ntfy">NTFY only</option>
                   <option value="gotify">Gotify only</option>
+                  <option value="telegram">Telegram only</option>
                   <option value="crackwatch">CrackRelease status only</option>
                 </select>
               </SettingsField>
@@ -1889,6 +1910,14 @@ function SettingsPage() {
                     <span className="ent-result-label">Gotify</span>
                     <span className={`ent-service-status ent-service-status--${testResult.results.gotify.sent ? 'ok' : 'fail'}`}>
                       {testResult.results.gotify.sent ? '✓ Sent' : `✗ ${testResult.results.gotify.error || 'Failed'}`}
+                    </span>
+                  </div>
+                )}
+                {testResult.results?.telegram && (
+                  <div className="ent-result-row">
+                    <span className="ent-result-label">Telegram</span>
+                    <span className={`ent-service-status ent-service-status--${testResult.results.telegram.sent ? 'ok' : 'fail'}`}>
+                      {testResult.results.telegram.sent ? '✓ Sent' : `✗ ${testResult.results.telegram.error || 'Failed'}`}
                     </span>
                   </div>
                 )}
