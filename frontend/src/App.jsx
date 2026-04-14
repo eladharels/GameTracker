@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
@@ -126,12 +126,10 @@ function App() {
             <FaUser className="nav-icon" />
             <span className="nav-label">My Account</span>
           </Link>
-          {user.can_manage_users && (
-            <Link to="/settings" className={location.pathname === '/settings' ? 'active' : ''}>
-              <FaCog className="nav-icon" />
-              <span className="nav-label">Settings</span>
-            </Link>
-          )}
+          <Link to="/settings" className={location.pathname === '/settings' ? 'active' : ''}>
+            <FaCog className="nav-icon" />
+            <span className="nav-label">Settings</span>
+          </Link>
           <button className="logout-btn" onClick={logout}>
             <FaSignOutAlt className="nav-icon" />
             <span className="nav-label">Logout</span>
@@ -1421,6 +1419,55 @@ function SectionSaveBar({ sectionKey, saving, saveStatus, dirty, onSave, label }
   )
 }
 
+// ── DiagSelect — custom dark dropdown for the Diagnostics panel ────────────
+function DiagSelect({ value, onChange, options, placeholder = 'Choose…' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [])
+
+  const selected = options.find(o => o.value === value)
+
+  return (
+    <div className="diag-select" ref={ref}>
+      <button
+        type="button"
+        className={`diag-select-btn${open ? ' open' : ''}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        {selected?.icon && <selected.icon className="diag-select-btn-icon" />}
+        <span className="diag-select-btn-label">{selected?.label || placeholder}</span>
+        {selected?.sub && <span className="diag-select-btn-sub">{selected.sub}</span>}
+        <FaChevronDown className={`diag-select-arrow${open ? ' open' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="diag-select-dropdown">
+          {options.map(opt => (
+            <button
+              key={opt.value}
+              type="button"
+              className={`diag-select-option${value === opt.value ? ' active' : ''}`}
+              onClick={() => { onChange(opt.value); setOpen(false) }}
+            >
+              {opt.icon && <opt.icon className="diag-select-option-icon" />}
+              <div className="diag-select-option-text">
+                <span className="diag-select-option-label">{opt.label}</span>
+                {opt.sub && <span className="diag-select-option-sub">{opt.sub}</span>}
+              </div>
+              {value === opt.value && <FaCheck className="diag-select-check" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── AccountPage (all users) ─────────────────────────────────────────────────
 const NOTIF_DAY_OPTIONS = [
   { days: 0,  label: 'On release day' },
@@ -1597,7 +1644,12 @@ function SettingsPage() {
   const [crackError, setCrackError]           = useState('')
   const [testError, setTestError]             = useState('')
 
-  const [activeTab, setActiveTab] = useState('email')
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const tok = localStorage.getItem('token')
+      return JSON.parse(atob(tok.split('.')[1])).can_manage_users ? 'email' : 'ntfy'
+    } catch { return 'ntfy' }
+  })
 
   const token   = localStorage.getItem('token')
   const isAdmin = (() => { try { return JSON.parse(atob(token.split('.')[1])).can_manage_users } catch { return false } })()
@@ -1618,13 +1670,12 @@ function SettingsPage() {
       .finally(() => setLoadingSettings(false))
   }, [])
 
-  // ── Load user games for testing tab
+  // ── Load user games for testing tab (available to all users)
   useEffect(() => {
-    if (!isAdmin) return
     axios.get(`${API_BASE}/user/me/games`, authH)
       .then(r => setUserGames(r.data))
       .catch(() => {})
-  }, [isAdmin])
+  }, [])
 
   // ── Helpers
   const isConfigured = data => Object.values(data || {}).some(v => v && String(v).trim())
@@ -1676,15 +1727,16 @@ function SettingsPage() {
     finally { setTestLoading(false) }
   }
 
-  // ── Nav definition
+  // ── Nav definition — adminOnly items are hidden from non-admin users
   const NAV = [
-    { key: 'email',    label: 'Email',       sub: 'SMTP',         icon: FaEnvelope,    data: smtp },
+    { key: 'email',    label: 'Email',       sub: 'SMTP',         icon: FaEnvelope,    data: smtp,     adminOnly: true },
     { key: 'ntfy',     label: 'Push',        sub: 'NTFY',         icon: FaBell,        data: ntfy },
     { key: 'gotify',   label: 'Gotify',      sub: 'Gotify Push',  icon: FaBell,        data: gotify },
     { key: 'telegram', label: 'Telegram',    sub: 'Telegram Bot', icon: FaTelegram,    data: telegram },
-    { key: 'ldap',     label: 'Directory',   sub: 'LDAP / AD',    icon: FaLock,        data: ldap },
+    { key: 'ldap',     label: 'Directory',   sub: 'LDAP / AD',    icon: FaLock,        data: ldap,     adminOnly: true },
     { key: 'testing',  label: 'Diagnostics', sub: 'Testing',      icon: FaCheckCircle, data: null },
   ]
+  const visibleNAV = NAV.filter(s => !s.adminOnly || isAdmin)
 
   if (loadingSettings) return (
     <div className="ent-loading">
@@ -1703,7 +1755,7 @@ function SettingsPage() {
           <span>Configuration</span>
         </div>
 
-        {NAV.map(s => {
+        {visibleNAV.map(s => {
           const configured = s.data !== null ? isConfigured(s.data) : null
           const dirty      = s.data !== null ? isDirty(s.key)       : false
           return (
@@ -1821,28 +1873,35 @@ function SettingsPage() {
         )}
 
         {/* Diagnostics */}
-        {activeTab === 'testing' && isAdmin && (
-          <SettingsSection icon={FaCheckCircle} title="Diagnostics & Testing" description="Verify your notification pipeline and inspect crack status data." configured={null}>
+        {activeTab === 'testing' && (
+          <SettingsSection icon={FaCheckCircle} title="Diagnostics & Testing" description="Verify your notification pipeline by sending a test to your configured channels." configured={null}>
             <div className="ent-fields">
               <SettingsField label="Notification Service">
-                <select className="ent-input ent-select" value={selectedService} onChange={e => setSelectedService(e.target.value)}>
-                  <option value="both">All (Email, NTFY, Gotify &amp; Telegram)</option>
-                  <option value="email">Email only</option>
-                  <option value="ntfy">NTFY only</option>
-                  <option value="gotify">Gotify only</option>
-                  <option value="telegram">Telegram only</option>
-                  <option value="crackwatch">CrackRelease status only</option>
-                </select>
+                <DiagSelect
+                  value={selectedService}
+                  onChange={setSelectedService}
+                  options={[
+                    { value: 'both',       label: 'All Services',      sub: 'Email · NTFY · Gotify · Telegram', icon: FaBell },
+                    { value: 'email',      label: 'Email only',        sub: 'SMTP',                             icon: FaEnvelope },
+                    { value: 'ntfy',       label: 'NTFY only',         sub: 'Push notification',                icon: FaBell },
+                    { value: 'gotify',     label: 'Gotify only',       sub: 'Self-hosted push',                 icon: FaBell },
+                    { value: 'telegram',   label: 'Telegram only',     sub: 'Telegram Bot',                     icon: FaTelegram },
+                    ...(isAdmin ? [{ value: 'crackwatch', label: 'CrackRelease only', sub: 'Crack status lookup', icon: FaCheckCircle }] : []),
+                  ]}
+                />
               </SettingsField>
               <SettingsField label="Game" hint={userGames.length ? `${userGames.length} games in library` : 'Loading…'}>
-                <select className="ent-input ent-select" value={selectedGame} onChange={e => setSelectedGame(e.target.value)}>
-                  <option value="">Choose a game…</option>
-                  {userGames.map(g => (
-                    <option key={g.game_id} value={g.game_id}>
-                      {g.game_name} {g.release_date ? `(${new Date(g.release_date).toLocaleDateString()})` : '(no date)'}
-                    </option>
-                  ))}
-                </select>
+                <DiagSelect
+                  value={selectedGame}
+                  onChange={setSelectedGame}
+                  placeholder="Choose a game…"
+                  options={userGames.map(g => ({
+                    value: g.game_id.toString(),
+                    label: g.game_name,
+                    sub: g.release_date ? new Date(g.release_date).toLocaleDateString() : 'no date',
+                    icon: FaGamepad,
+                  }))}
+                />
               </SettingsField>
             </div>
 
@@ -1905,22 +1964,18 @@ function SettingsPage() {
                     {testResult.results?.ntfy?.sent ? '✓ Sent' : `✗ ${testResult.results?.ntfy?.error || 'Failed'}`}
                   </span>
                 </div>
-                {testResult.results?.gotify && (
-                  <div className="ent-result-row">
-                    <span className="ent-result-label">Gotify</span>
-                    <span className={`ent-service-status ent-service-status--${testResult.results.gotify.sent ? 'ok' : 'fail'}`}>
-                      {testResult.results.gotify.sent ? '✓ Sent' : `✗ ${testResult.results.gotify.error || 'Failed'}`}
-                    </span>
-                  </div>
-                )}
-                {testResult.results?.telegram && (
-                  <div className="ent-result-row">
-                    <span className="ent-result-label">Telegram</span>
-                    <span className={`ent-service-status ent-service-status--${testResult.results.telegram.sent ? 'ok' : 'fail'}`}>
-                      {testResult.results.telegram.sent ? '✓ Sent' : `✗ ${testResult.results.telegram.error || 'Failed'}`}
-                    </span>
-                  </div>
-                )}
+                <div className="ent-result-row">
+                  <span className="ent-result-label">Gotify</span>
+                  <span className={`ent-service-status ent-service-status--${testResult.results?.gotify?.sent ? 'ok' : 'fail'}`}>
+                    {testResult.results?.gotify?.sent ? '✓ Sent' : `✗ ${testResult.results?.gotify?.error || 'Failed'}`}
+                  </span>
+                </div>
+                <div className="ent-result-row">
+                  <span className="ent-result-label">Telegram</span>
+                  <span className={`ent-service-status ent-service-status--${testResult.results?.telegram?.sent ? 'ok' : 'fail'}`}>
+                    {testResult.results?.telegram?.sent ? '✓ Sent' : `✗ ${testResult.results?.telegram?.error || 'Failed'}`}
+                  </span>
+                </div>
               </div>
             )}
           </SettingsSection>

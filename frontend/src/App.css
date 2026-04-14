@@ -4404,6 +4404,176 @@ body, html {
   padding-right: 2.2rem;
 }
 
+/* ── DiagSelect — custom dark dropdown for the Diagnostics panel ─────────── */
+.diag-select {
+  position: relative;
+  width: 100%;
+}
+
+.diag-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.7rem 1rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-fg);
+  font-size: 0.92rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  box-sizing: border-box;
+}
+
+.diag-select-btn:hover {
+  border-color: var(--color-border-hover);
+  background: rgba(255,255,255,0.06);
+}
+
+.diag-select-btn.open {
+  border-color: var(--color-accent);
+  background: rgba(255,255,255,0.06);
+  box-shadow: 0 0 0 3px rgba(14,165,233,0.12);
+  border-radius: 8px 8px 0 0;
+}
+
+.diag-select-btn-icon {
+  font-size: 0.95rem;
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.diag-select-btn-label {
+  flex: 1;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diag-select-btn-sub {
+  font-size: 0.76rem;
+  color: var(--color-fg-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.diag-select-arrow {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--color-fg-subtle);
+  transition: transform 0.2s ease;
+  margin-left: auto;
+}
+
+.diag-select-arrow.open {
+  transform: rotate(180deg);
+}
+
+.diag-select-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #1a2032;
+  border: 1px solid var(--color-accent);
+  border-top: 1px solid rgba(14,165,233,0.3);
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.55);
+  z-index: 300;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.diag-select-dropdown::-webkit-scrollbar {
+  width: 4px;
+}
+.diag-select-dropdown::-webkit-scrollbar-track {
+  background: transparent;
+}
+.diag-select-dropdown::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 4px;
+}
+
+.diag-select-option {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.6rem 1rem;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--color-fg);
+  font-size: 0.88rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+  box-sizing: border-box;
+}
+
+.diag-select-option:last-child {
+  border-bottom: none;
+  border-radius: 0 0 8px 8px;
+}
+
+.diag-select-option:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.diag-select-option.active {
+  background: rgba(14,165,233,0.1);
+  color: var(--color-accent);
+}
+
+.diag-select-option-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+.diag-select-option.active .diag-select-option-icon {
+  opacity: 1;
+}
+
+.diag-select-option-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.diag-select-option-label {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diag-select-option-sub {
+  font-size: 0.74rem;
+  color: var(--color-fg-subtle);
+  margin-top: 0.1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diag-select-option.active .diag-select-option-sub {
+  color: rgba(14,165,233,0.65);
+}
+
+.diag-select-check {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--color-accent);
+}
+
 /* ── Save bar ── */
 .ent-save-bar {
   display: flex;

@@ -2141,7 +2141,7 @@ app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users')
 });
 
 // --- Test Notification endpoint for admins ---
-app.post('/api/admin/test-notification', authRequired, requirePermission('can_manage_users'), async (req, res) => {
+app.post('/api/admin/test-notification', authRequired, async (req, res) => {
   try {
     const { service, gameId, gameName, releaseDate, coverUrl } = req.body;
     
