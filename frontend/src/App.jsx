@@ -622,7 +622,7 @@ function SearchPage({ user }) {
                 <div key={game.id} className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`} style={{ animationDelay: `${searchResults.indexOf(game) * 0.04}s` }}>
                   <div className="game-cover-container">
                     {game.coverUrl ? (
-                      <img src={game.coverUrl} alt={game.name} className="game-cover" />
+                      <img src={game.coverUrl} alt={game.name} className="game-cover" loading="lazy" decoding="async" onLoad={(e) => e.currentTarget.classList.add('cover-loaded')} />
                     ) : (
                       <div className="cover-placeholder">
                         <FaGamepad className="cover-placeholder-icon" />
