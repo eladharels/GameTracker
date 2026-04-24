@@ -1,6 +1,6 @@
 version: '3.8'
 services:
-  backend:
+  backend: # nosemgrep: yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
     image: local/gametracker-backend:staging
     container_name: gametracker-backend-staging
     pull_policy: never
@@ -17,6 +17,10 @@ services:
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}
       - RAWG_API_KEY=${RAWG_API_KEY}
       - JWT_SECRET=${JWT_SECRET:-supersecretkey}
+    security_opt:
+      - no-new-privileges:true
+    # read_only: true cannot be set — SQLite requires a writable /app/ directory
+    # for WAL and journal files alongside the mounted gametracker.db file.
     restart: unless-stopped
 
   frontend:
@@ -24,7 +28,12 @@ services:
     container_name: gametracker-frontend-staging
     pull_policy: never
     ports:
-      - "8085:80"
+      - "8085:8080"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
     restart: unless-stopped
-
-
