@@ -18,7 +18,7 @@ function getAuth() {
   if (token) {
     try {
       user = JSON.parse(atob(token.split('.')[1]));
-    } catch {}
+    } catch { /* ignore malformed JWT */ }
   }
   return { token, user };
 }

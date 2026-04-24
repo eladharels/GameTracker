@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Routes, Route, Link, useLocation, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
 import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown } from 'react-icons/fa'
@@ -229,7 +229,7 @@ function LoginPage({ setUser }) {
 
 function UserManagementPage({ user }) {
   const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [newUser, setNewUser] = useState({ username: '', password: '', can_manage_users: false })
   const [success, setSuccess] = useState('')
@@ -250,7 +250,6 @@ function UserManagementPage({ user }) {
       if (err.response && (err.response.status === 401 || err.response.status === 403)) {
         // Token expired or invalid, log out
         localStorage.removeItem('token');
-        setUser(null);
         navigate('/login');
       } else {
         setError('Failed to load users')
@@ -492,7 +491,6 @@ function SearchPage({ user }) {
   const [searchError, setSearchError] = useState('')
   const [viewMode, setViewMode] = useState('grid')
   const [gamePrices, setGamePrices] = useState({}) // { [gameId]: { price, loading, error } }
-  const navigate = useNavigate()
   const { showToast } = useToast();
 
   // Fetch price for a game by Steam App ID
@@ -657,7 +655,6 @@ function SearchPage({ user }) {
 function LibraryPage({ user }) {
   const [userGames, setUserGames] = useState([])
   const [loading, setLoading] = useState(false)
-  const [statusUpdating, setStatusUpdating] = useState(false)
   const [filter, setFilter] = useState('all')
   const [statusError, setStatusError] = useState('')
   const [removeError, setRemoveError] = useState('')
@@ -675,7 +672,7 @@ function LibraryPage({ user }) {
   const [refreshingGameIds, setRefreshingGameIds] = useState({})
   const [draggedGameId, setDraggedGameId] = useState(null)
   const [dragOverGameId, setDragOverGameId] = useState(null)
-  const { showToast, dismissToast } = useToast()
+  const { showToast } = useToast()
   const pendingDeleteRef = useRef({})
   const gamesPerPage = 15
 
@@ -1278,8 +1275,6 @@ function CalendarPage({ user }) {
   const year = month?.year ?? new Date().getFullYear();
   const m = month?.month ?? new Date().getMonth();
   const firstDay = new Date(year, m, 1);
-  const lastDay = new Date(year, m + 1, 0);
-  const daysInMonth = lastDay.getDate();
   const startDay = firstDay.getDay();
 
   // Build a 6-row (max) calendar grid (7 days per week)
@@ -1338,7 +1333,7 @@ function CalendarPage({ user }) {
         <button className="calendar-nav-btn" onClick={handleNextMonth}>&gt;</button>
       </div>
       <div className="calendar-grid calendar-grid-full">
-        {weekdayNames.map((wd, i) => (
+        {weekdayNames.map((wd) => (
           <div key={wd} className="calendar-cell calendar-weekday">{wd}</div>
         ))}
         {calendarCells.map((date, idx) => {
@@ -1365,7 +1360,8 @@ function CalendarPage({ user }) {
   );
 }
 
-function SettingsSection({ icon: Icon, title, description, configured, children }) {
+function SettingsSection({ icon, title, description, configured, children }) {
+  const Icon = icon
   return (
     <div className="ent-section">
       <div className="ent-section-header">
