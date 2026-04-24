@@ -1,0 +1,51 @@
+# .gitleaks.toml — Gitleaks configuration for GameTracker
+#
+# Extends the official Gitleaks default ruleset and allowlists known
+# false positives: smoke test dummy keys, documentation placeholders,
+# and the documented JWT_SECRET fallback default in index.js.
+#
+# Docs: https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
+
+title = "GameTracker Gitleaks Config"
+
+[extend]
+useDefault = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global allowlist — paths and patterns that are known-safe
+# ─────────────────────────────────────────────────────────────────────────────
+[allowlist]
+description = "Known-safe paths and placeholder patterns"
+
+paths = [
+  # Documentation and changelog files may contain example/redacted values
+  '''PRODUCTION_CHANGELOG\.txt''',
+  '''NOTIFICATION_FIXES\.md''',
+  '''RELEASE_STATUS_UPDATE\.md''',
+  '''SECURITY_FIXES\.md''',
+  '''CLAUDE\.md''',
+  '''\.gitleaks\.toml''',
+  # Build artifacts
+  '''frontend/dist''',
+  '''node_modules''',
+]
+
+regexes = [
+  # Smoke test placeholder values used in CI YAML and docker-compose.test.yml
+  # These are intentionally not real credentials
+  '''smoke-test-dummy''',
+  '''smoke-test-jwt-secret-not-real''',
+
+  # JWT_SECRET fallback default in index.js — overridden at runtime by
+  # the real secret injected via GitHub Actions secret. This value is
+  # documented in CLAUDE.md and is never used in production.
+  '''supersecretkey''',
+
+  # Documentation placeholder patterns
+  '''<twitch_client_id>''',
+  '''<twitch_bearer_token>''',
+  '''<rawg_api_key>''',
+  '''<strong_random_secret>''',
+  '''<optional>''',
+  '''smtp\.example\.com''',
+]

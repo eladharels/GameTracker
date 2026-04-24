@@ -226,6 +226,78 @@ NODE_ENV=production
 
 ---
 
+## CI/CD Security Pipeline
+
+**Added**: 2026-04-24 (from staging Changes #44, #45, #46)
+
+Every push to `main` must pass a full security gauntlet before code reaches the running production stack.
+
+### Pipeline Job Graph
+
+```
+push: main
+│
+├── secret-scan      Gitleaks — full git history scan
+├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
+├── frontend-quality ESLint + Vite build (no test framework; build = typecheck)
+└── build-images     Build backend + frontend Docker images
+    ├── trivy-api    Trivy — backend image  (CRITICAL/HIGH → fail)
+    └── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
+
+smoke-test  (needs: build-images + all 3 scan jobs)
+  └─► docker compose -p gametracker-smoke -f docker-compose.test.yml
+       Backend: GET http://localhost:3099/api/health → {"status":"ok"}
+       Frontend: GET http://localhost:8099/ → HTTP 200
+       Teardown: if: always() — guaranteed cleanup
+
+deploy  (needs: ALL 7 upstream jobs)
+  └─► docker compose up + post-deploy health check on :3000/api/health
+```
+
+### Security Tools
+
+| Tool | Job | Failure Condition |
+|---|---|---|
+| Gitleaks | `secret-scan` | Any detected secret in git history |
+| Semgrep | `semgrep` | Any ERROR-severity finding |
+| Trivy | `trivy-api` | CRITICAL or HIGH unfixed CVE in backend image |
+| Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
+| ESLint | `frontend-quality` | Any lint error |
+| Vite build | `frontend-quality` | Build failure |
+| Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
+
+### Container Hardening
+
+| Component | Hardening |
+|---|---|
+| Backend | `no-new-privileges:true`, runs as `node` user (UID 1000) |
+| Frontend | `no-new-privileges:true`, `read_only: true`, tmpfs for `/tmp`, `/var/cache/nginx`, `/var/run`, runs as `nginx` user via `nginxinc/nginx-unprivileged:alpine` |
+| Backend read_only | **Cannot be enabled** — SQLite requires writable `/app/` for WAL/journal files |
+
+### Smoke Test Isolation
+
+| Property | Value |
+|---|---|
+| Compose project | `gametracker-smoke` (separate Docker network) |
+| Backend port | `3099` (no conflict with production `3000`) |
+| Frontend port | `8099` (no conflict with production `8080`) |
+| Data directory | `/tmp/gametracker-smoke-data/` — ephemeral, wiped after test |
+| Production DB | **Never touched** — `/home/docker/gametracker/data/` not mounted |
+
+### Docker Prune Change
+
+Old: `docker system prune -a -f` (destroys layer cache, slow rebuilds)
+New: `docker image prune -f` (dangling only — preserves cache)
+
+### Post-Deploy Requirement
+
+After first deployment with USER node active, run on the host:
+```bash
+chown -R 1000:1000 /home/docker/gametracker/data/
+```
+
+---
+
 ---
 
 # Mandatory Agent Review Process

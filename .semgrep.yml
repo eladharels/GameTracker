@@ -1,0 +1,73 @@
+# .semgrep.yml — Semgrep configuration for GameTracker
+#
+# The primary ruleset is invoked via --config auto in CI (covers Node.js,
+# React, OWASP Top 10, injection, XSS, prototype pollution, etc.).
+# This file adds project-specific custom rules, path exclusions, and
+# documented suppressions for confirmed false positives.
+#
+# Docs: https://semgrep.dev/docs/writing-rules/rule-syntax/
+
+rules:
+  # Detect hardcoded secret fallbacks outside the documented entry point.
+  # index.js has an intentional, documented JWT_SECRET fallback — this rule
+  # catches if the same anti-pattern appears anywhere else in the codebase.
+  - id: hardcoded-secret-fallback-outside-entry
+    pattern: |
+      process.env.$VAR || "$LITERAL"
+    message: >
+      Hardcoded secret fallback detected. Secrets must come from environment
+      variables only — do not supply a literal fallback value.
+    languages: [javascript]
+    severity: ERROR
+    paths:
+      exclude:
+        - index.js
+        - node_modules/
+        - "**/frontend/node_modules/"
+        - "**/frontend/dist/"
+
+  # Detect console.log calls that include req.body, which may leak PII or
+  # credentials in server logs.
+  - id: log-request-body
+    pattern: console.log(..., $REQ.body, ...)
+    message: >
+      Logging request bodies may expose sensitive user data in server logs.
+      Redact or remove before production use.
+    languages: [javascript]
+    severity: WARNING
+    paths:
+      exclude:
+        - node_modules/
+        - "**/frontend/node_modules/"
+
+# Paths excluded from all semgrep scans (applied on top of --exclude CLI flags)
+paths:
+  exclude:
+    - node_modules/
+    - frontend/node_modules/
+    - frontend/dist/
+    - "**/*.min.js"
+    - "**/*.lock"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# False positive suppressions
+# Each suppression is documented with the reason it does not apply here.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+#   SUPPRESSED — This rule targets C/Python-style format string injection
+#   (e.g. printf("%s", userInput) where userInput contains "%n"). JavaScript
+#   template literals (`${variable}`) have no format specifier mechanism and
+#   cannot be exploited this way. The console.error/log calls flagged in
+#   index.js and utility scripts are internal error handlers using internal
+#   state, not user-controlled format strings. Risk: log injection via
+#   newlines in usernames is a separate concern not covered by this rule.
+#   Suppressed globally via --exclude-rule in the CI workflow step.
+#
+# javascript.express.security.audit.express-check-csurf-middleware-usage
+#   SUPPRESSED — The app uses stateless JWT Bearer token authentication
+#   (Authorization: Bearer <token> header). CSRF attacks require the browser
+#   to automatically attach credentials (cookies/session). Since this API
+#   does not use session cookies, CSRF is not an applicable attack vector.
+#   Additionally, the `csurf` npm package is officially deprecated (Nov 2023).
+#   Suppressed globally via --exclude-rule in the CI workflow step.

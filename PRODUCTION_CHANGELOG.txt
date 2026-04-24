@@ -9,6 +9,30 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-04-24 (Changes #44, #45, #46 from staging) ---
+Summary: Full CI/CD security pipeline, container hardening, and dependency CVE fixes.
+  Staging changes #44 (security pipeline), #45 (container hardening), and #46
+  (pipeline bug fixes) promoted to production simultaneously.
+
+Files changed:
+  • Dockerfile                                 (apt-get upgrade, curl, npm@10, chown /app, USER node)
+  • package.json                               (axios ^1.13.5, nodemailer ^7.0.11, overrides block)
+  • frontend/Dockerfile                        (nginx-unprivileged:alpine, EXPOSE 8080, USER nginx)
+  • frontend/nginx.conf                        (listen 8080)
+  • docker-compose.yaml                        (security_opt no-new-privileges, read_only frontend, tmpfs, port 8080:8080)
+  • docker-compose.test.yml                    (new — isolated smoke test stack on ports 3099/8099)
+  • .github/workflows/docker-build-deploy.yml  (replaced — 8-job security pipeline)
+  • .gitleaks.toml                             (new — Gitleaks secret scanning config)
+  • .semgrep.yml                               (new — Semgrep SAST config + custom rules)
+  • .trivyignore                               (new — suppress CVE-2026-33671 picomatch until 4.0.4)
+  • CLAUDE.md                                  (appended — CI/CD pipeline section)
+
+See STAGING_CHANGELOG.txt entries #44, #45, #46 for full context.
+
+Post-deploy action required:
+  Run on the host once to fix volume-mounted file ownership for the node user:
+    chown -R 1000:1000 /home/docker/gametracker/data/
+
 --- APPLIED 2026-03-20 (Mobile app UI upgrade) ---
 Summary: Massive UI redesign of the Android mobile app (GameTracker-mobile).
   All screens redesigned with clean dark professional look.

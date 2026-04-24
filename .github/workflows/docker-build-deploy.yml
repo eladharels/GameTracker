@@ -1,19 +1,134 @@
-name: Build & Deploy Docker Images
+name: Build, Secure & Deploy — GameTracker Production
 
 on:
   push:
     branches:
       - main
-      - staging
+
+# Prevent concurrent runs from conflicting on the self-hosted runner.
+# cancel-in-progress: false ensures the second push queues instead of
+# cancelling an in-progress run that may hold Docker ports.
+concurrency:
+  group: gametracker-pipeline
+  cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
-    runs-on: self-hosted
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 1: Secret Scanning — Gitleaks
+  # Scans the full git history for accidentally committed secrets.
+  # ─────────────────────────────────────────────────────────────────────────────
+  secret-scan:
+    name: Secret Scanning (Gitleaks)
+    runs-on: self-hosted
+    continue-on-error: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks (if not cached on runner)
+        run: |
+          if ! command -v gitleaks &>/dev/null; then
+            echo "[gitleaks] Downloading binary..."
+            curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+              -o /tmp/gitleaks.tar.gz
+            tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+            sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+            rm -f /tmp/gitleaks.tar.gz
+          fi
+          echo "[gitleaks] Version: $(gitleaks version)"
+
+      - name: Run Gitleaks secret scan
+        run: |
+          gitleaks detect \
+            --source . \
+            --config .gitleaks.toml \
+            --redact \
+            --verbose \
+            --exit-code 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 2: SAST — Semgrep
+  # Uses the `auto` ruleset (Node.js, React, OWASP Top 10, injection, XSS, etc.)
+  # plus project-specific custom rules defined in .semgrep.yml.
+  # ─────────────────────────────────────────────────────────────────────────────
+  semgrep:
+    name: SAST — Semgrep
+    runs-on: self-hosted
+    continue-on-error: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Semgrep (if not cached on runner)
+        run: |
+          if ! command -v semgrep &>/dev/null; then
+            echo "[semgrep] Installing via pip3..."
+            pip3 install semgrep --quiet
+          fi
+          echo "[semgrep] Version: $(semgrep --version)"
+
+      - name: Run Semgrep scan
+        run: |
+          semgrep scan \
+            --config auto \
+            --config .semgrep.yml \
+            --error \
+            --exclude 'node_modules' \
+            --exclude 'dist' \
+            --exclude 'frontend/dist' \
+            --exclude-rule 'javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring' \
+            --exclude-rule 'javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage' \
+            .
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 3: Frontend Lint & Build (Typecheck)
+  # Runs ESLint and Vite build. Vite build acts as the typecheck / compile
+  # verification step since the project has no TypeScript or test framework.
+  # Backend npm test is intentionally excluded (placeholder script, exits 1).
+  # ─────────────────────────────────────────────────────────────────────────────
+  frontend-quality:
+    name: Frontend Lint & Build
+    runs-on: self-hosted
+    continue-on-error: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: ./frontend
+        run: npm run lint
+
+      - name: Vite build (compile + typecheck verification)
+        working-directory: ./frontend
+        run: npm run build
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 4: Build Docker Images
+  # Builds both backend and frontend images that are shared by the container
+  # scan jobs and the smoke test.
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-images:
+    name: Build Docker Images
+    runs-on: self-hosted
+    continue-on-error: false
     env:
       BACKEND_IMAGE_BASE: local/gametracker-backend
       FRONTEND_IMAGE_BASE: local/gametracker-frontend
-
+    outputs:
+      backend_image: ${{ steps.image-tags.outputs.backend_image }}
+      frontend_image: ${{ steps.image-tags.outputs.frontend_image }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,44 +136,273 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Decide tags and compose file based on branch
-        id: vars
+      - name: Set image tag outputs
+        id: image-tags
         run: |
-          if [ "${GITHUB_REF_NAME}" = "main" ]; then
-            echo "env_tag=latest" >> $GITHUB_OUTPUT
-            echo "compose_file=docker-compose.yaml" >> $GITHUB_OUTPUT
-          elif [ "${GITHUB_REF_NAME}" = "staging" ]; then
-            echo "env_tag=staging" >> $GITHUB_OUTPUT
-            echo "compose_file=docker-compose.staging.yaml" >> $GITHUB_OUTPUT
-          else
-            echo "Unsupported branch: ${GITHUB_REF_NAME}"
-            exit 1
-          fi
+          echo "backend_image=${BACKEND_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
+          echo "frontend_image=${FRONTEND_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
 
-      - name: Build backend image
+      - name: Build backend Docker image
         run: |
           docker build \
-            -t ${BACKEND_IMAGE_BASE}:${{ steps.vars.outputs.env_tag }} \
+            -t ${BACKEND_IMAGE_BASE}:latest \
             .
 
-      - name: Build frontend image
+      - name: Build frontend Docker image
         run: |
           docker build \
-            -t ${FRONTEND_IMAGE_BASE}:${{ steps.vars.outputs.env_tag }} \
+            -t ${FRONTEND_IMAGE_BASE}:latest \
             ./frontend
 
-      - name: Stop existing stack (ignore errors)
-        run: |
-          docker compose -f ${{ steps.vars.outputs.compose_file }} down || true
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 5: Container Scan — Backend / API (Trivy)
+  # Scans the backend image for known CVEs. Fails on CRITICAL or HIGH severity
+  # unfixed vulnerabilities. Depends on build-images.
+  # ─────────────────────────────────────────────────────────────────────────────
+  trivy-api:
+    name: Container Scan — API / Backend (Trivy)
+    runs-on: self-hosted
+    continue-on-error: false
+    needs: build-images
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Start stack
+      - name: Install Trivy (if not cached on runner)
+        run: |
+          if ! command -v trivy &>/dev/null; then
+            echo "[trivy] Installing..."
+            curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+              | sudo sh -s -- -b /usr/local/bin
+          fi
+          echo "[trivy] Version: $(trivy --version)"
+
+      - name: Scan backend image
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: "true"
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --no-progress \
+            --format table \
+            --ignorefile .trivyignore \
+            ${{ needs.build-images.outputs.backend_image }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 6: Container Scan — Frontend / Web (Trivy)
+  # Scans the frontend (nginx + React SPA) image for known CVEs.
+  # Fails on CRITICAL or HIGH severity unfixed vulnerabilities.
+  # ─────────────────────────────────────────────────────────────────────────────
+  trivy-web:
+    name: Container Scan — Web / Frontend (Trivy)
+    runs-on: self-hosted
+    continue-on-error: false
+    needs: build-images
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Trivy (if not cached on runner)
+        run: |
+          if ! command -v trivy &>/dev/null; then
+            echo "[trivy] Installing..."
+            curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+              | sudo sh -s -- -b /usr/local/bin
+          fi
+          echo "[trivy] Version: $(trivy --version)"
+
+      - name: Scan frontend image
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: "true"
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --no-progress \
+            --format table \
+            --ignorefile .trivyignore \
+            ${{ needs.build-images.outputs.frontend_image }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 7: Smoke Test (docker compose)
+  # Starts a completely isolated test stack on ports 3099/8099 using
+  # docker-compose.test.yml. Verifies backend /api/health and frontend HTTP 200
+  # before any deploy happens. Teardown always runs (if: always()).
+  #
+  # ISOLATION GUARANTEES:
+  #   - Compose project name: gametracker-smoke (separate network + containers)
+  #   - Ports: 3099 (backend), 8099 (frontend) — no conflict with production 3000/8080
+  #   - Data dir: /tmp/gametracker-smoke-data/ — never touches production DB
+  #   - Dummy API keys — no real credentials used or exposed
+  # ─────────────────────────────────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke Test (docker compose)
+    runs-on: self-hosted
+    continue-on-error: false
+    needs:
+      - build-images
+      - secret-scan
+      - semgrep
+      - frontend-quality
+    env:
+      BACKEND_TEST_PORT: 3099
+      FRONTEND_TEST_PORT: 8099
+      SMOKE_DATA_DIR: /tmp/gametracker-smoke-data
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare ephemeral test data directory
+        run: |
+          mkdir -p ${{ env.SMOKE_DATA_DIR }}
+          touch ${{ env.SMOKE_DATA_DIR }}/gametracker.db
+          echo '{}' > ${{ env.SMOKE_DATA_DIR }}/settings.json
+          echo '[]' > ${{ env.SMOKE_DATA_DIR }}/sent_notifications.json
+          # Allow the container's node user (UID 1000) to read/write the mounted
+          # files regardless of which user the self-hosted runner creates them as.
+          chmod -R 777 ${{ env.SMOKE_DATA_DIR }}
+
+      - name: Start smoke test stack
+        env:
+          IGDB_CLIENT_ID: smoke-test-dummy
+          IGDB_BEARER_TOKEN: smoke-test-dummy
+          RAWG_API_KEY: smoke-test-dummy
+          JWT_SECRET: smoke-test-jwt-secret-not-real
+        run: |
+          docker compose \
+            -p gametracker-smoke \
+            -f docker-compose.test.yml \
+            up -d || {
+            echo "[smoke] ERROR: Stack failed to start — printing backend container logs:"
+            docker logs gametracker-backend-smoke 2>&1 || true
+            exit 1
+          }
+          echo "[smoke] Stack started — backend :${{ env.BACKEND_TEST_PORT }}, frontend :${{ env.FRONTEND_TEST_PORT }}"
+
+      - name: Wait for backend to become healthy
+        run: |
+          MAX_WAIT=60
+          ELAPSED=0
+          until curl -sf http://localhost:${{ env.BACKEND_TEST_PORT }}/api/health > /dev/null 2>&1; do
+            if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+              echo "[smoke] ERROR: Backend not healthy after ${MAX_WAIT}s"
+              docker compose -p gametracker-smoke -f docker-compose.test.yml logs backend
+              exit 1
+            fi
+            echo "[smoke] Waiting for backend... (${ELAPSED}s)"
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          echo "[smoke] Backend healthy after ${ELAPSED}s"
+
+      - name: Verify backend health response
+        run: |
+          RESPONSE=$(curl -sf http://localhost:${{ env.BACKEND_TEST_PORT }}/api/health)
+          echo "[smoke] Response: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"status":"ok"' || {
+            echo "[smoke] ERROR: Unexpected response — expected {\"status\":\"ok\"}"
+            exit 1
+          }
+          echo "[smoke] Backend health check PASSED"
+
+      - name: Wait for frontend to become reachable
+        run: |
+          MAX_WAIT=30
+          ELAPSED=0
+          until curl -sf http://localhost:${{ env.FRONTEND_TEST_PORT }}/ > /dev/null 2>&1; do
+            if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+              echo "[smoke] ERROR: Frontend not reachable after ${MAX_WAIT}s"
+              docker compose -p gametracker-smoke -f docker-compose.test.yml logs frontend
+              exit 1
+            fi
+            echo "[smoke] Waiting for frontend... (${ELAPSED}s)"
+            sleep 3
+            ELAPSED=$((ELAPSED + 3))
+          done
+          echo "[smoke] Frontend reachable after ${ELAPSED}s"
+
+      - name: Verify frontend returns HTTP 200
+        run: |
+          STATUS=$(curl -o /dev/null -sw "%{http_code}" http://localhost:${{ env.FRONTEND_TEST_PORT }}/)
+          echo "[smoke] Frontend HTTP status: $STATUS"
+          [ "$STATUS" -eq 200 ] || {
+            echo "[smoke] ERROR: Expected HTTP 200, got $STATUS"
+            exit 1
+          }
+          echo "[smoke] Frontend HTTP 200 check PASSED"
+
+      - name: Tear down smoke test stack
+        if: always()
+        env:
+          IGDB_CLIENT_ID: smoke-test-dummy
+          IGDB_BEARER_TOKEN: smoke-test-dummy
+          RAWG_API_KEY: smoke-test-dummy
+          JWT_SECRET: smoke-test-jwt-secret-not-real
+        run: |
+          docker compose \
+            -p gametracker-smoke \
+            -f docker-compose.test.yml \
+            down --volumes --remove-orphans || true
+          rm -rf ${{ env.SMOKE_DATA_DIR }}
+          echo "[smoke] Stack torn down and temp data wiped"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 8: Deploy to Production
+  # ONLY runs when ALL 7 upstream jobs pass.
+  # Uses docker image prune -f (dangling only) to preserve layer cache.
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Production
+    runs-on: self-hosted
+    continue-on-error: false
+    needs:
+      - secret-scan
+      - semgrep
+      - frontend-quality
+      - build-images
+      - trivy-api
+      - trivy-web
+      - smoke-test
+    env:
+      BACKEND_IMAGE_BASE: local/gametracker-backend
+      FRONTEND_IMAGE_BASE: local/gametracker-frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Stop existing production stack
+        run: |
+          docker compose -f docker-compose.yaml down || true
+
+      - name: Start production stack
         env:
           IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
           IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
-          docker compose -f ${{ steps.vars.outputs.compose_file }} up -d
+          docker compose -f docker-compose.yaml up -d
 
-      - name: Prune old Docker images (non-interactive)
-        run: docker system prune -a -f
+      - name: Verify production deployment health
+        run: |
+          echo "[deploy] Waiting for production backend to become healthy..."
+          MAX_WAIT=90
+          ELAPSED=0
+          until curl -sf http://localhost:3000/api/health > /dev/null 2>&1; do
+            if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+              echo "[deploy] ERROR: Production backend not healthy after ${MAX_WAIT}s"
+              docker compose -f docker-compose.yaml logs backend
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          echo "[deploy] Production healthy after ${ELAPSED}s — deployment SUCCESSFUL"
+
+      - name: Prune dangling Docker images
+        run: |
+          docker image prune -f
+          echo "[deploy] Dangling image prune complete"

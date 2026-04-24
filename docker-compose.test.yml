@@ -1,0 +1,62 @@
+# docker-compose.test.yml — Smoke test stack for CI pipeline
+#
+# ONLY used by the smoke-test job in .github/workflows/docker-build-deploy.yml.
+# Always launched with: docker compose -p gametracker-smoke -f docker-compose.test.yml ...
+#
+# ISOLATION:
+#   - Ports 3099 (backend) and 8099 (frontend) — no conflict with production (3000/8080)
+#     or staging (3001/8085).
+#   - Data mounted from /tmp/gametracker-smoke-data/ — never touches the real
+#     production volume at /home/docker/gametracker/data/.
+#   - restart: "no" prevents orphan containers after CI teardown.
+#   - All API keys are dummy placeholder values — no real credentials needed.
+
+version: '3.8'
+
+services:
+  backend: # nosemgrep: yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
+    image: local/gametracker-backend:latest
+    container_name: gametracker-backend-smoke
+    pull_policy: never
+    ports:
+      - "${BACKEND_TEST_PORT:-3099}:${BACKEND_TEST_PORT:-3099}"
+    volumes:
+      - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/gametracker.db:/app/gametracker.db
+      - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/settings.json:/app/settings.json
+      - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/sent_notifications.json:/app/sent_notifications.json
+    environment:
+      - PORT=${BACKEND_TEST_PORT:-3099}
+      - NODE_ENV=production
+      - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:-smoke-test-dummy}
+      - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN:-smoke-test-dummy}
+      - RAWG_API_KEY=${RAWG_API_KEY:-smoke-test-dummy}
+      - JWT_SECRET=${JWT_SECRET:-smoke-test-jwt-secret-not-real}
+    security_opt:
+      - no-new-privileges:true
+    # read_only: true cannot be set — SQLite requires a writable /app/ directory
+    # for WAL and journal files alongside the mounted gametracker.db file.
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${BACKEND_TEST_PORT:-3099}/api/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  frontend:
+    image: local/gametracker-frontend:latest
+    container_name: gametracker-frontend-smoke
+    pull_policy: never
+    ports:
+      - "${FRONTEND_TEST_PORT:-8099}:8080"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    restart: "no"
+    depends_on:
+      backend:
+        condition: service_healthy

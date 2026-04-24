@@ -1,0 +1,7 @@
+# CVE-2026-33671: picomatch ReDoS via crafted extglob patterns
+# Fixed in picomatch 4.0.4, 3.0.2, 2.3.2 — fix not yet resolvable via npm override
+# because node-gyp → glob@11 pins picomatch@^4 and 4.0.4 is not yet propagated.
+# picomatch is a transitive dep of node-gyp (sqlite3 build tooling only);
+# production traffic cannot supply crafted patterns to it.
+# Remove this entry once picomatch@4.0.4 is resolvable and the override takes effect.
+CVE-2026-33671
