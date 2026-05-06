@@ -9,6 +9,10 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-05-06 (Staging Change #53) ---
+Summary: API Keys session-expired UX fix — 401 errors now show a clear banner instead of raw "Invalid token".
+Files changed: frontend/src/App.jsx, frontend/src/App.css
+
 --- APPLIED 2026-05-06 (Staging Changes #34–#40, #47–#52) ---
 Summary: Full feature parity with staging — widescreen toggle, Gotify/Telegram/per-user notifications,
   cover images in notifications, System Status admin dashboard, API Keys settings tab with IGDB

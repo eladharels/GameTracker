@@ -2008,6 +2008,7 @@ function SettingsPage() {
   const [apiKeysShow, setApiKeysShow] = useState({})   // which fields are revealed
   const [apiKeysSaving, setApiKeysSaving] = useState(false)
   const [apiKeysSaveStatus, setApiKeysSaveStatus] = useState(null)
+  const [apiKeysAuthError, setApiKeysAuthError] = useState(false)  // session expired
   const [saving, setSaving]       = useState({})
   const [saveStatus, setSaveStatus] = useState({})
 
@@ -2052,8 +2053,8 @@ function SettingsPage() {
   useEffect(() => {
     if (!isAdmin) return
     axios.get(`${API_BASE}/settings/apikeys`, authH)
-      .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}) })
-      .catch(() => {})
+      .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}); setApiKeysAuthError(false) })
+      .catch(err => { if (err.response?.status === 401) setApiKeysAuthError(true) })
   }, [])
 
   // ── Load user games for testing tab (available to all users)
@@ -2085,6 +2086,14 @@ function SettingsPage() {
     setSaving(p => ({ ...p, [key]: false }))
   }
 
+  const apiErrMsg = (err) => {
+    const status = err.response?.status
+    const body   = err.response?.data?.error || err.response?.data?.message || err.message || 'Unknown error'
+    if (status === 401) { setApiKeysAuthError(true); return 'Session expired — log out and log back in.' }
+    if (status === 403) return 'Access denied — admin permission required.'
+    return body
+  }
+
   const saveApiKeys = async () => {
     if (!Object.keys(apiKeysEdit).length) return
     setApiKeysSaving(true); setApiKeysSaveStatus(null)
@@ -2095,7 +2104,7 @@ function SettingsPage() {
       setApiKeysSaveStatus('saved')
       setTimeout(() => setApiKeysSaveStatus(null), 3000)
     } catch (err) {
-      setApiKeysSaveStatus('error — ' + (err.response?.data?.error || err.message))
+      setApiKeysSaveStatus(apiErrMsg(err))
     } finally {
       setApiKeysSaving(false)
     }
@@ -2109,11 +2118,10 @@ function SettingsPage() {
       const r = await axios.post(`${API_BASE}/settings/apikeys/refresh-igdb-token`, {}, authH)
       const expiresInDays = r.data.expires_in ? Math.floor(r.data.expires_in / 86400) : null
       setIgdbRefreshResult({ ok: true, msg: `New token saved (${r.data.masked}). Expires in ~${expiresInDays ?? '?'} days.` })
-      // Reload meta so the bearer token shows updated source/masked value
       const meta = await axios.get(`${API_BASE}/settings/apikeys`, authH)
       setApiKeysMeta(meta.data)
     } catch (err) {
-      setIgdbRefreshResult({ ok: false, msg: err.response?.data?.error || err.message || 'Unknown error' })
+      setIgdbRefreshResult({ ok: false, msg: apiErrMsg(err) })
     } finally {
       setIgdbRefreshing(false)
     }
@@ -2296,6 +2304,14 @@ function SettingsPage() {
         {/* API Keys */}
         {activeTab === 'apikeys' && (
           <SettingsSection icon={FaKey} title="API Provider Keys" description="Configure API credentials for game data providers. Settings here override environment variables. Leave a field blank to keep the existing value.">
+
+            {/* Session expired warning */}
+            {apiKeysAuthError && (
+              <div className="ak-session-expired">
+                <FaExclamationCircle />
+                <span><strong>Session expired.</strong> Please log out and log back in — your admin session needs to be refreshed before you can view or save API keys.</span>
+              </div>
+            )}
 
             {/* IGDB / Twitch section */}
             <div className="ak-section-header">IGDB — via Twitch Developer</div>
