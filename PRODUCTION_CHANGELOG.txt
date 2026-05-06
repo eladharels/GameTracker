@@ -9,6 +9,42 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-05-06 (Staging Changes #34–#40, #47–#52) ---
+Summary: Full feature parity with staging — widescreen toggle, Gotify/Telegram/per-user notifications,
+  cover images in notifications, System Status admin dashboard, API Keys settings tab with IGDB
+  auto-refresh, plus Trivy Dockerfile fix and circular-JSON/500 bug fixes.
+
+Files changed:
+  • index.js                       (all new routes and features — see staging changelog entries)
+  • frontend/src/App.jsx           (all new UI — STAGING badge removed, same features as staging)
+  • frontend/src/App.css           (all new styles — system status, API keys tab, widescreen, etc.)
+  • Dockerfile                     (linux-libc-dev purge after npm install — eliminates 59 HIGH CVEs)
+  • package.json                   (updated dependency versions matching staging)
+
+New features applied:
+  #34  Widescreen layout toggle (sidebar button, localStorage persisted)
+  #35  Gotify push notification support (server URL in Settings, per-user token in My Account)
+  #36  Cover images in all notification channels (ntfy Attach, Gotify bigImageUrl, email HTML)
+  #37  Per-user notification schedule (choose which days-before-release to receive reminders)
+  #38  Multi-user notification channel refactor (Settings = infra, My Account = personal delivery)
+  #39  Telegram bot notifications (bot token in Settings, per-user chat ID in My Account)
+  #40  Dockerfile build order fix (build tools before npm install for sqlite3 compilation)
+  #47  System Status admin page (real-time checks for IGDB, RAWG, TheGamesDB, Steam, CrackWatch, DB)
+  #48  Trivy fix (purge linux-libc-dev kernel headers post-build — not needed at runtime)
+  #49  System Status enrichment (HTTP status code, last-OK persistence, provider info, latency)
+  #50  API Keys admin settings tab + resolveApiKey() chain (settings.json overrides env vars)
+  #51  System Status 500 fix (handler try/catch + saveStatusOkCache isolation)
+  #52  Circular-JSON fix in system-status check(); IGDB Client Secret field + Refresh Token button
+
+No schema changes — all existing database columns are already present.
+No new environment variables required — API keys can be set via Settings → API Keys UI.
+
+Post-deploy actions:
+  • If volume ownership has not been set for the node user, run once on the host:
+      chown -R 1000:1000 /home/docker/gametracker/data/
+  • Verify System Status page is accessible at Settings → System Status (admin login required)
+  • If IGDB searches return no results: go to Settings → API Keys → Refresh IGDB Token
+
 --- APPLIED 2026-04-24 (Changes #44, #45, #46 from staging) ---
 Summary: Full CI/CD security pipeline, container hardening, and dependency CVE fixes.
   Staging changes #44 (security pipeline), #45 (container hardening), and #46

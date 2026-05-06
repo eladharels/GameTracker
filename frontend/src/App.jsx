@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 
@@ -81,8 +81,9 @@ function App() {
   else if (location.pathname.startsWith('/library')) pageTitle = 'My Library'
   else if (location.pathname.startsWith('/calendar')) pageTitle = 'Calendar'
   else if (location.pathname.startsWith('/users')) pageTitle = 'User Management'
-  else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings'
   else if (location.pathname.startsWith('/account')) pageTitle = 'My Account'
+  else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings'
+  else if (location.pathname.startsWith('/system-status')) pageTitle = 'System Status'
   else if (location.pathname.startsWith('/game/')) pageTitle = 'Game Details'
 
   // If not logged in, render only the login page/route
@@ -130,6 +131,12 @@ function App() {
             <FaCog className="nav-icon" />
             <span className="nav-label">Settings</span>
           </Link>
+          {user?.can_manage_users && (
+            <Link to="/system-status" className={location.pathname === '/system-status' ? 'active' : ''}>
+              <FaServer className="nav-icon" />
+              <span className="nav-label">System Status</span>
+            </Link>
+          )}
           <button className="logout-btn" onClick={logout}>
             <FaSignOutAlt className="nav-icon" />
             <span className="nav-label">Logout</span>
@@ -151,6 +158,8 @@ function App() {
                 style={{ background: p.value }}
                 onClick={() => setAccentColor(p.value)}
                 title={p.name}
+                aria-label={`Set accent color to ${p.name}`}
+                aria-pressed={accentColor === p.value}
               />
             ))}
           </div>
@@ -163,9 +172,10 @@ function App() {
           <Route path="/library" element={<LibraryPage user={user} />} />
           <Route path="/shared-library" element={<SharedLibrary />} />
           <Route path="/calendar" element={<CalendarPage user={user} />} />
+          <Route path="/account" element={<AccountPage />} />
           <Route path="/users" element={<UserManagementPage user={user} />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/account" element={<AccountPage />} />
+          <Route path="/system-status" element={<SystemStatusPage />} />
           <Route path="*" element={<Navigate to="/search" />} />
         </Routes>
       </main>
@@ -206,25 +216,49 @@ function LoginPage({ setUser }) {
     <div className="login-page">
       <form className="login-form" onSubmit={handleLogin}>
         <h2>Login</h2>
-        <input
-          type="text"
-          placeholder="Username"
-          value={username}
-          onChange={e => setUsername(e.target.value)}
-          onBlur={e => setUsername(e.target.value.toLowerCase())}
-          autoFocus
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-        />
+        <div className="login-field-group">
+          <label htmlFor="login-username">Username</label>
+          <input
+            id="login-username"
+            type="text"
+            placeholder="Enter your username"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            onBlur={e => setUsername(e.target.value.toLowerCase())}
+            autoFocus
+          />
+        </div>
+        <div className="login-field-group">
+          <label htmlFor="login-password">Password</label>
+          <input
+            id="login-password"
+            type="password"
+            placeholder="Enter your password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+          />
+        </div>
         <button type="submit">Login</button>
-        {error && <div className="error-msg">{error}</div>}
+        {error && <div className="error-msg" role="alert">{error}</div>}
       </form>
     </div>
   )
+}
+
+// Reusable focus-trap handler for modal keydown events
+function handleModalFocusTrap(e) {
+  if (e.key !== 'Tab') return
+  const focusable = Array.from(
+    e.currentTarget.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')
+  ).filter(el => !el.disabled)
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (e.shiftKey) {
+    if (document.activeElement === first) { e.preventDefault(); last.focus() }
+  } else {
+    if (document.activeElement === last) { e.preventDefault(); first.focus() }
+  }
 }
 
 function UserManagementPage({ user }) {
@@ -237,7 +271,16 @@ function UserManagementPage({ user }) {
   const token = localStorage.getItem('token')
   const [formError, setFormError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmTarget, setConfirmTarget] = useState(null)
+  const [pwModalOpen, setPwModalOpen] = useState(false)
+  const [pwTarget, setPwTarget] = useState(null)
+  const [newPassword, setNewPassword] = useState('')
   const modalRef = useRef()
+  const confirmModalRef = useRef()
+  const pwModalRef = useRef()
+  const addUserFirstInputRef = useRef()
+  const pwInputRef = useRef()
   const navigate = useNavigate()
 
   const fetchUsers = async () => {
@@ -279,7 +322,6 @@ function UserManagementPage({ user }) {
     }
   }
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this user?')) return
     setError('')
     setSuccess('')
     try {
@@ -289,6 +331,25 @@ function UserManagementPage({ user }) {
     } catch (err) {
       setError('Failed to delete user')
     }
+  }
+
+  const confirmDelete = (id) => {
+    setConfirmTarget(id)
+    setConfirmOpen(true)
+  }
+
+  const handlePasswordChange = (id) => {
+    setPwTarget(id)
+    setNewPassword('')
+    setPwModalOpen(true)
+  }
+
+  const submitPasswordChange = async () => {
+    if (!newPassword.trim()) return
+    await handleEdit(pwTarget, { password: newPassword })
+    setPwModalOpen(false)
+    setNewPassword('')
+    setPwTarget(null)
   }
   const handleEdit = async (id, updates) => {
     setError('')
@@ -326,13 +387,33 @@ function UserManagementPage({ user }) {
     }
   }
 
-  // Modal close on ESC or background click
+  // Modal close on ESC
   useEffect(() => {
-    if (!modalOpen) return;
-    function onKey(e) { if (e.key === 'Escape') setModalOpen(false); }
+    if (!modalOpen && !confirmOpen && !pwModalOpen) return;
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        if (pwModalOpen) { setPwModalOpen(false); return }
+        if (confirmOpen) { setConfirmOpen(false); return }
+        setModalOpen(false)
+      }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [modalOpen, confirmOpen, pwModalOpen])
+
+  // Focus first input when add-user modal opens
+  useEffect(() => {
+    if (modalOpen && addUserFirstInputRef.current) {
+      setTimeout(() => addUserFirstInputRef.current?.focus(), 50)
+    }
   }, [modalOpen])
+
+  // Focus password input when pw modal opens
+  useEffect(() => {
+    if (pwModalOpen && pwInputRef.current) {
+      setTimeout(() => pwInputRef.current?.focus(), 50)
+    }
+  }, [pwModalOpen])
 
   function handleModalBgClick(e) {
     if (e.target === modalRef.current) setModalOpen(false)
@@ -377,14 +458,61 @@ function UserManagementPage({ user }) {
           <button className="add-user-btn" onClick={() => setModalOpen(true)}>Add User</button>
         </div>
       </div>
+      {confirmOpen && (
+        <div className="user-modal-bg" ref={confirmModalRef} onClick={e => { if (e.target === confirmModalRef.current) setConfirmOpen(false) }} tabIndex={-1} aria-modal="true" role="alertdialog" aria-labelledby="confirm-dialog-title">
+          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={handleModalFocusTrap}>
+            <h3 id="confirm-dialog-title" style={{marginTop:0}}>Delete User</h3>
+            <p style={{color:'var(--color-fg-muted)'}}>Are you sure you want to delete this user? This cannot be undone.</p>
+            <div style={{display:'flex', gap:'1rem', justifyContent:'flex-end', marginTop:'1.5rem'}}>
+              <button className="icon-btn enhanced-icon-btn" style={{padding:'0.6em 1.4em'}} onClick={() => setConfirmOpen(false)}>Cancel</button>
+              <button
+                className="create-user-btn enhanced-btn"
+                style={{background:'#ef4444', padding:'0.6em 1.4em'}}
+                onClick={() => { handleDelete(confirmTarget); setConfirmOpen(false) }}
+              >Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pwModalOpen && (
+        <div className="user-modal-bg" ref={pwModalRef} onClick={e => { if (e.target === pwModalRef.current) setPwModalOpen(false) }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="pw-dialog-title">
+          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={handleModalFocusTrap}>
+            <button className="user-modal-close" aria-label="Close" onClick={() => setPwModalOpen(false)}>&times;</button>
+            <h3 id="pw-dialog-title" style={{marginTop:0}}>Change Password</h3>
+            <div className="user-form-group" style={{flexDirection:'column'}}>
+              <label htmlFor="pw-new-input" style={{fontWeight:600, marginBottom:'0.35rem'}}>New Password</label>
+              <input
+                id="pw-new-input"
+                ref={pwInputRef}
+                type="password"
+                className="ent-input"
+                placeholder="Enter new password"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') submitPasswordChange() }}
+              />
+            </div>
+            <div style={{display:'flex', gap:'1rem', justifyContent:'flex-end', marginTop:'1.5rem'}}>
+              <button className="icon-btn enhanced-icon-btn" style={{padding:'0.6em 1.4em'}} onClick={() => setPwModalOpen(false)}>Cancel</button>
+              <button
+                className="create-user-btn enhanced-btn"
+                disabled={!newPassword.trim()}
+                onClick={submitPasswordChange}
+              >Change Password</button>
+            </div>
+          </div>
+        </div>
+      )}
       {modalOpen && (
-        <div className="user-modal-bg" ref={modalRef} onClick={handleModalBgClick} tabIndex={-1} aria-modal="true" role="dialog">
-          <div className="user-modal-window">
+        <div className="user-modal-bg" ref={modalRef} onClick={handleModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="add-user-dialog-title">
+          <div className="user-modal-window" onKeyDown={handleModalFocusTrap}>
             <button className="user-modal-close" aria-label="Close" onClick={() => setModalOpen(false)}>&times;</button>
-            <form className="user-form-modern user-form-vertical user-form-enhanced" onSubmit={handleCreate} autoFocus>
+            <h3 id="add-user-dialog-title" style={{marginTop:0, marginBottom:'1rem'}}>Add User</h3>
+            <form className="user-form-modern user-form-vertical user-form-enhanced" onSubmit={handleCreate}>
               <div className="user-form-group">
                 <label>Username
                   <input
+                    ref={addUserFirstInputRef}
                     type="text"
                     placeholder="Username"
                     value={newUser.username}
@@ -459,6 +587,7 @@ function UserManagementPage({ user }) {
                       <label className="switch-modern enhanced-switch" title="Toggle Admin Permission">
                         <input
                           type="checkbox"
+                          aria-label={`Admin permission for ${u.username}`}
                           checked={!!u.can_manage_users}
                           disabled={u.username === 'root' || u.id === user.id}
                           onChange={e => handleEdit(u.id, { can_manage_users: e.target.checked })}
@@ -470,8 +599,8 @@ function UserManagementPage({ user }) {
                   <td><span className="user-table-source">{u.origin === 'ldap' ? 'LDAP' : 'Local'}</span></td>
                   <td>
                     <div className="user-table-actions">
-                      <button className="icon-btn enhanced-icon-btn" title="Change Password" aria-label="Change Password" onClick={() => handleEdit(u.id, { password: prompt('New password:') })}><FaLock /></button>
-                      <button className="icon-btn enhanced-icon-btn" title="Delete User" aria-label="Delete User" onClick={() => handleDelete(u.id)} disabled={u.username === 'root'}><FaTrash /></button>
+                      <button className="icon-btn enhanced-icon-btn" title="Change Password" aria-label={`Change password for ${u.username}`} onClick={() => handlePasswordChange(u.id)}><FaLock /></button>
+                      <button className="icon-btn enhanced-icon-btn" title="Delete User" aria-label={`Delete user ${u.username}`} onClick={() => confirmDelete(u.id)} disabled={u.username === 'root'}><FaTrash /></button>
                     </div>
                   </td>
                 </tr>
@@ -587,12 +716,22 @@ function SearchPage({ user }) {
         </form>
         <div className="view-controls">
           <div className="view-toggle">
-            <button onClick={() => setViewMode('grid')} className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}><FaTh /></button>
-            <button onClick={() => setViewMode('list')} className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}><FaList /></button>
+            <button onClick={() => setViewMode('grid')} className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`} aria-label="Grid view" aria-pressed={viewMode === 'grid'}><FaTh /></button>
+            <button onClick={() => setViewMode('list')} className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} aria-label="List view" aria-pressed={viewMode === 'list'}><FaList /></button>
           </div>
         </div>
       </div>
-      {loading && <p>Searching...</p>}
+      {loading && (
+        <div className="games-list grid-view">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="skeleton-card">
+              <div className="skeleton-cover" />
+              <div className="skeleton-line skeleton-line--med" />
+              <div className="skeleton-line skeleton-line--short" />
+            </div>
+          ))}
+        </div>
+      )}
       {searchError && <div className="error-msg">{searchError}</div>}
       {searchResults.length > 0 && (
         <>
@@ -672,8 +811,10 @@ function LibraryPage({ user }) {
   const [refreshingGameIds, setRefreshingGameIds] = useState({})
   const [draggedGameId, setDraggedGameId] = useState(null)
   const [dragOverGameId, setDragOverGameId] = useState(null)
+  const [isDraggingAny, setIsDraggingAny] = useState(false)
+  const [keyboardDragId, setKeyboardDragId] = useState(null)
   const { showToast } = useToast()
-  const pendingDeleteRef = useRef({})
+  const pendingDeleteRef = useRef({}) // { [gameId]: { timers, snapshot } }
   const gamesPerPage = 15
 
   useEffect(() => {
@@ -778,21 +919,22 @@ function LibraryPage({ user }) {
 
   const fetchCrackStatus = async (game) => {
     try {
-      const res = await axios.post(`${API_BASE}/user/${user.username}/games/${game.game_id}/crackrelease-status`)
-      setCrackStatusMap(prev => ({ ...prev, [game.game_id]: res.data.status || 'unknown' }))
-      setUserGames(prev => prev.map(g => g.game_id === game.game_id ? { ...g, crackStatus: res.data.status } : g))
+      const res = await axios.post(`${API_BASE}/user/${user.username}/games/${game.game_id}/crackrelease-status`);
+      setCrackStatusMap(prev => ({ ...prev, [game.game_id]: res.data.status || 'unknown' }));
     } catch (err) {
-      setCrackStatusMap(prev => ({ ...prev, [game.game_id]: 'unknown' }))
+      setCrackStatusMap(prev => ({ ...prev, [game.game_id]: 'unknown' }));
     }
-  }
+  };
 
   // When showCrackStatus is toggled on, fetch crack status for visible games that don't have it yet
   useEffect(() => {
-    if (!showCrackStatus || !user) return
+    if (!showCrackStatus || !user) return;
     currentGames.forEach(game => {
-      const existing = game.crackStatus || crackStatusMap[game.game_id]
-      if (!existing) fetchCrackStatus(game)
-    })
+      const existing = game.crackStatus || crackStatusMap[game.game_id];
+      if (!existing) {
+        fetchCrackStatus(game);
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCrackStatus, currentGames, user])
 
@@ -800,6 +942,7 @@ function LibraryPage({ user }) {
   const setGameStatus = async (game, status) => {
     if (!user) return alert('Enter a username first!')
     setStatusError('')
+    // Optimistically update local state immediately
     const previousGames = userGames
     setUserGames(prev => prev.map(g =>
       String(g.game_id) === String(game.game_id) ? { ...g, status } : g
@@ -813,6 +956,7 @@ function LibraryPage({ user }) {
         status,
       })
     } catch (err) {
+      // Rollback on failure
       setUserGames(previousGames)
       showToast('error', 'Failed to update status. Please try again.')
     }
@@ -825,16 +969,19 @@ function LibraryPage({ user }) {
     const snapshot = userGames.find(g => String(g.game_id) === String(gameId))
     if (!snapshot) return
 
+    // Optimistically remove from UI
     setUserGames(prev => prev.filter(g => String(g.game_id) !== String(gameId)))
 
     showToast('info', `Removed "${snapshot.game_name}"`, {
       duration: 5300,
       actionLabel: 'Undo',
       onAction: () => {
+        // Cancel the pending delete
         if (pendingDeleteRef.current[gameId]) {
           pendingDeleteRef.current[gameId].forEach(t => clearTimeout(t))
           delete pendingDeleteRef.current[gameId]
         }
+        // Restore the game to its original position
         setUserGames(prev => {
           const exists = prev.some(g => String(g.game_id) === String(gameId))
           if (exists) return prev
@@ -844,11 +991,13 @@ function LibraryPage({ user }) {
       },
     })
 
+    // After 5 seconds, execute the actual delete
     const deleteTimer = setTimeout(async () => {
       delete pendingDeleteRef.current[gameId]
       try {
         await axios.delete(`${API_BASE}/user/${user.username}/games/${gameId}`)
       } catch (err) {
+        // Server delete failed — restore the game
         setUserGames(prev => {
           const exists = prev.some(g => String(g.game_id) === String(gameId))
           if (exists) return prev
@@ -964,7 +1113,7 @@ function LibraryPage({ user }) {
             className={`toggle-feature-btn${showCrackStatus ? ' toggle-feature-btn--active' : ''}`}
             onClick={() => setShowCrackStatus(v => !v)}
             aria-pressed={showCrackStatus}
-            title="Show crack status from CrackRelease (green = cracked, red = not cracked)"
+            title="Show crack status from CrackWatch (green = cracked, red = not cracked)"
           >
             {showCrackStatus ? 'Hide crack status' : 'Show crack status'}
           </button>
@@ -1036,6 +1185,8 @@ function LibraryPage({ user }) {
             key={opt.value}
             className={`sort-btn${sortBy === opt.value ? ' active' : ''}`}
             onClick={() => handleSortClick(opt.value)}
+            aria-label={`Sort by ${opt.label}${sortBy === opt.value ? `, ${sortDir === 'asc' ? 'ascending' : 'descending'}` : ''}`}
+            aria-pressed={sortBy === opt.value}
           >
             {opt.label}
             {sortBy === opt.value && (
@@ -1094,22 +1245,43 @@ function LibraryPage({ user }) {
         </div>
       ) : (
         <>
-          <div key={`${filter}-${currentPage}`} className={`games-list ${viewMode === 'list' ? 'list-view' : ''}`}>
+          {filter === 'backlog' && (
+            <div aria-live="polite" aria-atomic="true" className="visually-hidden">
+              {keyboardDragId
+                ? `Selected game for reordering. Press Enter on another game to move it there, or Escape to cancel.`
+                : ''}
+            </div>
+          )}
+          <div key={`${filter}-${currentPage}`} className={`games-list ${viewMode === 'list' ? 'list-view' : ''}${isDraggingAny ? ' backlog-drag-active' : ''}`}>
             {currentGames.map((game, index) => {
               const isUnreleased = game.status === 'unreleased' || !game.release_date;
               const effectiveCrackStatus = game.crackStatus || crackStatusMap[game.game_id] || 'unknown';
               const isDragging  = filter === 'backlog' && String(draggedGameId) === String(game.game_id);
               const isDragOver  = filter === 'backlog' && String(dragOverGameId) === String(game.game_id);
+              const isKbSelected = filter === 'backlog' && String(keyboardDragId) === String(game.game_id);
               return (
                 <div
                   key={game.game_id}
-                  className={`game-card status-${normalizeStatus(game.status)} ${viewMode === 'list' ? 'list-item' : ''}${isDragging ? ' card-dragging' : ''}${isDragOver ? ' card-drag-over' : ''}`}
+                  className={`game-card status-${normalizeStatus(game.status)} ${viewMode === 'list' ? 'list-item' : ''}${isDragging ? ' card-dragging' : ''}${isDragOver ? ' card-drag-over' : ''}${isKbSelected ? ' card-keyboard-selected' : ''}`}
                   style={{ animationDelay: `${index * 0.04}s` }}
                   draggable={filter === 'backlog'}
-                  onDragStart={() => setDraggedGameId(game.game_id)}
+                  tabIndex={filter === 'backlog' ? 0 : undefined}
+                  onDragStart={() => { setDraggedGameId(game.game_id); setIsDraggingAny(true) }}
                   onDragOver={(e) => { if (filter === 'backlog') { e.preventDefault(); setDragOverGameId(game.game_id); } }}
                   onDrop={() => handleBacklogDrop(game.game_id)}
-                  onDragEnd={() => { setDraggedGameId(null); setDragOverGameId(null); }}
+                  onDragEnd={() => { setDraggedGameId(null); setDragOverGameId(null); setIsDraggingAny(false) }}
+                  onKeyDown={filter === 'backlog' ? (e) => {
+                    if (e.key === 'Escape') { setKeyboardDragId(null); return }
+                    if (e.key === ' ' || e.key === 'Enter') {
+                      e.preventDefault()
+                      if (!keyboardDragId) {
+                        setKeyboardDragId(game.game_id)
+                      } else if (String(keyboardDragId) !== String(game.game_id)) {
+                        handleBacklogDrop(game.game_id)
+                        setKeyboardDragId(null)
+                      }
+                    }
+                  } : undefined}
                 >
                   {filter === 'backlog' && game.backlog_order != null && (
                     <div className="backlog-position-badge">#{game.backlog_order}</div>
@@ -1347,9 +1519,12 @@ function CalendarPage({ user }) {
               <div className="calendar-date">{date.getDate()}</div>
               {games.length > 0 && (
                 <div className="calendar-games-list">
-                  {games.map(game => (
+                  {games.slice(0, 2).map(game => (
                     <div key={game.game_id} className="calendar-game-title-small">{game.game_name}</div>
                   ))}
+                  {games.length > 2 && (
+                    <div className="calendar-overflow-badge">+{games.length - 2} more</div>
+                  )}
                 </div>
               )}
             </div>
@@ -1360,8 +1535,9 @@ function CalendarPage({ user }) {
   );
 }
 
+// ── Settings sub-components ────────────────────────────────────────────────
 function SettingsSection({ icon, title, description, configured, children }) {
-  const Icon = icon
+  const Icon = icon // hoisted to var scope so varsIgnorePattern (^[A-Z_]) covers JSX usage
   return (
     <div className="ent-section">
       <div className="ent-section-header">
@@ -1616,6 +1792,205 @@ function AccountPage() {
   )
 }
 
+// ── SystemStatusPage ────────────────────────────────────────────────────────
+function SystemStatusPage() {
+  const [status, setStatus] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const token = localStorage.getItem('token')
+  const authH = { headers: { Authorization: `Bearer ${token}` } }
+
+  const SERVICE_META = {
+    database:   { label: 'Database',    desc: 'Local SQLite database',                website: null,                     auth: 'None — local file' },
+    igdb:       { label: 'IGDB',        desc: 'Primary game search & metadata',        website: 'api.igdb.com',           auth: 'Client-ID + Bearer token (Twitch OAuth)' },
+    rawg:       { label: 'RAWG',        desc: 'Secondary game search & metadata',      website: 'api.rawg.io',            auth: 'API key' },
+    thegamesdb: { label: 'TheGamesDB',  desc: 'Tertiary game source & box art',        website: 'api.thegamesdb.net',     auth: 'API key (optional)' },
+    steam:      { label: 'Steam Store', desc: 'Game pricing by region',                website: 'store.steampowered.com', auth: 'None — public API' },
+    crackwatch: { label: 'CrackWatch',  desc: 'DRM/crack status (daily cached)',       website: 'api.crackwatch.com',     auth: 'None — public API' },
+  }
+
+  const HTTP_STATUS_LABELS = {
+    400: 'Bad Request', 401: 'Unauthorized — check token/key', 403: 'Forbidden — insufficient permissions',
+    404: 'Not Found', 429: 'Rate Limited — too many requests', 500: 'Server Error', 503: 'Service Unavailable',
+  }
+
+  const timeAgo = (iso) => {
+    if (!iso) return null
+    const diff = Date.now() - new Date(iso).getTime()
+    const m = Math.floor(diff / 60000)
+    if (m < 1)   return 'just now'
+    if (m < 60)  return `${m}m ago`
+    const h = Math.floor(m / 60)
+    if (h < 24)  return `${h}h ago`
+    const d = Math.floor(h / 24)
+    if (d < 30)  return `${d}d ago`
+    return new Date(iso).toLocaleDateString()
+  }
+
+  const fetchStatus = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await axios.get(`${API_BASE}/system-status`, authH)
+      setStatus(res.data)
+    } catch (err) {
+      const s = err.response?.status
+      const msg = err.response?.data?.error || err.response?.data?.message
+      const friendly =
+        msg ? `${s ? `HTTP ${s} — ` : ''}${msg}` :
+        s === 401 ? 'HTTP 401 — Session expired. Please log out and back in.' :
+        s === 403 ? 'HTTP 403 — Admin access required to view system status.' :
+        s ? `HTTP ${s} — ${err.response?.statusText || 'Server error'}` :
+        err.code === 'ERR_NETWORK' || err.code === 'ECONNREFUSED' ? 'Cannot reach the backend server. Is it running?' :
+        err.message || 'Unknown error'
+      setError(friendly)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { fetchStatus() }, [])
+
+  const statusIcon = (s) => {
+    if (s === 'ok')           return <FaCheckCircle className="ss-icon ss-ok" />
+    if (s === 'error')        return <FaTimesCircle className="ss-icon ss-error" />
+    if (s === 'unconfigured') return <FaMinusCircle className="ss-icon ss-unconfigured" />
+    return <FaSpinner className="ss-icon ss-loading" />
+  }
+
+  const overallClass = status
+    ? status.overall === 'ok' ? 'ss-overall ss-overall-ok' : 'ss-overall ss-overall-degraded'
+    : 'ss-overall'
+
+  return (
+    <div className="system-status-page">
+      <div className="ss-header">
+        <div className={overallClass}>
+          {status && (status.overall === 'ok'
+            ? <><FaCheckCircle /> All systems operational</>
+            : <><FaExclamationCircle /> One or more services need attention</>
+          )}
+          {!status && !loading && !error && <span>—</span>}
+          {loading && <><FaSpinner className="spin" /> Checking services…</>}
+          {error && <><FaTimesCircle /> {error}</>}
+        </div>
+        <button className="ss-refresh-btn" onClick={fetchStatus} disabled={loading}>
+          <FaSync className={loading ? 'spin' : ''} />
+          {loading ? 'Checking…' : 'Refresh'}
+        </button>
+      </div>
+
+      {status && (
+        <>
+          <div className="ss-grid">
+            {status.services.map(svc => {
+              const meta = SERVICE_META[svc.name] || { label: svc.name, desc: '', website: null, auth: '' }
+              const ago = timeAgo(svc.lastOk)
+              const httpLabel = svc.httpStatus ? `HTTP ${svc.httpStatus}${HTTP_STATUS_LABELS[svc.httpStatus] ? ' — ' + HTTP_STATUS_LABELS[svc.httpStatus] : ''}` : null
+              // IGDB/Twitch tokens expire every ~60 days — show actionable hint on 401
+              const igdbTokenExpired = svc.name === 'igdb' && svc.httpStatus === 401
+              return (
+                <div key={svc.name} className={`ss-card ss-card-${svc.status}`}>
+
+                  {/* Title row */}
+                  <div className="ss-card-top">
+                    {statusIcon(svc.status)}
+                    <div className="ss-card-title-block">
+                      <div className="ss-card-label">{meta.label}</div>
+                      {meta.website && <div className="ss-card-website">{meta.website}</div>}
+                    </div>
+                    <span className={`ss-badge ss-badge-${svc.status}`}>
+                      {svc.status === 'ok' ? 'OK' : svc.status === 'error' ? 'Error' : 'N/A'}
+                    </span>
+                  </div>
+
+                  {/* Description + auth */}
+                  <div className="ss-card-meta">
+                    <span className="ss-card-desc">{meta.desc}</span>
+                    <span className="ss-card-auth">{meta.auth}</span>
+                  </div>
+
+                  {/* HTTP error */}
+                  {svc.status === 'error' && httpLabel && (
+                    <div className="ss-http-status">{httpLabel}</div>
+                  )}
+
+                  {/* IGDB token expiry hint */}
+                  {igdbTokenExpired && (
+                    <div className="ss-igdb-hint">
+                      <strong>Twitch OAuth token expired.</strong><br />
+                      Go to <strong>Settings → API Keys</strong>, make sure your Client ID &amp; Secret are saved, then click <em>Refresh IGDB Token</em> — it fetches a new token automatically.
+                    </div>
+                  )}
+
+                  {/* Error / info message */}
+                  {svc.message && (
+                    <div className={`ss-card-msg${svc.status === 'error' ? ' ss-card-msg-error' : ''}`}>
+                      {svc.message}
+                    </div>
+                  )}
+
+                  {/* Footer row: latency + last OK */}
+                  <div className="ss-card-footer">
+                    <span className="ss-last-ok">
+                      {svc.status === 'ok'
+                        ? <><FaCheckCircle className="ss-lastok-icon ss-ok" /> Last OK: just now</>
+                        : ago
+                          ? <><FaCheckCircle className="ss-lastok-icon ss-ok" /> Last OK: {ago}</>
+                          : <><FaTimesCircle className="ss-lastok-icon ss-error" /> Never succeeded</>
+                      }
+                    </span>
+                    {svc.latency != null && (
+                      <span className="ss-latency">{svc.latency} ms</span>
+                    )}
+                  </div>
+
+                </div>
+              )
+            })}
+          </div>
+          <div className="ss-footer">Last checked: {new Date(status.checkedAt).toLocaleString()}</div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Reusable API key input row (used in the API Keys settings tab)
+function AkField({ fieldKey, label, hint, provider, meta, edit, setEdit, show, setShow }) {
+  const editing = fieldKey in edit
+  const visible = !!show[fieldKey]
+  const sourceLabel = meta.source === 'settings' ? '● settings' : meta.source === 'env' ? '● env var' : '○ not set'
+  const sourceColor = meta.source === 'settings' ? '#22c55e' : meta.source === 'env' ? '#f97316' : '#ef4444'
+  return (
+    <div className="ak-row">
+      <div className="ak-row-header">
+        <div>
+          <div className="ak-label">{label}</div>
+          {provider && <div className="ak-provider">{provider}</div>}
+        </div>
+        <span className="ak-source" style={{ color: sourceColor }}>{sourceLabel}</span>
+      </div>
+      <div className="ak-input-row">
+        <div className="ak-input-wrap">
+          <input
+            type={visible ? 'text' : 'password'}
+            className="settings-form input ak-input"
+            placeholder={meta.set ? meta.masked : 'Not set — enter a value'}
+            value={editing ? edit[fieldKey] : ''}
+            onChange={e => setEdit(p => ({ ...p, [fieldKey]: e.target.value }))}
+            autoComplete="new-password"
+          />
+          <button type="button" className="ak-toggle-btn" onClick={() => setShow(p => ({ ...p, [fieldKey]: !p[fieldKey] }))} title={visible ? 'Hide' : 'Show'}>
+            {visible ? <FaEyeSlash /> : <FaEye />}
+          </button>
+        </div>
+        <div className="ak-hint">{hint}</div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main SettingsPage ───────────────────────────────────────────────────────
 function SettingsPage() {
   // Server-synced state
@@ -1626,6 +2001,13 @@ function SettingsPage() {
   const [ldap, setLdap] = useState({})
   const [telegram, setTelegram] = useState({})
   const [loadingSettings, setLoadingSettings] = useState(true)
+
+  // API Keys state (admin-only)
+  const [apiKeysMeta, setApiKeysMeta] = useState({})   // { key: { masked, set, source } }
+  const [apiKeysEdit, setApiKeysEdit] = useState({})   // fields being edited (plain text)
+  const [apiKeysShow, setApiKeysShow] = useState({})   // which fields are revealed
+  const [apiKeysSaving, setApiKeysSaving] = useState(false)
+  const [apiKeysSaveStatus, setApiKeysSaveStatus] = useState(null)
   const [saving, setSaving]       = useState({})
   const [saveStatus, setSaveStatus] = useState({})
 
@@ -1666,6 +2048,14 @@ function SettingsPage() {
       .finally(() => setLoadingSettings(false))
   }, [])
 
+  // ── Load API keys meta (admin only)
+  useEffect(() => {
+    if (!isAdmin) return
+    axios.get(`${API_BASE}/settings/apikeys`, authH)
+      .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}) })
+      .catch(() => {})
+  }, [])
+
   // ── Load user games for testing tab (available to all users)
   useEffect(() => {
     axios.get(`${API_BASE}/user/me/games`, authH)
@@ -1693,6 +2083,40 @@ function SettingsPage() {
       setSaveStatus(p => ({ ...p, [key]: 'error' }))
     }
     setSaving(p => ({ ...p, [key]: false }))
+  }
+
+  const saveApiKeys = async () => {
+    if (!Object.keys(apiKeysEdit).length) return
+    setApiKeysSaving(true); setApiKeysSaveStatus(null)
+    try {
+      await axios.post(`${API_BASE}/settings/apikeys`, apiKeysEdit, authH)
+      const r = await axios.get(`${API_BASE}/settings/apikeys`, authH)
+      setApiKeysMeta(r.data); setApiKeysEdit({}); setApiKeysShow({})
+      setApiKeysSaveStatus('saved')
+      setTimeout(() => setApiKeysSaveStatus(null), 3000)
+    } catch (err) {
+      setApiKeysSaveStatus('error — ' + (err.response?.data?.error || err.message))
+    } finally {
+      setApiKeysSaving(false)
+    }
+  }
+
+  const [igdbRefreshing, setIgdbRefreshing] = useState(false)
+  const [igdbRefreshResult, setIgdbRefreshResult] = useState(null)
+  const refreshIgdbToken = async () => {
+    setIgdbRefreshing(true); setIgdbRefreshResult(null)
+    try {
+      const r = await axios.post(`${API_BASE}/settings/apikeys/refresh-igdb-token`, {}, authH)
+      const expiresInDays = r.data.expires_in ? Math.floor(r.data.expires_in / 86400) : null
+      setIgdbRefreshResult({ ok: true, msg: `New token saved (${r.data.masked}). Expires in ~${expiresInDays ?? '?'} days.` })
+      // Reload meta so the bearer token shows updated source/masked value
+      const meta = await axios.get(`${API_BASE}/settings/apikeys`, authH)
+      setApiKeysMeta(meta.data)
+    } catch (err) {
+      setIgdbRefreshResult({ ok: false, msg: err.response?.data?.error || err.message || 'Unknown error' })
+    } finally {
+      setIgdbRefreshing(false)
+    }
   }
 
   // ── Test handlers (preserved)
@@ -1730,6 +2154,7 @@ function SettingsPage() {
     { key: 'gotify',   label: 'Gotify',      sub: 'Gotify Push',  icon: FaBell,        data: gotify },
     { key: 'telegram', label: 'Telegram',    sub: 'Telegram Bot', icon: FaTelegram,    data: telegram },
     { key: 'ldap',     label: 'Directory',   sub: 'LDAP / AD',    icon: FaLock,        data: ldap,     adminOnly: true },
+    { key: 'apikeys',  label: 'API Keys',    sub: 'Providers',    icon: FaKey,         data: null,     adminOnly: true },
     { key: 'testing',  label: 'Diagnostics', sub: 'Testing',      icon: FaCheckCircle, data: null },
   ]
   const visibleNAV = NAV.filter(s => !s.adminOnly || isAdmin)
@@ -1810,7 +2235,7 @@ function SettingsPage() {
           <SettingsSection icon={FaBell} title="Push Notifications (NTFY)" description="Set the NTFY server URL. Each user subscribes using their own topic configured in My Account." configured={isConfigured(ntfy)}>
             <div className="ent-fields">
               <SettingsField label="NTFY Server URL" saved={!!serverSettings.ntfy?.url} wide hint="Self-hosted or ntfy.sh">
-                <input className="ent-input" value={ntfy.url   || ''} onChange={e => setNtfy(p => ({ ...p, url:   e.target.value }))} placeholder="https://ntfy.sh" />
+                <input className="ent-input" value={ntfy.url || ''} onChange={e => setNtfy(p => ({ ...p, url: e.target.value }))} placeholder="https://ntfy.sh" />
               </SettingsField>
             </div>
             <SectionSaveBar sectionKey="ntfy" saving={saving} saveStatus={saveStatus} dirty={isDirty('ntfy')} onSave={() => saveSection('ntfy')} label="NTFY Settings" />
@@ -1822,7 +2247,7 @@ function SettingsPage() {
           <SettingsSection icon={FaBell} title="Push Notifications (Gotify)" description="Set the Gotify server URL. Each user provides their own app token configured in My Account." configured={isConfigured(gotify)}>
             <div className="ent-fields">
               <SettingsField label="Gotify Server URL" saved={!!serverSettings.gotify?.url} wide hint="Your self-hosted Gotify server">
-                <input className="ent-input" value={gotify.url   || ''} onChange={e => setGotify(p => ({ ...p, url:   e.target.value }))} placeholder="https://gotify.example.com" />
+                <input className="ent-input" value={gotify.url || ''} onChange={e => setGotify(p => ({ ...p, url: e.target.value }))} placeholder="https://gotify.example.com" />
               </SettingsField>
             </div>
             <SectionSaveBar sectionKey="gotify" saving={saving} saveStatus={saveStatus} dirty={isDirty('gotify')} onSave={() => saveSection('gotify')} label="Gotify Settings" />
@@ -1865,6 +2290,57 @@ function SettingsPage() {
               </SettingsField>
             </div>
             <SectionSaveBar sectionKey="ldap" saving={saving} saveStatus={saveStatus} dirty={isDirty('ldap')} onSave={() => saveSection('ldap')} label="LDAP Settings" />
+          </SettingsSection>
+        )}
+
+        {/* API Keys */}
+        {activeTab === 'apikeys' && (
+          <SettingsSection icon={FaKey} title="API Provider Keys" description="Configure API credentials for game data providers. Settings here override environment variables. Leave a field blank to keep the existing value.">
+
+            {/* IGDB / Twitch section */}
+            <div className="ak-section-header">IGDB — via Twitch Developer</div>
+            {[
+              { key: 'igdb_client_id',     label: 'Client ID',      hint: 'From dev.twitch.tv → Your Application → Client ID' },
+              { key: 'igdb_client_secret', label: 'Client Secret',  hint: 'From dev.twitch.tv → Your Application → New Secret' },
+              { key: 'igdb_bearer_token',  label: 'Bearer Token',   hint: 'access_token from Twitch OAuth — use Refresh below instead of pasting manually' },
+            ].map(({ key, label, hint }) => <AkField key={key} fieldKey={key} label={label} hint={hint} provider="igdb.com" meta={apiKeysMeta[key] || {}} edit={apiKeysEdit} setEdit={setApiKeysEdit} show={apiKeysShow} setShow={setApiKeysShow} />)}
+
+            {/* IGDB auto-refresh button */}
+            <div className="ak-refresh-box">
+              <div className="ak-refresh-desc">
+                <strong>Auto-refresh Bearer Token</strong>
+                <span>Twitch tokens expire every ~60 days. Save your Client ID &amp; Secret above first, then click Refresh — the server calls Twitch and saves the new token automatically.</span>
+              </div>
+              <button className="ak-refresh-btn" onClick={refreshIgdbToken} disabled={igdbRefreshing}>
+                <FaSync className={igdbRefreshing ? 'spin' : ''} />
+                {igdbRefreshing ? 'Refreshing…' : 'Refresh IGDB Token'}
+              </button>
+              {igdbRefreshResult && (
+                <div className={`ak-refresh-result${igdbRefreshResult.ok ? '' : ' ak-refresh-error'}`}>
+                  {igdbRefreshResult.ok ? <FaCheckCircle /> : <FaExclamationCircle />}
+                  {igdbRefreshResult.msg}
+                </div>
+              )}
+            </div>
+
+            {/* Other providers */}
+            <div className="ak-section-header" style={{ marginTop: '1.5rem' }}>Other Providers</div>
+            {[
+              { key: 'rawg_api_key',       label: 'RAWG API Key',       hint: 'rawg.io/apidocs — free registration required',    provider: 'rawg.io' },
+              { key: 'thegamesdb_api_key', label: 'TheGamesDB API Key', hint: 'forums.thegamesdb.net — optional third source',   provider: 'thegamesdb.net' },
+            ].map(({ key, label, hint, provider }) => <AkField key={key} fieldKey={key} label={label} hint={hint} provider={provider} meta={apiKeysMeta[key] || {}} edit={apiKeysEdit} setEdit={setApiKeysEdit} show={apiKeysShow} setShow={setApiKeysShow} />)}
+
+            <div className="ent-actions">
+              {Object.keys(apiKeysEdit).some(k => apiKeysEdit[k].trim()) ? (
+                <button className="ent-save-btn" onClick={saveApiKeys} disabled={apiKeysSaving}>
+                  {apiKeysSaving ? <><FaSync className="ent-spin" /> Saving…</> : <><FaCheckCircle /> Save API Keys</>}
+                </button>
+              ) : (
+                <span className="ak-no-changes">Edit a field above to save</span>
+              )}
+              {apiKeysSaveStatus === 'saved' && <span className="ent-saved-msg"><FaCheckCircle /> Saved</span>}
+              {apiKeysSaveStatus && apiKeysSaveStatus !== 'saved' && <span className="ent-test-error"><FaExclamationCircle /> {apiKeysSaveStatus}</span>}
+            </div>
           </SettingsSection>
         )}
 

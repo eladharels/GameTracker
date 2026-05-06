@@ -14,18 +14,18 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Database**: SQLite3 (file-based, `gametracker.db`)
 - **Authentication**: JWT (jsonwebtoken) + bcryptjs for local auth, ldapjs for LDAP/Active Directory
 - **Email**: Nodemailer (SMTP)
-- **Push Notifications**: ntfy.sh webhooks
+- **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~2800 lines — monolithic Express server)
+- **Entry point**: `index.js` (~3300 lines — monolithic Express server)
 
 ### Frontend
 - **Framework**: React 18 with React Router 6
 - **Build tool**: Vite 5
 - **HTTP client**: Axios
 - **Icons**: react-icons
-- **Styling**: Custom CSS with glassmorphism dark theme, accent color support
-- **Entry point**: `frontend/src/App.jsx` (~1700 lines — single large component)
+- **Styling**: Custom CSS, glassmorphism dark theme, 5 accent color presets (Sky/Purple/Green/Orange/Pink)
+- **Entry point**: `frontend/src/App.jsx` (~2450 lines — single large component)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -129,15 +129,25 @@ GameTracker/
 
 | API | Purpose | Auth |
 |---|---|---|
-| **IGDB** (igdb.com) | Primary game search + metadata | `IGDB_CLIENT_ID` + `IGDB_BEARER_TOKEN` (Twitch Dev) |
+| **IGDB** (igdb.com) | Primary game search + metadata | `IGDB_CLIENT_ID` + `IGDB_BEARER_TOKEN` (Twitch OAuth — expires ~60 days) |
 | **RAWG.io** | Secondary game search + metadata | `RAWG_API_KEY` |
 | **TheGamesDB** | Tertiary game source + box art | `THEGAMESDB_API_KEY` (optional) |
 | **Steam Store API** | Game pricing by region | No auth (public) |
+| **CrackWatch** | DRM/crack status (daily cached) | No auth (public) |
 | **SMTP** | Email notifications | Configured in `settings.json` |
 | **ntfy.sh** | Push notifications | Server URL in `settings.json`; per-user topic in `users.ntfy_topic` |
 | **Gotify** | Self-hosted push notifications | Server URL in `settings.json`; per-user token in `users.gotify_token` |
 | **Telegram Bot API** | Push notifications via Telegram | Bot token in `settings.json`; per-user chat ID in `users.telegram_chat_id` |
 | **LDAP/Active Directory** | Enterprise authentication | Bind DN + password in `settings.json` |
+
+### API Key Management
+API keys for IGDB, RAWG, and TheGamesDB can be managed in two ways:
+1. **Environment variables** (`.env`) — set at deploy time, require container restart to change
+2. **Admin UI** (Settings → API Keys) — stored in `settings.json` under `apikeys`, take effect immediately, override env vars
+
+The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, then falls back to `process.env[envName]`.
+
+**IGDB token expiry**: Twitch OAuth `access_token` values expire every ~60 days. Use **Settings → API Keys → Refresh IGDB Token** to auto-fetch a new token from Twitch using the stored Client ID + Client Secret — no redeploy needed.
 
 ---
 
@@ -158,14 +168,17 @@ GameTracker/
 - **Personal game library**: Track games with statuses — wishlist, playing, done, backlog, unreleased
 - **Backlog ordering**: Drag-and-drop reordering for the backlog queue with position badges
 - **Steam pricing**: Weekly price sync for all library games with Steam App IDs
-- **Release notifications**: Daily cron checks; sends reminders per user-configured schedule (default 0/7/30 days) via email, ntfy, and Gotify, with game cover images
+- **Release notifications**: Daily cron checks; sends reminders per user-configured schedule (default 0/7/30 days) via email, ntfy, Gotify, and Telegram, with game cover images
 - **Gotify push notifications**: Self-hosted push support; server URL in Settings, per-user token in My Account
 - **Telegram push notifications**: Bot-based push support; bot token in Settings, per-user chat ID in My Account; cover images via sendPhoto
+- **CrackWatch integration**: Daily cache of DRM/crack status for all games; shown on library cards
 - **Library sharing**: Share your game library (read-only) with specific other users
 - **Admin panel**: Create/edit/delete users, manage permissions, LDAP sync
 - **Metadata refresh**: Manual and automatic refresh of game info from source APIs
-- **My Account page**: Per-user notification channels (email, ntfy topic, Gotify token) and reminder schedule
-- **Settings page**: Server infrastructure only — SMTP, ntfy server URL, Gotify server URL, LDAP
+- **Widescreen layout toggle**: Sidebar button to expand to widescreen; persisted to localStorage
+- **My Account page**: Per-user notification channels (email, ntfy topic, Gotify token, Telegram chat ID) and reminder schedule
+- **Settings page**: Server infrastructure — SMTP, ntfy, Gotify, Telegram bot token, LDAP, **API Keys** (admin-only)
+- **System Status page** (admin-only): Real-time connectivity check for all 6 external services (IGDB, RAWG, TheGamesDB, Steam, CrackWatch, Database). Shows HTTP status code, last-OK timestamp, provider info, latency. Persists last-OK times to `system-status-cache.json`.
 
 ---
 
@@ -185,13 +198,18 @@ NODE_ENV=production
 ### `settings.json` (Runtime, managed via Admin UI)
 ```json
 {
-  "smtp": { "host": "", "port": 587, "user": "", "pass": "", "from": "", "to": "" },
-  "ntfy": { "url": "https://ntfy.sh" },
-  "gotify": { "url": "" },
-  "telegram": { "bot_token": "" },
-  "ldap": { "url": "", "base": "", "bindDn": "", "bindPass": "", "requiredGroup": "" }
+  "smtp":    { "host": "", "port": 587, "user": "", "pass": "", "from": "", "to": "" },
+  "ntfy":    { "url": "https://ntfy.sh" },
+  "gotify":  { "url": "" },
+  "telegram":{ "bot_token": "" },
+  "ldap":    { "url": "", "base": "", "bindDn": "", "bindPass": "", "requiredGroup": "" },
+  "apikeys": {
+    "igdb_client_id": "", "igdb_client_secret": "", "igdb_bearer_token": "",
+    "rawg_api_key": "", "thegamesdb_api_key": ""
+  }
 }
 ```
+> `apikeys` values override environment variables. The `igdb_client_secret` is used exclusively by the Settings → API Keys → **Refresh IGDB Token** button, which calls Twitch OAuth and auto-saves the new bearer token.
 
 ---
 

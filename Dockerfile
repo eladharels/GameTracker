@@ -8,10 +8,12 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 # Upgrade npm itself to pull in patched versions of its bundled deps
 # (cross-spawn, glob, minimatch, tar in /usr/local/lib/node_modules/npm/).
-# npm@11 dropped Node 18 support — pin to the last compatible major (10.x).
 RUN npm install -g npm@10
 COPY package*.json ./
-RUN npm install --production
+RUN npm install --production && \
+    apt-get purge -y linux-libc-dev && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 COPY . .
 ENV NODE_ENV=production
 # Transfer ownership to the built-in node user before dropping privileges.

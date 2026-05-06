@@ -163,6 +163,108 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// --- System status last-OK persistence ---
+const STATUS_CACHE_FILE = path.join(__dirname, 'system-status-cache.json');
+let statusOkCache = {}; // { serviceName: { lastOk: ISO, latency: ms } }
+
+(function loadStatusOkCache() {
+  try {
+    if (fs.existsSync(STATUS_CACHE_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(STATUS_CACHE_FILE, 'utf8'));
+      if (raw && typeof raw === 'object') statusOkCache = raw;
+    }
+  } catch { /* start fresh if file is corrupt */ }
+})();
+
+function saveStatusOkCache() {
+  try { fs.writeFileSync(STATUS_CACHE_FILE, JSON.stringify(statusOkCache, null, 2), 'utf8'); } catch { /* non-fatal */ }
+}
+
+// System status endpoint — checks all external API connections
+app.get('/api/system-status', authRequired, requirePermission('can_manage_users'), async (req, res) => {
+  try {
+    // Strip URLs from error messages to prevent API keys in query params leaking back to the client
+    const safeMessage = (err) => {
+      const msg = err.response?.data?.message || err.response?.data?.status_message
+                || (Array.isArray(err.response?.data) && err.response.data[0]?.title)
+                || err.message || 'Unknown error';
+      return String(msg).replace(/https?:\/\/\S*/gi, '[URL redacted]');
+    };
+
+    const check = async (name, fn) => {
+      const start = Date.now();
+      try {
+        const meta = await fn();
+        const latency = Date.now() - start;
+        // Update cache in an isolated try so a file-write error never poisons the service result
+        try {
+          statusOkCache[name] = { lastOk: new Date().toISOString(), latency };
+          saveStatusOkCache();
+        } catch { /* non-fatal */ }
+        return { name, status: 'ok', latency };
+      } catch (err) {
+        return {
+          name,
+          status: 'error',
+          latency: Date.now() - start,
+          httpStatus: err.response?.status || null,
+          message: safeMessage(err),
+        };
+      }
+    };
+
+    const dbCheck = () => new Promise((resolve, reject) => {
+      db.get('SELECT 1', [], (err) => err ? reject(err) : resolve());
+    });
+
+    const igdbClientId    = resolveApiKey('IGDB_CLIENT_ID');
+    const igdbBearerToken = resolveApiKey('IGDB_BEARER_TOKEN');
+    const rawgApiKey      = resolveApiKey('RAWG_API_KEY');
+    const tgdbApiKey      = resolveApiKey('THEGAMESDB_API_KEY');
+    const cacheSize       = Object.keys(crackWatchCache).length;
+
+    const checks = await Promise.all([
+      check('database', dbCheck),
+
+      (igdbClientId && igdbBearerToken)
+        ? check('igdb', () => axios.post(
+            'https://api.igdb.com/v4/games',
+            'fields id; limit 1;',
+            { headers: { 'Client-ID': igdbClientId, 'Authorization': `Bearer ${igdbBearerToken}`, 'Accept': 'application/json' }, timeout: 8000 }
+          ))
+        : { name: 'igdb', status: 'unconfigured', message: 'IGDB_CLIENT_ID or IGDB_BEARER_TOKEN not set' },
+
+      rawgApiKey
+        ? check('rawg', () => axios.get('https://api.rawg.io/api/games', { params: { key: rawgApiKey, page_size: 1, search: 'tetris' }, timeout: 8000 }))
+        : { name: 'rawg', status: 'unconfigured', message: 'RAWG_API_KEY not set' },
+
+      tgdbApiKey
+        ? check('thegamesdb', () => axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', { params: { apikey: tgdbApiKey, name: 'tetris', 'fields[games]': 'id' }, timeout: 8000 }))
+        : { name: 'thegamesdb', status: 'unconfigured', message: 'THEGAMESDB_API_KEY not set (optional)' },
+
+      check('steam', () => axios.get('https://store.steampowered.com/api/featured', { timeout: 8000 })),
+
+      cacheSize > 0
+        ? Promise.resolve({ name: 'crackwatch', status: 'ok', message: `Cache has ${cacheSize} titles` })
+        : check('crackwatch', () => axios.get('https://api.crackwatch.com/api/games', { params: { page: 0, sort_by: 'release_date' }, timeout: 8000 }))
+            .then(r => ({ ...r, message: r.status === 'ok' ? 'Reachable (cache empty — run a refresh)' : r.message })),
+    ]);
+
+    // Merge persisted last-OK timestamps into each result
+    const enriched = checks.map(c => ({
+      ...c,
+      lastOk:        statusOkCache[c.name]?.lastOk    || null,
+      lastOkLatency: statusOkCache[c.name]?.latency   || null,
+    }));
+
+    const allOk = enriched.every(c => c.status === 'ok' || c.status === 'unconfigured');
+    res.json({ overall: allOk ? 'ok' : 'degraded', services: enriched, checkedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[System Status] Unexpected error:', err.message);
+    res.status(500).json({ error: 'System status check failed: ' + err.message });
+  }
+});
+
 // Unified search endpoint: IGDB + RAWG + TheGamesDB
 app.get('/api/games/search', async (req, res) => {
   const query = req.query.q;
@@ -171,14 +273,14 @@ app.get('/api/games/search', async (req, res) => {
   }
   try {
     // IGDB request
-    const hasIgdbCredentials = process.env.IGDB_CLIENT_ID && process.env.IGDB_BEARER_TOKEN;
+    const hasIgdbCredentials = resolveApiKey('IGDB_CLIENT_ID') && resolveApiKey('IGDB_BEARER_TOKEN');
     if (!hasIgdbCredentials) {
       console.warn('[IGDB] Missing credentials - IGDB_CLIENT_ID or IGDB_BEARER_TOKEN not set');
     }
     
     // Verify credentials are loaded before making the API call
-    const clientId = process.env.IGDB_CLIENT_ID;
-    const bearerToken = process.env.IGDB_BEARER_TOKEN;
+    const clientId = resolveApiKey('IGDB_CLIENT_ID');
+    const bearerToken = resolveApiKey('IGDB_BEARER_TOKEN');
     
     if (!clientId || !bearerToken) {
       console.error('[IGDB] Credentials check failed:', {
@@ -234,8 +336,8 @@ app.get('/api/games/search', async (req, res) => {
         statusText: err.response?.statusText,
         data: err.response?.data,
         hasCredentials: hasIgdbCredentials,
-        clientId: process.env.IGDB_CLIENT_ID ? 'SET' : 'MISSING',
-        bearerToken: process.env.IGDB_BEARER_TOKEN ? 'SET' : 'MISSING'
+        clientId: resolveApiKey('IGDB_CLIENT_ID') ? 'SET' : 'MISSING',
+        bearerToken: resolveApiKey('IGDB_BEARER_TOKEN') ? 'SET' : 'MISSING'
       });
       return [];
     });
@@ -245,7 +347,7 @@ app.get('/api/games/search', async (req, res) => {
       'https://api.rawg.io/api/games',
       {
         params: {
-          key: process.env.RAWG_API_KEY,
+          key: resolveApiKey('RAWG_API_KEY'),
           search: query,
           page_size: 20,
         }
@@ -257,7 +359,7 @@ app.get('/api/games/search', async (req, res) => {
         let steamAppId = null;
         try {
           const detailRes = await axios.get(`https://api.rawg.io/api/games/${game.id}`, {
-            params: { key: process.env.RAWG_API_KEY }
+            params: { key: resolveApiKey('RAWG_API_KEY') }
           });
           const stores = detailRes.data.stores || [];
           const steamStore = stores.find(s => s.store && s.store.id === 1 && s.url_en);
@@ -287,10 +389,10 @@ app.get('/api/games/search', async (req, res) => {
     });
 
     // TheGamesDB request (optional - only if API key is configured)
-    const thegamesdbPromise = process.env.THEGAMESDB_API_KEY
+    const thegamesdbPromise = resolveApiKey('THEGAMESDB_API_KEY')
       ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
           params: {
-            apikey: process.env.THEGAMESDB_API_KEY,
+            apikey: resolveApiKey('THEGAMESDB_API_KEY'),
             name: query,
           }
         }).then(async response => {
@@ -395,8 +497,8 @@ app.get('/api/games/search', async (req, res) => {
 // Test endpoint for IGDB connectivity
 app.get('/api/test/igdb', async (req, res) => {
   const testQuery = req.query.q || 'Mario';
-  const hasClientId = !!process.env.IGDB_CLIENT_ID;
-  const hasBearerToken = !!process.env.IGDB_BEARER_TOKEN;
+  const hasClientId = !!resolveApiKey('IGDB_CLIENT_ID');
+  const hasBearerToken = !!resolveApiKey('IGDB_BEARER_TOKEN');
   
   const testInfo = {
     credentials: {
@@ -420,8 +522,8 @@ app.get('/api/test/igdb', async (req, res) => {
       `search "${testQuery}"; fields id,name,first_release_date,cover.image_id; limit 5;`,
       {
         headers: {
-          'Client-ID': process.env.IGDB_CLIENT_ID,
-          'Authorization': `Bearer ${process.env.IGDB_BEARER_TOKEN}`,
+          'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
+          'Authorization': `Bearer ${resolveApiKey('IGDB_BEARER_TOKEN')}`,
           'Accept': 'application/json',
         },
       }
@@ -455,7 +557,123 @@ app.get('/api/test/igdb', async (req, res) => {
   }
 });
 
-// --- CrackRelease: crack status from crackrelease.com (per-game page scrape) ---
+// --- CrackWatch cache (Option B: cached crack status) ---
+const CRACKWATCH_CACHE_FILE = path.join(__dirname, 'crackwatch-cache.json');
+const CRACKWATCH_RATE_MS = 1200; // 1.2s between requests to respect API limit
+
+/** Normalize game title for matching: lowercase, trim, collapse spaces, remove most punctuation */
+function normalizeTitleForCrackWatch(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .toLowerCase()
+    .trim()
+    .replace(/['':\-–—]/g, ' ')
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** In-memory cache: normalizedTitle -> true (cracked) | false (uncracked). Unknown = not in cache. */
+let crackWatchCache = Object.create(null);
+
+function loadCrackWatchCacheFromFile() {
+  try {
+    if (fs.existsSync(CRACKWATCH_CACHE_FILE)) {
+      const raw = fs.readFileSync(CRACKWATCH_CACHE_FILE, 'utf8');
+      const data = JSON.parse(raw);
+      if (data && typeof data === 'object') crackWatchCache = data;
+      console.log('[CrackWatch] Loaded cache from file,', Object.keys(crackWatchCache).length, 'titles');
+    }
+  } catch (err) {
+    console.warn('[CrackWatch] Could not load cache file:', err.message);
+  }
+}
+
+function saveCrackWatchCacheToFile() {
+  try {
+    fs.writeFileSync(CRACKWATCH_CACHE_FILE, JSON.stringify(crackWatchCache, null, 0), 'utf8');
+    console.log('[CrackWatch] Saved cache to file,', Object.keys(crackWatchCache).length, 'titles');
+  } catch (err) {
+    console.warn('[CrackWatch] Could not save cache file:', err.message);
+  }
+}
+
+/** Fetch all pages from CrackWatch API (rate-limited), merge into crackWatchCache. */
+async function refreshCrackWatchCache() {
+  const baseUrl = 'https://api.crackwatch.com/api/games';
+  let page = 0;
+  let total = 0;
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  console.log('[CrackWatch] Starting cache refresh...');
+  while (true) {
+    try {
+      const res = await axios.get(baseUrl, {
+        params: { page, sort_by: 'release_date' },
+        timeout: 15000,
+        validateStatus: (s) => s === 200,
+      });
+      const data = res.data;
+      let list = Array.isArray(data) ? data : null;
+      if (!list && data && typeof data === 'object') {
+        list = data.data || data.results || data.games || data.items || [];
+      }
+      if (!Array.isArray(list) || !list.length) {
+        if (page === 0) console.log('[CrackWatch] API response shape:', Array.isArray(data) ? 'array' : data ? Object.keys(data) : 'null');
+        break;
+      }
+
+      for (const item of list) {
+        const title = item.title || item.name;
+        if (!title) continue;
+        const key = normalizeTitleForCrackWatch(title);
+        if (!key) continue;
+        const cracked = item.isCracked === true || (Array.isArray(item.groups) && item.groups.length > 0) || !!(item.crackDate || item.date_cracked);
+        crackWatchCache[key] = cracked;
+        if (item.slug && typeof item.slug === 'string') {
+          const slugKey = item.slug.toLowerCase().replace(/-/g, ' ');
+          if (slugKey && slugKey !== key) crackWatchCache[slugKey] = cracked;
+        }
+      }
+      total += list.length;
+      page++;
+      await delay(CRACKWATCH_RATE_MS);
+    } catch (err) {
+      console.warn('[CrackWatch] Refresh error at page', page, err.message || err, err.response?.status);
+      break;
+    }
+  }
+  console.log('[CrackWatch] Cache refresh done. Total entries:', total, 'Cache size:', Object.keys(crackWatchCache).length);
+  saveCrackWatchCacheToFile();
+}
+
+loadCrackWatchCacheFromFile();
+
+// Cron: refresh CrackWatch cache daily at 4:00 AM
+cron.schedule('0 4 * * *', () => {
+  console.log('[CRON] Refreshing CrackWatch cache...');
+  refreshCrackWatchCache().catch((err) => console.error('[CRON] CrackWatch refresh failed:', err));
+});
+
+// Optional: run first refresh 30s after startup if cache is empty
+setTimeout(() => {
+  if (Object.keys(crackWatchCache).length === 0) {
+    console.log('[CrackWatch] Cache empty, running initial refresh in background...');
+    refreshCrackWatchCache().catch((err) => console.error('[CrackWatch] Initial refresh failed:', err));
+  }
+}, 30000);
+
+// Admin: manually trigger CrackWatch cache refresh
+app.post('/api/admin/refresh-crackwatch-cache', authRequired, requirePermission('can_manage_users'), async (req, res) => {
+  try {
+    await refreshCrackWatchCache();
+    res.json({ success: true, message: 'CrackWatch cache refreshed', count: Object.keys(crackWatchCache).length });
+  } catch (err) {
+    res.status(500).json({ error: 'Refresh failed', details: err.message });
+  }
+});
+
+// --- CrackRelease HTML scraper for single-game status (fallback when API host is down) ---
 function slugifyForCrackRelease(name) {
   if (!name || typeof name !== 'string') return '';
   return name
@@ -488,7 +706,7 @@ async function getCrackReleaseStatus(gameName) {
   }
 }
 
-// Admin: check CrackRelease status for a specific game name (Settings test)
+// Admin: check CrackRelease status for a specific game name (used only for testing in staging UI)
 app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_manage_users'), async (req, res) => {
   const { gameName } = req.body || {};
   if (!gameName || typeof gameName !== 'string' || !gameName.trim()) {
@@ -502,7 +720,7 @@ app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_
   }
 });
 
-// Update a user's game with CrackRelease status and persist to DB
+// Update a specific user's game with CrackRelease status and persist to DB
 app.post('/api/user/:username/games/:gameId/crackrelease-status', async (req, res) => {
   const { username, gameId } = req.params;
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -517,12 +735,61 @@ app.post('/api/user/:username/games/:gameId/crackrelease-status', async (req, re
       try {
         const result = await getCrackReleaseStatus(row.game_name);
         db.run('UPDATE user_games SET crack_status = ? WHERE user_id = ? AND game_id = ?', [result.status, user.id, gameId], (updateErr) => {
-          if (updateErr) console.error('[CrackRelease] Failed to update crack_status in DB:', updateErr);
+          if (updateErr) {
+            console.error('[CrackRelease] Failed to update crack_status in DB:', updateErr);
+          }
         });
         res.json(result);
       } catch (e) {
         res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: e.message });
       }
+    });
+  });
+});
+
+/** Look up crack status by normalized game name: exact match, then best substring match. */
+function lookupCrackStatus(normalizedGameName) {
+  if (!normalizedGameName) return undefined;
+  const exact = crackWatchCache[normalizedGameName];
+  if (exact === true || exact === false) return exact;
+  const keys = Object.keys(crackWatchCache);
+  let bestMatch = null;
+  let bestLen = 0;
+  for (const k of keys) {
+    const val = crackWatchCache[k];
+    if (val !== true && val !== false) continue;
+    const inKey = normalizedGameName.includes(k) && k.length >= 3;
+    const keyInName = k.includes(normalizedGameName) && normalizedGameName.length >= 3;
+    if (inKey && k.length > bestLen) { bestMatch = val; bestLen = k.length; }
+    if (keyInName && normalizedGameName.length > bestLen) { bestMatch = val; bestLen = normalizedGameName.length; }
+  }
+  return bestMatch;
+}
+
+// Optional: check if CrackWatch cache is populated (for debugging "all unknown")
+app.get('/api/crack-status/cache-info', (req, res) => {
+  const keys = Object.keys(crackWatchCache);
+  res.json({ count: keys.length, sampleKeys: keys.slice(0, 5) });
+});
+
+// Get crack status for a user's library (from cache only)
+app.get('/api/user/:username/crack-status', (req, res) => {
+  const { username } = req.params;
+  const normalizedUsername = username ? username.toLowerCase() : '';
+  if (!normalizedUsername) return res.status(400).json({ error: 'Missing username' });
+
+  getOrCreateUser(normalizedUsername, (err, user) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+    db.all('SELECT game_id, game_name, crack_status FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
+      if (err) return res.status(500).json({ error: 'DB error' });
+      const statusByGameId = {};
+      for (const row of rows) {
+        const key = normalizeTitleForCrackWatch(row.game_name || '');
+        const cached = crackWatchCache[key] ?? lookupCrackStatus(key);
+        const combined = row.crack_status || (cached === true ? 'cracked' : cached === false ? 'uncracked' : 'unknown');
+        statusByGameId[row.game_id] = combined || 'unknown';
+      }
+      res.json(statusByGameId);
     });
   });
 });
@@ -566,7 +833,7 @@ function loadSettings() {
   try {
     return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
   } catch {
-    return { smtp: {}, ntfy: {}, gotify: {}, ldap: {} };
+    return { smtp: {}, ntfy: {}, gotify: {}, ldap: {}, apikeys: {} };
   }
 }
 function saveSettings(settings) {
@@ -577,6 +844,73 @@ function saveSettings(settings) {
     console.error('Failed to write settings.json:', err);
   }
 }
+
+// Resolve an API key: settings.json overrides env vars so admins can update keys via UI
+function resolveApiKey(envName) {
+  const fromSettings = loadSettings()?.apikeys?.[envName.toLowerCase()];
+  return (fromSettings && fromSettings.trim()) ? fromSettings.trim() : (process.env[envName] || '');
+}
+
+// API Keys — admin-only read/write
+app.get('/api/settings/apikeys', authRequired, requirePermission('can_manage_users'), (req, res) => {
+  const k = loadSettings().apikeys || {};
+  const mask = v => v && v.trim() ? '••••••••' + v.trim().slice(-6) : '';
+  const row  = (storedVal, envVar) => ({
+    masked: mask(storedVal || process.env[envVar]),
+    set:    !!(storedVal  || process.env[envVar]),
+    source: storedVal ? 'settings' : (process.env[envVar] ? 'env' : 'none'),
+  });
+  res.json({
+    igdb_client_id:      row(k.igdb_client_id,      'IGDB_CLIENT_ID'),
+    igdb_client_secret:  row(k.igdb_client_secret,   'IGDB_CLIENT_SECRET'),
+    igdb_bearer_token:   row(k.igdb_bearer_token,    'IGDB_BEARER_TOKEN'),
+    rawg_api_key:        row(k.rawg_api_key,          'RAWG_API_KEY'),
+    thegamesdb_api_key:  row(k.thegamesdb_api_key,   'THEGAMESDB_API_KEY'),
+  });
+});
+
+app.post('/api/settings/apikeys', authRequired, requirePermission('can_manage_users'), express.json(), (req, res) => {
+  try {
+    const allowed = ['igdb_client_id', 'igdb_client_secret', 'igdb_bearer_token', 'rawg_api_key', 'thegamesdb_api_key'];
+    const incoming = req.body || {};
+    const clean = {};
+    for (const k of allowed) {
+      if (k in incoming) clean[k] = String(incoming[k] || '').trim();
+    }
+    const existing = loadSettings();
+    saveSettings({ ...existing, apikeys: { ...(existing.apikeys || {}), ...clean } });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error saving apikeys:', err);
+    res.status(500).json({ error: 'Failed to save API keys.' });
+  }
+});
+
+// Refresh IGDB bearer token using stored Client ID + Client Secret (calls Twitch OAuth)
+app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermission('can_manage_users'), express.json(), async (req, res) => {
+  const clientId     = resolveApiKey('IGDB_CLIENT_ID');
+  const clientSecret = resolveApiKey('IGDB_CLIENT_SECRET');
+  if (!clientId)     return res.status(400).json({ error: 'IGDB Client ID is not set. Add it in API Keys first.' });
+  if (!clientSecret) return res.status(400).json({ error: 'IGDB Client Secret is not set. Add it in API Keys first.' });
+  try {
+    const resp = await axios.post(
+      'https://id.twitch.tv/oauth2/token',
+      null,
+      { params: { client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' }, timeout: 10000 }
+    );
+    const { access_token, expires_in } = resp.data;
+    if (!access_token) return res.status(502).json({ error: 'Twitch returned no access_token in response' });
+    // Auto-save the new bearer token
+    const existing = loadSettings();
+    saveSettings({ ...existing, apikeys: { ...(existing.apikeys || {}), igdb_bearer_token: access_token } });
+    console.log('[IGDB] Bearer token refreshed via Twitch OAuth, expires_in:', expires_in);
+    res.json({ success: true, expires_in, masked: '••••••••' + access_token.slice(-6) });
+  } catch (err) {
+    const msg = err.response?.data?.message || err.response?.data?.error_description || err.message || 'Unknown error';
+    console.error('[IGDB] Token refresh failed:', msg);
+    res.status(502).json({ error: 'Twitch token request failed: ' + msg });
+  }
+});
 
 // --- Notification Functions ---
 async function sendEmail(subject, text, toOverride, coverUrl) {
@@ -868,6 +1202,7 @@ app.post('/api/settings', express.json(), (req, res) => {
       gotify: req.body.gotify !== undefined ? req.body.gotify : (existing.gotify || {}),
       ldap: req.body.ldap !== undefined ? req.body.ldap : (existing.ldap || {}),
       telegram: req.body.telegram !== undefined ? req.body.telegram : (existing.telegram || {}),
+      apikeys: existing.apikeys || {},  // always preserve — managed via /api/settings/apikeys
     };
     saveSettings(merged);
     res.json({ success: true });
@@ -1068,7 +1403,8 @@ app.get('/api/user/:username/games', (req, res) => {
           game_name: rows[0].game_name,
           status: rows[0].status,
           release_date: rows[0].release_date,
-          user_id: rows[0].user_id
+          user_id: rows[0].user_id,
+          crack_status: rows[0].crack_status
         });
         
         // Log all games with their statuses
@@ -1077,12 +1413,13 @@ app.get('/api/user/:username/games', (req, res) => {
             game_id: game.game_id,
             game_name: game.game_name,
             status: game.status,
-            user_id: game.user_id
+            user_id: game.user_id,
+            crack_status: game.crack_status
           });
         });
       }
       
-      // Ensure steamAppId and crackStatus are included in the response
+      // Ensure steamAppId is included in the response
       const mapped = rows.map(row => ({
         ...row,
         steamAppId: row.steam_app_id || null,
@@ -1222,8 +1559,8 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
             `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
             {
               headers: {
-                'Client-ID': process.env.IGDB_CLIENT_ID,
-                'Authorization': `Bearer ${process.env.IGDB_BEARER_TOKEN}`,
+                'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
+                'Authorization': `Bearer ${resolveApiKey('IGDB_BEARER_TOKEN')}`,
                 'Accept': 'application/json',
               },
             }
@@ -1257,7 +1594,7 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
             'https://api.rawg.io/api/games',
             {
               params: {
-                key: process.env.RAWG_API_KEY,
+                key: resolveApiKey('RAWG_API_KEY'),
                 search: query,
                 page_size: 10,
               }
@@ -1268,7 +1605,7 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
               let steamAppId = null;
               try {
                 const detailRes = await axios.get(`https://api.rawg.io/api/games/${game.id}`, {
-                  params: { key: process.env.RAWG_API_KEY }
+                  params: { key: resolveApiKey('RAWG_API_KEY') }
                 });
                 const stores = detailRes.data.stores || [];
                 const steamStore = stores.find(s => s.store && s.store.id === 1 && s.url_en);
@@ -1294,10 +1631,10 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
           }).catch(() => []);
 
           // TheGamesDB request (optional - only if API key is configured)
-          const thegamesdbPromise = process.env.THEGAMESDB_API_KEY
+          const thegamesdbPromise = resolveApiKey('THEGAMESDB_API_KEY')
             ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
                 params: {
-                  apikey: process.env.THEGAMESDB_API_KEY,
+                  apikey: resolveApiKey('THEGAMESDB_API_KEY'),
                   name: query,
                 }
               }).then(async response => {
@@ -1523,8 +1860,8 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
           `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
           {
             headers: {
-              'Client-ID': process.env.IGDB_CLIENT_ID,
-              'Authorization': `Bearer ${process.env.IGDB_BEARER_TOKEN}`,
+              'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
+              'Authorization': `Bearer ${resolveApiKey('IGDB_BEARER_TOKEN')}`,
               'Accept': 'application/json',
             },
           }
@@ -1557,7 +1894,7 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
           'https://api.rawg.io/api/games',
           {
             params: {
-              key: process.env.RAWG_API_KEY,
+              key: resolveApiKey('RAWG_API_KEY'),
               search: query,
               page_size: 10,
             }
@@ -1568,7 +1905,7 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
             let steamAppId = null;
             try {
               const detailRes = await axios.get(`https://api.rawg.io/api/games/${game.id}`, {
-                params: { key: process.env.RAWG_API_KEY }
+                params: { key: resolveApiKey('RAWG_API_KEY') }
               });
               const stores = detailRes.data.stores || [];
               const steamStore = stores.find(s => s.store && s.store.id === 1 && s.url_en);
@@ -1593,10 +1930,10 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
           return detailedGames;
         }).catch(() => []);
 
-        const thegamesdbPromise = process.env.THEGAMESDB_API_KEY
+        const thegamesdbPromise = resolveApiKey('THEGAMESDB_API_KEY')
           ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
               params: {
-                apikey: process.env.THEGAMESDB_API_KEY,
+                apikey: resolveApiKey('THEGAMESDB_API_KEY'),
                 name: query,
               }
             }).then(async response => {
@@ -2152,18 +2489,18 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
     if (!['email', 'ntfy', 'gotify', 'telegram', 'both'].includes(service)) {
       return res.status(400).json({ error: 'Invalid service. Must be email, ntfy, gotify, telegram, or both' });
     }
-
+    
     // Calculate days until release
     let daysUntilRelease = null;
     let releaseText = 'Date N/A';
-
+    
     if (releaseDate) {
       const releaseDateObj = new Date(releaseDate);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       releaseDateObj.setHours(0, 0, 0, 0);
       daysUntilRelease = Math.ceil((releaseDateObj - today) / (1000 * 60 * 60 * 24));
-
+      
       if (daysUntilRelease === 0) {
         releaseText = 'releases today';
       } else if (daysUntilRelease > 0) {
@@ -2172,12 +2509,12 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
         releaseText = `released ${Math.abs(daysUntilRelease)} days ago`;
       }
     }
-
+    
     const subject = `Test Notification: "${gameName}" ${releaseText}`;
     const text = `This is a test notification for "${gameName}". ${releaseText} (${releaseDate || 'Date N/A'}).`;
     const title = 'Test Notification';
     const message = text;
-
+    
     const results = {
       email: { sent: false, error: null },
       ntfy: { sent: false, error: null },
@@ -2342,11 +2679,16 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
             });
           });
 
-          // Search for user in LDAP using sAMAccountName
+          // Search for user in LDAP using multiple username attributes
+          // (Active Directory: sAMAccountName, FreeIPA: uid)
+          const usernameFilters = [
+            `(sAMAccountName=${user.username})`,
+            `(uid=${user.username})`,
+          ];
           const searchOptions = {
-            filter: `(sAMAccountName=${user.username})`,
+            filter: `(|${usernameFilters.join('')})`,
             scope: 'sub',
-            attributes: ['displayName', 'mail', 'sAMAccountName']
+            attributes: ['displayName', 'mail', 'sAMAccountName', 'uid']
           };
 
           console.log(`[LDAP Sync] Searching for user with filter: ${searchOptions.filter}`);
@@ -2475,8 +2817,6 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
   }
 });
 
-// --- Per-user settings endpoint ---
-// Authenticated user can update their own email/ntfy_topic/gotify_token
 // --- Get current user's profile/settings ---
 app.get('/api/user/me', authRequired, (req, res) => {
   const userId = req.user.id;
@@ -2706,7 +3046,6 @@ cron.schedule('0 8 * * *', () => {
                       console.error(`[CRON] Failed to update status for game ${game.game_name} (user: ${username}):`, err);
                     } else {
                       console.log(`[CRON] Successfully updated status for game ${game.game_name} (user: ${username}) from unreleased to wishlist`);
-                      // Send release notification
                       notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist').catch(err => {
                         console.error(`[CRON] Failed to send release notification for game ${game.game_name} (user: ${username}):`, err);
                       });
