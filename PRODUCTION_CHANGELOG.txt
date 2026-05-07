@@ -9,6 +9,10 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-05-06 (Staging Change #55) ---
+Summary: Game card UX fix — larger cards (180→220px), always-visible actions, 36px button hit targets.
+Files changed: frontend/src/App.css
+
 --- APPLIED 2026-05-06 (Staging Change #53) ---
 Summary: API Keys session-expired UX fix — 401 errors now show a clear banner instead of raw "Invalid token".
 Files changed: frontend/src/App.jsx, frontend/src/App.css
