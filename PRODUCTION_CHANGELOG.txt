@@ -9,6 +9,10 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-05-15 (Staging Change #57) ---
+Summary: Fix Trivy HIGH CVE-2026-27135 (libnghttp2-14) — add --no-cache to backend docker build.
+Files changed: .github/workflows/docker-build-deploy.yml
+
 --- APPLIED 2026-05-06 (Staging Change #55) ---
 Summary: Game card UX fix — larger cards (180→220px), always-visible actions, 36px button hit targets.
 Files changed: frontend/src/App.css

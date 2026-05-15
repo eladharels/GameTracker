@@ -145,6 +145,7 @@ jobs:
       - name: Build backend Docker image
         run: |
           docker build \
+            --no-cache \
             -t ${BACKEND_IMAGE_BASE}:latest \
             .
 
