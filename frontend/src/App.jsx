@@ -815,7 +815,7 @@ function LibraryPage({ user }) {
   const [keyboardDragId, setKeyboardDragId] = useState(null)
   const { showToast } = useToast()
   const pendingDeleteRef = useRef({}) // { [gameId]: { timers, snapshot } }
-  const gamesPerPage = 15
+  const gamesPerPage = 24
 
   useEffect(() => {
     if (user) {
@@ -1032,6 +1032,24 @@ function LibraryPage({ user }) {
       setUserGames(res.data)
     } catch (err) {
       showToast('error', 'Failed to reorder backlog.')
+    }
+  }
+
+  const handleMoveToTopOfBacklog = async (gameId) => {
+    const sorted = [...filteredUserGames]
+    const fromIdx = sorted.findIndex(g => String(g.game_id) === String(gameId))
+    if (fromIdx <= 0) return
+    const newOrder = sorted.map(g => g.game_id)
+    const [moved] = newOrder.splice(fromIdx, 1)
+    newOrder.unshift(moved)
+    try {
+      await axios.put(`${API_BASE}/user/${user.username}/backlog-reorder`, { order: newOrder })
+      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
+      setUserGames(res.data)
+      setCurrentPage(1)
+      showToast('success', `Moved to top of backlog.`)
+    } catch (err) {
+      showToast('error', 'Failed to move game to top.')
     }
   }
 
@@ -1356,6 +1374,19 @@ function LibraryPage({ user }) {
                             ))}
                           </select>
                         </div>
+                      )}
+                      {filter === 'backlog' && game.backlog_order !== 1 && (
+                        <button
+                          className="remove-btn-icon"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleMoveToTopOfBacklog(game.game_id);
+                          }}
+                          title="Move to top of backlog"
+                          aria-label="Move to top of backlog"
+                        >
+                          <FaArrowUp />
+                        </button>
                       )}
                       <button
                         className="remove-btn-icon"

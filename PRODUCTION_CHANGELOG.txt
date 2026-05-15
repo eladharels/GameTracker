@@ -9,6 +9,10 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-05-15 (Staging Change #56) ---
+Summary: Backlog UX — increase games per page (15→24) and add "Move to top" button on each backlog card.
+Files changed: frontend/src/App.jsx
+
 --- APPLIED 2026-05-15 (Staging Change #57) ---
 Summary: Fix Trivy HIGH CVE-2026-27135 (libnghttp2-14) — add --no-cache to backend docker build.
 Files changed: .github/workflows/docker-build-deploy.yml
