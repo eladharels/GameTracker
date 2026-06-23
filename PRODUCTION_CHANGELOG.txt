@@ -9,6 +9,55 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-06-23 (Staging Change #58) ---
+Summary: Premium frontend redesign — cinematic violet dark theme + art-forward
+         poster cards + new click-to-open Game Detail modal.
+
+Files changed in production:
+  • frontend/src/index.css            (font import: Inter → Space Grotesk + Manrope)
+  • frontend/src/App.css              (tokenized theme, poster cards, appended .gdm-* modal CSS)
+  • frontend/src/styles/Toast.css     (theme tokens)
+  • frontend/src/App.jsx              (redesign + Game Detail modal wired in)
+  • frontend/SharedLibrary.jsx        (hardcoded colors → design tokens)
+  • frontend/src/GameDetailModal.jsx  (NEW — card-press detail popup component)
+  • frontend/index.html               (Google Fonts link → Space Grotesk + Manrope)
+  • frontend/nginx.conf               (CSP + security headers; img-src scoped to IGDB/RAWG/TheGamesDB)
+
+What was done:
+  • Replaced Inter with Space Grotesk (display) + Manrope (UI/body); introduced a
+    full design-token system (surfaces, borders, text, radius, transitions) and a
+    violet (#8b5cf6) default accent derived with color-mix() so the accent-theming
+    (theme dots) stays reactive — JS still only sets --color-accent.
+  • Library/Search grid cards redesigned as full-bleed posters (cover art fills the
+    card, controls overlay a gradient scrim, status-colored left edge). List view
+    unchanged.
+  • New GameDetailModal: clicking a game card opens a centered detail popup (cover
+    header, status kicker, Released/Status meta, Update Status buttons). Closes on
+    ✕ / Esc / backdrop; clicks on inner select/button/a do NOT open the modal.
+    Background scroll locked while open.
+  • nginx now serves a Content-Security-Policy plus X-Content-Type-Options,
+    X-Frame-Options, and Referrer-Policy headers; img-src is bounded to IGDB/RAWG/
+    TheGamesDB cover hosts and font-src/style-src to Google Fonts.
+
+PROD-SPECIFIC DELTA (intentional divergence from staging):
+  • The staging-only "- STAGING -" env badge was NOT carried over. Both badge lines
+    (sidebar .brand block and login .login-wordmark block) were removed from App.jsx.
+    The harmless .env-badge CSS rules remain in App.css with no markup referencing them.
+
+--- APPLIED 2026-06-23 (Staging Change #59) ---
+Summary: Security — fix nodemailer HIGH CVE (GHSA-p6gq-j5cr-w38f) by bumping
+         nodemailer to 9.0.1 (clears the backend-image Trivy HIGH).
+
+Files changed in production:
+  • package.json        (nodemailer ^7.0.11 → ^9.0.1)
+  • package-lock.json   (resolves nodemailer 9.0.1)
+
+What was done:
+  • Bumped the backend nodemailer dependency to ^9.0.1 and regenerated the lockfile.
+    9.0.1 keeps the createTransport() / sendMail({from,to,subject,text,html}) API used
+    in index.js unchanged and declares engines: node >=6.0.0 (backend runs node:18).
+    The codebase never uses the vulnerable `raw` option.
+
 --- APPLIED 2026-05-15 (Staging Change #56) ---
 Summary: Backlog UX — increase games per page (15→24) and add "Move to top" button on each backlog card.
 Files changed: frontend/src/App.jsx

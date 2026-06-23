@@ -5,13 +5,15 @@ import './App.css'
 import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
+import GameDetailModal from './GameDetailModal'
 
 const ACCENT_PRESETS = [
-  { name: 'Sky',    value: '#0ea5e9' },
-  { name: 'Purple', value: '#a855f7' },
-  { name: 'Green',  value: '#22c55e' },
-  { name: 'Orange', value: '#f97316' },
-  { name: 'Pink',   value: '#ec4899' },
+  { name: 'Violet',  value: '#8b5cf6' },
+  { name: 'Blue',    value: '#3b82f6' },
+  { name: 'Emerald', value: '#10b981' },
+  { name: 'Amber',   value: '#f59e0b' },
+  { name: 'Rose',    value: '#f43f5e' },
+  { name: 'Cyan',    value: '#06b6d4' },
 ]
 
 // Dynamic API base URL: always hit the current origin's /api
@@ -50,7 +52,7 @@ function App() {
   const navigate = useNavigate()
 
   const [accentColor, setAccentColor] = useState(
-    () => localStorage.getItem('accent_color') || '#0ea5e9'
+    () => localStorage.getItem('accent_color') || '#8b5cf6'
   )
   useEffect(() => {
     document.documentElement.style.setProperty('--color-accent', accentColor)
@@ -100,6 +102,12 @@ function App() {
   return (
     <div className={`container${widescreen ? ' widescreen' : ''}`}>
       <aside className="sidebar left-sidebar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M6 11h4M8 9v4"/><line x1="15" y1="11" x2="15.01" y2="11"/><line x1="18" y1="13" x2="18.01" y2="13"/><rect x="2" y="6" width="20" height="12" rx="5"/></svg>
+          </span>
+          <span className="brand-name">GameTracker</span>
+        </div>
         <nav className="nav-menu">
           <Link to="/search" className={location.pathname === '/search' ? 'active' : ''}>
             <FaSearch className="nav-icon" />
@@ -215,7 +223,13 @@ function LoginPage({ setUser }) {
   return (
     <div className="login-page">
       <form className="login-form" onSubmit={handleLogin}>
-        <h2>Login</h2>
+        <div className="login-wordmark">
+          <span className="brand-mark brand-mark--lg" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M6 11h4M8 9v4"/><line x1="15" y1="11" x2="15.01" y2="11"/><line x1="18" y1="13" x2="18.01" y2="13"/><rect x="2" y="6" width="20" height="12" rx="5"/></svg>
+          </span>
+          <div className="login-wordmark-title">GameTracker</div>
+          <div className="login-wordmark-sub">Track every game worth your time</div>
+        </div>
         <div className="login-field-group">
           <label htmlFor="login-username">Username</label>
           <input
@@ -431,26 +445,15 @@ function UserManagementPage({ user }) {
             className="ldap-sync-btn" 
             onClick={handleLdapSync}
             disabled={ldapSyncLoading}
-            style={{
-              backgroundColor: ldapSyncLoading ? '#ccc' : '#28a745',
-              color: 'white',
-              padding: '8px 16px',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: ldapSyncLoading ? 'not-allowed' : 'pointer',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              marginRight: '10px'
-            }}
           >
             {ldapSyncLoading ? (
               <>
-                <span style={{marginRight: '6px'}}>⏳</span>
+                <FaSpinner className="spin-icon" style={{marginRight:6}} />
                 Syncing...
               </>
             ) : (
               <>
-                <span style={{marginRight: '6px'}}>🔄</span>
+                <FaSync style={{marginRight:6}} />
                 Sync LDAP Users
               </>
             )}
@@ -620,6 +623,7 @@ function SearchPage({ user }) {
   const [searchError, setSearchError] = useState('')
   const [viewMode, setViewMode] = useState('grid')
   const [gamePrices, setGamePrices] = useState({}) // { [gameId]: { price, loading, error } }
+  const [openGame, setOpenGame] = useState(null)
   const { showToast } = useToast();
 
   // Fetch price for a game by Steam App ID
@@ -663,8 +667,8 @@ function SearchPage({ user }) {
     setLoading(false)
   }
 
-  // Add to library
-  const addToLibrary = async (game, unreleased = false) => {
+  // Add to library (statusOverride lets the detail modal add with a chosen status)
+  const addToLibrary = async (game, unreleased = false, statusOverride = null) => {
     if (!user) {
       showToast('error', 'You must be logged in to add games.');
       return;
@@ -688,7 +692,7 @@ function SearchPage({ user }) {
         gameName: game.name,
         coverUrl: game.coverUrl,
         releaseDate: game.releaseDate,
-        status: (!game.releaseDate || unreleased) ? 'unreleased' : 'wishlist',
+        status: statusOverride || ((!game.releaseDate || unreleased) ? 'unreleased' : 'wishlist'),
         steamAppId: game.steamAppId || null,
       })
       showToast('success', `Added ${game.name} to your library!`);
@@ -756,7 +760,22 @@ function SearchPage({ user }) {
                 else if (priceInfo && priceInfo.price === null) priceDisplay = 'Price: Not found';
               }
               return (
-                <div key={game.id} className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`} style={{ animationDelay: `${searchResults.indexOf(game) * 0.04}s` }}>
+                <div
+                  key={game.id}
+                  className={`game-card ${viewMode === 'list' ? 'list-item' : ''}`}
+                  style={{ animationDelay: `${searchResults.indexOf(game) * 0.04}s` }}
+                  onClick={(e) => {
+                    if (e.target.closest('select,button,a')) return;
+                    setOpenGame({
+                      ...game,
+                      game_id: game.id,
+                      game_name: game.name,
+                      cover_url: game.coverUrl,
+                      release_date: game.releaseDate,
+                      status: unreleased ? 'unreleased' : 'wishlist',
+                    });
+                  }}
+                >
                   <div className="game-cover-container">
                     {game.coverUrl ? (
                       <img src={game.coverUrl} alt={game.name} className="game-cover" loading="lazy" decoding="async" onLoad={(e) => e.currentTarget.classList.add('cover-loaded')} />
@@ -773,7 +792,7 @@ function SearchPage({ user }) {
                       Release: {game.releaseDate ? game.releaseDate : 'Unreleased'}
                       {unreleased && <span className="unreleased-pill">Unreleased</span>}
                     </div>
-                    <div className="game-price" style={{ margin: '0.5em 0', color: '#0ea5e9', fontWeight: 600 }}>{priceDisplay}</div>
+                    <div className="game-price" style={{ margin: '0.5em 0', color: 'var(--color-accent)', fontWeight: 600 }}>{priceDisplay}</div>
                     <button
                       className="add-btn"
                       onClick={e => { e.stopPropagation(); addToLibrary(game, unreleased); }}
@@ -787,6 +806,12 @@ function SearchPage({ user }) {
           </div>
         </>
       )}
+      <GameDetailModal
+        game={openGame}
+        onClose={() => setOpenGame(null)}
+        onSetStatus={(g, status) => { addToLibrary(g, false, status); setOpenGame(null); }}
+        onRemove={() => setOpenGame(null)}
+      />
     </div>
   )
 }
@@ -813,6 +838,7 @@ function LibraryPage({ user }) {
   const [dragOverGameId, setDragOverGameId] = useState(null)
   const [isDraggingAny, setIsDraggingAny] = useState(false)
   const [keyboardDragId, setKeyboardDragId] = useState(null)
+  const [openGame, setOpenGame] = useState(null)
   const { showToast } = useToast()
   const pendingDeleteRef = useRef({}) // { [gameId]: { timers, snapshot } }
   const gamesPerPage = 24
@@ -1222,9 +1248,9 @@ function LibraryPage({ user }) {
         <div style={{
           padding: '0.8em 1.2em',
           borderRadius: 8,
-          background: 'rgba(33, 150, 243, 0.1)',
-          border: '1.5px solid rgba(33, 150, 243, 0.3)',
-          color: '#2196f3',
+          background: 'var(--accent-soft)',
+          border: '1.5px solid var(--accent-border)',
+          color: 'var(--color-accent)',
           marginBottom: '1rem',
           fontSize: '0.95em'
         }}>
@@ -1284,6 +1310,7 @@ function LibraryPage({ user }) {
                   style={{ animationDelay: `${index * 0.04}s` }}
                   draggable={filter === 'backlog'}
                   tabIndex={filter === 'backlog' ? 0 : undefined}
+                  onClick={(e) => { if (e.target.closest('select,button,a,.status-select-wrapper')) return; setOpenGame(game) }}
                   onDragStart={() => { setDraggedGameId(game.game_id); setIsDraggingAny(true) }}
                   onDragOver={(e) => { if (filter === 'backlog') { e.preventDefault(); setDragOverGameId(game.game_id); } }}
                   onDrop={() => handleBacklogDrop(game.game_id)}
@@ -1428,8 +1455,8 @@ function LibraryPage({ user }) {
             <span className="pagination-info">
               Page {currentPage} of {totalPages}
             </span>
-            <button 
-              className="pagination-btn" 
+            <button
+              className="pagination-btn"
               onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
               disabled={currentPage === totalPages}
             >
@@ -1438,6 +1465,12 @@ function LibraryPage({ user }) {
           </div>
         </>
       )}
+      <GameDetailModal
+        game={openGame}
+        onClose={() => setOpenGame(null)}
+        onSetStatus={setGameStatus}
+        onRemove={(g) => removeGame(g.game_id)}
+      />
     </div>
   )
 }
