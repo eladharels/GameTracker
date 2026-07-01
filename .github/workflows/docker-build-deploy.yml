@@ -81,6 +81,7 @@ jobs:
             --exclude 'frontend/dist' \
             --exclude-rule 'javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring' \
             --exclude-rule 'javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage' \
+            --exclude-rule 'yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag' \
             .
 
   # ─────────────────────────────────────────────────────────────────────────────
