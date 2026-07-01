@@ -709,7 +709,7 @@ function SearchPage({ user }) {
         gameName: game.name,
         coverUrl: game.coverUrl,
         releaseDate: game.releaseDate,
-        status: statusOverride || ((!game.releaseDate || unreleased) ? 'unreleased' : 'wishlist'),
+        status: statusOverride || (unreleased ? 'unreleased' : 'wishlist'),
         steamAppId: game.steamAppId || null,
       })
       showToast('success', `Added ${game.name} to your library!`);

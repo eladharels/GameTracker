@@ -39,7 +39,10 @@ Files changed in production:
                             helpers after normalizeStatus(); routed 4 sites through
                             isGameUnreleased(): search-results add path, statusCounts
                             .unreleased, the "unreleased" filter tab, and the library
-                            card render that chooses locked-indicator vs status <select>)
+                            card render that chooses locked-indicator vs status <select>;
+                            simplified the addToLibrary status line to
+                            `statusOverride || (unreleased ? 'unreleased' : 'wishlist')`
+                            to match staging — `unreleased` already covers the dateless case)
   • index.js               (added module-scope isReleaseInFuture(); POST /api/user/
                             :username/games now forces status='unreleased' for future
                             dates, not just missing ones; the release-notification
