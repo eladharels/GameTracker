@@ -9,6 +9,54 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-07-01 (Staging: future-dated "unreleased" games fix, STAGING_CHANGELOG.txt CHANGE #58 dated 2026-07-01) ---
+Summary: Games with a FUTURE release date no longer appear as already-released
+         (editable status). They now lock as "Unreleased" across the UI, the
+         add/update endpoint, and metadata refresh, via one date-only predicate
+         shared with the daily cron.
+
+NOTE ON NUMBERING: The entry below is ALSO labeled "(Staging Change #58)" but is a
+different change (the premium frontend redesign, applied 2026-06-23). The staging
+and production changelogs have diverged numbering — this fix is staging CHANGE #58
+per the CURRENT STAGING_CHANGELOG.txt. Reconcile the numbering when convenient.
+
+Files changed in production:
+  • frontend/src/App.jsx   (added isGameReleaseInFuture() + isGameUnreleased()
+                            helpers after normalizeStatus(); routed 4 sites through
+                            isGameUnreleased(): search-results add path, statusCounts
+                            .unreleased, the "unreleased" filter tab, and the library
+                            card render that chooses locked-indicator vs status <select>)
+  • index.js               (added module-scope isReleaseInFuture(); POST /api/user/
+                            :username/games now forces status='unreleased' for future
+                            dates, not just missing ones; the release-notification
+                            guard uses the same predicate; BOTH refresh-metadata
+                            handlers re-sync status when release_date changes)
+
+What was done:
+  • Root cause: "released vs unreleased" was decided from the stored status string
+    alone, never checking whether release_date was actually in the future, so status
+    and release_date could drift apart (e.g. a metadata refresh moving a date forward,
+    or a client persisting a future game as wishlist).
+  • Added one date-only predicate (setHours(0,0,0,0) on both sides, matching the daily
+    [CRON] job so "releases today" counts as released) on the frontend (isGameUnreleased)
+    and backend (isReleaseInFuture), applied everywhere the released/unreleased state is
+    decided. No CSS/markup change (reuses .unreleased-indicator / .unreleased-pill).
+  • No database schema change. No new dependencies. Daily cron unchanged.
+
+OPTIONAL data backfill (recommended, run once — take a DB backup first):
+  Legacy rows already stored with a future date but a non-unreleased status are masked
+  in the UI and self-correct on next update/refresh; to clean them at the data layer:
+
+    UPDATE user_games SET status = 'unreleased'
+      WHERE status != 'unreleased' AND release_date IS NOT NULL
+        AND date(release_date) > date('now');
+
+Deploy:
+  • Rebuild both Docker images (backend + frontend) and redeploy via the normal
+    push-to-main pipeline. Post-deploy health check: GET /api/health -> {"status":"ok"}.
+
+Review status: CISO + Architect + UI/UX all APPROVED in staging (mandatory review).
+
 --- APPLIED 2026-06-23 (Staging Change #58) ---
 Summary: Premium frontend redesign — cinematic violet dark theme + art-forward
          poster cards + new click-to-open Game Detail modal.

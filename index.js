@@ -1212,6 +1212,16 @@ app.post('/api/settings', express.json(), (req, res) => {
   }
 });
 
+// Date-only future check for release dates. 'YYYY-MM-DD' parses as UTC midnight,
+// so compare date-only on both sides — matching the daily cron (search "[CRON]")
+// so a game "releasing today" counts as released, not unreleased.
+function isReleaseInFuture(dateStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr); d.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return d > today;
+}
+
 // --- Add/update a game status for a user (with notification) ---
 app.post('/api/user/:username/games', async (req, res) => {
   const { username } = req.params;
@@ -1234,9 +1244,10 @@ app.post('/api/user/:username/games', async (req, res) => {
     console.log(`[DEBUG] Missing required fields:`, { gameId, gameName, status });
     return res.status(400).json({ error: 'Missing required fields' });
   }
-  // If no releaseDate, always set status to 'unreleased'
-  if (!releaseDate) {
-    console.log(`[DEBUG] No release date provided, setting status to 'unreleased'`);
+  // Force 'unreleased' when there is no release date OR the date is still in the
+  // future — a future-dated game must never be stored as a released status.
+  if (!releaseDate || isReleaseInFuture(releaseDate)) {
+    console.log(`[DEBUG] No/future release date (${releaseDate || 'none'}), setting status to 'unreleased'`);
     status = 'unreleased';
   }
   getOrCreateUser(normalizedUsername, async (err, user) => {
@@ -1261,7 +1272,7 @@ app.post('/api/user/:username/games', async (req, res) => {
           gameName: row.game_name 
         });
         if (row.status !== status) eventType = 'status';
-        if (row.status === 'unreleased' && status !== 'unreleased' && releaseDate && new Date(releaseDate) <= new Date()) {
+        if (row.status === 'unreleased' && status !== 'unreleased' && releaseDate && !isReleaseInFuture(releaseDate)) {
           await notifyEvent('release', { gameName, coverUrl }, normalizedUsername, status);
         }
       } else {
@@ -1735,6 +1746,18 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
               updates.push('release_date = ?');
               params.push(match.releaseDate);
               updated = true;
+              // Re-sync status to the new date: future -> lock as unreleased;
+              // past/now on a currently-unreleased game -> promote to wishlist
+              // (mirrors the daily cron auto-transition).
+              if (isReleaseInFuture(match.releaseDate)) {
+                if (game.status !== 'unreleased') {
+                  updates.push('status = ?');
+                  params.push('unreleased');
+                }
+              } else if (game.status === 'unreleased') {
+                updates.push('status = ?');
+                params.push('wishlist');
+              }
             }
 
             // Check cover URL
@@ -2020,6 +2043,16 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
             updates.push('release_date = ?');
             params.push(match.releaseDate);
             updated = true;
+            // Re-sync status to the new date (see bulk refresh above).
+            if (isReleaseInFuture(match.releaseDate)) {
+              if (game.status !== 'unreleased') {
+                updates.push('status = ?');
+                params.push('unreleased');
+              }
+            } else if (game.status === 'unreleased') {
+              updates.push('status = ?');
+              params.push('wishlist');
+            }
           }
           if (match.coverUrl !== game.cover_url) {
             updates.push('cover_url = ?');

@@ -21,6 +21,23 @@ const API_BASE = `${window.location.origin}/api`;
 
 const STATUSES = ['wishlist', 'playing', 'done', 'backlog']
 
+// Date-only future check (YYYY-MM-DD parses as UTC midnight; compare date-only,
+// matching the backend cron so "releases today" counts as released everywhere).
+function isGameReleaseInFuture(dateStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr); d.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return d > today;
+}
+
+// Single source of truth: a game is "unreleased" if flagged, dateless, or its
+// release date is still in the future. Accepts library games (release_date) or
+// search results (releaseDate).
+function isGameUnreleased(game) {
+  const date = game.release_date ?? game.releaseDate;
+  return game.status === 'unreleased' || !date || isGameReleaseInFuture(date);
+}
+
 // Helper function to normalize status values
 function normalizeStatus(status) {
   if (!status) return 'wishlist';
@@ -742,15 +759,8 @@ function SearchPage({ user }) {
           <h2>Search Results</h2>
           <div className={`games-list ${viewMode === 'list' ? 'list-view' : 'grid-view'}`}>
             {searchResults.map(game => {
-              // Determine if unreleased
-              let unreleased = false;
-              if (!game.releaseDate) {
-                unreleased = true;
-              } else {
-                const today = new Date();
-                const release = new Date(game.releaseDate);
-                unreleased = release > today;
-              }
+              // Determine if unreleased (dateless or future release date)
+              const unreleased = isGameUnreleased(game);
               // Price display logic
               let priceDisplay = 'Price: N/A';
               if (game.steamAppId) {
@@ -862,7 +872,7 @@ function LibraryPage({ user }) {
     wishlist:   userGames.filter(g => normalizeStatus(g.status) === 'wishlist').length,
     playing:    userGames.filter(g => normalizeStatus(g.status) === 'playing').length,
     done:       userGames.filter(g => normalizeStatus(g.status) === 'done').length,
-    unreleased: userGames.filter(g => g.status === 'unreleased' || !g.release_date).length,
+    unreleased: userGames.filter(g => isGameUnreleased(g)).length,
     backlog:    userGames.filter(g => normalizeStatus(g.status) === 'backlog').length,
   }
 
@@ -879,7 +889,7 @@ function LibraryPage({ user }) {
     ? userGames
     : userGames.filter(game => {
         if (filter === 'unreleased') {
-          return game.status === 'unreleased' || !game.release_date;
+          return isGameUnreleased(game);
         }
         // Case-insensitive status comparison using helper function
         return normalizeStatus(game.status) === filter;
@@ -1298,7 +1308,7 @@ function LibraryPage({ user }) {
           )}
           <div key={`${filter}-${currentPage}`} className={`games-list ${viewMode === 'list' ? 'list-view' : ''}${isDraggingAny ? ' backlog-drag-active' : ''}`}>
             {currentGames.map((game, index) => {
-              const isUnreleased = game.status === 'unreleased' || !game.release_date;
+              const isUnreleased = isGameUnreleased(game);
               const effectiveCrackStatus = game.crackStatus || crackStatusMap[game.game_id] || 'unknown';
               const isDragging  = filter === 'backlog' && String(draggedGameId) === String(game.game_id);
               const isDragOver  = filter === 'backlog' && String(dragOverGameId) === String(game.game_id);
