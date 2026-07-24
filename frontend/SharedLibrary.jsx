@@ -4,12 +4,10 @@ import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
 import { useToast } from './src/contexts/ToastContext';
 import { useNavigate } from 'react-router-dom';
 
-const API_BASE =
-window.location.hostname === "gametracker.etech.ink"
-  ? "https://gametracker.etech.ink/api"
-  : "http://10.0.0.30:3000/api";
-//const API_BASE = "http://10.0.0.30:3000/api"
-//const API_BASE = "/api"
+// Always call our own origin's /api (nginx proxies it to the backend). The previous
+// hardcoded host/port fell back to the PRODUCTION backend (:3000) from staging, and
+// being cross-origin it also bypassed the shared axios auth interceptor.
+const API_BASE = `${window.location.origin}/api`;
 
 // Helper to get token and user info from localStorage
 function getAuth() {

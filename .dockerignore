@@ -1,0 +1,46 @@
+# Keep secrets, local state, and dev cruft OUT of the backend image build context.
+# The Dockerfile ends with `COPY . .`, so without this file a local `docker build`
+# would bake these into an image layer. (CI builds from a git checkout, where most of
+# these are gitignored anyway — this is defense-in-depth and protects local builds.)
+
+# Secrets / credentials — never belong in an image
+.env
+.env.local
+.env.*.local
+
+# Runtime state (volume-mounted at run time, not needed in the image)
+gametracker.db
+gametracker.db-journal
+gametracker.db-wal
+gametracker.db-shm
+settings.json
+sent_notifications.json
+crackwatch-cache.json
+system-status-cache.json
+
+# Dependencies (installed via `npm install` in the image) and build output
+node_modules
+frontend/node_modules
+dist
+frontend/dist
+
+# VCS / CI / tooling
+.git
+.github
+.gitignore
+.dockerignore
+.gitleaks.toml
+.semgrep.yml
+.trivyignore
+
+# Logs, caches, editor/OS files
+*.log
+npm-debug.log*
+coverage
+.eslintcache
+.npm
+.turbo
+.vscode
+.idea
+.DS_Store
+Thumbs.db

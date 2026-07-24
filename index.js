@@ -6,7 +6,15 @@ const sqlite3 = require('sqlite3').verbose();
 const DBSOURCE = 'gametracker.db';
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const crypto = require('crypto');
+// JWT_SECRET must be supplied via the environment (.env / docker-compose). There is
+// no hardcoded fallback: a shared/default secret lets anyone forge admin tokens.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET === 'supersecretkey' || JWT_SECRET.length < 16) {
+  console.error('[FATAL] JWT_SECRET is missing, too short, or set to the insecure default. ' +
+    'Set a strong JWT_SECRET (>=16 chars) in the environment before starting.');
+  process.exit(1);
+}
 const fs = require('fs');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
@@ -16,12 +24,32 @@ const ldap = require('ldapjs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust the reverse proxy (nginx) in front of us so req.ip reflects the real client
+// address (from X-Forwarded-For) rather than the proxy's — required for per-IP login
+// rate limiting to work. Default to one hop; override with TRUST_PROXY if the topology
+// differs. Do NOT set to `true` (trust all hops) — that lets clients spoof X-Forwarded-For.
+app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 1);
+
 // Simple rate limiting for login attempts
 const loginAttempts = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
 
-app.use(cors());
+// CORS: browser calls from the web app are same-origin (nginx proxies /api to the
+// backend), so no cross-origin allowance is needed by default. Any cross-origin
+// browser origin that legitimately needs access can be allowlisted via CORS_ORIGINS
+// (comma-separated). Non-browser clients (mobile app, curl) ignore CORS entirely, so
+// route-level auth — not CORS — is what actually protects the data.
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, cb) {
+    // Allow non-browser / same-origin requests (no Origin header) and any explicitly
+    // allowlisted origin; reject everything else (no ACAO header emitted).
+    if (!origin || CORS_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(null, false);
+  },
+}));
 app.use(express.json());
 
 // Security headers
@@ -87,6 +115,10 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
     db.run(`ALTER TABLE users ADD COLUMN gotify_token TEXT`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN notification_days TEXT`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN telegram_chat_id TEXT`, () => {});
+    // Per-user notification server URLs — each user points at their own ntfy/Gotify
+    // server (falls back to the optional admin-set global default if left empty).
+    db.run(`ALTER TABLE users ADD COLUMN ntfy_url TEXT`, () => {});
+    db.run(`ALTER TABLE users ADD COLUMN gotify_url TEXT`, () => {});
     console.log('Database initialized');
   }
 });
@@ -95,12 +127,28 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
 const ensureRootUser = async () => {
   db.get('SELECT * FROM users WHERE username = ?', ['root'], async (err, user) => {
     if (!user) {
-      const hash = await bcrypt.hash('Qq123456', 10);
+      // Use an operator-supplied ROOT_PASSWORD, or generate a strong random one and
+      // print it ONCE at first boot — never ship a well-known default password.
+      let rootPassword = process.env.ROOT_PASSWORD;
+      let generated = false;
+      if (!rootPassword) {
+        rootPassword = crypto.randomBytes(12).toString('base64url');
+        generated = true;
+      }
+      const hash = await bcrypt.hash(rootPassword, 10);
       db.run(
         'INSERT INTO users (username, password, can_manage_users, origin, display_name) VALUES (?, ?, 1, ?, ?)',
         ['root', hash, 'local', 'root']
       );
-      console.log('Root user created.');
+      if (generated) {
+        console.log('====================================================================');
+        console.log('Root user created with a GENERATED password (shown only once):');
+        console.log('    ' + rootPassword);
+        console.log('Log in as root and change it immediately, or set ROOT_PASSWORD.');
+        console.log('====================================================================');
+      } else {
+        console.log('Root user created with the operator-supplied ROOT_PASSWORD.');
+      }
     }
   });
 };
@@ -266,11 +314,14 @@ app.get('/api/system-status', authRequired, requirePermission('can_manage_users'
 });
 
 // Unified search endpoint: IGDB + RAWG + TheGamesDB
-app.get('/api/games/search', async (req, res) => {
+app.get('/api/games/search', authRequired, async (req, res) => {
   const query = req.query.q;
   if (!query) {
     return res.status(400).json({ error: 'Missing search query' });
   }
+  // Escape double-quotes so a crafted query can't break out of the IGDB
+  // APIcalypse `search "..."` string literal (query injection into the IGDB call).
+  const safeQuery = String(query).replace(/["\\]/g, '\\$&');
   try {
     // IGDB request
     const hasIgdbCredentials = resolveApiKey('IGDB_CLIENT_ID') && resolveApiKey('IGDB_BEARER_TOKEN');
@@ -284,19 +335,14 @@ app.get('/api/games/search', async (req, res) => {
     
     if (!clientId || !bearerToken) {
       console.error('[IGDB] Credentials check failed:', {
-        clientId: clientId ? 'SET (length: ' + clientId.length + ')' : 'MISSING',
-        bearerToken: bearerToken ? 'SET (length: ' + bearerToken.length + ')' : 'MISSING'
-      });
-    } else {
-      console.log('[IGDB] Credentials verified:', {
-        clientId: 'SET (length: ' + clientId.length + ')',
-        bearerToken: 'SET (length: ' + bearerToken.length + ')'
+        clientId: clientId ? 'SET' : 'MISSING',
+        bearerToken: bearerToken ? 'SET' : 'MISSING'
       });
     }
     
     const igdbPromise = axios.post(
       'https://api.igdb.com/v4/games',
-      `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 20;`,
+      `search "${safeQuery}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 20;`,
       {
         headers: {
           'Client-ID': clientId,
@@ -495,8 +541,10 @@ app.get('/api/games/search', async (req, res) => {
 });
 
 // Test endpoint for IGDB connectivity
-app.get('/api/test/igdb', async (req, res) => {
+app.get('/api/test/igdb', authRequired, requirePermission('can_manage_users'), async (req, res) => {
   const testQuery = req.query.q || 'Mario';
+  // Escape quotes/backslashes so the query can't break out of the IGDB search literal.
+  const safeTestQuery = String(testQuery).replace(/["\\]/g, '\\$&');
   const hasClientId = !!resolveApiKey('IGDB_CLIENT_ID');
   const hasBearerToken = !!resolveApiKey('IGDB_BEARER_TOKEN');
   
@@ -519,7 +567,7 @@ app.get('/api/test/igdb', async (req, res) => {
   try {
     const response = await axios.post(
       'https://api.igdb.com/v4/games',
-      `search "${testQuery}"; fields id,name,first_release_date,cover.image_id; limit 5;`,
+      `search "${safeTestQuery}"; fields id,name,first_release_date,cover.image_id; limit 5;`,
       {
         headers: {
           'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
@@ -721,7 +769,7 @@ app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_
 });
 
 // Update a specific user's game with CrackRelease status and persist to DB
-app.post('/api/user/:username/games/:gameId/crackrelease-status', async (req, res) => {
+app.post('/api/user/:username/games/:gameId/crackrelease-status', authRequired, ownershipRequired, async (req, res) => {
   const { username, gameId } = req.params;
   const normalizedUsername = username ? username.toLowerCase() : '';
   if (!normalizedUsername || !gameId) {
@@ -767,13 +815,13 @@ function lookupCrackStatus(normalizedGameName) {
 }
 
 // Optional: check if CrackWatch cache is populated (for debugging "all unknown")
-app.get('/api/crack-status/cache-info', (req, res) => {
+app.get('/api/crack-status/cache-info', authRequired, (req, res) => {
   const keys = Object.keys(crackWatchCache);
   res.json({ count: keys.length, sampleKeys: keys.slice(0, 5) });
 });
 
 // Get crack status for a user's library (from cache only)
-app.get('/api/user/:username/crack-status', (req, res) => {
+app.get('/api/user/:username/crack-status', authRequired, ownershipRequired, (req, res) => {
   const { username } = req.params;
   const normalizedUsername = username ? username.toLowerCase() : '';
   if (!normalizedUsername) return res.status(400).json({ error: 'Missing username' });
@@ -795,7 +843,7 @@ app.get('/api/user/:username/crack-status', (req, res) => {
 });
 
 // Remove the in-memory cache for Steam prices
-app.get('/api/game-price/:steamAppId', async (req, res) => {
+app.get('/api/game-price/:steamAppId', authRequired, async (req, res) => {
   const { steamAppId } = req.params;
   if (!steamAppId) {
     return res.status(400).json({ error: 'Missing Steam App ID' });
@@ -980,17 +1028,18 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
   }
 }
 
-async function sendNtfy(title, message, topic, attachUrl) {
-  const { ntfy } = loadSettings();
-  if (!ntfy.url || !topic) return;
+async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
+  // Prefer the user's own ntfy server; fall back to the optional global default.
+  const url = (serverUrl && serverUrl.trim()) || loadSettings().ntfy?.url;
+  if (!url || !topic) return;
   const headers = { Title: title };
   if (attachUrl) headers.Attach = attachUrl;
-  await axios.post(`${ntfy.url.replace(/\/$/, '')}/${topic}`, message, { headers });
+  await axios.post(`${url.replace(/\/$/, '')}/${topic}`, message, { headers });
 }
 
-async function sendGotify(title, message, token, priority = 5, imageUrl) {
-  const { gotify } = loadSettings();
-  const url = gotify?.url;
+async function sendGotify(title, message, token, priority = 5, imageUrl, serverUrl) {
+  // Prefer the user's own Gotify server; fall back to the optional global default.
+  const url = (serverUrl && serverUrl.trim()) || loadSettings().gotify?.url;
   if (!url || !token) return;
   const body = { title, message, priority };
   if (imageUrl) {
@@ -1113,7 +1162,7 @@ async function notifyEvent(type, game, username, status) {
   
   // Get user details from database
   const userDetails = await new Promise((resolve, reject) => {
-    db.get('SELECT email, ntfy_topic, gotify_token, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
+    db.get('SELECT email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
       if (err) {
         reject(err);
       } else {
@@ -1124,7 +1173,9 @@ async function notifyEvent(type, game, username, status) {
 
   let userEmail = userDetails && userDetails.email;
   const userNtfy = userDetails && userDetails.ntfy_topic;
+  const userNtfyUrl = userDetails && userDetails.ntfy_url;
   const userGotifyToken = userDetails && userDetails.gotify_token;
+  const userGotifyUrl = userDetails && userDetails.gotify_url;
   const userTelegramChatId = userDetails && userDetails.telegram_chat_id;
 
   // If no email in database, try LDAP
@@ -1155,7 +1206,7 @@ async function notifyEvent(type, game, username, status) {
 
   if (userNtfy) {
     try {
-      await sendNtfy(title, message, userNtfy, coverUrl);
+      await sendNtfy(title, message, userNtfy, coverUrl, userNtfyUrl);
       console.log(`[Notify Event] Ntfy sent successfully to topic ${userNtfy} for user ${normalizedUsername}`);
     } catch (ntfyErr) {
       console.error(`[Notify Event] Error sending ntfy for user ${normalizedUsername}:`, ntfyErr);
@@ -1166,7 +1217,7 @@ async function notifyEvent(type, game, username, status) {
 
   if (userGotifyToken) {
     try {
-      await sendGotify(title, message, userGotifyToken, 5, coverUrl);
+      await sendGotify(title, message, userGotifyToken, 5, coverUrl, userGotifyUrl);
       console.log(`[Notify Event] Gotify sent successfully for user ${normalizedUsername}`);
     } catch (gotifyErr) {
       console.error(`[Notify Event] Error sending Gotify for user ${normalizedUsername}:`, gotifyErr);
@@ -1188,20 +1239,45 @@ async function notifyEvent(type, game, username, status) {
 }
 
 // --- Settings API ---
-app.get('/api/settings', (req, res) => {
-  res.json(loadSettings());
+app.get('/api/settings', authRequired, (req, res) => {
+  const s = loadSettings();
+  const isAdmin = !!req.user.can_manage_users;
+  // Never expose the apikeys block here — it holds the IGDB client secret and is served
+  // (masked) only by the admin-only GET /api/settings/apikeys endpoint.
+  const { apikeys, ...rest } = s;
+  if (isAdmin) {
+    // Admins manage server infrastructure and need the current values to edit them.
+    return res.json(rest);
+  }
+  // Non-admins configure their notifications entirely on the My Account page
+  // (personal ntfy/Gotify server URL + topic/token, Telegram chat ID). The server
+  // Settings sections are all administrator-only infrastructure, so a non-admin gets
+  // nothing sensitive here.
+  return res.json({});
 });
-app.post('/api/settings', express.json(), (req, res) => {
-  console.log('POST /api/settings called');
+// All server Settings sections are administrator-only. They hold secrets (SMTP/LDAP
+// credentials, Telegram bot token) or act as an optional global default that would
+// affect every user (the ntfy/Gotify server URLs) — per-user notification servers are
+// set on My Account instead.
+const ADMIN_ONLY_SETTINGS = ['smtp', 'ldap', 'telegram', 'ntfy', 'gotify'];
+app.post('/api/settings', authRequired, express.json(), (req, res) => {
+  console.log('POST /api/settings called by', req.user.username);
   try {
-    // Merge incoming sections with existing — only overwrite sections that were sent
+    const isAdmin = !!req.user.can_manage_users;
+    // If a non-admin tried to write an admin-only section, reject plainly.
+    if (!isAdmin && ADMIN_ONLY_SETTINGS.some(k => req.body[k] !== undefined)) {
+      return res.status(403).json({ error: 'Only administrators can change SMTP, LDAP, or Telegram settings.' });
+    }
+    // Merge incoming sections with existing — only overwrite sections that were sent,
+    // and only let admins overwrite the admin-only sections.
     const existing = loadSettings();
+    const canWrite = (k) => req.body[k] !== undefined && (isAdmin || !ADMIN_ONLY_SETTINGS.includes(k));
     const merged = {
-      smtp: req.body.smtp !== undefined ? req.body.smtp : (existing.smtp || {}),
-      ntfy: req.body.ntfy !== undefined ? req.body.ntfy : (existing.ntfy || {}),
-      gotify: req.body.gotify !== undefined ? req.body.gotify : (existing.gotify || {}),
-      ldap: req.body.ldap !== undefined ? req.body.ldap : (existing.ldap || {}),
-      telegram: req.body.telegram !== undefined ? req.body.telegram : (existing.telegram || {}),
+      smtp: canWrite('smtp') ? req.body.smtp : (existing.smtp || {}),
+      ldap: canWrite('ldap') ? req.body.ldap : (existing.ldap || {}),
+      telegram: canWrite('telegram') ? req.body.telegram : (existing.telegram || {}),
+      ntfy: canWrite('ntfy') ? req.body.ntfy : (existing.ntfy || {}),
+      gotify: canWrite('gotify') ? req.body.gotify : (existing.gotify || {}),
       apikeys: existing.apikeys || {},  // always preserve — managed via /api/settings/apikeys
     };
     saveSettings(merged);
@@ -1223,7 +1299,7 @@ function isReleaseInFuture(dateStr) {
 }
 
 // --- Add/update a game status for a user (with notification) ---
-app.post('/api/user/:username/games', async (req, res) => {
+app.post('/api/user/:username/games', authRequired, ownershipRequired, async (req, res) => {
   const { username } = req.params;
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -1320,7 +1396,7 @@ app.post('/api/user/:username/games', async (req, res) => {
 });
 
 // Debug endpoint to check game status
-app.get('/api/debug/user/:username/game/:gameId', (req, res) => {
+app.get('/api/debug/user/:username/game/:gameId', authRequired, ownershipRequired, (req, res) => {
   const { username, gameId } = req.params;
   const normalizedUsername = username ? username.toLowerCase() : '';
   
@@ -1384,7 +1460,7 @@ app.get('/api/user/me/games', authRequired, (req, res) => {
 });
 
 // Get all games for a user
-app.get('/api/user/:username/games', (req, res) => {
+app.get('/api/user/:username/games', authRequired, ownershipRequired, (req, res) => {
   const { username } = req.params;
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -1444,7 +1520,7 @@ app.get('/api/user/:username/games', (req, res) => {
 });
 
 // Remove a game from a user's list
-app.delete('/api/user/:username/games/:gameId', (req, res) => {
+app.delete('/api/user/:username/games/:gameId', authRequired, ownershipRequired, (req, res) => {
   const { username, gameId } = req.params;
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -1465,7 +1541,7 @@ app.delete('/api/user/:username/games/:gameId', (req, res) => {
 });
 
 // Reorder a game within the user's backlog (move up or down)
-app.put('/api/user/:username/games/:gameId/backlog-order', (req, res) => {
+app.put('/api/user/:username/games/:gameId/backlog-order', authRequired, ownershipRequired, (req, res) => {
   const { username, gameId } = req.params;
   const { direction } = req.body; // 'up' or 'down'
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -1500,7 +1576,7 @@ app.put('/api/user/:username/games/:gameId/backlog-order', (req, res) => {
 });
 
 // Reorder entire backlog by providing a new ordered array of game IDs
-app.put('/api/user/:username/backlog-reorder', (req, res) => {
+app.put('/api/user/:username/backlog-reorder', authRequired, ownershipRequired, (req, res) => {
   const { username } = req.params;
   const { order } = req.body; // array of game_ids in desired order
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -1529,7 +1605,7 @@ app.put('/api/user/:username/backlog-reorder', (req, res) => {
 });
 
 // Refresh metadata for all games in a user's library
-app.post('/api/user/:username/refresh-metadata', async (req, res) => {
+app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired, async (req, res) => {
   const { username } = req.params;
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -1563,11 +1639,13 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
         try {
           // Search for the game using the same logic as the search endpoint
           const query = game.game_name;
-          
+          // Escape quotes/backslashes in the stored name so it can't break out of the IGDB search literal.
+          const safeQuery = String(query).replace(/["\\]/g, '\\$&');
+
           // IGDB request
           const igdbPromise = axios.post(
             'https://api.igdb.com/v4/games',
-            `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
+            `search "${safeQuery}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
             {
               headers: {
                 'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
@@ -1847,7 +1925,7 @@ app.post('/api/user/:username/refresh-metadata', async (req, res) => {
 });
 
 // Refresh metadata for a specific game in a user's library
-app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) => {
+app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, ownershipRequired, async (req, res) => {
   const { username, gameId } = req.params;
   const normalizedUsername = username ? username.toLowerCase() : '';
 
@@ -1877,10 +1955,12 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', async (req, res) 
 
       try {
         const query = game.game_name;
+        // Escape quotes/backslashes in the stored name so it can't break out of the IGDB search literal.
+        const safeQuery = String(query).replace(/["\\]/g, '\\$&');
 
         const igdbPromise = axios.post(
           'https://api.igdb.com/v4/games',
-          `search "${query}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
+          `search "${safeQuery}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
           {
             headers: {
               'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
@@ -2145,6 +2225,17 @@ function requirePermission(permission) {
     next();
   };
 }
+// Enforce that the authenticated user may only act on their OWN :username-scoped
+// resources, unless they are an admin (can_manage_users). Usernames are normalized to
+// lowercase everywhere, so compare case-insensitively. Must run AFTER authRequired.
+function ownershipRequired(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+  const target = (req.params.username || '').toLowerCase();
+  const self = (req.user.username || '').toLowerCase();
+  if (target && target === self) return next();
+  if (req.user.can_manage_users) return next();
+  return res.status(403).json({ error: 'Forbidden' });
+}
 
 // --- Helper Functions ---
 
@@ -2294,7 +2385,7 @@ app.post('/api/auth/login', (req, res) => {
 
         let foundUser = null;
         searchRes.on('searchEntry', (entry) => {
-          console.log('[LDAP] Raw search entry received:', entry.toString());
+          console.log('[LDAP] Search entry received for user lookup.');
 
           // Manually construct the user object from the entry's properties.
           // This is more reliable than the .object getter.
@@ -2558,7 +2649,7 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
     // Get current user's email, ntfy topic, gotify token, and telegram chat id
     const userId = req.user.id;
     const userDetails = await new Promise((resolve, reject) => {
-      db.get('SELECT email, ntfy_topic, gotify_token, telegram_chat_id FROM users WHERE id = ?', [userId], (err, userRow) => {
+      db.get('SELECT email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id FROM users WHERE id = ?', [userId], (err, userRow) => {
         if (err) {
           reject(err);
         } else {
@@ -2587,7 +2678,7 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
     if (service === 'ntfy' || service === 'both') {
       if (userDetails?.ntfy_topic) {
         try {
-          await sendNtfy(title, message, userDetails.ntfy_topic, coverUrl);
+          await sendNtfy(title, message, userDetails.ntfy_topic, coverUrl, userDetails.ntfy_url);
           results.ntfy.sent = true;
           console.log(`[Test Notification] Ntfy sent successfully to topic ${userDetails.ntfy_topic}`);
         } catch (error) {
@@ -2603,7 +2694,7 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
     if (service === 'gotify' || service === 'both') {
       if (userDetails?.gotify_token) {
         try {
-          await sendGotify(title, message, userDetails.gotify_token, 5, coverUrl);
+          await sendGotify(title, message, userDetails.gotify_token, 5, coverUrl, userDetails.gotify_url);
           results.gotify.sent = true;
           console.log(`[Test Notification] Gotify sent successfully`);
         } catch (error) {
@@ -2853,7 +2944,7 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
 // --- Get current user's profile/settings ---
 app.get('/api/user/me', authRequired, (req, res) => {
   const userId = req.user.id;
-  db.get('SELECT id, username, email, ntfy_topic, gotify_token, telegram_chat_id, notification_days, display_name, shares_library FROM users WHERE id = ?', [userId], (err, row) => {
+  db.get('SELECT id, username, email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id, notification_days, display_name, shares_library FROM users WHERE id = ?', [userId], (err, row) => {
     if (err) return res.status(500).json({ error: 'DB error' });
     if (!row) return res.status(404).json({ error: 'User not found' });
     let notificationDays = [0, 7, 30];
@@ -2866,9 +2957,11 @@ app.get('/api/user/me', authRequired, (req, res) => {
 // Authenticated user can update their own email/ntfy_topic/gotify_token/telegram_chat_id/notification_days
 app.put('/api/user/me/settings', authRequired, (req, res) => {
   const userId = req.user.id;
-  const { email, ntfy_topic, gotify_token, telegram_chat_id, notification_days } = req.body;
+  const { email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id, notification_days } = req.body;
   const updates = [];
   const params = [];
+  // Only accept http(s) URLs for the per-user notification servers (or empty to clear).
+  const isValidServerUrl = (u) => u === '' || /^https?:\/\/\S+$/i.test(u);
   if (typeof email !== 'undefined') {
     updates.push('email = ?');
     params.push(email);
@@ -2877,9 +2970,23 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
     updates.push('ntfy_topic = ?');
     params.push(ntfy_topic);
   }
+  if (typeof ntfy_url !== 'undefined') {
+    if (!isValidServerUrl(String(ntfy_url).trim())) {
+      return res.status(400).json({ error: 'ntfy_url must be an http(s) URL or empty' });
+    }
+    updates.push('ntfy_url = ?');
+    params.push(String(ntfy_url).trim());
+  }
   if (typeof gotify_token !== 'undefined') {
     updates.push('gotify_token = ?');
     params.push(gotify_token);
+  }
+  if (typeof gotify_url !== 'undefined') {
+    if (!isValidServerUrl(String(gotify_url).trim())) {
+      return res.status(400).json({ error: 'gotify_url must be an http(s) URL or empty' });
+    }
+    updates.push('gotify_url = ?');
+    params.push(String(gotify_url).trim());
   }
   if (typeof telegram_chat_id !== 'undefined') {
     updates.push('telegram_chat_id = ?');
@@ -2980,7 +3087,7 @@ async function sendReleaseReminder(username, game, days) {
   
   // Get user's ntfy topic, gotify token, and telegram chat id
   const userPushSettings = await new Promise((resolve) => {
-    db.get('SELECT ntfy_topic, gotify_token, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
+    db.get('SELECT ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
       if (err || !userRow) {
         resolve({});
       } else {
@@ -2991,7 +3098,7 @@ async function sendReleaseReminder(username, game, days) {
 
   if (userPushSettings.ntfy_topic) {
     try {
-      await sendNtfy(title, message, userPushSettings.ntfy_topic, coverUrl);
+      await sendNtfy(title, message, userPushSettings.ntfy_topic, coverUrl, userPushSettings.ntfy_url);
       console.log(`[Release Reminder] Ntfy sent successfully to topic ${userPushSettings.ntfy_topic} for user ${normalizedUsername}`);
     } catch (error) {
       console.error(`[Release Reminder] Ntfy failed for user ${normalizedUsername}:`, error.message);
@@ -3002,7 +3109,7 @@ async function sendReleaseReminder(username, game, days) {
 
   if (userPushSettings.gotify_token) {
     try {
-      await sendGotify(title, message, userPushSettings.gotify_token, 5, coverUrl);
+      await sendGotify(title, message, userPushSettings.gotify_token, 5, coverUrl, userPushSettings.gotify_url);
       console.log(`[Release Reminder] Gotify sent successfully for user ${normalizedUsername}`);
     } catch (error) {
       console.error(`[Release Reminder] Gotify failed for user ${normalizedUsername}:`, error.message);
@@ -3216,7 +3323,7 @@ app.get('/api/user/:username/share', authRequired, (req, res) => {
 });
 
 // Manual trigger for release status updates (for testing)
-app.post('/api/admin/check-releases', authRequired, requirePermission('manage_users'), (req, res) => {
+app.post('/api/admin/check-releases', authRequired, requirePermission('can_manage_users'), (req, res) => {
   console.log('[MANUAL API] Running release status check...');
   let updatedGames = [];
   let notificationsSent = [];

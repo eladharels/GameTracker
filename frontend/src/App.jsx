@@ -19,6 +19,42 @@ const ACCENT_PRESETS = [
 // Dynamic API base URL: always hit the current origin's /api
 const API_BASE = `${window.location.origin}/api`;
 
+// Global auth: attach the stored JWT to every request to our own API so the many
+// call sites don't each have to add the Authorization header (the backend now
+// requires auth on the library/search/settings routes). Only same-origin /api
+// requests get the token — never leak it to external hosts (IGDB/Steam/etc.).
+axios.interceptors.request.use((config) => {
+  try {
+    const url = config.url || '';
+    const isOwnApi = url.startsWith(API_BASE) || url.startsWith('/api');
+    if (isOwnApi) {
+      const token = localStorage.getItem('token');
+      if (token) {
+        config.headers = config.headers || {};
+        if (!config.headers.Authorization) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      }
+    }
+  } catch { /* never let header wiring break a request */ }
+  return config;
+});
+
+// If the server rejects our token (expired/invalid/secret rotated), drop it and send
+// the user back to login instead of leaving the app in a broken half-authed state.
+axios.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err?.response?.status === 401 && localStorage.getItem('token')) {
+      localStorage.removeItem('token');
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login');
+      }
+    }
+    return Promise.reject(err);
+  }
+);
+
 const STATUSES = ['wishlist', 'playing', 'done', 'backlog']
 
 // Date-only future check (YYYY-MM-DD parses as UTC midnight; compare date-only,
@@ -1728,7 +1764,7 @@ function AccountPage() {
   const token = localStorage.getItem('token')
   const authH = { headers: { Authorization: `Bearer ${token}` } }
 
-  const [profile, setProfile] = useState({ email: '', ntfy_topic: '', gotify_token: '', telegram_chat_id: '', notification_days: [0, 7, 30] })
+  const [profile, setProfile] = useState({ email: '', ntfy_url: '', ntfy_topic: '', gotify_url: '', gotify_token: '', telegram_chat_id: '', notification_days: [0, 7, 30] })
   const [saved, setSaved] = useState({})   // { channels: true/null, schedule: true/null }
   const [saving, setSaving] = useState({})
   const [error, setError] = useState({})
@@ -1738,7 +1774,9 @@ function AccountPage() {
     axios.get(`${API_BASE}/user/me`, authH)
       .then(res => setProfile({
         email:             res.data.email || '',
+        ntfy_url:          res.data.ntfy_url || '',
         ntfy_topic:        res.data.ntfy_topic || '',
+        gotify_url:        res.data.gotify_url || '',
         gotify_token:      res.data.gotify_token || '',
         telegram_chat_id:  res.data.telegram_chat_id || '',
         notification_days: Array.isArray(res.data.notification_days) ? res.data.notification_days : [0, 7, 30],
@@ -1799,8 +1837,16 @@ function AccountPage() {
               <input className="ent-input" type="email" value={profile.email} onChange={e => setProfile(p => ({ ...p, email: e.target.value }))} placeholder="you@example.com" />
             </div>
             <div className="ent-field">
+              <label className="ent-label">NTFY Server URL</label>
+              <input className="ent-input" type="url" inputMode="url" value={profile.ntfy_url} onChange={e => setProfile(p => ({ ...p, ntfy_url: e.target.value }))} placeholder="https://ntfy.sh" />
+            </div>
+            <div className="ent-field">
               <label className="ent-label">NTFY Topic</label>
               <input className="ent-input" value={profile.ntfy_topic} onChange={e => setProfile(p => ({ ...p, ntfy_topic: e.target.value }))} placeholder="my-gametracker-alerts" />
+            </div>
+            <div className="ent-field">
+              <label className="ent-label">Gotify Server URL</label>
+              <input className="ent-input" type="url" inputMode="url" value={profile.gotify_url} onChange={e => setProfile(p => ({ ...p, gotify_url: e.target.value }))} placeholder="https://gotify.example.com" />
             </div>
             <div className="ent-field">
               <label className="ent-label">Gotify Token</label>
@@ -1815,7 +1861,7 @@ function AccountPage() {
             <button
               className="ent-save-btn"
               disabled={!!saving.channels}
-              onClick={() => saveSection('channels', { email: profile.email, ntfy_topic: profile.ntfy_topic, gotify_token: profile.gotify_token, telegram_chat_id: profile.telegram_chat_id })}
+              onClick={() => saveSection('channels', { email: profile.email, ntfy_url: profile.ntfy_url, ntfy_topic: profile.ntfy_topic, gotify_url: profile.gotify_url, gotify_token: profile.gotify_token, telegram_chat_id: profile.telegram_chat_id })}
             >
               {saving.channels ? <><FaSync className="ent-spin" /> Saving…</> : 'Save Channels'}
             </button>
@@ -2100,8 +2146,10 @@ function SettingsPage() {
   const [activeTab, setActiveTab] = useState(() => {
     try {
       const tok = localStorage.getItem('token')
-      return JSON.parse(atob(tok.split('.')[1])).can_manage_users ? 'email' : 'ntfy'
-    } catch { return 'ntfy' }
+      // Admins land on Email; non-admins only have the Diagnostics tab in Settings
+      // (all notification config moved to My Account).
+      return JSON.parse(atob(tok.split('.')[1])).can_manage_users ? 'email' : 'testing'
+    } catch { return 'testing' }
   })
 
   const token   = localStorage.getItem('token')
@@ -2232,9 +2280,12 @@ function SettingsPage() {
   // ── Nav definition — adminOnly items are hidden from non-admin users
   const NAV = [
     { key: 'email',    label: 'Email',       sub: 'SMTP',         icon: FaEnvelope,    data: smtp,     adminOnly: true },
-    { key: 'ntfy',     label: 'Push',        sub: 'NTFY',         icon: FaBell,        data: ntfy },
-    { key: 'gotify',   label: 'Gotify',      sub: 'Gotify Push',  icon: FaBell,        data: gotify },
-    { key: 'telegram', label: 'Telegram',    sub: 'Telegram Bot', icon: FaTelegram,    data: telegram },
+    // ntfy/gotify/telegram are server infrastructure (global default URL / bot token).
+    // Regular users set their own notification server per-user in My Account, so these
+    // are administrator-only here.
+    { key: 'ntfy',     label: 'Push',        sub: 'NTFY',         icon: FaBell,        data: ntfy,     adminOnly: true },
+    { key: 'gotify',   label: 'Gotify',      sub: 'Gotify Push',  icon: FaBell,        data: gotify,   adminOnly: true },
+    { key: 'telegram', label: 'Telegram',    sub: 'Telegram Bot', icon: FaTelegram,    data: telegram, adminOnly: true },
     { key: 'ldap',     label: 'Directory',   sub: 'LDAP / AD',    icon: FaLock,        data: ldap,     adminOnly: true },
     { key: 'apikeys',  label: 'API Keys',    sub: 'Providers',    icon: FaKey,         data: null,     adminOnly: true },
     { key: 'testing',  label: 'Diagnostics', sub: 'Testing',      icon: FaCheckCircle, data: null },

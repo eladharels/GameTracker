@@ -15,7 +15,9 @@ services:
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}
       - RAWG_API_KEY=${RAWG_API_KEY}
-      - JWT_SECRET=${JWT_SECRET:-supersecretkey}
+      # No insecure default — JWT_SECRET must be provided (via .env or the shell env).
+      # The backend refuses to start if it is missing, too short, or 'supersecretkey'.
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set (see .env)}
     security_opt:
       - no-new-privileges:true
     # read_only: true cannot be set — SQLite requires a writable /app/ directory

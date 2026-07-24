@@ -9,6 +9,103 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-07-25 (Staging CHANGE #66 — add .dockerignore; CISO condition C1) ---
+Summary: Add .dockerignore so a local `docker build` cannot bake .env (real IGDB/RAWG
+         API keys), gametracker.db, or settings.json into the backend image. Resolves
+         the CISO "APPROVED WITH CONDITIONS" item from the #62-#65 migration review.
+
+Files changed in production:
+  • .dockerignore   (NEW — identical to staging's)
+
+What was done:
+  • Added .dockerignore excluding: .env / .env.local / .env.*.local (secrets); gametracker.db*,
+    settings.json, sent_notifications.json, crackwatch-cache.json, system-status-cache.json
+    (runtime state, volume-mounted); node_modules, frontend/node_modules, dist, frontend/dist
+    (installed/built in image); .git/.github/.gitleaks.toml/.semgrep.yml/.trivyignore and
+    editor/OS/log cruft. Verified package*.json and index.js are NOT excluded (build still works).
+
+Risk note (accurate scope):
+  • The CI-DEPLOYED production image was NOT exposed: CI builds from actions/checkout (git-tracked
+    files only) and .env is gitignored, so it was never in the build context. This is pre-existing
+    hardening for LOCAL builds, not a regression from the #62-#65 migration.
+  • ACTION (operator decision): if any backend image built with a LOCAL `docker build .` was ever
+    pushed/shared, rotate IGDB_CLIENT_ID / IGDB_BEARER_TOKEN / RAWG_API_KEY and assume compromised.
+    If only CI-built images were ever deployed, no rotation is required.
+  • JWT_SECRET is injected via compose env (not in .env), so it was never baked into any image.
+
+--- APPLIED 2026-07-25 (Staging CHANGES #62, #63, #64, #65 — security hardening + CVE/CI fixes) ---
+Summary: Full security-hardening pass promoted from staging. Closes all unauthenticated
+         API access (forgeable JWT, anonymous library + settings access, secret leakage),
+         adds ownership checks, moves notification-server config to per-user, and fixes
+         the Trivy CVE/npm-bundle build issues. Validated end-to-end in staging first.
+
+Files changed in production:
+  • index.js                       (copied from staging — the entire delta was #62; verified
+                                     no production-specific divergence existed in this file)
+  • frontend/src/App.jsx           (hand-applied #62 — axios auth interceptors, per-user
+                                     ntfy/Gotify Server URL fields in My Account, ntfy/gotify/
+                                     telegram Settings tabs made admin-only, non-admin default
+                                     tab -> Diagnostics. STAGING badge intentionally NOT added.)
+  • frontend/SharedLibrary.jsx     (copied — API_BASE -> `${window.location.origin}/api`)
+  • package.json                   (copied — overrides add brace-expansion>=5.0.7, tar>=7.5.21)
+  • package-lock.json              (copied — brace-expansion 5.0.7, tar 7.5.21 both entries)
+  • Dockerfile                     (hand-applied #65 — remove global npm+corepack+npm cache
+                                     after prod install; kept prod's /data/ chown comment)
+  • docker-compose.yaml            (JWT_SECRET default removed -> ${JWT_SECRET:?...} fail-fast;
+                                     prod ports 3000/8080, image :latest, NODE_ENV=production
+                                     all left unchanged)
+
+What was done (maps to staging STAGING_CHANGELOG.txt entries):
+  #62 SECURITY HARDENING:
+    • JWT_SECRET: no hardcoded fallback in index.js OR docker-compose.yaml; backend exits
+      if it is missing / <16 chars / == 'supersecretkey'.
+    • ownershipRequired middleware added; every /api/user/:username/* library route now
+      requires authRequired + ownership (self-or-admin): add/list/delete game, backlog-order,
+      backlog-reorder, both refresh-metadata, crackrelease-status, crack-status, debug route.
+    • Data routes now require auth: /api/games/search, /api/game-price, /api/crack-status/
+      cache-info (auth); /api/test/igdb (admin). IGDB search query escaped at all 4 sites.
+    • GET/POST /api/settings: authRequired; apikeys never returned here; secrets hidden from
+      non-admins (they get {}); ALL server sections (smtp/ldap/telegram/ntfy/gotify) admin-only
+      to write.
+    • Broken gate fixed: /api/admin/check-releases requirePermission('can_manage_users').
+    • CORS -> env allowlist (CORS_ORIGINS, deny-by-default cross-origin); trust proxy set to 1
+      (real client IP for the login rate limiter); root user seeded from ROOT_PASSWORD or a
+      random printed-once password (no more Qq123456); trimmed credential logging.
+    • Per-user notification servers: users.ntfy_url + users.gotify_url columns (idempotent
+      ALTERs); sendNtfy/sendGotify take a per-user serverUrl (fallback to global default);
+      wired at all three send sites (notifyEvent, test-notification, sendReleaseReminder);
+      GET /api/user/me + PUT /api/user/me/settings handle the new fields (http(s) validated).
+    • Frontend: one global axios request interceptor attaches the JWT to same-origin /api
+      calls (so all existing call sites keep working); a 401 response interceptor logs out.
+  #63/#64 CVE FIXES: overrides brace-expansion>=5.0.7 (CVE-2026-13149) and tar>=7.5.21
+      (CVE-2026-59873 CRITICAL, CVE-2026-59874 HIGH); lockfile bumped to match.
+  #65 ROOT-CAUSE BUILD FIX: the Trivy CRITICAL/HIGH were in npm's OWN bundled deps
+      (global npm@10 bundles tar/brace-expansion/sigstore) — app overrides can't touch them.
+      npm is build-time only, so it (and corepack + npm cache) are removed after install.
+
+*** OPERATIONAL — REQUIRED BEFORE/AT DEPLOY (production repo) ***
+  1. Set a GitHub Actions secret `JWT_SECRET` in the PRODUCTION repo (Settings -> Secrets
+     and variables -> Actions), strong value >=16 chars. The prod deploy job already passes
+     `JWT_SECRET: ${{ secrets.JWT_SECRET }}` (workflow line ~387) and the compose now fails
+     fast if it is empty — so the deploy WILL fail until this secret exists. (This mirrors
+     exactly what happened in staging.)
+  2. Rotating the secret invalidates all existing sessions — every web user AND the mobile
+     app must log in again. Announce/coordinate. The mobile app already sends its JWT on all
+     calls and builds URLs with the logged-in username, so it satisfies the new ownership
+     checks after re-login — but VERIFY mobile flows post-deploy (search/list/add/delete/
+     backlog/refresh) since production is what the mobile app talks to.
+  3. (Optional) one-time DB backfill is NOT needed for this change. No schema migration beyond
+     the idempotent ntfy_url/gotify_url ALTERs, which run automatically on boot.
+
+Deploy: normal push-to-main pipeline. Post-deploy health: GET /api/health -> {"status":"ok"}
+(the deploy job waits on :3000/api/health). Then verify: fresh login, library load/add/status/
+backlog/refresh, search, prices, System Status (admin), and a My Account notification test
+with a per-user ntfy/Gotify server URL.
+
+Review status: CISO + Architect + UI/UX approved in staging (#62). Production migration
+re-reviewed by all three (this promotion). Staging ran green through the full CI pipeline
+(secret-scan, semgrep, trivy x2, smoke test) and deployed successfully before this promotion.
+
 --- APPLIED 2026-07-01 (Staging CHANGE #61 — CI: suppress Semgrep github-actions-mutable-action-tag) ---
 Summary: The Semgrep `--config auto` community ruleset added a BLOCKING rule that
          flags mutable action tags (actions/checkout@v4, etc.), failing every push.
