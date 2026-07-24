@@ -24,7 +24,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Build tool**: Vite 5
 - **HTTP client**: Axios
 - **Icons**: react-icons
-- **Styling**: Custom CSS, glassmorphism dark theme, 5 accent color presets (Sky/Purple/Green/Orange/Pink)
+- **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
 - **Entry point**: `frontend/src/App.jsx` (~2450 lines — single large component)
 
 ### Infrastructure
@@ -91,7 +91,9 @@ GameTracker/
 | password | TEXT | bcrypt hash; NULL for LDAP users |
 | can_manage_users | INTEGER | Admin flag (0/1) |
 | email | TEXT | For notifications |
+| ntfy_url | TEXT | Per-user ntfy **server URL** (My Account); falls back to global default if empty |
 | ntfy_topic | TEXT | User-specific ntfy topic (personal, set in My Account) |
+| gotify_url | TEXT | Per-user Gotify **server URL** (My Account); falls back to global default if empty |
 | gotify_token | TEXT | User-specific Gotify app token (personal, set in My Account) |
 | telegram_chat_id | TEXT | User-specific Telegram chat ID (personal, set in My Account) |
 | created_at | TEXT | ISO timestamp |
@@ -155,10 +157,13 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 
 - **Local auth**: bcrypt-hashed passwords stored in SQLite
 - **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure
-- **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`
-- **Rate limiting**: 5 failed login attempts → 15-minute IP lockout
-- **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy
-- **Default root credentials**: username `root`, password `Qq123456` (change immediately on first run)
+- **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
+- **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
+- **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
+- **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
+- **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy (CSP/HSTS from nginx)
+- **Root user**: seeded from `ROOT_PASSWORD`, else a random password printed once at first boot (no hardcoded default; existing DBs keep their current root password)
+- **Secrets never in the image**: `.dockerignore` excludes `.env`, the DB, and `settings.json` from the build context
 
 ---
 
@@ -169,15 +174,15 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 - **Backlog ordering**: Drag-and-drop reordering for the backlog queue with position badges
 - **Steam pricing**: Weekly price sync for all library games with Steam App IDs
 - **Release notifications**: Daily cron checks; sends reminders per user-configured schedule (default 0/7/30 days) via email, ntfy, Gotify, and Telegram, with game cover images
-- **Gotify push notifications**: Self-hosted push support; server URL in Settings, per-user token in My Account
-- **Telegram push notifications**: Bot-based push support; bot token in Settings, per-user chat ID in My Account; cover images via sendPhoto
+- **Per-user notification servers**: each user sets their own **ntfy/Gotify server URL** (+ topic/token) in My Account; the `settings.json` ntfy/Gotify URL is only an optional admin-set default fallback
+- **Telegram push notifications**: Bot-based push support; bot token in Settings (admin-only), per-user chat ID in My Account; cover images via sendPhoto
 - **CrackWatch integration**: Daily cache of DRM/crack status for all games; shown on library cards
 - **Library sharing**: Share your game library (read-only) with specific other users
 - **Admin panel**: Create/edit/delete users, manage permissions, LDAP sync
 - **Metadata refresh**: Manual and automatic refresh of game info from source APIs
 - **Widescreen layout toggle**: Sidebar button to expand to widescreen; persisted to localStorage
-- **My Account page**: Per-user notification channels (email, ntfy topic, Gotify token, Telegram chat ID) and reminder schedule
-- **Settings page**: Server infrastructure — SMTP, ntfy, Gotify, Telegram bot token, LDAP, **API Keys** (admin-only)
+- **My Account page**: Per-user notification setup — email, **ntfy server URL + topic**, **Gotify server URL + token**, Telegram chat ID, and reminder schedule
+- **Settings page**: Server infrastructure, **admin-only** — SMTP, LDAP, API Keys, and the optional default ntfy/Gotify/Telegram server config. Non-admins see only the **Diagnostics** tab (test their own channels).
 - **System Status page** (admin-only): Real-time connectivity check for all 6 external services (IGDB, RAWG, TheGamesDB, Steam, CrackWatch, Database). Shows HTTP status code, last-OK timestamp, provider info, latency. Persists last-OK times to `system-status-cache.json`.
 
 ---
@@ -190,10 +195,17 @@ IGDB_CLIENT_ID=<twitch_client_id>
 IGDB_BEARER_TOKEN=<twitch_bearer_token>
 RAWG_API_KEY=<rawg_api_key>
 THEGAMESDB_API_KEY=<optional>
-JWT_SECRET=<strong_random_secret>
+JWT_SECRET=<strong_random_secret>   # REQUIRED, >=16 chars, not 'supersecretkey' — backend exits without it
 PORT=3000
 NODE_ENV=production
+# Optional:
+# ROOT_PASSWORD=<fresh-DB root password; random-printed-once if unset>
+# CORS_ORIGINS=<comma-separated cross-origin allowlist; usually empty (same-origin app)>
+# TRUST_PROXY=<reverse-proxy hop count for the login rate limiter; default 1>
 ```
+> In deployment `JWT_SECRET` (and the API keys) come from **GitHub Actions secrets** injected into the
+> compose env; the compose uses `${JWT_SECRET:?...}` (fail-fast). `.env` is gitignored and excluded from
+> images via `.dockerignore`.
 
 ### `settings.json` (Runtime, managed via Admin UI)
 ```json

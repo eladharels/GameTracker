@@ -1,5 +1,11 @@
 # Security Fixes - GameTracker Application
 
+> **Note (2026-07):** This file documents an early, narrow fix (empty-credentials login validation).
+> For the July 2026 platform-wide security-hardening pass — unauthenticated-route lockdown, ownership
+> checks, JWT fail-fast, settings/secret exposure, per-user notification servers, CVE/image fixes,
+> and the operational runbook — see **[`SECURITY_HARDENING_2026-07.md`](SECURITY_HARDENING_2026-07.md)**
+> (and `PRODUCTION_CHANGELOG.txt`).
+
 ## Critical Security Issue Fixed
 
 **Problem**: Users could attempt to log in with a username but no password, allowing the authentication request to proceed through the system.
