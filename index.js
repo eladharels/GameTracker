@@ -73,9 +73,39 @@ app.use((req, res, next) => {
 // Initialize SQLite DB
 const db = new sqlite3.Database(DBSOURCE, (err) => {
   if (err) {
-    console.error('Could not connect to database', err);
-  } else {
-    db.run(`CREATE TABLE IF NOT EXISTS users (
+    console.error('[FATAL] Could not connect to database:', err.message);
+    process.exit(1);
+  }
+});
+
+// Schema creation + migrations.
+//
+// Everything here MUST run inside db.serialize(). node-sqlite3 defaults to
+// PARALLEL mode, where queued statements may execute out of order — so the
+// ALTER TABLE migrations were racing the CREATE TABLE statements above them and
+// losing, failing with "no such table" on a FRESH database. Their error callbacks
+// were empty (`() => {}`), so every failure was swallowed silently and a brand-new
+// install came up missing user_games.backlog_order, users.telegram_chat_id,
+// users.ntfy_url and users.gotify_url — breaking add-game, backlog ordering and
+// the whole per-user notification feature. Long-lived databases were unaffected
+// because they were migrated incrementally as each column was introduced, which is
+// why this stayed hidden. The CI smoke test only asserts /api/health, so it passed.
+function initializeSchema(done) {
+  // SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so re-running a
+  // migration against an already-migrated database is EXPECTED to fail with
+  // exactly "duplicate column name". Anything else is a real fault and is logged
+  // rather than discarded.
+  const migrate = (sql) => db.run(sql, (err) => {
+    if (err && !/duplicate column name/i.test(err.message)) {
+      console.error(`[DB] Migration failed: ${sql.trim()} -> ${err.message}`);
+    }
+  });
+  const create = (label, sql) => db.run(sql, (err) => {
+    if (err) console.error(`[DB] Could not create ${label}:`, err.message);
+  });
+
+  db.serialize(() => {
+    create('users', `CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE,
       password TEXT,
@@ -89,7 +119,7 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
       shares_library INTEGER DEFAULT 0,
       notification_days TEXT DEFAULT '[0,7,30]'
     )`);
-    db.run(`CREATE TABLE IF NOT EXISTS user_games (
+    create('user_games', `CREATE TABLE IF NOT EXISTS user_games (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
       game_id INTEGER,
@@ -104,28 +134,46 @@ const db = new sqlite3.Database(DBSOURCE, (err) => {
       UNIQUE(user_id, game_id),
       FOREIGN KEY(user_id) REFERENCES users(id)
     )`);
+    create('user_shares', `CREATE TABLE IF NOT EXISTS user_shares (
+      from_user TEXT,
+      to_user TEXT,
+      shared_at TEXT,
+      PRIMARY KEY (from_user, to_user),
+      FOREIGN KEY (from_user) REFERENCES users(username),
+      FOREIGN KEY (to_user) REFERENCES users(username)
+    )`);
+
     // Add columns if missing (for migrations)
-    db.run(`ALTER TABLE users ADD COLUMN origin TEXT DEFAULT 'local'`, () => {});
-    db.run(`ALTER TABLE users ADD COLUMN display_name TEXT`, () => {});
-    db.run(`ALTER TABLE user_games ADD COLUMN steam_app_id TEXT`, () => {});
-    db.run(`ALTER TABLE user_games ADD COLUMN last_price TEXT`, () => {});
-    db.run(`ALTER TABLE user_games ADD COLUMN last_price_updated TEXT`, () => {});
-    db.run(`ALTER TABLE user_games ADD COLUMN crack_status TEXT`, () => {});
-    db.run(`ALTER TABLE user_games ADD COLUMN backlog_order INTEGER`, () => {});
-    db.run(`ALTER TABLE users ADD COLUMN gotify_token TEXT`, () => {});
-    db.run(`ALTER TABLE users ADD COLUMN notification_days TEXT`, () => {});
-    db.run(`ALTER TABLE users ADD COLUMN telegram_chat_id TEXT`, () => {});
+    migrate(`ALTER TABLE users ADD COLUMN origin TEXT DEFAULT 'local'`);
+    migrate(`ALTER TABLE users ADD COLUMN display_name TEXT`);
+    migrate(`ALTER TABLE user_games ADD COLUMN steam_app_id TEXT`);
+    migrate(`ALTER TABLE user_games ADD COLUMN last_price TEXT`);
+    migrate(`ALTER TABLE user_games ADD COLUMN last_price_updated TEXT`);
+    migrate(`ALTER TABLE user_games ADD COLUMN crack_status TEXT`);
+    migrate(`ALTER TABLE user_games ADD COLUMN backlog_order INTEGER`);
+    migrate(`ALTER TABLE users ADD COLUMN gotify_token TEXT`);
+    migrate(`ALTER TABLE users ADD COLUMN notification_days TEXT`);
+    migrate(`ALTER TABLE users ADD COLUMN telegram_chat_id TEXT`);
     // Per-user notification server URLs — each user points at their own ntfy/Gotify
     // server (falls back to the optional admin-set global default if left empty).
-    db.run(`ALTER TABLE users ADD COLUMN ntfy_url TEXT`, () => {});
-    db.run(`ALTER TABLE users ADD COLUMN gotify_url TEXT`, () => {});
-    console.log('Database initialized');
-  }
-});
+    migrate(`ALTER TABLE users ADD COLUMN ntfy_url TEXT`);
+    migrate(`ALTER TABLE users ADD COLUMN gotify_url TEXT`);
+
+    // Runs last in the serialized queue: every statement above has completed.
+    db.run('SELECT 1', () => {
+      console.log('Database initialized');
+      if (done) done();
+    });
+  });
+}
 
 // Ensure root user exists
 const ensureRootUser = async () => {
   db.get('SELECT * FROM users WHERE username = ?', ['root'], async (err, user) => {
+    if (err) {
+      console.error('[FATAL] Could not check for the root user:', err.message);
+      return;
+    }
     if (!user) {
       // Use an operator-supplied ROOT_PASSWORD, or generate a strong random one and
       // print it ONCE at first boot — never ship a well-known default password.
@@ -152,9 +200,43 @@ const ensureRootUser = async () => {
     }
   });
 };
-ensureRootUser();
 
-// Helper: get or create user
+// Schema first, THEN the root user — ensureRootUser queries `users`, so running it
+// before the tables exist raced the schema and failed with "no such table".
+initializeSchema(() => ensureRootUser());
+
+// Helper: look up a user WITHOUT creating one.
+//
+// Use this everywhere except the LDAP login path. `getOrCreateUser` below INSERTs
+// on a miss, so using it to *read* meant any request naming an unknown user
+// silently provisioned a passwordless account — which then showed up in
+// /api/all-users and the library-sharing picker. Reads call this and 404 instead.
+//
+// Calls back with (null, null) when the user does not exist; that is not an error.
+function findUser(username, cb) {
+  const normalizedUsername = username ? String(username).toLowerCase() : '';
+  if (!normalizedUsername) return cb(null, null);
+  db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername], (err, user) => {
+    if (err) return cb(err);
+    cb(null, user || null);
+  });
+}
+
+// Wrapper for the common route shape: resolve :username or end the response.
+// Returns true when the caller should stop (a response has already been sent).
+function withExistingUser(res, username, cb) {
+  findUser(username, (err, user) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    cb(user);
+  });
+}
+
+// Helper: get or create user.
+//
+// ONLY for the LDAP login path, where a successful directory authentication must
+// provision a local row for a first-time user. Everything else must use findUser
+// / withExistingUser — see the note above.
 function getOrCreateUser(username, cb, opts = {}) {
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
@@ -176,38 +258,19 @@ function getOrCreateUser(username, cb, opts = {}) {
   });
 }
 
-// Health check endpoint
+// Health check endpoint.
+//
+// UNAUTHENTICATED — it is the deploy gate and the container healthcheck, so it must
+// stay open. That means it must also stay boring: it used to return the user count,
+// the root account's id and username, and the raw DB error message to anyone who
+// asked. Operational detail belongs in the admin-only /api/system-status.
 app.get('/api/health', (req, res) => {
-  // Check database connection
-  db.get('SELECT COUNT(*) as count FROM users', [], (err, result) => {
+  db.get('SELECT 1', [], (err) => {
     if (err) {
-      console.error('[Health] Database error:', err);
-      return res.status(500).json({ 
-        status: 'error', 
-        message: 'Database connection failed',
-        error: err.message 
-      });
+      console.error('[Health] Database error:', err.message);
+      return res.status(500).json({ status: 'error' });
     }
-    
-    // Check if root user exists
-    db.get('SELECT id, username FROM users WHERE username = ?', ['root'], (err, rootUser) => {
-      if (err) {
-        console.error('[Health] Error checking root user:', err);
-        return res.status(500).json({ 
-          status: 'error', 
-          message: 'Database error checking root user',
-          error: err.message 
-        });
-      }
-      
-      res.json({ 
-        status: 'ok',
-        database: 'connected',
-        totalUsers: result.count,
-        rootUser: rootUser ? { id: rootUser.id, username: rootUser.username } : null,
-        timestamp: new Date().toISOString()
-      });
-    });
+    res.json({ status: 'ok' });
   });
 });
 
@@ -775,8 +838,7 @@ app.post('/api/user/:username/games/:gameId/crackrelease-status', authRequired, 
   if (!normalizedUsername || !gameId) {
     return res.status(400).json({ error: 'Missing username or gameId' });
   }
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
+  withExistingUser(res, normalizedUsername, (user) => {
     db.get('SELECT game_name FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, row) => {
       if (err) return res.status(500).json({ error: 'DB error' });
       if (!row) return res.status(404).json({ error: 'Game not found for this user' });
@@ -826,8 +888,7 @@ app.get('/api/user/:username/crack-status', authRequired, ownershipRequired, (re
   const normalizedUsername = username ? username.toLowerCase() : '';
   if (!normalizedUsername) return res.status(400).json({ error: 'Missing username' });
 
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
+  withExistingUser(res, normalizedUsername, (user) => {
     db.all('SELECT game_id, game_name, crack_status FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
       if (err) return res.status(500).json({ error: 'DB error' });
       const statusByGameId = {};
@@ -876,20 +937,57 @@ app.get('/api/game-price/:steamAppId', authRequired, async (req, res) => {
 });
 
 // --- Notification Settings ---
-const SETTINGS_FILE = 'settings.json';
+// Absolute path. This was a bare relative 'settings.json', resolved against
+// process.cwd() — so a utility script run from another directory silently read,
+// or worse created, a DIFFERENT settings file. Matches STATUS_CACHE_FILE below.
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const EMPTY_SETTINGS = { smtp: {}, ntfy: {}, gotify: {}, telegram: {}, ldap: {}, apikeys: {} };
+
+// loadSettings() sits on the hot path — resolveApiKey() calls it ~10x per search,
+// and every login, notification and settings read goes through it. Doing a
+// synchronous readFileSync each time blocks the single-threaded event loop against
+// a single-file Docker bind mount: if that host path ever stalls, the whole server
+// stalls. Cache the parsed object and validate it with a much cheaper statSync.
+//
+// mtime validation (rather than only invalidating inside saveSettings) keeps
+// EXTERNAL writers working — the utility scripts and any `docker exec` edit — so an
+// admin's change still takes effect immediately, as CLAUDE.md advertises.
+let settingsCache = null;
+let settingsMtimeMs = -1;
+
 function loadSettings() {
   try {
-    return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-  } catch {
-    return { smtp: {}, ntfy: {}, gotify: {}, ldap: {}, apikeys: {} };
+    const { mtimeMs } = fs.statSync(SETTINGS_FILE);
+    if (settingsCache && mtimeMs === settingsMtimeMs) return settingsCache;
+    settingsCache = { ...EMPTY_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
+    settingsMtimeMs = mtimeMs;
+    return settingsCache;
+  } catch (err) {
+    // A missing file is normal on a fresh install. A corrupt one is NOT — it used
+    // to degrade silently to "no SMTP, no LDAP, no API keys" with no log line at
+    // all, which is a miserable thing to debug from the admin's side.
+    if (err.code !== 'ENOENT') {
+      console.error('[settings] Failed to read/parse settings.json:', err.message);
+    }
+    settingsCache = null;
+    settingsMtimeMs = -1;
+    return EMPTY_SETTINGS;
   }
 }
+
 function saveSettings(settings) {
   try {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), { flag: 'w' });
+    // mode 0600: this file holds the SMTP password, the LDAP bind password and the
+    // Telegram bot token. The default 0644 made it world-readable in the container.
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), { flag: 'w', mode: 0o600 });
+    settingsCache = { ...EMPTY_SETTINGS, ...settings };
+    try { settingsMtimeMs = fs.statSync(SETTINGS_FILE).mtimeMs; } catch { settingsMtimeMs = -1; }
     console.log('settings.json created/updated.');
   } catch (err) {
     console.error('Failed to write settings.json:', err);
+    // Never keep serving a cache we cannot vouch for.
+    settingsCache = null;
+    settingsMtimeMs = -1;
   }
 }
 
@@ -960,6 +1058,67 @@ app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermis
   }
 });
 
+// --- Notification helpers ---
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Cover art comes from IGDB/RAWG/TheGamesDB, but the client supplies the value, so
+// treat it as untrusted: https only, no credentials, and a known image host.
+const ALLOWED_IMAGE_HOSTS = [
+  'images.igdb.com', 'media.rawg.io', 'cdn.thegamesdb.net',
+  'cdn.cloudflare.steamstatic.com', 'shared.akamai.steamstatic.com',
+];
+function isSafeImageUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') return false;
+    if (u.username || u.password) return false;
+    return ALLOWED_IMAGE_HOSTS.some(h => u.hostname === h || u.hostname.endsWith('.' + h));
+  } catch {
+    return false;
+  }
+}
+
+// Per-user notification servers are deliberately allowed to be private/LAN
+// addresses — users self-host ntfy and Gotify on their own networks, and blocking
+// RFC1918 would break the documented feature. What is NOT acceptable is reaching a
+// cloud instance-metadata endpoint, which is the one target that turns a blind
+// SSRF into credential theft. Block those specifically.
+const METADATA_HOSTS = ['169.254.169.254', 'metadata.google.internal', 'fd00:ec2::254', '100.100.100.200'];
+// Raw axios errors distinguish ECONNREFUSED / 404 / timeout, which turns the
+// Diagnostics "send test notification" button into an open/closed/filtered port
+// scanner for the server's internal network. Collapse every network-level outcome
+// into one indistinguishable message; the detail still goes to the server log where
+// the operator (and only the operator) can see it.
+function sanitizeDeliveryError(err, channel) {
+  console.error(`[Notify] ${channel} delivery failed:`, err?.message || err);
+  if (err?.message === 'Notification server host is not permitted') return err.message;
+  return 'Delivery failed. Check the server URL and credentials in My Account, then try again.';
+}
+
+function isBlockedNotificationHost(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (METADATA_HOSTS.includes(host)) return true;
+    // IPv4 link-local (169.254.0.0/16) covers the AWS/Azure/GCP metadata range.
+    if (/^169\.254\./.test(host)) return true;
+    // IPv6 link-local
+    if (/^fe80:/i.test(host)) return true;
+    return false;
+  } catch {
+    return true; // unparseable -> refuse
+  }
+}
+
 // --- Notification Functions ---
 async function sendEmail(subject, text, toOverride, coverUrl) {
   const { smtp } = loadSettings();
@@ -1000,11 +1159,19 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
   });
 
   const transporter = nodemailer.createTransport(options);
-  const html = coverUrl
+  // Both `text` and `coverUrl` derive from user-supplied game data (gameName /
+  // coverUrl on POST /api/user/:username/games, and the test-notification body), so
+  // interpolating them raw let an authenticated user author arbitrary HTML in a mail
+  // sent from the deployment's own SPF/DKIM-aligned domain — a ready-made phishing
+  // primitive. Escape the text, and only accept an https image URL.
+  const safeText = escapeHtml(text);
+  const safeCover = isSafeImageUrl(coverUrl) ? coverUrl : null;
+  const html = safeCover
     ? `<div style="font-family:sans-serif;max-width:480px">` +
-      `<img src="${coverUrl}" alt="Game cover" style="max-width:200px;border-radius:6px;display:block;margin-bottom:12px">` +
-      `<p style="margin:0;font-size:15px">${text}</p></div>`
-    : null;
+      `<img src="${escapeHtml(safeCover)}" alt="Game cover" style="max-width:200px;border-radius:6px;display:block;margin-bottom:12px">` +
+      `<p style="margin:0;font-size:15px">${safeText}</p></div>`
+    : `<div style="font-family:sans-serif;max-width:480px">` +
+      `<p style="margin:0;font-size:15px">${safeText}</p></div>`;
   try {
     const result = await transporter.sendMail({
       from: smtp.from,
@@ -1032,21 +1199,39 @@ async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
   // Prefer the user's own ntfy server; fall back to the optional global default.
   const url = (serverUrl && serverUrl.trim()) || loadSettings().ntfy?.url;
   if (!url || !topic) return;
+  if (isBlockedNotificationHost(url)) {
+    throw new Error('Notification server host is not permitted');
+  }
   const headers = { Title: title };
-  if (attachUrl) headers.Attach = attachUrl;
-  await axios.post(`${url.replace(/\/$/, '')}/${topic}`, message, { headers });
+  if (isSafeImageUrl(attachUrl)) headers.Attach = attachUrl;
+  // encodeURIComponent: `topic` is unvalidated user input, so interpolating it raw
+  // let the caller append their own path, query string and fragment to the request
+  // — turning "pick your own server" into "craft an arbitrary request from the
+  // server's network position".
+  await axios.post(`${url.replace(/\/$/, '')}/${encodeURIComponent(topic)}`, message, {
+    headers,
+    timeout: 10000,
+    maxRedirects: 0,
+  });
 }
 
 async function sendGotify(title, message, token, priority = 5, imageUrl, serverUrl) {
   // Prefer the user's own Gotify server; fall back to the optional global default.
   const url = (serverUrl && serverUrl.trim()) || loadSettings().gotify?.url;
   if (!url || !token) return;
+  if (isBlockedNotificationHost(url)) {
+    throw new Error('Notification server host is not permitted');
+  }
   const body = { title, message, priority };
-  if (imageUrl) {
+  if (isSafeImageUrl(imageUrl)) {
     body.extras = { 'client::notification': { bigImageUrl: imageUrl } };
   }
-  await axios.post(`${url.replace(/\/$/, '')}/message?token=${token}`, body, {
-    headers: { 'Content-Type': 'application/json' },
+  // Token goes in the header, not the query string: query strings land in reverse
+  // proxy and Gotify access logs. Header also removes the path-injection sink.
+  await axios.post(`${url.replace(/\/$/, '')}/message`, body, {
+    headers: { 'Content-Type': 'application/json', 'X-Gotify-Key': token },
+    timeout: 10000,
+    maxRedirects: 0,
   });
 }
 
@@ -1071,6 +1256,78 @@ async function sendTelegram(title, message, chatId, photoUrl) {
   }
 }
 
+// --- LDAP filter escaping (RFC 4515) ---
+// A username goes straight into an LDAP search filter, so any of the filter
+// metacharacters must be escaped or the caller can rewrite the filter. Without
+// this, `username=*` matches every entry in the directory and the search picks an
+// arbitrary one; `)(uid=admin` splices in a whole extra assertion.
+// Backslash MUST be replaced first, or we would double-escape our own output.
+function escapeLdapFilterValue(value) {
+  return String(value == null ? '' : value)
+    .replace(/\\/g, '\\5c')
+    .replace(/\*/g, '\\2a')
+    .replace(/\(/g, '\\28')
+    .replace(/\)/g, '\\29')
+    .replace(/\0/g, '\\00');
+}
+
+// Build the "find this user" filter used by both the login and the email lookup.
+// Active Directory keys on sAMAccountName, FreeIPA on uid — match either.
+function buildUserSearchFilter(username) {
+  const safe = escapeLdapFilterValue(username);
+  return `(|(sAMAccountName=${safe})(uid=${safe}))`;
+}
+
+// Create an ldapjs client that cannot take the process down.
+//
+// ldapjs Client is an EventEmitter that emits 'error' on socket-level failures
+// (ECONNREFUSED, ETIMEDOUT, TCP reset, TLS failure). With no 'error' listener,
+// Node treats that as an uncaught exception and EXITS — so an unreachable domain
+// controller turned any anonymous POST /api/auth/login into a remote process kill,
+// and one /api/admin/ldap-sync against a down directory was a guaranteed crash.
+// The bind callback fires *first*, so the request itself often looked fine right
+// before the server died. Every crash also wiped the in-memory login rate-limit
+// counters, handing an attacker a lockout reset.
+//
+// `onError` lets a caller fail over (e.g. to local auth) exactly once.
+function createLdapClient(url, onError) {
+  const client = ldap.createClient({
+    url,
+    timeout: 10000,
+    connectTimeout: 10000,
+    reconnect: false,
+  });
+  let handled = false;
+  client.on('error', (err) => {
+    console.error('[LDAP] Client error:', err.message);
+    try { client.destroy(); } catch { /* already gone */ }
+    if (!handled) {
+      handled = true;
+      if (typeof onError === 'function') onError(err);
+    }
+  });
+  // Mark the failover as spent once the caller has moved on, so a late socket
+  // error cannot fire a second response on the same request.
+  client.markHandled = () => { handled = true; };
+  return client;
+}
+
+// Warn loudly about cleartext LDAP. A simple bind sends the user's password (and
+// the service-account password) unencrypted in the BER payload, so plain `ldap://`
+// exposes directory credentials to any passive observer on the path. We warn
+// rather than refuse, because refusing would lock out an existing deployment
+// mid-upgrade — but this should be `ldaps://` (or StartTLS) in any real network.
+let warnedAboutCleartextLdap = false;
+function warnIfCleartextLdap(url) {
+  if (warnedAboutCleartextLdap || !url) return;
+  if (/^ldap:\/\//i.test(String(url).trim())) {
+    warnedAboutCleartextLdap = true;
+    console.warn('[LDAP] WARNING: connecting over cleartext ldap://. Bind passwords ' +
+      '(including the service account and every user password) traverse the network ' +
+      'unencrypted. Switch the LDAP URL to ldaps:// — see SECURITY_HARDENING_2026-07.md.');
+  }
+}
+
 // --- LDAP Email Lookup ---
 async function getLdapEmail(username) {
   return new Promise((resolve) => {
@@ -1084,23 +1341,23 @@ async function getLdapEmail(username) {
       return;
     }
 
-    const client = ldap.createClient({ url: ldapSettings.url });
+    warnIfCleartextLdap(ldapSettings.url);
+    // A socket error here resolves null (no email found) instead of crashing.
+    const client = createLdapClient(ldapSettings.url, () => resolve(null));
     client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
       if (err) {
-        console.log('[LDAP] Service account bind failed for email lookup:', err);
+        console.log('[LDAP] Service account bind failed for email lookup:', err.message);
+        client.markHandled();
         client.unbind();
         resolve(null);
         return;
       }
       
       // Try multiple username attributes: first sAMAccountName (AD), then uid (FreeIPA).
-      // Using an OR filter means if either matches, we get a result.
-      const usernameFilters = [
-        `(sAMAccountName=${normalizedUsername})`,
-        `(uid=${normalizedUsername})`,
-      ];
+      // Using an OR filter means if either matches, we get a result. The username is
+      // RFC 4515-escaped so it cannot alter the filter's structure.
       const searchOptions = {
-        filter: `(|${usernameFilters.join('')})`,
+        filter: buildUserSearchFilter(normalizedUsername),
         scope: 'sub',
         attributes: ['mail', 'email']
       };
@@ -1108,6 +1365,7 @@ async function getLdapEmail(username) {
       client.search(ldapSettings.base, searchOptions, (err, searchRes) => {
         if (err) {
           console.log('[LDAP] Search failed for email lookup:', err);
+          client.markHandled();
           client.unbind();
           resolve(null);
           return;
@@ -1123,12 +1381,14 @@ async function getLdapEmail(username) {
         });
         
         searchRes.on('end', () => {
+          client.markHandled();
           client.unbind();
           resolve(foundEmail);
         });
         
         searchRes.on('error', (err) => {
           console.error('[LDAP] Search error during email lookup:', err);
+          client.markHandled();
           client.unbind();
           resolve(null);
         });
@@ -1239,6 +1499,43 @@ async function notifyEvent(type, game, username, status) {
 }
 
 // --- Settings API ---
+// Secret-bearing fields inside settings.json, as [section, key] pairs. These are
+// never sent to a client in cleartext — not even to an admin. The admin UI needs
+// to know *whether* a secret is set, not what it is, so a set secret is returned
+// as SECRET_PLACEHOLDER and POST /api/settings maps that value back to whatever is
+// already stored (see unmaskSecrets). This keeps the LDAP bind password and SMTP
+// password out of browser memory, devtools, and any proxy log.
+const SECRET_PLACEHOLDER = '__unchanged__';
+const SECRET_FIELDS = [
+  ['smtp', 'pass'],
+  ['ldap', 'bindPass'],
+  ['telegram', 'bot_token'],
+];
+
+function maskSecrets(settings) {
+  const out = JSON.parse(JSON.stringify(settings || {}));
+  for (const [section, key] of SECRET_FIELDS) {
+    const val = out?.[section]?.[key];
+    if (typeof val === 'string' && val !== '') out[section][key] = SECRET_PLACEHOLDER;
+  }
+  return out;
+}
+
+// Reverse of maskSecrets: an incoming SECRET_PLACEHOLDER means "leave as-is".
+// An empty string is a genuine request to clear the secret and is honoured.
+function unmaskSecrets(incomingSection, sectionName, existing) {
+  const section = { ...(incomingSection || {}) };
+  for (const [sec, key] of SECRET_FIELDS) {
+    if (sec !== sectionName) continue;
+    if (section[key] === SECRET_PLACEHOLDER) {
+      const prior = existing?.[sectionName]?.[key];
+      if (typeof prior === 'string') section[key] = prior;
+      else delete section[key];
+    }
+  }
+  return section;
+}
+
 app.get('/api/settings', authRequired, (req, res) => {
   const s = loadSettings();
   const isAdmin = !!req.user.can_manage_users;
@@ -1246,8 +1543,9 @@ app.get('/api/settings', authRequired, (req, res) => {
   // (masked) only by the admin-only GET /api/settings/apikeys endpoint.
   const { apikeys, ...rest } = s;
   if (isAdmin) {
-    // Admins manage server infrastructure and need the current values to edit them.
-    return res.json(rest);
+    // Admins manage server infrastructure and need the current values to edit them,
+    // but secrets go out masked — see SECRET_FIELDS above.
+    return res.json(maskSecrets(rest));
   }
   // Non-admins configure their notifications entirely on the My Account page
   // (personal ntfy/Gotify server URL + topic/token, Telegram chat ID). The server
@@ -1272,10 +1570,14 @@ app.post('/api/settings', authRequired, express.json(), (req, res) => {
     // and only let admins overwrite the admin-only sections.
     const existing = loadSettings();
     const canWrite = (k) => req.body[k] !== undefined && (isAdmin || !ADMIN_ONLY_SETTINGS.includes(k));
+    // GET returns secrets as SECRET_PLACEHOLDER, so a section saved without the
+    // admin retyping the password comes back with the placeholder — map it to the
+    // stored value rather than overwriting the credential with the mask.
+    const section = (k) => unmaskSecrets(req.body[k], k, existing);
     const merged = {
-      smtp: canWrite('smtp') ? req.body.smtp : (existing.smtp || {}),
-      ldap: canWrite('ldap') ? req.body.ldap : (existing.ldap || {}),
-      telegram: canWrite('telegram') ? req.body.telegram : (existing.telegram || {}),
+      smtp: canWrite('smtp') ? section('smtp') : (existing.smtp || {}),
+      ldap: canWrite('ldap') ? section('ldap') : (existing.ldap || {}),
+      telegram: canWrite('telegram') ? section('telegram') : (existing.telegram || {}),
       ntfy: canWrite('ntfy') ? req.body.ntfy : (existing.ntfy || {}),
       gotify: canWrite('gotify') ? req.body.gotify : (existing.gotify || {}),
       apikeys: existing.apikeys || {},  // always preserve — managed via /api/settings/apikeys
@@ -1326,12 +1628,8 @@ app.post('/api/user/:username/games', authRequired, ownershipRequired, async (re
     console.log(`[DEBUG] No/future release date (${releaseDate || 'none'}), setting status to 'unreleased'`);
     status = 'unreleased';
   }
-  getOrCreateUser(normalizedUsername, async (err, user) => {
-    if (err) {
-      console.log(`[DEBUG] Error getting/creating user:`, err);
-      return res.status(500).json({ error: 'DB error' });
-    }
-    console.log(`[DEBUG] User found/created:`, { userId: user.id, username: user.username });
+  withExistingUser(res, normalizedUsername, async (user) => {
+    console.log(`[DEBUG] User resolved:`, { userId: user.id, username: user.username });
     
     db.get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, row) => {
       if (err) {
@@ -1402,11 +1700,7 @@ app.get('/api/debug/user/:username/game/:gameId', authRequired, ownershipRequire
   
   console.log(`[DEBUG] Debug request for user ${username}, game ${gameId}`);
   
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) {
-      console.log(`[DEBUG] Error getting user:`, err);
-      return res.status(500).json({ error: 'DB error' });
-    }
+  withExistingUser(res, normalizedUsername, (user) => {
     
     db.get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], (err, row) => {
       if (err) {
@@ -1465,55 +1759,23 @@ app.get('/api/user/:username/games', authRequired, ownershipRequired, (req, res)
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
   
-  console.log(`[DEBUG] GET /api/user/${username}/games requested`);
-  console.log(`[DEBUG] Original username: ${username}, Normalized: ${normalizedUsername}`);
-  
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) {
-      console.log(`[DEBUG] Error getting user:`, err);
-      return res.status(500).json({ error: 'DB error' });
-    }
-    
-    console.log(`[DEBUG] User found:`, { userId: user.id, username: user.username });
-    
+  withExistingUser(res, normalizedUsername, (user) => {
     db.all('SELECT * FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
       if (err) {
-        console.log(`[DEBUG] Error querying games:`, err);
+        console.error('[Library] Error querying games:', err.message);
         return res.status(500).json({ error: 'DB error' });
       }
-      
-      // Add debug logging
-      console.log(`[DEBUG] GET /api/user/${normalizedUsername}/games - Found ${rows.length} games`);
-      if (rows.length > 0) {
-        console.log(`[DEBUG] Sample game data:`, {
-          game_id: rows[0].game_id,
-          game_name: rows[0].game_name,
-          status: rows[0].status,
-          release_date: rows[0].release_date,
-          user_id: rows[0].user_id,
-          crack_status: rows[0].crack_status
-        });
-        
-        // Log all games with their statuses
-        rows.forEach((game, index) => {
-          console.log(`[DEBUG] Game ${index + 1}:`, {
-            game_id: game.game_id,
-            game_name: game.game_name,
-            status: game.status,
-            user_id: game.user_id,
-            crack_status: game.crack_status
-          });
-        });
-      }
-      
+
       // Ensure steamAppId is included in the response
       const mapped = rows.map(row => ({
         ...row,
         steamAppId: row.steam_app_id || null,
         crackStatus: row.crack_status || null
       }));
-      
-      console.log(`[DEBUG] Sending response with ${mapped.length} games`);
+
+      // One line per request. This previously logged every game in the library
+      // individually, so a normal page load wrote hundreds of lines.
+      console.log(`[Library] ${normalizedUsername}: returned ${mapped.length} games`);
       res.json(mapped);
     });
   });
@@ -1527,8 +1789,7 @@ app.delete('/api/user/:username/games/:gameId', authRequired, ownershipRequired,
   if (!normalizedUsername || !gameId) {
     return res.status(400).json({ error: 'Missing username or gameId' });
   }
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
+  withExistingUser(res, normalizedUsername, (user) => {
     db.run(
       'DELETE FROM user_games WHERE user_id = ? AND game_id = ?',
       [user.id, gameId],
@@ -1548,8 +1809,7 @@ app.put('/api/user/:username/games/:gameId/backlog-order', authRequired, ownersh
   if (!normalizedUsername || !gameId || !['up', 'down'].includes(direction)) {
     return res.status(400).json({ error: 'Missing or invalid parameters' });
   }
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
+  withExistingUser(res, normalizedUsername, (user) => {
     db.all(
       'SELECT id, game_id, backlog_order FROM user_games WHERE user_id = ? AND status = ? ORDER BY backlog_order ASC',
       [user.id, 'backlog'],
@@ -1583,8 +1843,7 @@ app.put('/api/user/:username/backlog-reorder', authRequired, ownershipRequired, 
   if (!normalizedUsername || !Array.isArray(order) || order.length === 0) {
     return res.status(400).json({ error: 'Missing or invalid parameters' });
   }
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
+  withExistingUser(res, normalizedUsername, (user) => {
     let completed = 0;
     let hasError = false;
     order.forEach((gameId, index) => {
@@ -1614,10 +1873,7 @@ app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired
     return res.status(400).json({ error: 'Missing username' });
   }
 
-  getOrCreateUser(normalizedUsername, (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: 'DB error' });
-    }
+  withExistingUser(res, normalizedUsername, (user) => {
 
     const run = async () => {
       const userGames = await new Promise((resolve, reject) => {
@@ -1933,10 +2189,7 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
     return res.status(400).json({ error: 'Missing username or gameId' });
   }
 
-  getOrCreateUser(normalizedUsername, async (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: 'DB error' });
-    }
+  withExistingUser(res, normalizedUsername, async (user) => {
 
     db.get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, game) => {
       if (err) {
@@ -2206,16 +2459,41 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
 });
 
 // --- Auth Middleware ---
+// The token proves *identity*; the database is the authority on *privilege*.
+//
+// This previously trusted the JWT payload wholesale, so authorization was frozen
+// for the token's full 12-hour life: revoking an admin's can_manage_users left them
+// with complete admin access (create/delete users, reset any password, read API
+// keys) until the token expired, and deleting a user entirely left their token
+// working — every route still resolved, because nothing ever checked the row still
+// existed. Re-reading the user costs one indexed primary-key lookup per request.
 function authRequired(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  let payload;
   try {
-    const payload = jwt.verify(auth.slice(7), JWT_SECRET);
-    req.user = payload;
-    next();
+    payload = jwt.verify(auth.slice(7), JWT_SECRET);
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
+  db.get('SELECT id, username, can_manage_users, origin, display_name FROM users WHERE id = ?',
+    [payload.id], (err, user) => {
+      if (err) {
+        console.error('[Auth] User lookup failed:', err.message);
+        return res.status(500).json({ error: 'DB error' });
+      }
+      // Account deleted (or the DB was replaced) — the signature is still valid but
+      // the identity is gone, so the token is worthless.
+      if (!user) return res.status(401).json({ error: 'Invalid token' });
+      req.user = {
+        id: user.id,
+        username: user.username,
+        can_manage_users: !!user.can_manage_users,
+        origin: user.origin || 'local',
+        display_name: user.display_name || user.username,
+      };
+      next();
+    });
 }
 function requirePermission(permission) {
   return (req, res, next) => {
@@ -2239,17 +2517,62 @@ function ownershipRequired(req, res, next) {
 
 // --- Helper Functions ---
 
-// Track failed login attempts for rate limiting
-function trackFailedAttempt(clientIP) {
-  const now = Date.now();
-  const attempts = loginAttempts.get(clientIP) || { count: 0, firstAttempt: now };
-  attempts.count++;
-  if (attempts.count === 1) {
-    attempts.firstAttempt = now;
-  }
-  loginAttempts.set(clientIP, attempts);
-  console.log(`[Auth] Failed login attempt from IP ${clientIP}. Total attempts: ${attempts.count}`);
+// Login throttling.
+//
+// Counters are keyed on BOTH the client IP and the targeted account, because
+// per-IP alone was trivially defeated: a successful login cleared the whole IP's
+// counter, so anyone holding one valid account could guess four passwords for
+// `root`, log into their own account to zero the counter, and repeat forever.
+// Now a success only clears that user's own key, and the per-account counter
+// (which an attacker cannot clear without already knowing the password) keeps
+// counting. The account key also throttles an attacker who rotates IPs.
+function attemptKeys(clientIP, username) {
+  const keys = [`ip:${clientIP}`];
+  if (username) keys.push(`user:${String(username).toLowerCase()}`);
+  return keys;
 }
+
+function isLockedOut(clientIP, username) {
+  const now = Date.now();
+  for (const key of attemptKeys(clientIP, username)) {
+    const attempts = loginAttempts.get(key);
+    if (!attempts) continue;
+    if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
+      const elapsed = now - attempts.firstAttempt;
+      if (elapsed < LOCKOUT_DURATION) {
+        return Math.ceil((LOCKOUT_DURATION - elapsed) / 1000 / 60);
+      }
+      loginAttempts.delete(key); // lockout expired
+    }
+  }
+  return 0;
+}
+
+// Track failed login attempts for rate limiting
+function trackFailedAttempt(clientIP, username) {
+  const now = Date.now();
+  for (const key of attemptKeys(clientIP, username)) {
+    const attempts = loginAttempts.get(key) || { count: 0, firstAttempt: now };
+    attempts.count++;
+    if (attempts.count === 1) attempts.firstAttempt = now;
+    loginAttempts.set(key, attempts);
+  }
+  console.log(`[Auth] Failed login attempt from IP ${clientIP} for '${username || 'unknown'}'.`);
+}
+
+// Clear only the keys belonging to the account that actually authenticated.
+function clearFailedAttempts(clientIP, username) {
+  for (const key of attemptKeys(clientIP, username)) loginAttempts.delete(key);
+}
+
+// Entries for IPs that fail a few times and never return were never evicted — an
+// unbounded slow leak under background scanning traffic. Sweep hourly.
+setInterval(() => {
+  const cutoff = Date.now() - LOCKOUT_DURATION;
+  for (const [key, attempts] of loginAttempts) {
+    if (attempts.firstAttempt < cutoff) loginAttempts.delete(key);
+  }
+}, 60 * 60 * 1000).unref();
 
 // --- Auth Endpoints ---
 app.post('/api/auth/login', (req, res) => {
@@ -2262,30 +2585,30 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Username and password are required' });
   }
   
-  // Check rate limiting
-  const now = Date.now();
-  const attempts = loginAttempts.get(clientIP) || { count: 0, firstAttempt: now };
-  
-  if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
-    const timeSinceFirst = now - attempts.firstAttempt;
-    if (timeSinceFirst < LOCKOUT_DURATION) {
-      const remainingTime = Math.ceil((LOCKOUT_DURATION - timeSinceFirst) / 1000 / 60);
-      console.log(`[Auth] IP ${clientIP} is rate limited. Remaining lockout time: ${remainingTime} minutes`);
-      return res.status(429).json({ 
-        error: `Too many login attempts. Please try again in ${remainingTime} minutes.` 
-      });
-    } else {
-      // Reset after lockout duration
-      loginAttempts.delete(clientIP);
-    }
-  }
-  
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username.toLowerCase();
+
+  // Check rate limiting (per-IP AND per-account — see attemptKeys above)
+  const lockedFor = isLockedOut(clientIP, normalizedUsername);
+  if (lockedFor) {
+    console.log(`[Auth] Rate limited: IP ${clientIP} / user '${normalizedUsername}'. ${lockedFor} minutes remaining.`);
+    return res.status(429).json({
+      error: `Too many login attempts. Please try again in ${lockedFor} minutes.`
+    });
+  }
+
   const settings = loadSettings();
   const ldapSettings = settings.ldap || {};
 
+  // The LDAP path has several independent failure signals that can each decide to
+  // fall back: the bind callback, the search callback, and the client's 'error'
+  // event — and they do NOT arrive in a fixed order (on a refused connection the
+  // socket error usually beats the bind callback). Without this latch the fallback
+  // ran twice and the second run threw ERR_HTTP_HEADERS_SENT.
+  let authCompleted = false;
   function fallbackLocalAuth() {
+    if (authCompleted) return;
+    authCompleted = true;
     console.log('[Auth] Using fallback local authentication for user:', normalizedUsername);
     db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername], async (err, user) => {
       if (err) {
@@ -2295,30 +2618,30 @@ app.post('/api/auth/login', (req, res) => {
       if (!user) {
         console.log('[Auth] Local user not found:', normalizedUsername);
         // Track failed attempt
-        trackFailedAttempt(clientIP);
+        trackFailedAttempt(clientIP, normalizedUsername);
         return res.status(401).json({ error: 'Invalid credentials' });
       }
       console.log('[Auth] Found user in database:', { id: user.id, username: user.username, origin: user.origin });
       try {
-        // LDAP users have no local password — reject cleanly instead of crashing bcrypt
+        // LDAP users have no local password — reject cleanly instead of crashing bcrypt.
+        // The reason goes to the server log only: telling the *client* that this is
+        // an LDAP account confirmed both that the username exists and that it is a
+        // domain account, which is a ready-made target list for spraying against AD.
         if (!user.password || typeof user.password !== 'string') {
-          console.log('[Auth] User has no local password (likely an LDAP account). Local auth not possible.');
-          trackFailedAttempt(clientIP);
-          const hint = user.origin === 'ldap'
-            ? 'This account uses LDAP authentication. Check your LDAP configuration.'
-            : 'Invalid credentials';
-          return res.status(401).json({ error: hint });
+          console.log(`[Auth] User '${normalizedUsername}' has no local password (origin=${user.origin}). Local auth not possible.`);
+          trackFailedAttempt(clientIP, normalizedUsername);
+          return res.status(401).json({ error: 'Invalid credentials' });
         }
         const valid = await bcrypt.compare(String(password), user.password);
         if (!valid) {
           console.log('[Auth] Local password validation failed for user:', normalizedUsername);
           // Track failed attempt
-          trackFailedAttempt(clientIP);
+          trackFailedAttempt(clientIP, normalizedUsername);
           return res.status(401).json({ error: 'Invalid credentials' });
         }
         console.log('[Auth] Password validation successful for user:', normalizedUsername);
         // Clear failed attempts on successful login
-        loginAttempts.delete(clientIP);
+        clearFailedAttempts(clientIP, normalizedUsername);
         const token = jwt.sign({
           id: user.id,
           username: user.username,
@@ -2352,25 +2675,27 @@ app.post('/api/auth/login', (req, res) => {
 
   // If LDAP is enabled with a service account, use the reliable search-then-bind method.
   try {
-    const client = ldap.createClient({ url: ldapSettings.url });
+    warnIfCleartextLdap(ldapSettings.url);
+    // If the directory is unreachable, fall back to local auth instead of letting an
+    // unhandled 'error' event kill the process (an anonymous login request used to
+    // be enough to take the server down whenever the DC was down).
+    const client = createLdapClient(ldapSettings.url, () => fallbackLocalAuth());
 
     // 1. Bind as service account
     client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
       if (err) {
-        console.log('[LDAP] Service account bind failed:', err);
+        console.log('[LDAP] Service account bind failed:', err.message);
+        client.markHandled();
         client.unbind();
         return fallbackLocalAuth();
       }
       console.log('[LDAP] Service account bind succeeded.');
 
       // 2. Search for the user by username using multiple attributes:
-      //    Active Directory: sAMAccountName, FreeIPA: uid
-      const usernameFilters = [
-        `(sAMAccountName=${normalizedUsername})`,
-        `(uid=${normalizedUsername})`,
-      ];
+      //    Active Directory: sAMAccountName, FreeIPA: uid. The username is
+      //    RFC 4515-escaped so it cannot alter the filter's structure.
       const searchOptions = {
-        filter: `(|${usernameFilters.join('')})`,
+        filter: buildUserSearchFilter(normalizedUsername),
         scope: 'sub',
         attributes: ['dn', 'memberOf', 'displayName', 'cn', 'mail', 'email']
       };
@@ -2379,12 +2704,15 @@ app.post('/api/auth/login', (req, res) => {
       client.search(ldapSettings.base, searchOptions, (err, searchRes) => {
         if (err) {
           console.log('[LDAP] Search initiation failed:', err);
+          client.markHandled();
           client.unbind();
           return fallbackLocalAuth();
         }
 
         let foundUser = null;
+        let matchCount = 0;
         searchRes.on('searchEntry', (entry) => {
+          matchCount++;
           console.log('[LDAP] Search entry received for user lookup.');
 
           // Manually construct the user object from the entry's properties.
@@ -2393,16 +2721,19 @@ app.post('/api/auth/login', (req, res) => {
           entry.attributes.forEach(attr => {
             attributes[attr.type] = attr.vals.length === 1 ? attr.vals[0] : attr.vals;
           });
-          
+
           foundUser = {
             dn: entry.dn.toString(),
             ...attributes
           };
-          console.log('[LDAP] Successfully parsed user object:', JSON.stringify(foundUser, null, 2));
+          // Log the DN only. Dumping the whole entry put mail addresses and full
+          // group membership into shared logs for every single login.
+          console.log('[LDAP] Parsed user object for DN:', foundUser.dn);
         });
 
         searchRes.on('error', (err) => {
           console.error('[LDAP] Search error during processing:', err.message);
+          client.markHandled();
           client.unbind();
           return fallbackLocalAuth();
         });
@@ -2411,8 +2742,22 @@ app.post('/api/auth/login', (req, res) => {
           console.log('[LDAP] Search finished. Result status:', result ? result.status : 'N/A');
           if (!foundUser) {
             console.log('[LDAP] User object was not populated from search. This could be a permissions issue or the user truly does not exist in the search base.');
+            client.markHandled();
             client.unbind();
             return fallbackLocalAuth();
+          }
+          // A username must identify exactly one directory entry. If the search
+          // matched several, we cannot know which identity the caller meant — the
+          // old code silently kept whichever arrived last. Refuse instead of
+          // guessing; binding as an arbitrary matched DN is an authentication bug.
+          if (matchCount > 1) {
+            console.error(`[LDAP] Ambiguous login: ${matchCount} entries matched username '${normalizedUsername}'. Refusing to authenticate.`);
+            client.markHandled();
+            client.unbind();
+            trackFailedAttempt(clientIP, normalizedUsername);
+            if (authCompleted) return;
+            authCompleted = true;
+            return res.status(401).json({ error: 'Invalid credentials' });
           }
 
           const userDn = foundUser.dn;
@@ -2422,16 +2767,18 @@ app.post('/api/auth/login', (req, res) => {
           client.bind(userDn, password, (err) => {
             if (err) {
               console.log('[LDAP] User password authentication failed:', err);
+              client.markHandled();
               client.unbind();
               // Track failed attempt
-              trackFailedAttempt(clientIP);
+              trackFailedAttempt(clientIP, normalizedUsername);
               return fallbackLocalAuth(); // Incorrect password for this user
             }
             console.log('[LDAP] User password authentication succeeded.');
-            // Clear failed attempts on successful login
-            loginAttempts.delete(clientIP);
 
-            // 4. Check group membership (Authorization)
+            // 4. Check group membership (Authorization).
+            // The failed-attempt counter is deliberately NOT cleared yet: a user who
+            // authenticates but is outside the required group is not authorized, so
+            // clearing here would let them reset the throttle at will.
             if (ldapSettings.requiredGroup) {
                 const memberOf = foundUser.memberOf || [];
                 const groups = Array.isArray(memberOf) ? memberOf : [memberOf];
@@ -2444,13 +2791,19 @@ app.post('/api/auth/login', (req, res) => {
 
                 if (!isMember) {
                     console.log(`[LDAP] Authorization failed: User is not in required group '${ldapSettings.requiredGroup}'.`);
+                    client.markHandled();
                     client.unbind();
+                    if (authCompleted) return;
+                    authCompleted = true;
                     return res.status(403).json({ error: 'Not a member of the required group' });
                 }
                 console.log('[LDAP] Authorization passed: Group membership check OK.');
             }
+            // Fully authenticated AND authorized — now it is safe to clear.
+            clearFailedAttempts(clientIP, normalizedUsername);
 
             // 5. User is authenticated and authorized, create token.
+            client.markHandled();
             client.unbind();
             // Try to get CN from attribute, else extract from DN
             let cnValue = Array.isArray(foundUser.cn) ? foundUser.cn[0] : foundUser.cn;
@@ -2469,7 +2822,11 @@ app.post('/api/auth/login', (req, res) => {
             console.log('[DEBUG] User email from LDAP:', userEmail);
 
             getOrCreateUser(normalizedUsername, (err, user) => {
-              if (err) return res.status(500).json({ error: 'DB error' });
+              if (err) {
+                if (authCompleted) return;
+                authCompleted = true;
+                return res.status(500).json({ error: 'DB error' });
+              }
               // Update display_name, origin, and email for LDAP users
               const updates = ['display_name = ?, origin = ?'];
               const params = [displayName, 'ldap'];
@@ -2489,6 +2846,8 @@ app.post('/api/auth/login', (req, res) => {
                 origin: 'ldap',
                 display_name: displayName
               }, JWT_SECRET, { expiresIn: '12h' });
+              if (authCompleted) return;
+              authCompleted = true;
               res.json({ token });
             }, { origin: 'ldap', display_name: displayName });
           });
@@ -2502,26 +2861,41 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // --- User Management Endpoints ---
+// `me` would be shadowed by the /api/user/me/* routes registered before
+// /api/user/:username/*; `root`/`admin` are reserved to avoid impersonation
+// confusion with the seeded administrator account.
+const RESERVED_USERNAMES = ['me', 'root', 'admin'];
+
 // Create user (admin only)
 app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {
   const { username, password, can_manage_users = 0, email = '', ntfy_topic = '', gotify_token = '', shares_library = 0 } = req.body;
   
-  // Enhanced validation
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Missing username or password' });
+  // Enhanced validation. Both fields must be STRINGS — a JSON number reaching
+  // bcrypt.hash rejects with "Illegal arguments", and an unhandled rejection takes
+  // the whole process down under Node's default --unhandled-rejections=throw.
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Username and password must be strings' });
   }
-  
+
   if (!username.trim() || !password.trim()) {
     return res.status(400).json({ error: 'Username and password cannot be empty' });
   }
-  
+
   // Password strength requirements
   if (password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters long' });
   }
-  
+
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username.toLowerCase();
+
+  // `me` collides with the /api/user/me/* routes, which are registered first and
+  // would shadow this account entirely; the others are reserved to avoid confusion
+  // with the seeded administrator.
+  if (RESERVED_USERNAMES.includes(normalizedUsername)) {
+    return res.status(400).json({ error: `'${normalizedUsername}' is a reserved username.` });
+  }
+
   bcrypt.hash(password, 10).then(hash => {
     db.run(
       'INSERT INTO users (username, password, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -2531,6 +2905,9 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
         res.json({ success: true, id: this.lastID });
       }
     );
+  }).catch(err => {
+    console.error('[Users] Password hashing failed:', err.message);
+    res.status(500).json({ error: 'Failed to create user' });
   });
 });
 
@@ -2568,36 +2945,72 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
     updates.push('shares_library = ?');
     params.push(shares_library ? 1 : 0);
   }
+  // Nothing to change: an empty body previously produced `UPDATE users SET  WHERE
+  // id = ?`, i.e. a SQL syntax error surfacing as an opaque 500.
+  if (updates.length === 0 && !password) {
+    return res.status(400).json({ error: 'No fields to update' });
+  }
+  // An admin must not be able to lock the instance out of its own administration by
+  // demoting themselves — there may be no other admin left to undo it.
+  if (typeof can_manage_users !== 'undefined' && !can_manage_users && String(req.user.id) === String(id)) {
+    return res.status(400).json({ error: 'You cannot remove your own admin permission.' });
+  }
+
+  const applyUpdate = () => {
+    params.push(id);
+    db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function (err) {
+      if (err) return res.status(500).json({ error: 'DB error' });
+      if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+      res.json({ success: true });
+    });
+  };
+
   if (password) {
+    // Must be a string: a JSON number passes `.length < 8` (undefined < 8 is false)
+    // and then rejects inside bcrypt.hash, crashing the process.
+    if (typeof password !== 'string') {
+      return res.status(400).json({ error: 'Password must be a string' });
+    }
     // Password strength validation
     if (password.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters long' });
     }
-    
+
     bcrypt.hash(password, 10).then(hash => {
       updates.push('password = ?');
       params.push(hash);
-      params.push(id);
-      db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function (err) {
-        if (err) return res.status(500).json({ error: 'DB error' });
-        res.json({ success: true });
-      });
+      applyUpdate();
+    }).catch(err => {
+      console.error('[Users] Password hashing failed:', err.message);
+      res.status(500).json({ error: 'Failed to update user' });
     });
   } else {
-    params.push(id);
-    db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function (err) {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      res.json({ success: true });
-    });
+    applyUpdate();
   }
 });
 
 // Delete user (manager only)
 app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
   const { id } = req.params;
-  db.run('DELETE FROM users WHERE id = ?', [id], function (err) {
+  // Deleting yourself, or deleting the seeded `root` account, can leave the
+  // instance with no way back in. Both are refused.
+  if (String(req.user.id) === String(id)) {
+    return res.status(400).json({ error: 'You cannot delete your own account.' });
+  }
+  db.get('SELECT username FROM users WHERE id = ?', [id], (err, row) => {
     if (err) return res.status(500).json({ error: 'DB error' });
-    res.json({ success: true });
+    if (!row) return res.status(404).json({ error: 'User not found' });
+    if (row.username === 'root') {
+      return res.status(400).json({ error: 'The root account cannot be deleted.' });
+    }
+    db.run('DELETE FROM users WHERE id = ?', [id], function (err) {
+      if (err) return res.status(500).json({ error: 'DB error' });
+      // Shares reference usernames, not ids, and SQLite does not enforce the
+      // declared foreign keys — clean them up so the deleted user does not linger
+      // in other people's sharing lists.
+      db.run('DELETE FROM user_shares WHERE from_user = ? OR to_user = ?', [row.username, row.username]);
+      res.json({ success: true });
+    });
   });
 });
 
@@ -2666,8 +3079,7 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
           results.email.sent = true;
           console.log(`[Test Notification] Email sent successfully to ${userDetails.email}`);
         } catch (error) {
-          results.email.error = error.message;
-          console.error(`[Test Notification] Email failed:`, error.message);
+          results.email.error = sanitizeDeliveryError(error, 'email');
         }
       } else {
         results.email.error = 'No email configured for current user';
@@ -2682,8 +3094,7 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
           results.ntfy.sent = true;
           console.log(`[Test Notification] Ntfy sent successfully to topic ${userDetails.ntfy_topic}`);
         } catch (error) {
-          results.ntfy.error = error.message;
-          console.error(`[Test Notification] Ntfy failed:`, error.message);
+          results.ntfy.error = sanitizeDeliveryError(error, 'ntfy');
         }
       } else {
         results.ntfy.error = 'No personal NTFY topic set — configure it in My Account';
@@ -2698,8 +3109,7 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
           results.gotify.sent = true;
           console.log(`[Test Notification] Gotify sent successfully`);
         } catch (error) {
-          results.gotify.error = error.message;
-          console.error(`[Test Notification] Gotify failed:`, error.message);
+          results.gotify.error = sanitizeDeliveryError(error, 'gotify');
         }
       } else {
         results.gotify.error = 'No personal Gotify token set — configure it in My Account';
@@ -2714,8 +3124,7 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
           results.telegram.sent = true;
           console.log(`[Test Notification] Telegram sent successfully`);
         } catch (error) {
-          results.telegram.error = error.message;
-          console.error(`[Test Notification] Telegram failed:`, error.message);
+          results.telegram.error = sanitizeDeliveryError(error, 'telegram');
         }
       } else {
         results.telegram.error = 'No personal Telegram chat ID set — configure it in My Account';
@@ -2787,11 +3196,16 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
       for (const user of ldapUsers) {
         console.log(`[LDAP Sync] Processing user: ${user.username}`);
         
+        // Declared outside the try so the finally block can always close the socket:
+        // the previous version returned early on the reject paths without ever
+        // calling unbind(), leaking one connection per failing user in this loop.
+        let client = null;
         try {
-          const client = ldap.createClient({ url: ldapSettings.url });
-          
-          // Bind to LDAP
+          warnIfCleartextLdap(ldapSettings.url);
           await new Promise((resolve, reject) => {
+            // Without an 'error' listener an unreachable directory here was a
+            // guaranteed process crash — this loop builds a fresh client per user.
+            client = createLdapClient(ldapSettings.url, (err) => reject(err));
             client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
               if (err) {
                 console.error(`[LDAP Sync] Bind failed for ${user.username}:`, err.message);
@@ -2804,13 +3218,11 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
           });
 
           // Search for user in LDAP using multiple username attributes
-          // (Active Directory: sAMAccountName, FreeIPA: uid)
-          const usernameFilters = [
-            `(sAMAccountName=${user.username})`,
-            `(uid=${user.username})`,
-          ];
+          // (Active Directory: sAMAccountName, FreeIPA: uid). Escaped even though
+          // the username comes from our own DB — LDAP-origin rows are created from
+          // directory data, so this is second-order untrusted input.
           const searchOptions = {
-            filter: `(|${usernameFilters.join('')})`,
+            filter: buildUserSearchFilter(user.username),
             scope: 'sub',
             attributes: ['displayName', 'mail', 'sAMAccountName', 'uid']
           };
@@ -2850,7 +3262,7 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
             });
           });
 
-          client.unbind();
+          // (the socket is closed in the finally block below, on every path)
 
           if (userData) {
             // User found in LDAP, update their information
@@ -2924,6 +3336,11 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
             action: 'error',
             error: error.message
           });
+        } finally {
+          // Always close the socket, including on the bind/search reject paths.
+          if (client) {
+            try { client.markHandled(); client.unbind(); } catch { /* already closed */ }
+          }
         }
       }
 
@@ -2963,8 +3380,15 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
   // Only accept http(s) URLs for the per-user notification servers (or empty to clear).
   const isValidServerUrl = (u) => u === '' || /^https?:\/\/\S+$/i.test(u);
   if (typeof email !== 'undefined') {
+    // Basic shape check + no commas. Nodemailer treats a comma-separated `to` as a
+    // recipient LIST, so an unvalidated value here let one account fan a
+    // notification out to arbitrary third parties from the deployment's own domain.
+    const cleanEmail = String(email).trim();
+    if (cleanEmail !== '' && !/^[^\s@,;:<>"]+@[^\s@,;:<>"]+\.[^\s@,;:<>"]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'email must be a single valid address, or empty' });
+    }
     updates.push('email = ?');
-    params.push(email);
+    params.push(cleanEmail);
   }
   if (typeof ntfy_topic !== 'undefined') {
     updates.push('ntfy_topic = ?');
@@ -3033,25 +3457,51 @@ app.get('/api/shared-libraries', authRequired, (req, res) => {
 
 // --- Scheduled Notifications for Unreleased Games ---
 const SENT_NOTIFICATIONS_FILE = path.join(__dirname, 'sent_notifications.json');
-let sentNotifications = {};
+// Null-prototype maps throughout.
+//
+// game_id is attacker-controlled (POST /api/user/:username/games) and SQLite's
+// flexible typing happily stores the string "__proto__" in an INTEGER column. With
+// a normal object literal, `sentNotifications[user]["__proto__"]` returns
+// Object.prototype — truthy, so the "create if missing" guard is skipped — and the
+// following write lands on the PROTOTYPE. After that `wasNotificationSent()` returns
+// truthy for every user/game/type combination and release notifications silently
+// stop firing for everyone. Object.create(null) removes the sink entirely.
+const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+const isUnsafeKey = (k) => UNSAFE_KEYS.includes(String(k));
+
+let sentNotifications = Object.create(null);
 if (fs.existsSync(SENT_NOTIFICATIONS_FILE)) {
   try {
-    sentNotifications = JSON.parse(fs.readFileSync(SENT_NOTIFICATIONS_FILE, 'utf8'));
-  } catch {
-    sentNotifications = {};
+    // JSON.parse itself does not pollute, but assigning its result would reintroduce
+    // a normal prototype — copy the entries onto null-prototype objects instead.
+    const raw = JSON.parse(fs.readFileSync(SENT_NOTIFICATIONS_FILE, 'utf8'));
+    for (const [user, games] of Object.entries(raw || {})) {
+      if (isUnsafeKey(user)) continue;
+      const userEntry = Object.create(null);
+      for (const [gameId, types] of Object.entries(games || {})) {
+        if (isUnsafeKey(gameId)) continue;
+        userEntry[gameId] = Object.assign(Object.create(null), types);
+      }
+      sentNotifications[user] = userEntry;
+    }
+  } catch (err) {
+    console.warn('[Notifications] Could not read sent_notifications.json:', err.message);
+    sentNotifications = Object.create(null);
   }
 }
 function markNotificationSent(username, gameId, type) {
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
-  if (!sentNotifications[normalizedUsername]) sentNotifications[normalizedUsername] = {};
-  if (!sentNotifications[normalizedUsername][gameId]) sentNotifications[normalizedUsername][gameId] = {};
+  if (isUnsafeKey(normalizedUsername) || isUnsafeKey(gameId) || isUnsafeKey(type)) return;
+  if (!sentNotifications[normalizedUsername]) sentNotifications[normalizedUsername] = Object.create(null);
+  if (!sentNotifications[normalizedUsername][gameId]) sentNotifications[normalizedUsername][gameId] = Object.create(null);
   sentNotifications[normalizedUsername][gameId][type] = new Date().toISOString();
   fs.writeFileSync(SENT_NOTIFICATIONS_FILE, JSON.stringify(sentNotifications, null, 2));
 }
 function wasNotificationSent(username, gameId, type) {
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
+  if (isUnsafeKey(normalizedUsername) || isUnsafeKey(gameId) || isUnsafeKey(type)) return false;
   return sentNotifications[normalizedUsername] && sentNotifications[normalizedUsername][gameId] && sentNotifications[normalizedUsername][gameId][type];
 }
 function getAllUsers(cb) {
@@ -3061,13 +3511,16 @@ function getAllUsers(cb) {
   });
 }
 function getUserGames(username, cb) {
-  getOrCreateUser(username, (err, user) => {
-    if (err) return cb(err);
-    db.all('SELECT * FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
-      if (err) return cb(err);
-      cb(null, rows);
-    });
-  });
+  // Read-only, single round trip. Callers are the cron sweep (users always exist)
+  // and the shared-library view, where `fromUser` may have been deleted — the
+  // declared foreign keys on user_shares are not enforced, so orphan share rows
+  // are possible. An unknown user is simply an empty library, never a reason to
+  // provision an account (this used to call getOrCreateUser and did exactly that).
+  db.all(
+    'SELECT ug.* FROM user_games ug JOIN users u ON u.id = ug.user_id WHERE u.username = ?',
+    [username ? String(username).toLowerCase() : ''],
+    cb
+  );
 }
 async function sendReleaseReminder(username, game, days) {
   // Normalize username to lowercase to prevent case sensitivity issues
@@ -3223,17 +3676,9 @@ cron.schedule('0 8 * * *', () => {
 });
 
 // --- Per-user Library Sharing (persistent) ---
-const ensureUserShareTable = () => {
-  db.run(`CREATE TABLE IF NOT EXISTS user_shares (
-    from_user TEXT,
-    to_user TEXT,
-    shared_at TEXT,
-    PRIMARY KEY (from_user, to_user),
-    FOREIGN KEY (from_user) REFERENCES users(username),
-    FOREIGN KEY (to_user) REFERENCES users(username)
-  )`);
-};
-ensureUserShareTable();
+// The user_shares table is created by initializeSchema() at boot, alongside the
+// other tables and inside the same db.serialize() block — creating it here as well
+// raced everything else in the file.
 
 // Share a user's list with one or more users
 app.post('/api/user/:username/share', authRequired, (req, res) => {
@@ -3243,19 +3688,50 @@ app.post('/api/user/:username/share', authRequired, (req, res) => {
   const { toUsers } = req.body;
   if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only share your own library.' });
   if (!Array.isArray(toUsers)) return res.status(400).json({ error: 'No users to share with.' });
-  // Remove all existing shares for this user
-  db.run('DELETE FROM user_shares WHERE from_user = ?', [normalizedUsername], (err) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    // Add new shares
-    if (toUsers.length === 0) return res.json({ success: true });
-    const now = new Date().toISOString();
-    const stmt = db.prepare('INSERT OR IGNORE INTO user_shares (from_user, to_user, shared_at) VALUES (?, ?, ?)');
-    toUsers.forEach(toUser => {
-      stmt.run(normalizedUsername, toUser, now);
+
+  // Usernames are stored lowercase everywhere and every lookup compares lowercase,
+  // so a mixed-case entry here would be written but never match — a share the user
+  // sees as active that silently does nothing. Normalize, drop blanks and self-shares,
+  // and de-duplicate before touching the table.
+  const requested = [...new Set(
+    toUsers
+      .filter(u => typeof u === 'string')
+      .map(u => u.trim().toLowerCase())
+      .filter(u => u && u !== normalizedUsername)
+  )];
+
+  // The declared foreign keys on user_shares are not enforced (SQLite runs with
+  // PRAGMA foreign_keys OFF by default), so verify the targets exist ourselves
+  // rather than storing shares pointing at accounts that were never created.
+  const verifyTargets = (cb) => {
+    if (requested.length === 0) return cb(null, []);
+    const placeholders = requested.map(() => '?').join(',');
+    db.all(`SELECT username FROM users WHERE username IN (${placeholders})`, requested, (err, rows) => {
+      if (err) return cb(err);
+      cb(null, rows.map(r => r.username));
     });
-    stmt.finalize((err) => {
+  };
+
+  verifyTargets((err, existingUsers) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+    const unknown = requested.filter(u => !existingUsers.includes(u));
+    if (unknown.length) {
+      return res.status(400).json({ error: `Unknown user(s): ${unknown.join(', ')}` });
+    }
+    // Remove all existing shares for this user
+    db.run('DELETE FROM user_shares WHERE from_user = ?', [normalizedUsername], (err) => {
       if (err) return res.status(500).json({ error: 'DB error' });
-      res.json({ success: true });
+      // Add new shares
+      if (existingUsers.length === 0) return res.json({ success: true });
+      const now = new Date().toISOString();
+      const stmt = db.prepare('INSERT OR IGNORE INTO user_shares (from_user, to_user, shared_at) VALUES (?, ?, ?)');
+      existingUsers.forEach(toUser => {
+        stmt.run(normalizedUsername, toUser, now);
+      });
+      stmt.finalize((err) => {
+        if (err) return res.status(500).json({ error: 'DB error' });
+        res.json({ success: true });
+      });
     });
   });
 });
@@ -3386,6 +3862,31 @@ app.post('/api/admin/check-releases', authRequired, requirePermission('can_manag
   });
 });
 
+// --- Terminal handlers (must be registered after every route) ---
+
+// An unmatched /api/* path used to fall through to Express's default handler, which
+// replies with HTML — the frontend then reported an unintelligible JSON parse error.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// Express's built-in final handler includes err.stack in the RESPONSE BODY whenever
+// NODE_ENV !== 'production' — and staging runs NODE_ENV=staging, so unhandled errors
+// there leaked absolute filesystem paths and internal structure to the client.
+// Express 5 also forwards rejected promises from async handlers here.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(`[Error] ${req.method} ${req.path}:`, err?.stack || err);
+  if (res.headersSent) return;
+  res.status(err?.status || 500).json({ error: 'Internal server error' });
+});
+
+// A rejected promise with no handler exits the process under Node's default
+// --unhandled-rejections=throw. Log loudly instead of dying mid-request.
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled promise rejection:', reason);
+});
+
 // --- Scheduled Weekly Price Update for User Libraries ---
 cron.schedule('0 3 * * 1', async () => { // Every Monday at 3:00 AM
   console.log('[CRON] Starting weekly Steam price update for all user libraries...');
@@ -3428,12 +3929,19 @@ cron.schedule('0 3 * * 1', async () => { // Every Monday at 3:00 AM
   });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// Only bind a port when run directly (`node index.js`). The utility scripts
+// `require('./index.js')` for its exports — which used to start a second HTTP
+// listener and register all the cron jobs as a side effect of the import, so
+// `node run_notifications.js` left a server running and never exited.
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
 
 // Export functions for manual scripts
 module.exports = {
+  app,
   db,
   getAllUsers,
   getUserGames,

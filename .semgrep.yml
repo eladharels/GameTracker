@@ -8,12 +8,26 @@
 # Docs: https://semgrep.dev/docs/writing-rules/rule-syntax/
 
 rules:
-  # Detect hardcoded secret fallbacks outside the documented entry point.
-  # index.js has an intentional, documented JWT_SECRET fallback — this rule
-  # catches if the same anti-pattern appears anywhere else in the codebase.
+  # Detect hardcoded secret fallbacks anywhere in the codebase, including the
+  # entry point. index.js used to carry an intentional JWT_SECRET fallback and
+  # was excluded from this rule on that basis; that fallback was REMOVED
+  # (staging change #62). index.js now reads `const JWT_SECRET =
+  # process.env.JWT_SECRET;` and calls process.exit(1) when it is missing,
+  # shorter than 16 chars, or still set to the old 'supersecretkey' default —
+  # so there is no longer any reason to exempt it, and the exclusion is gone.
+  #
+  # The $LITERAL metavariable is constrained to a non-empty string so the rule
+  # targets real baked-in secret values and does not flag benign empty-string
+  # defaults for non-secret config (e.g. `process.env.CORS_ORIGINS || ''`,
+  # which just yields an empty allowlist before .split(',')). A credential is
+  # never the empty string, so this narrowing costs no real coverage.
   - id: hardcoded-secret-fallback-outside-entry
-    pattern: |
-      process.env.$VAR || "$LITERAL"
+    patterns:
+      - pattern: |
+          process.env.$VAR || "$LITERAL"
+      - metavariable-regex:
+          metavariable: $LITERAL
+          regex: ".+"
     message: >
       Hardcoded secret fallback detected. Secrets must come from environment
       variables only — do not supply a literal fallback value.
@@ -21,7 +35,6 @@ rules:
     severity: ERROR
     paths:
       exclude:
-        - index.js
         - node_modules/
         - "**/frontend/node_modules/"
         - "**/frontend/dist/"

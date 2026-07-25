@@ -1,0 +1,39 @@
+{
+  "_comment": "Template for settings.json. Copy to settings.json and fill in. settings.json is gitignored — it holds live SMTP/LDAP credentials and the Telegram bot token, so it must never be committed. All values below are editable at runtime from Settings (admin-only) in the web UI.",
+
+  "smtp": {
+    "host": "",
+    "port": 587,
+    "user": "",
+    "pass": "",
+    "from": ""
+  },
+
+  "ntfy": {
+    "url": ""
+  },
+
+  "gotify": {
+    "url": ""
+  },
+
+  "telegram": {
+    "bot_token": ""
+  },
+
+  "ldap": {
+    "url": "",
+    "base": "",
+    "bindDn": "",
+    "bindPass": "",
+    "requiredGroup": ""
+  },
+
+  "apikeys": {
+    "igdb_client_id": "",
+    "igdb_client_secret": "",
+    "igdb_bearer_token": "",
+    "rawg_api_key": "",
+    "thegamesdb_api_key": ""
+  }
+}

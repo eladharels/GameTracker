@@ -17,7 +17,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~3300 lines — monolithic Express server)
+- **Entry point**: `index.js` (~3950 lines — monolithic Express server)
 
 ### Frontend
 - **Framework**: React 18 with React Router 6
@@ -25,7 +25,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~2450 lines — single large component)
+- **Entry point**: `frontend/src/App.jsx` (~2600 lines — single large component)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -33,7 +33,9 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
 - **Persistent volumes**: SQLite database, settings.json, sent_notifications.json
 
-> **Dockerfile layer order (critical):** The backend `Dockerfile` must install system build tools (`python3`, `make`, `g++`, `sqlite3`) **before** running `npm install --production`. The `sqlite3` package has no prebuilt NAPI binary for the `node:18-slim` image and compiles from source via `node-gyp`, which requires Python3. Wrong order → build failure.
+> **Dockerfile layer order (critical):** The backend `Dockerfile` must install system build tools (`python3`, `make`, `g++`, `sqlite3`) **before** running `npm ci --omit=dev`. The `sqlite3` package has no prebuilt NAPI binary for the `node:18-slim` image and compiles from source via `node-gyp`, which requires Python3. Wrong order → build failure.
+>
+> Dependencies install with `npm ci` (not `npm install`) so the image matches `package-lock.json` exactly.
 
 ---
 
@@ -46,22 +48,44 @@ GameTracker/
 ├── Dockerfile                      # Backend image (node:18-slim)
 ├── docker-compose.yaml             # Production orchestration
 ├── docker-compose.staging.yaml     # Staging orchestration
-├── .env                            # API credentials (gitignored)
-├── settings.json                   # SMTP / LDAP / ntfy runtime config
+├── docker-compose.test.yml         # CI smoke-test stack (isolated ports/data)
+├── .env                            # API credentials (GITIGNORED — never commit)
+├── settings.example.json           # Template for settings.json (committed, no secrets)
+├── settings.json                   # SMTP / LDAP / Telegram / API-key runtime config
+│                                   #   (GITIGNORED — holds live credentials)
 ├── gametracker.db                  # SQLite database (gitignored)
-├── sent_notifications.json         # Notification deduplication log
+├── sent_notifications.json         # Notification deduplication log (gitignored)
+├── crackwatch-cache.json           # Cached DRM status (gitignored)
+├── system-status-cache.json        # Last-OK timestamps per service (gitignored)
+├── .dockerignore                   # Keeps secrets/state out of the image build context
+├── .gitleaks.toml                  # Secret-scanning rules + allowlist
+├── .semgrep.yml                    # Custom SAST rules
+├── .trivyignore                    # Documented CVE suppressions
+├── .github/workflows/
+│   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx                 # Main React app (all pages/views in one file)
-│   │   ├── App.css                 # Global styles (glassmorphism theme)
+│   │   ├── App.css                 # Global styles (glassmorphism theme, ~6200 lines)
+│   │   ├── GameDetailModal.jsx     # Game detail overlay
 │   │   ├── main.jsx                # React entry point
 │   │   ├── contexts/
 │   │   │   └── ToastContext.jsx    # Global toast notification context
 │   │   └── styles/
 │   │       └── Toast.css
-│   ├── vite.config.js
+│   ├── SharedLibrary.jsx           # Shared-library page (NOTE: lives outside src/)
+│   ├── nginx.conf                  # Serves the SPA + proxies /api to the backend
+│   ├── vite.config.js              # Dev server + /api proxy for local development
+│   ├── eslint.config.js
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
+├── [Docs]:
+│   ├── README.md                   # Setup, API reference, operations
+│   ├── SECURITY_HARDENING_2026-07.md  # Threat history + operational runbook (authoritative)
+│   ├── PRODUCTION_CHANGELOG.txt    # Record of changes promoted from staging
+│   ├── SECURITY_FIXES.md           # Historical — early credential-validation fix
+│   ├── NOTIFICATION_FIXES.md       # Historical — notification system rework
+│   └── RELEASE_STATUS_UPDATE.md    # Historical — unreleased→wishlist transition
 └── [Utility scripts]:
     ├── create-local-admin.js
     ├── reset-root-password.js
@@ -76,8 +100,17 @@ GameTracker/
 ### Architectural Pattern
 - **Full-stack monolith**: All backend logic lives in a single `index.js`
 - **Single-page application**: All frontend views/pages live in `App.jsx` + React Router
-- **File-based config**: Runtime settings (SMTP, LDAP, ntfy) stored in `settings.json`
-- **Stateless API**: JWT-based authentication — no server-side session state
+- **File-based config**: Runtime settings (SMTP, LDAP, Telegram, API keys) in `settings.json`,
+  read through a cached `loadSettings()` that revalidates on the file's mtime
+- **Stateless API**: JWT-based authentication — no server-side session state. The token carries
+  identity; **privilege is re-read from the database on every request**, so revoking admin or deleting
+  an account takes effect immediately rather than at token expiry.
+
+> **Schema initialization is order-sensitive.** All `CREATE TABLE` / `ALTER TABLE` statements run inside
+> `db.serialize()` in `initializeSchema()`. node-sqlite3 defaults to *parallel* mode, where the ALTER
+> migrations race the CREATEs and fail on a fresh database — which silently shipped installs missing
+> `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Never add schema statements outside
+> that block, and never pass an empty error callback to a migration.
 
 ---
 
@@ -161,7 +194,7 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
-- **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy (CSP/HSTS from nginx)
+- **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.
 - **Root user**: seeded from `ROOT_PASSWORD`, else a random password printed once at first boot (no hardcoded default; existing DBs keep their current root password)
 - **Secrets never in the image**: `.dockerignore` excludes `.env`, the DB, and `settings.json` from the build context
 
@@ -229,7 +262,8 @@ NODE_ENV=production
 
 | Schedule | Task |
 |---|---|
-| Daily at 8:00 AM | Check released games; update status `unreleased → wishlist`; send release notifications and reminders (30d, 7d, 0d) |
+| Daily at 4:00 AM | Refresh the CrackWatch DRM-status cache for all games |
+| Daily at 8:00 AM | Check released games; update status `unreleased → wishlist`; send release reminders on each user's own `notification_days` schedule (default 0/7/30) |
 | Every Monday at 3:00 AM | Fetch current Steam prices for all library games with a Steam App ID |
 
 ---
@@ -410,5 +444,6 @@ Before any production deployment:
 - [ ] Changes were first validated in **GameTracker-stg** (staging environment)
 - [ ] Migration steps are documented in `GameTracker-stg/STAGING_CHANGELOG.txt`
 - [ ] `.env` and `settings.json` are not committed to version control
+      (both are gitignored; `settings.json` was leaked historically — see `SECURITY_HARDENING_2026-07.md` §9.1)
 - [ ] Docker images build successfully
 - [ ] Health check endpoint (`GET /api/health`) passes after deployment

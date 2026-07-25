@@ -43,6 +43,9 @@ if (!username || !password || !username.trim() || !password.trim()) {
   - 15-minute lockout period
   - Automatic reset after lockout duration
 - **Tracking**: All failed authentication attempts (both local and LDAP) are tracked
+- **Client identity**: Attempts are keyed on `req.ip`. The app sets `trust proxy` (one hop by
+  default, overridable via `TRUST_PROXY`) so that behind nginx this is the real client address
+  rather than the proxy's — otherwise every user would share a single bucket
 
 ### 4. Enhanced Password Security
 - **Minimum Length**: Passwords must be at least 8 characters
@@ -75,7 +78,10 @@ if (!username || !password || !username.trim() || !password.trim()) {
 ## Additional Security Considerations
 
 1. **HTTPS**: Ensure the application is served over HTTPS in production
-2. **Session Management**: Consider implementing session timeouts and secure session handling
+2. **Session Management**: Implemented since this document was written — issued JWTs carry a
+   12-hour expiry (`expiresIn: '12h'`), and `JWT_SECRET` is now required from the environment
+   with no hardcoded fallback (the backend exits at startup if it is missing, under 16
+   characters, or still set to the old `supersecretkey` default)
 3. **Input Sanitization**: Ensure all user inputs are properly sanitized
 4. **Regular Security Audits**: Implement regular security reviews and updates
 

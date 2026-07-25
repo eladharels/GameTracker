@@ -1,5 +1,15 @@
 # Notification System Fixes
 
+> **Note (2026-07):** This file is a historical record of an earlier notification-system fix
+> (duplicate sends, ntfy message wording, per-user email lookup). It is **not** a description of
+> the current architecture. Most importantly, **notification servers are now per-user**: each user
+> sets their own ntfy server URL + topic, Gotify server URL + token, and Telegram chat ID on the
+> **My Account** page. The server-level `settings.json` `ntfy.url` / `gotify.url` values are only an
+> optional admin-set *default fallback* used when a user leaves their own server URL blank.
+> Reminder schedules are per-user too (`users.notification_days`, default `[0, 7, 30]`).
+> For the current design and the July 2026 hardening pass, see
+> **[`SECURITY_HARDENING_2026-07.md`](SECURITY_HARDENING_2026-07.md)** and **[`CLAUDE.md`](CLAUDE.md)**.
+
 ## Issues Addressed
 
 ### 1. Duplicate Notifications
@@ -88,6 +98,12 @@ Configure SMTP for email delivery:
   }
 }
 ```
+
+There is deliberately **no server-wide `to` address** here. `sendEmail()` delivers only to the
+per-recipient address passed in by its caller — recipients are resolved per user from
+`users.email`, falling back to an LDAP `mail` lookup via `getUserEmail()` / `getLdapEmail()`
+(which then caches the result back into `users.email`). A user with no address in either place
+simply receives no email.
 
 ## Testing
 

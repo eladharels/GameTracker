@@ -1,3 +1,20 @@
 node_modules/
+
+# Secrets / credentials — never commit
 .env
-gametracker.db 
+.env.local
+.env.*.local
+
+# Runtime configuration. Holds SMTP + LDAP credentials and the Telegram bot token.
+# Volume-mounted in production (see docker-compose.yaml); seed a new install from
+# settings.example.json.
+settings.json
+
+# Runtime state (volume-mounted / regenerated at run time)
+gametracker.db
+gametracker.db-journal
+gametracker.db-wal
+gametracker.db-shm
+sent_notifications.json
+crackwatch-cache.json
+system-status-cache.json

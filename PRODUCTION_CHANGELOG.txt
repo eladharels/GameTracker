@@ -9,6 +9,69 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-07-25 (Remediation pass — full codebase + docs review, round 2) ---
+Summary: Full review of every MD file and the codebase, with independent CISO and
+         Architect reviews. Fixes a leaked LDAP credential in git history, a broken
+         fresh-install schema, a pre-auth remote crash, and ~20 further security and
+         correctness defects. See SECURITY_HARDENING_2026-07.md section 9 for the
+         complete record; only the operational deltas are repeated here.
+
+CRITICAL — credentials in git history:
+  • settings.json was TRACKED and contained a live LDAP bind password. TWO distinct
+    passwords exist in history (33eface and 811af90), plus the full directory topology.
+  • settings.json is now untracked + gitignored; settings.example.json added.
+  • .gitleaks.toml gained rules for config passwords and Telegram bot tokens, with both
+    historical commits allowlisted BY SHA so CI stays green on unrewritable history.
+  >>> OPERATOR ACTION REQUIRED:
+      1. Rotate BOTH LDAP service-account passwords; treat the account as compromised.
+      2. Decide whether to purge history with git filter-repo + force-push.
+      3. Move the LDAP URL to ldaps:// (simple bind over ldap:// is cleartext).
+
+FRESH INSTALLS WERE BROKEN (pre-existing, never detected):
+  • Schema ALTERs ran outside db.serialize(), so on a NEW database they raced the
+    CREATE TABLEs and failed into empty error callbacks. A fresh install came up without
+    user_games.backlog_order, users.telegram_chat_id, users.ntfy_url, users.gotify_url —
+    adding any game returned 500 and per-user notifications did nothing.
+  • Existing databases were unaffected (migrated incrementally over time), and the smoke
+    test only checked /api/health, which is why this stayed hidden.
+  • Fixed via initializeSchema() inside db.serialize(), with migration errors logged.
+
+Files changed:
+  • index.js                      (all backend fixes — see SECURITY_HARDENING section 9.3)
+  • run_notifications.js          (now honours users.notification_days and uses the cron's
+                                   '<N>days' dedup key — it used 'release' for day 0, so
+                                   running it re-sent reminders the cron had already sent)
+  • package.json / package-lock   (brace-expansion >=5.0.8 — the old >=5.0.7 pin did NOT
+                                   satisfy GHSA-mh99-v99m-4gvg and was a live HIGH that
+                                   would have failed the next Trivy run; plus qs,
+                                   body-parser, ip-address. react-icons removed — it is a
+                                   frontend package that was in the backend deps.)
+  • frontend/nginx.conf           (NEW location /api/ proxy; the frontend image could not
+                                   serve a working app alone — try_files answered /api/*
+                                   with index.html and HTTP 200)
+  • frontend/vite.config.js       (dev /api proxy — `npm run dev` per README could not
+                                   reach the backend at all)
+  • docker-compose{,.staging,.test}  (container port fixed at 3000, host ports bound to
+                                   127.0.0.1, staging JWT_SECRET fail-fast, staging
+                                   NODE_ENV=production so stacks stop leaking err.stack)
+  • .github/workflows/...         (smoke test now exercises browser -> nginx -> backend;
+                                   mktemp -d instead of a fixed /tmp path; pinned scanner
+                                   installs; least-privilege token)
+  • Dockerfile                    (npm ci --omit=dev)
+  • .gitignore / .gitleaks.toml / .semgrep.yml / settings.example.json
+  • README.md, CLAUDE.md, SECURITY_HARDENING_2026-07.md, and the three historical docs
+
+Post-deploy verification (beyond the standard checklist):
+  • Confirm login still works — authRequired now re-reads the user row per request.
+  • Confirm an admin saving Settings does NOT blank the SMTP/LDAP password: GET returns
+    '__unchanged__' and POST maps it back to the stored value.
+  • Confirm notifications still deliver: ntfy topics are now URL-encoded and the Gotify
+    token moved from the query string to the X-Gotify-Key header.
+  • On the host, review pre-existing ghost accounts:
+      SELECT id, username, created_at FROM users WHERE password IS NULL AND origin='local';
+    and delete the confirmed ones (plus their user_shares rows) by hand.
+
+
 --- APPLIED 2026-07-25 (Staging CHANGE #66 — add .dockerignore; CISO condition C1) ---
 Summary: Add .dockerignore so a local `docker build` cannot bake .env (real IGDB/RAWG
          API keys), gametracker.db, or settings.json into the backend image. Resolves

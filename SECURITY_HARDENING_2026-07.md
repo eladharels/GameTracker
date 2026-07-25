@@ -208,9 +208,138 @@ Production (`../GameTracker/`) received the same logical changes, preserving int
 
 ## 8. Known residual items / follow-ups (non-blocking)
 - Login rate limiting is in-memory (per-process, resets on restart) — fine for a single container.
-- No CSP/HSTS from the Node app — nginx owns those headers (see staging #58).
-- LOW/MODERATE dependency advisories (qs, body-parser, ip-address, @tootallnate/once) — routine refresh.
+  **Update (§9):** now keyed per-account as well as per-IP, and swept hourly.
+- No CSP/HSTS from the Node app — nginx owns those headers (see staging #58). HSTS is still not set
+  anywhere in this repo's nginx.conf; it belongs on the TLS-terminating edge proxy.
+- ~~LOW/MODERATE dependency advisories (qs, body-parser, ip-address, @tootallnate/once)~~ — cleared in
+  §9 except the `node-gyp` chain under `sqlite3` (5 LOW, build-time only).
 - Mobile app: uses plain `SharedPreferences` for the token and has always-on OkHttp `BODY` logging that
   prints the login body + bearer token — tracked in `../GameTracker-mobile/SECURITY_FIXES.md`.
-- `CLAUDE.md` files describe notification config as server-level and "5 accent presets" — now stale
-  (per-user notification servers; 6 accent presets). Worth a docs refresh.
+- ~~`CLAUDE.md` describes notification config as server-level and "5 accent presets"~~ — already
+  corrected; that item was itself stale when written.
+
+---
+
+## 9. Remediation pass — July 2026 (round 2)
+
+A full codebase + documentation review, with independent CISO and Architect reviews, found a further
+set of issues. Everything below is **fixed in code** unless explicitly listed under *Operator actions*.
+
+### 9.1 CRITICAL — credentials in git history
+
+`settings.json` was **tracked in git** and contained a live LDAP service-account bind password.
+There are **two distinct passwords** across two commits:
+
+| Commit | Leaked |
+|---|---|
+| `33eface` "add my project" | `bindPass` for `CN=GameTrackerusr` (`ldap://etechdc.etech.com`) |
+| `811af90` "change ldap"    | `bindPass` for `uid=gametrackerusr` (`ldap://freeipa.etech.com`) |
+
+The history also exposes the directory topology: base DN, service-account DN, required-group DN, and
+the `mail.etech.ink` / `ntfy.etech.ink` hostnames.
+
+Three controls each failed to catch it: `.gitignore` covered `.env` and the DB but not `settings.json`;
+Gitleaks' default ruleset has no rule for a password in a generic JSON key; and the deployment
+checklist *asserted* the file was not committed.
+
+**Fixed:** `settings.json` untracked and gitignored; `settings.example.json` added as the template;
+`.gitleaks.toml` gained a `gametracker-config-password` rule (matches `bindPass`/`smtp pass`/`password`
+with a non-empty value) and a Telegram-bot-token rule. Both historical commits are allowlisted **by SHA**
+so the new rules do not fail CI on unrewritable history — remove those entries if the history is purged.
+
+> **Operator actions (cannot be done in code):**
+> 1. **Rotate BOTH LDAP service-account passwords** and treat the account as compromised; audit what it
+>    could reach.
+> 2. Decide on `git filter-repo` + force-push to purge the blobs. Until then every clone still has them.
+> 3. Switch the LDAP URL to `ldaps://` (see 9.2).
+
+### 9.2 Fresh installs were broken (pre-existing, undetected)
+
+`db.run` was called outside `db.serialize()`. node-sqlite3 defaults to **parallel** mode, so the
+`ALTER TABLE … ADD COLUMN` migrations raced the `CREATE TABLE` statements and lost on a **fresh**
+database — failing with "no such table" into empty `() => {}` error callbacks. A brand-new install came
+up missing `user_games.backlog_order`, `users.telegram_chat_id`, `users.ntfy_url` and `users.gotify_url`,
+so **adding any game returned 500**, backlog ordering failed, and the entire per-user notification
+feature was inert. Existing databases were fine (migrated incrementally), and the CI smoke test only
+asserted `/api/health`, so nothing surfaced it.
+
+**Fixed:** schema creation and migrations run inside `db.serialize()` via `initializeSchema(done)`;
+migration failures are logged unless they are the expected "duplicate column name"; `ensureRootUser()`
+now runs *after* the schema instead of racing it; `user_shares` creation moved into the same block.
+
+### 9.3 Backend
+
+| # | Issue | Fix |
+|---|---|---|
+| C1 | **Pre-auth remote crash.** `ldap.createClient` had no `'error'` listener anywhere. An unreachable directory turned any anonymous `POST /api/auth/login` into an uncaught exception that killed the process — and each crash wiped the in-memory rate-limit counters. `/api/admin/ldap-sync` built a client per user, so one sync was a guaranteed crash. | `createLdapClient()` attaches an `'error'` handler + connect/read timeouts and fails over once. All three call sites use it. A `authCompleted` latch makes the login fallback idempotent (the socket error and the bind callback race). |
+| H | **LDAP filter injection** at three sites — username interpolated raw, so `*` matched the whole directory. | `escapeLdapFilterValue()` (RFC 4515) + `buildUserSearchFilter()`. A search matching **more than one** entry is now refused rather than silently binding as whichever arrived last. |
+| H | **SSRF error oracle.** `POST /api/admin/test-notification` (auth-only, by design) returned raw axios errors, distinguishing refused/filtered/404 — a port scanner for the internal network. `topic`/`token` were interpolated unencoded, giving control of the full path and query. | Errors collapsed to one generic message (`sanitizeDeliveryError`); detail stays in the server log. `topic` is `encodeURIComponent`'d; the Gotify token moved to the `X-Gotify-Key` header. Cloud **metadata** endpoints (169.254.0.0/16, `metadata.google.internal`, …) are blocked. **RFC1918 remains allowed — self-hosting ntfy/Gotify on a LAN is the documented design.** |
+| H | **Authenticated open relay / HTML injection.** `sendEmail` interpolated `text` and `coverUrl` raw into the HTML body, and `email` was accepted with no validation — so one account could send arbitrary HTML to an arbitrary address from the deployment's SPF/DKIM-aligned domain. | Body HTML-escaped; `coverUrl` must be `https` on an allowlisted image host; `email` must be a single valid address (commas rejected — nodemailer treats `to` as a list). |
+| H | **Rate-limit bypasses.** A successful login cleared the whole IP's counter, so one valid account gave unlimited guesses against `root`; the counter was cleared before the LDAP group check; entries never expired. | Counters keyed on **both** IP and account; only the authenticating account's keys clear; clearing moved after the group-membership check; hourly sweep. |
+| M | **Authorization frozen in the 12-hour JWT.** `requirePermission` read the token claim, never the DB — so revoking admin left full admin access until expiry, and a deleted user's token kept working. | `authRequired` re-reads the user row per request and 401s if the account is gone. |
+| M | **Prototype pollution.** `game_id` is attacker-controlled and SQLite stores `"__proto__"` happily; the notification-dedup map's guard was skipped and the write landed on `Object.prototype`, after which **all** release notifications silently stopped. | Null-prototype maps + rejection of `__proto__`/`constructor`/`prototype` keys. |
+| M | **Crash via numeric password.** `12345678` passes `.length < 8` (`undefined < 8`) then rejects inside `bcrypt.hash`; unhandled, that exits the process. | `typeof === 'string'` checks + `.catch()` on both hash calls + an `unhandledRejection` backstop. |
+| M | **Ghost users.** `getOrCreateUser` was used as a *read* helper in ~10 routes, so any request naming an unknown user provisioned a passwordless account that appeared in `/api/all-users` and the sharing picker. | `findUser` / `withExistingUser` (404 on miss); auto-create is now only on the LDAP login path. `getUserGames` uses a single JOIN. |
+| M | **Share integrity.** Nonexistent and mixed-case usernames were accepted; SQLite does not enforce the declared FKs, so mixed-case shares were stored but could never match. | Targets normalized, de-duplicated, self-shares dropped, and verified to exist. Deleting a user now also deletes their share rows. |
+| M | Staging ran `NODE_ENV=staging`, so Express's default handler returned `err.stack` **in the response body**. | Explicit error middleware returning a generic message; staging set to `NODE_ENV=production`. Unmatched `/api/*` now returns JSON 404 instead of the SPA's HTML. |
+| L | `/api/health` (unauthenticated) leaked user count, the root account's id/username, and raw DB errors. | Returns `{"status":"ok"}` only. |
+| L | Admin `GET /api/settings` returned `ldap.bindPass` / `smtp.pass` / `telegram.bot_token` in cleartext. | Masked as `__unchanged__`; `POST` maps the mask back to the stored value, so saving a section without retyping the password preserves it. An empty string still clears. |
+| L | `settings.json` written 0644 (world-readable in-container); `SETTINGS_FILE` was a **relative** path, so scripts run from another directory read/created a different file; a corrupt file degraded silently. | Mode `0600`, absolute `path.join(__dirname, …)`, parse errors logged, and the parsed object cached with `mtime` validation (it was `readFileSync` on every hot-path call). |
+| L | Admins could demote or delete themselves, or delete `root`, locking the instance out. | Refused. `me`/`root`/`admin` are reserved usernames (`me` would be shadowed by the `/api/user/me/*` routes). |
+| L | Per-request logging wrote one line **per game** in a library, and dumped the full LDAP entry (DN, mail, memberOf) on every login. | One summary line per request; LDAP logs the DN only. |
+| L | Username enumeration — LDAP-origin accounts got a distinct error message. | Uniform `Invalid credentials`; the reason goes to the log. |
+
+### 9.4 Dependencies
+
+`brace-expansion` was pinned `>=5.0.7`, but GHSA-mh99-v99m-4gvg covers `<=5.0.7` — a live **HIGH** that
+would have failed the next Trivy run. Bumped to `>=5.0.8`, plus `qs >=6.15.3`, `body-parser >=2.3.0`,
+`ip-address >=10.3.0`. `react-icons` (a frontend-only package) removed from the backend dependencies.
+
+`npm audit --production`: **1 HIGH + 4 MODERATE → 0**. Five LOW remain in the `node-gyp` chain under
+`sqlite3`, reachable only at build time and resolvable only by the `sqlite3` 6.x major bump — deferred.
+
+> **`ldapjs` is decommissioned.** All `@ldapjs/*` packages print decommission notices on install; the
+> entire enterprise auth path rests on an abandoned dependency that will never be patched. No drop-in
+> replacement exists — this needs a planned migration.
+
+### 9.5 Infrastructure & CI
+
+- **`frontend/nginx.conf` had no `/api` proxy**, so `try_files` answered `/api/*` with **index.html and
+  HTTP 200** — the frontend image could not serve a working app alone, and CI's "frontend returns 200"
+  gate passed against a completely broken stack. Added a `location /api/` block using the
+  `resolver 127.0.0.11` + variable-`proxy_pass` pattern (so nginx starts even when the backend is down)
+  with 600s timeouts for the 5-minute bulk refresh. **If an external proxy already routes `/api`, this
+  block is simply never reached.**
+- The **container** backend port is now fixed at `3000` in all three compose files (only the *host*
+  port varies), which is what makes that proxy work in the smoke stack too.
+- Backend published ports bound to **`127.0.0.1`**. On `0.0.0.0` the backend was reachable directly,
+  bypassing nginx — and with `trust proxy: 1` a direct client controls `X-Forwarded-For` and can present
+  a fresh IP per login attempt.
+- **Smoke test now proves the real request path**: `/api/health` *through* the frontend port, plus a
+  JSON-404 assertion. This is the first functional CI gate beyond "the process started".
+- Smoke-test data directory moved from a fixed `/tmp` path to `mktemp -d`. The old path on a shared
+  runner was a symlink-attack target: `echo` would truncate production `settings.json`, `chmod -R 777`
+  would expose the live database, and teardown's `rm -rf` would **delete the production data directory**.
+  Teardown now refuses to delete a symlink and uses `--one-file-system`.
+- Trivy/Gitleaks installs **pinned and verified** (Trivy was `curl | sudo sh` from a mutable `main`).
+  Both were `if ! command -v …`-guarded, so a stub binary on a persistent runner would permanently
+  green-light the scan while CI reported success.
+- `permissions: contents: read` + `persist-credentials: false` on all eight checkouts.
+- Backend image builds with `npm ci --omit=dev` (was `npm install --production`) so it matches the lockfile.
+- Staging `JWT_SECRET` uses `${JWT_SECRET:?…}` like production (it defaulted to `supersecretkey`, which
+  only failed closed by accident because that exact literal is on the boot deny-list).
+
+### 9.6 Still open — deliberately not changed
+
+- **Cleartext `ldap://`.** A simple bind sends every user password and the service-account password
+  unencrypted. The code now **warns loudly at startup** but does not refuse, because refusing would lock
+  out the running deployment. **Switch to `ldaps://` and rotate.**
+- **HSTS** — belongs on the TLS-terminating edge proxy, which is not in this repo.
+- **`sqlite3` 6.x** major bump (clears the last 5 LOW advisories).
+- **Existing ghost users** already in the database. Review with
+  `SELECT id, username, created_at FROM users WHERE password IS NULL AND origin = 'local';`
+  and delete the confirmed ones by hand — this is a live-data operation, not a migration.
+- **Email address verification.** Changing `email` still takes effect without a confirmation round-trip;
+  only the format is validated. A verification token is a feature, not a patch.
+- **Long-running bulk refresh** is still a synchronous 5-minute HTTP request. The right shape is
+  `202 Accepted` + a job id; deferred as a feature.

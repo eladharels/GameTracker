@@ -12,6 +12,11 @@ concurrency:
   group: gametracker-pipeline
   cancel-in-progress: false
 
+# Least privilege. Without this the default token may be read+write, and
+# actions/checkout persists it into .git/config on a PERSISTENT self-hosted runner.
+permissions:
+  contents: read
+
 jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -26,19 +31,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Install Gitleaks (if not cached on runner)
         run: |
-          if ! command -v gitleaks &>/dev/null; then
-            echo "[gitleaks] Downloading binary..."
-            curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+          set -euo pipefail
+          GITLEAKS_VERSION="8.21.2"
+          # Reinstall unless the pinned version is already on PATH, so a stubbed
+          # binary cannot silently disable the secret scan on a persistent runner.
+          if [ "$(gitleaks version 2>/dev/null)" != "${GITLEAKS_VERSION}" ]; then
+            echo "[gitleaks] Downloading pinned v${GITLEAKS_VERSION}..."
+            curl -sSfL --proto '=https' --tlsv1.2 \
+              "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
               -o /tmp/gitleaks.tar.gz
             tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
-            sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
-            rm -f /tmp/gitleaks.tar.gz
+            sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+            rm -f /tmp/gitleaks.tar.gz /tmp/gitleaks
           fi
-          echo "[gitleaks] Version: $(gitleaks version)"
+          gitleaks version
+          gitleaks version | grep -q "${GITLEAKS_VERSION}"
 
       - name: Run Gitleaks secret scan
         run: |
@@ -61,6 +73,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Semgrep (if not cached on runner)
         run: |
@@ -97,6 +111,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -133,6 +149,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -169,15 +187,32 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Install Trivy (if not cached on runner)
+      # Pinned release tarball, verified before use. The previous version piped
+      # raw.githubusercontent.com/.../main/contrib/install.sh into `sudo sh` — a
+      # mutable ref executed as root on the same host that runs production and holds
+      # JWT_SECRET. It was also guarded by `if ! command -v trivy`, so on a
+      # persistent runner anyone who could drop a stub at /usr/local/bin/trivy would
+      # permanently green-light the scan while CI still reported success.
+      - name: Install Trivy (pinned)
+        env:
+          TRIVY_VERSION: "0.58.1"
         run: |
-          if ! command -v trivy &>/dev/null; then
-            echo "[trivy] Installing..."
-            curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-              | sudo sh -s -- -b /usr/local/bin
+          set -euo pipefail
+          if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
+            echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
+            curl -sSfL --proto '=https' --tlsv1.2 \
+              "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+              -o /tmp/trivy.tar.gz
+            tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+            sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+            rm -f /tmp/trivy.tar.gz /tmp/trivy
           fi
-          echo "[trivy] Version: $(trivy --version)"
+          # Fail closed if the binary on PATH is not the pinned version.
+          trivy --version
+          trivy --version | head -1 | grep -q "${TRIVY_VERSION}"
 
       - name: Scan backend image
         env:
@@ -205,15 +240,32 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Install Trivy (if not cached on runner)
+      # Pinned release tarball, verified before use. The previous version piped
+      # raw.githubusercontent.com/.../main/contrib/install.sh into `sudo sh` — a
+      # mutable ref executed as root on the same host that runs production and holds
+      # JWT_SECRET. It was also guarded by `if ! command -v trivy`, so on a
+      # persistent runner anyone who could drop a stub at /usr/local/bin/trivy would
+      # permanently green-light the scan while CI still reported success.
+      - name: Install Trivy (pinned)
+        env:
+          TRIVY_VERSION: "0.58.1"
         run: |
-          if ! command -v trivy &>/dev/null; then
-            echo "[trivy] Installing..."
-            curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-              | sudo sh -s -- -b /usr/local/bin
+          set -euo pipefail
+          if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
+            echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
+            curl -sSfL --proto '=https' --tlsv1.2 \
+              "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+              -o /tmp/trivy.tar.gz
+            tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+            sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+            rm -f /tmp/trivy.tar.gz /tmp/trivy
           fi
-          echo "[trivy] Version: $(trivy --version)"
+          # Fail closed if the binary on PATH is not the pinned version.
+          trivy --version
+          trivy --version | head -1 | grep -q "${TRIVY_VERSION}"
 
       - name: Scan frontend image
         env:
@@ -252,20 +304,32 @@ jobs:
     env:
       BACKEND_TEST_PORT: 3099
       FRONTEND_TEST_PORT: 8099
-      SMOKE_DATA_DIR: /tmp/gametracker-smoke-data
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
+      # SMOKE_DATA_DIR is created with mktemp -d, not a fixed /tmp path.
+      #
+      # The old fixed path (/tmp/gametracker-smoke-data) on a shared, persistent
+      # runner was a symlink-attack target: any local user could pre-create it as a
+      # symlink to /home/docker/gametracker/data, at which point this step's `echo`
+      # truncated the production settings.json, `chmod -R 777` exposed the live
+      # database, and teardown's `rm -rf` DELETED the production data directory.
       - name: Prepare ephemeral test data directory
         run: |
-          mkdir -p ${{ env.SMOKE_DATA_DIR }}
-          touch ${{ env.SMOKE_DATA_DIR }}/gametracker.db
-          echo '{}' > ${{ env.SMOKE_DATA_DIR }}/settings.json
-          echo '[]' > ${{ env.SMOKE_DATA_DIR }}/sent_notifications.json
-          # Allow the container's node user (UID 1000) to read/write the mounted
-          # files regardless of which user the self-hosted runner creates them as.
-          chmod -R 777 ${{ env.SMOKE_DATA_DIR }}
+          set -euo pipefail
+          SMOKE_DATA_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gametracker-smoke.XXXXXXXX")"
+          echo "SMOKE_DATA_DIR=${SMOKE_DATA_DIR}" >> "$GITHUB_ENV"
+          touch "${SMOKE_DATA_DIR}/gametracker.db"
+          echo '{}' > "${SMOKE_DATA_DIR}/settings.json"
+          echo '[]' > "${SMOKE_DATA_DIR}/sent_notifications.json"
+          # The container runs as UID 1000 (node). Grant that user ownership
+          # explicitly rather than making the tree world-writable.
+          sudo chown -R 1000:1000 "${SMOKE_DATA_DIR}"
+          chmod 700 "${SMOKE_DATA_DIR}"
+          echo "[smoke] Test data dir: ${SMOKE_DATA_DIR}"
 
       - name: Start smoke test stack
         env:
@@ -336,6 +400,38 @@ jobs:
           }
           echo "[smoke] Frontend HTTP 200 check PASSED"
 
+      # THE check that actually matters: the browser talks to the API through
+      # nginx on the frontend port, never to the backend port directly. Until the
+      # nginx /api proxy existed, `try_files` answered /api/* with index.html and
+      # HTTP 200 — so the check above passed against a completely broken stack.
+      # Asserting the JSON body here is what makes that failure mode visible.
+      - name: Verify API is reachable THROUGH the frontend proxy
+        run: |
+          set -euo pipefail
+          RESPONSE=$(curl -sf "http://localhost:${{ env.FRONTEND_TEST_PORT }}/api/health")
+          echo "[smoke] /api/health via frontend: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"status":"ok"' || {
+            echo "[smoke] ERROR: /api/health through the frontend proxy did not return status ok."
+            echo "[smoke] If this returned HTML, the nginx /api proxy is not routing to the backend."
+            exit 1
+          }
+          echo "[smoke] End-to-end frontend -> backend check PASSED"
+
+      # An unmatched /api path must be JSON 404, not the SPA's index.html —
+      # otherwise a typo'd endpoint surfaces in the app as a JSON parse error.
+      - name: Verify unknown API routes return JSON 404
+        run: |
+          set -euo pipefail
+          STATUS=$(curl -o /tmp/smoke-404.json -sw "%{http_code}" \
+            "http://localhost:${{ env.FRONTEND_TEST_PORT }}/api/definitely-not-a-route")
+          echo "[smoke] Unknown API route status: $STATUS, body: $(cat /tmp/smoke-404.json)"
+          [ "$STATUS" -eq 404 ] && grep -q '"error"' /tmp/smoke-404.json || {
+            echo "[smoke] ERROR: expected a JSON 404 from an unknown /api route."
+            exit 1
+          }
+          rm -f /tmp/smoke-404.json
+          echo "[smoke] API 404 handling check PASSED"
+
       - name: Tear down smoke test stack
         if: always()
         env:
@@ -348,7 +444,10 @@ jobs:
             -p gametracker-smoke \
             -f docker-compose.test.yml \
             down --volumes --remove-orphans || true
-          rm -rf ${{ env.SMOKE_DATA_DIR }}
+          # Refuse to delete anything that isn't the mktemp -d directory we created.
+          if [ -n "${SMOKE_DATA_DIR:-}" ] && [ -d "${SMOKE_DATA_DIR}" ] && [ ! -L "${SMOKE_DATA_DIR}" ]; then
+            sudo rm -rf --one-file-system "${SMOKE_DATA_DIR}"
+          fi
           echo "[smoke] Stack torn down and temp data wiped"
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -374,6 +473,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Stop existing production stack
         run: |

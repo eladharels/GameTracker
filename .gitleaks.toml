@@ -1,8 +1,9 @@
 # .gitleaks.toml — Gitleaks configuration for GameTracker
 #
-# Extends the official Gitleaks default ruleset and allowlists known
-# false positives: smoke test dummy keys, documentation placeholders,
-# and the documented JWT_SECRET fallback default in index.js.
+# Extends the official Gitleaks default ruleset, adds project-specific rules for
+# the credential shapes this app actually stores (settings.json: LDAP bind
+# password, SMTP password, Telegram bot token), and allowlists known false
+# positives: smoke test dummy keys and documentation placeholders.
 #
 # Docs: https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
 
@@ -12,10 +13,64 @@ title = "GameTracker Gitleaks Config"
 useDefault = true
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Project-specific rules
+#
+# The default Gitleaks ruleset detects recognisable *provider* tokens (AWS keys,
+# GitHub PATs, Stripe keys, …). It has no rule for a plain password sitting in a
+# generic JSON key — which is exactly how this project leaked its live LDAP bind
+# password in settings.json (commit 811af90). These rules close that gap.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id = "gametracker-config-password"
+description = "Non-empty password/secret value in a JSON or YAML config key"
+# Matches a JSON credential key with a NON-EMPTY string value:
+#     "bindPass": "s3cret"   "pass": "hunter2"   "smtp_password": "x"
+#
+# Deliberately scoped to the quoted-JSON shape, because that is the shape of the
+# credential store that actually leaked (settings.json). Requiring the opening quote
+# to sit immediately before the key is what keeps this quiet:
+#   - "minipass": "^3.0.0"  in package-lock.json does NOT match (the key must match
+#     in full, and `pass` cannot consume `minipass`)
+#   - password = ?  /  const password = argv[3]  in .js does NOT match (no quoted key)
+#   - "passed": "yes" does NOT match (key must end at the closing quote)
+#   - "bindPass": "" does NOT match, so settings.example.json stays clean
+regex = '''(?i)"(bind_?pass(word)?|smtp_?pass(word)?|passwd|password|bindpw|pass)"\s*:\s*"[^"]+"'''
+tags = ["password", "config"]
+
+[[rules]]
+id = "gametracker-telegram-bot-token"
+description = "Telegram bot token"
+regex = '''\d{8,10}:AA[0-9A-Za-z_-]{32,}'''
+tags = ["token", "telegram"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Global allowlist — paths and patterns that are known-safe
 # ─────────────────────────────────────────────────────────────────────────────
 [allowlist]
 description = "Known-safe paths and placeholder patterns"
+
+commits = [
+  # HISTORICAL LEAK — settings.json was committed with a live LDAP service-account
+  # bind password. There are TWO distinct passwords across these two commits, and
+  # BOTH must be treated as compromised and rotated in the directory:
+  #   33eface "add my project" -> bindPass for CN=GameTrackerusr (ldap://etechdc…)
+  #   811af90 "change ldap"    -> bindPass for uid=gametrackerusr (ldap://freeipa…)
+  # The history also exposes the directory topology (base DN, service-account DN,
+  # required group, mail/ntfy hostnames) — see SECURITY_HARDENING_2026-07.md §9.
+  #
+  # settings.json is now gitignored and untracked, but that does NOT remove these
+  # blobs from history: every existing clone still has them. Purging requires
+  # `git filter-repo` + a coordinated force-push, which is an operator decision.
+  # Until then these two commits are allowlisted so the scan stays green, while the
+  # rules above still catch any *fresh* occurrence. Remove both entries once the
+  # history has been rewritten.
+  #
+  # NOTE: allowlisting a commit SHA exempts EVERY finding in that commit, not just
+  # this one. Do not grow this list casually.
+  "33eface7807630ffadfd631a0da86d16e564c0cd",
+  "811af90c04efa247404d6e9e44a34697cdc8e1a5",
+]
 
 paths = [
   # Documentation and changelog files may contain example/redacted values
@@ -23,8 +78,12 @@ paths = [
   '''NOTIFICATION_FIXES\.md''',
   '''RELEASE_STATUS_UPDATE\.md''',
   '''SECURITY_FIXES\.md''',
+  '''SECURITY_HARDENING_2026-07\.md''',
   '''CLAUDE\.md''',
+  '''README\.md''',
   '''\.gitleaks\.toml''',
+  # Credential-free template — every value is an empty string
+  '''settings\.example\.json''',
   # Build artifacts
   '''frontend/dist''',
   '''node_modules''',
@@ -36,9 +95,9 @@ regexes = [
   '''smoke-test-dummy''',
   '''smoke-test-jwt-secret-not-real''',
 
-  # JWT_SECRET fallback default in index.js — overridden at runtime by
-  # the real secret injected via GitHub Actions secret. This value is
-  # documented in CLAUDE.md and is never used in production.
+  # 'supersecretkey' is the value index.js REJECTS at boot (the old insecure
+  # default). It is a deny-list entry in the JWT_SECRET guard, not a fallback —
+  # there is no hardcoded fallback any more (removed in staging #62).
   '''supersecretkey''',
 
   # Documentation placeholder patterns

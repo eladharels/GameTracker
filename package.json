@@ -21,7 +21,6 @@
     "ldapjs": "^3.0.7",
     "node-cron": "^4.1.1",
     "nodemailer": "^9.0.1",
-    "react-icons": "^5.5.0",
     "sqlite3": "^5.1.7"
   },
   "overrides": {
@@ -33,6 +32,9 @@
     "minimatch": ">=3.1.3",
     "picomatch": ">=4.0.4",
     "tar": ">=7.5.21",
-    "brace-expansion": ">=5.0.7"
+    "brace-expansion": ">=5.0.8",
+    "qs": ">=6.15.3",
+    "body-parser": ">=2.3.0",
+    "ip-address": ">=10.3.0"
   }
 }

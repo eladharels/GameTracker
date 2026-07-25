@@ -10,12 +10,15 @@ RUN apt-get update && \
 # npm is removed again in the install step below, so it never reaches the runtime image.
 RUN npm install -g npm@10
 COPY package*.json ./
-# Install production deps, then strip build-time-only tooling from the RUNTIME image.
+# `npm ci` (not `npm install`): installs exactly what package-lock.json pins, so the
+# image can never contain an unreviewed transitive version that drifted since the
+# lockfile was reviewed. Matches what frontend/Dockerfile already does.
+# Then strip build-time-only tooling from the RUNTIME image.
 # npm itself bundles its own copies of tar / brace-expansion / sigstore etc. under
 # /usr/local/lib/node_modules/npm — Trivy scans those and they carry CVEs that app-level
 # `overrides` cannot touch. The app runs `node index.js` and never needs npm at runtime,
 # so remove npm (and its npm cache) after installing. This also shrinks the image.
-RUN npm install --production && \
+RUN npm ci --omit=dev && \
     apt-get purge -y linux-libc-dev && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/* && \

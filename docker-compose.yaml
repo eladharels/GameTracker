@@ -4,13 +4,20 @@ services:
     image: local/gametracker-backend:latest
     pull_policy: never
     ports:
-      - "${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}"
+      # Bound to LOOPBACK. Published on 0.0.0.0 the backend was reachable directly,
+      # bypassing nginx — and with `trust proxy: 1` a client connecting straight to
+      # :3000 controls X-Forwarded-For, so every login attempt could claim a fresh
+      # IP and walk straight through the rate limiter. The frontend container reaches
+      # the backend over the compose network, not this published port.
+      - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
     volumes:
       - /home/docker/gametracker/data/gametracker.db:/app/gametracker.db
       - /home/docker/gametracker/data/settings.json:/app/settings.json
       - /home/docker/gametracker/data/sent_notifications.json:/app/sent_notifications.json
     environment:
-      - PORT=${BACKEND_PORT:-3000}
+      # Fixed INSIDE the container so frontend/nginx.conf can proxy to a stable
+      # `backend:3000`; only the published host port varies per environment.
+      - PORT=3000
       - NODE_ENV=production
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}

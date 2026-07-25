@@ -19,13 +19,15 @@ services:
     container_name: gametracker-backend-smoke
     pull_policy: never
     ports:
-      - "${BACKEND_TEST_PORT:-3099}:${BACKEND_TEST_PORT:-3099}"
+      # Host port varies to avoid clashing with prod/staging; the CONTAINER port is
+      # fixed at 3000 so the frontend image's nginx `/api` proxy works unchanged.
+      - "127.0.0.1:${BACKEND_TEST_PORT:-3099}:3000"
     volumes:
       - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/gametracker.db:/app/gametracker.db
       - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/settings.json:/app/settings.json
       - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/sent_notifications.json:/app/sent_notifications.json
     environment:
-      - PORT=${BACKEND_TEST_PORT:-3099}
+      - PORT=3000
       - NODE_ENV=production
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:-smoke-test-dummy}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN:-smoke-test-dummy}
