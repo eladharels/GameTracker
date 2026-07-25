@@ -687,15 +687,30 @@ function normalizeTitleForCrackWatch(str) {
 /** In-memory cache: normalizedTitle -> true (cracked) | false (uncracked). Unknown = not in cache. */
 let crackWatchCache = Object.create(null);
 
+// Keys that must never be written into a plain object built from external data:
+// assigning them mutates Object.prototype instead of the object. Defined HERE, above
+// every consumer -- these were `const` declarations further down the file, and
+// loadCrackWatchCacheFromFile() runs at module scope, so it hit the temporal dead
+// zone and silently lost the whole DRM cache on every boot behind a try/catch.
+const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+const isUnsafeKey = (k) => UNSAFE_KEYS.includes(String(k));
+
 function loadCrackWatchCacheFromFile() {
   try {
     if (fs.existsSync(CRACKWATCH_CACHE_FILE)) {
       const raw = fs.readFileSync(CRACKWATCH_CACHE_FILE, 'utf8');
       const data = JSON.parse(raw);
       // Copy onto a null-prototype object rather than adopting the parsed literal,
-      // keeping the posture the initializer declares.
+      // keeping the posture the initializer declares. Copied key-by-key with the
+      // dangerous keys rejected, rather than via Object.assign — a bulk copy of
+      // externally-sourced data into an object is a mass-assignment shape, and this
+      // way the guarantee is visible in the code instead of assumed.
       if (data && typeof data === 'object') {
-        crackWatchCache = Object.assign(Object.create(null), data);
+        const fresh = Object.create(null);
+        for (const [k, v] of Object.entries(data)) {
+          if (!isUnsafeKey(k)) fresh[k] = v;
+        }
+        crackWatchCache = fresh;
       }
       console.log('[CrackWatch] Loaded cache from file,', Object.keys(crackWatchCache).length, 'titles');
     }
@@ -3523,8 +3538,6 @@ const SENT_NOTIFICATIONS_FILE = path.join(__dirname, 'sent_notifications.json');
 // following write lands on the PROTOTYPE. After that `wasNotificationSent()` returns
 // truthy for every user/game/type combination and release notifications silently
 // stop firing for everyone. Object.create(null) removes the sink entirely.
-const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
-const isUnsafeKey = (k) => UNSAFE_KEYS.includes(String(k));
 
 let sentNotifications = Object.create(null);
 if (fs.existsSync(SENT_NOTIFICATIONS_FILE)) {

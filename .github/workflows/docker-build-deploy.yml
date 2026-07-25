@@ -198,7 +198,10 @@ jobs:
       # permanently green-light the scan while CI still reported success.
       - name: Install Trivy (pinned)
         env:
-          TRIVY_VERSION: "0.58.1"
+          # Must be a REAL release tag — verify at github.com/aquasecurity/trivy/releases
+          # before changing. The asset is trivy_<ver>_Linux-64bit.tar.gz (capital L, hyphen).
+          # 0.70.0 is what this runner already has, so the pin normally downloads nothing.
+          TRIVY_VERSION: "0.70.0"
         run: |
           set -euo pipefail
           if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
@@ -251,7 +254,10 @@ jobs:
       # permanently green-light the scan while CI still reported success.
       - name: Install Trivy (pinned)
         env:
-          TRIVY_VERSION: "0.58.1"
+          # Must be a REAL release tag — verify at github.com/aquasecurity/trivy/releases
+          # before changing. The asset is trivy_<ver>_Linux-64bit.tar.gz (capital L, hyphen).
+          # 0.70.0 is what this runner already has, so the pin normally downloads nothing.
+          TRIVY_VERSION: "0.70.0"
         run: |
           set -euo pipefail
           if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
