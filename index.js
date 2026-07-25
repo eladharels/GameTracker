@@ -2168,9 +2168,12 @@ app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired
     };
 
     run().catch((e) => {
+      // Log the detail, return a generic message. This now wraps db.run rejections,
+      // so e.message can be raw Postgres text disclosing table/constraint names or
+      // the shape of the SQL.
       console.error('Bulk refresh metadata error:', e);
       if (!res.headersSent) {
-        res.status(500).json({ error: e.message || 'Failed to refresh metadata' });
+        res.status(500).json({ error: 'Failed to refresh metadata' });
       }
     });
   });
@@ -2857,6 +2860,14 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // --- User Management Endpoints ---
+// Postgres raises 22P02 when a non-numeric value is compared against an INTEGER
+// column, so an unvalidated :id surfaced as an opaque 500 (and filled the log with
+// fake database errors) where SQLite simply matched nothing and 404'd.
+// See divergence 5 in db.js.
+function parseRouteId(value) {
+  return /^[0-9]+$/.test(String(value)) ? Number(value) : null;
+}
+
 // `me` would be shadowed by the /api/user/me/* routes registered before
 // /api/user/:username/*; `root`/`admin` are reserved to avoid impersonation
 // confusion with the seeded administrator account.
@@ -2922,7 +2933,8 @@ app.get('/api/users', authRequired, requirePermission('can_manage_users'), (req,
 
 // Edit user (manager only)
 app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  const { id } = req.params;
+  const id = parseRouteId(req.params.id);
+  if (id === null) return res.status(404).json({ error: 'User not found' });
   const { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library } = req.body;
   const updates = [];
   const params = [];
@@ -2996,7 +3008,8 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
 
 // Delete user (manager only)
 app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  const { id } = req.params;
+  const id = parseRouteId(req.params.id);
+  if (id === null) return res.status(404).json({ error: 'User not found' });
   // Deleting yourself, or deleting the seeded `root` account, can leave the
   // instance with no way back in. Both are refused.
   if (String(req.user.id) === String(id)) {

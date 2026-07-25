@@ -34,11 +34,23 @@ function listMigrationFiles() {
     .sort();
 }
 
+// Arbitrary but fixed application-wide key for the advisory lock below. Any other
+// process taking this same key is, by definition, also migrating this schema.
+const MIGRATION_LOCK_KEY = 4127710501;
+
 // Applies any migration files not yet recorded in schema_migrations.
 // Resolves when the schema is known-good. Rejects -- loudly -- otherwise.
 async function runMigrations() {
   const client = await pool.connect();
   try {
+    // Serialise migration across processes. CREATE TABLE IF NOT EXISTS is NOT
+    // race-free in Postgres, so two backends starting together would both see the
+    // same migration pending, both run it, and the loser would die on the
+    // schema_migrations primary key. Single-replica today, but `restart:
+    // unless-stopped` would turn that into a crash-loop rather than a clean start.
+    // The lock is session-scoped and released with the connection in `finally`.
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
+
     await client.query(TRACKING_TABLE);
 
     const { rows } = await client.query('SELECT filename FROM schema_migrations');
@@ -71,6 +83,7 @@ async function runMigrations() {
 
     console.log(`[DB] Schema migrations complete (${pending.length} applied)`);
   } finally {
+    // Releases the advisory lock too — it is held for the life of the session.
     client.release();
   }
 }

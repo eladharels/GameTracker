@@ -16,8 +16,11 @@
 //                          Proceed, copying orphans into migration_orphans.
 //
 // SAFETY PROPERTIES:
-//   * Idempotent. Re-running loads nothing twice (ON CONFLICT DO NOTHING) and
-//     reports the same counts. Safe to run again if it is interrupted.
+//   * Safe to re-run ONLY after a failure. An aborted run rolls back completely,
+//     so nothing is left behind and the script can simply be run again.
+//     A run that COMPLETED cannot be repeated: the target is no longer empty and
+//     the script will refuse with exit 5. That is deliberate -- it is not
+//     idempotent, it is single-shot, which is the stronger property here.
 //   * Transactional. Everything happens in ONE transaction; any failure rolls
 //     the whole thing back and leaves Postgres exactly as it was.
 //   * It NEVER silently drops a row. Referential problems stop the migration
@@ -92,6 +95,12 @@ const section = (t) => { console.log(''); hr(); console.log(t); hr(); };
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+// Sentinel used to force a ROLLBACK at the end of a --dry-run transaction. It is
+// not an error condition, so it is unwrapped immediately outside withTransaction.
+class DryRunRollback extends Error {
+  constructor() { super('dry run — rolling back'); this.name = 'DryRunRollback'; }
+}
+
 async function main() {
   console.log('');
   console.log('GameTracker SQLite -> PostgreSQL migration');
@@ -196,14 +205,22 @@ async function main() {
 
   // --- Target must be empty ------------------------------------------------
   //
-  // Every INSERT below carries an explicit primary key and ON CONFLICT (id) DO
-  // NOTHING, which is only safe against an EMPTY target. If the backend has
-  // booted against this database even once, ensureRootUser() has already seeded
-  // a 'root' row at id=1. The migration would then silently skip the REAL root
-  // row -- discarding its bcrypt hash, email and permissions -- and the operator
-  // would be left with a generated password printed into a CI log. Worse, if
-  // some other account holds id=1 in SQLite, that user is dropped and their
-  // entire library is re-parented onto whoever occupies id=1 here.
+  // Every INSERT below carries an EXPLICIT primary key, so the target must be
+  // empty or ids collide. If the backend has booted against this database even
+  // once, ensureRootUser() has already seeded a 'root' row at id=1.
+  //
+  // This gate is the FIRST of two defences. It is inherently TOCTOU -- it runs on
+  // the pool, the load runs on its own connection -- so a backend that comes back
+  // up in between (`restart: unless-stopped` will do it) can still seed a row
+  // afterwards. The second defence is that the inserts deliberately carry NO
+  // `ON CONFLICT ... DO NOTHING`: a collision therefore ABORTS and rolls the whole
+  // migration back, rather than silently skipping the row and committing.
+  //
+  // That silent skip was a real bug. It discarded the genuine root account --
+  // bcrypt hash, email and permissions -- leaving the operator with a generated
+  // password printed into a CI log nobody reads. And if some account other than
+  // root held id=1 in SQLite, that user was dropped while their entire library
+  // inserted successfully and re-parented onto whoever occupied id=1 here.
   //
   // The old row-count verification could not detect any of this: one
   // pre-existing row plus (N-1) inserted still totals N, so it printed OK.
@@ -233,9 +250,18 @@ async function main() {
       console.log('  the genuine one. (Safe: it has no games or shares attached.)');
     } else {
       console.log('  Refusing to load into a populated database — this script cannot merge.');
-      console.log('  Start from an empty database: stop the backend, then');
+      console.log('');
+      console.log('  STOP. Work out WHY it is populated before doing anything else:');
+      console.log('    * A previous run of this script already succeeded -> you are done,');
+      console.log('      do NOT run it again. Verify with: SELECT COUNT(*) FROM user_games;');
+      console.log('    * The backend was left running and auto-provisioned LDAP users');
+      console.log('      -> stop the backend, then decide whether those accounts matter.');
+      console.log('');
+      console.log('  Destroying the volume and starting over is only correct in the SECOND');
+      console.log('  case, and only once you are certain the data in it is disposable.');
+      console.log('  It PERMANENTLY DELETES the database, including a completed migration:');
       console.log('    docker compose -f docker-compose.yaml down');
-      console.log('    docker volume rm gt_gametracker-pgdata');
+      console.log('    docker volume rm gametracker_gametracker-pgdata   # CHECK: docker volume ls');
       console.log('    docker compose -f docker-compose.yaml up -d db');
     }
     console.log('');
@@ -244,14 +270,11 @@ async function main() {
     process.exit(5);
   }
 
-  if (DRY_RUN) {
-    section('DRY RUN COMPLETE');
-    console.log('  Target database is empty and referential integrity was checked.');
-    console.log('  No changes were written. Re-run without --dry-run to load.');
-    sdb.close();
-    await db.pool.end();
-    return;
-  }
+  // NOTE: a dry run deliberately does NOT return here. It performs the ENTIRE load
+  // and then rolls it back (see DryRunRollback below), because returning early meant
+  // the rehearsal never executed a single INSERT — so NOT NULL violations, type
+  // mismatches and constraint failures against the tightened schema were discovered
+  // for the first time during the LIVE cutover, with the app down.
 
   // --- Load --------------------------------------------------------------
   // Column lists are intersected with what the target schema actually has, so a
@@ -265,7 +288,7 @@ async function main() {
   const uCols = TARGET_USER_COLS.filter((c) => userCols.includes(c));
   const gCols = TARGET_GAME_COLS.filter((c) => gameCols.includes(c));
 
-  const counts = { users: 0, games: 0, shares: 0, quarantined: 0, skipped: 0 };
+  const counts = { users: 0, games: 0, shares: 0, quarantined: 0, skipped: 0, sharesCollapsed: 0 };
 
   await db.withTransaction(async (tx) => {
     if (isBootstrapRootOnly && REPLACE_BOOTSTRAP_ROOT) {
@@ -297,7 +320,13 @@ async function main() {
       const row = pick(u, uCols);
       const ph = uCols.map(() => '?').join(', ');
       const r = await tx.query(
-        `INSERT INTO users (${uCols.join(', ')}) VALUES (${ph}) ON CONFLICT (id) DO NOTHING`,
+        // NO `ON CONFLICT (id) DO NOTHING`. With the emptiness gate above it would be
+        // dead code, and it is exactly what caused the original silent-data-loss bug:
+        // the gate runs on the pool, the load runs on a different connection, so a
+        // backend that came back up in between could seed a row and make an id collide.
+        // With the clause, that row was silently skipped and the transaction COMMITTED.
+        // Without it, a collision aborts and rolls the whole migration back.
+        `INSERT INTO users (${uCols.join(', ')}) VALUES (${ph})`,
         uCols.map((c) => row[c])
       );
       counts.users += r.rowCount;
@@ -324,7 +353,7 @@ async function main() {
       if (row.game_id !== null && row.game_id !== undefined) row.game_id = String(row.game_id);
       const ph = gCols.map(() => '?').join(', ');
       const r = await tx.query(
-        `INSERT INTO user_games (${gCols.join(', ')}) VALUES (${ph}) ON CONFLICT (id) DO NOTHING`,
+        `INSERT INTO user_games (${gCols.join(', ')}) VALUES (${ph})`,   // see the note on the users insert above
         gCols.map((c) => row[c])
       );
       counts.games += r.rowCount;
@@ -353,29 +382,58 @@ async function main() {
         [from, to, s.shared_at]
       );
       counts.shares += r.rowCount;
+      // Case repair can COLLAPSE two source rows onto one target row: production
+      // holds both 'Orelsh'->x and 'orelsh'->x, which normalise to the same pair,
+      // and the second is absorbed by ON CONFLICT DO NOTHING. That is correct
+      // de-duplication, not a lost row — count it so verification does not report a
+      // false MISMATCH *after* the transaction has already committed.
+      if (r.rowCount === 0) counts.sharesCollapsed++;
     }
 
     // Identity sequences were bypassed by the explicit ids above. Resynchronise
     // them or the next INSERT will collide with an existing primary key.
-    await tx.query(`SELECT setval(pg_get_serial_sequence('users', 'id'),
-                                 GREATEST((SELECT COALESCE(MAX(id), 0) FROM users), 1))`);
-    await tx.query(`SELECT setval(pg_get_serial_sequence('user_games', 'id'),
-                                 GREATEST((SELECT COALESCE(MAX(id), 0) FROM user_games), 1))`);
+    // setval() is STRICT: if pg_get_serial_sequence ever returns NULL it returns
+    // NULL *without erroring*, leaving the counter at 1 so the next user creation
+    // dies with a duplicate-key 23505. Assert we actually set something.
+    for (const t of ['users', 'user_games']) {
+      const r = await tx.query(
+        `SELECT setval(pg_get_serial_sequence($1, 'id'),
+                       GREATEST((SELECT COALESCE(MAX(id), 0) FROM ${t}), 1)) AS newval`,
+        [t]
+      );
+      if (r.rows[0].newval == null) {
+        throw new Error(`Could not resolve the identity sequence for ${t}.id — refusing to ` +
+          'commit, because the next insert would collide with an existing primary key.');
+      }
+    }
+
+    // Everything above has now been exercised for real. On a dry run, throw so
+    // withTransaction issues ROLLBACK and Postgres is left exactly as it was.
+    if (DRY_RUN) throw new DryRunRollback();
+  }).catch((err) => {
+    if (!(err instanceof DryRunRollback)) throw err;
   });
 
   // --- Verify ------------------------------------------------------------
-  const finalCount = async (t) => Number((await db.query(`SELECT COUNT(*) AS n FROM ${t}`)).rows[0].n);
+  // After a dry run the transaction was rolled back, so the tables are empty again.
+  // Compare against what WOULD have been committed rather than what is on disk.
+  const finalCount = DRY_RUN
+    ? async (t) => ({ users: counts.users, user_games: counts.games, user_shares: counts.shares })[t]
+    : async (t) => Number((await db.query(`SELECT COUNT(*) AS n FROM ${t}`)).rows[0].n);
 
-  section('LOADED');
+  section(DRY_RUN ? 'DRY RUN — LOADED THEN ROLLED BACK' : 'LOADED');
   console.log(`  users        inserted ${counts.users}`);
   console.log(`  user_games   inserted ${counts.games}`);
   console.log(`  user_shares  inserted ${counts.shares}`);
   if (counts.quarantined) console.log(`  quarantined  ${counts.quarantined}  (see table migration_orphans)`);
   if (counts.skipped) console.log(`  SKIPPED      ${counts.skipped}  (discarded at operator request)`);
+  if (counts.sharesCollapsed) {
+    console.log(`  de-duplicated ${counts.sharesCollapsed} share(s) whose only difference was username case`);
+  }
 
   section('VERIFICATION (source vs target)');
   const expectedGames = games.length - orphanGames.length;
-  const expectedShares = shares.length - orphanShares.length;
+  const expectedShares = shares.length - orphanShares.length - counts.sharesCollapsed;
   // Verify BOTH the final table count AND the number of rows this run actually
   // inserted. Checking only the totals is what allowed a skipped row to pass:
   // one pre-existing row plus (N-1) inserted still totals N, so the old check
@@ -400,7 +458,11 @@ async function main() {
   }
 
   console.log('');
-  if (ok) {
+  if (ok && DRY_RUN) {
+    console.log('  DRY RUN PASSED. Every row was actually inserted and then rolled back,');
+    console.log('  so the schema accepts this data. PostgreSQL is unchanged and still empty.');
+    console.log('  Re-run without --dry-run to commit.');
+  } else if (ok) {
     console.log('  Row counts reconcile. Migration complete.');
     console.log('  Keep the SQLite file untouched until you are confident — it is the rollback.');
   } else {

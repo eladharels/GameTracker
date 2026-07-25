@@ -33,6 +33,25 @@
 //  7. The JSONB `?` / `?|` / `?&` operators cannot be written in SQL passed
 //     through this shim -- the rewriter would consume them. Use the
 //     jsonb_exists() function form instead.
+//  8. **bigint comes back as a STRING.** COUNT(), SUM() and any int8 column
+//     yield '12', not 12. Under SQLite these were numbers, so `+` concatenates
+//     where it used to add. Wrap them in Number().
+//  9. **Every run/get/all uses a DIFFERENT pooled connection.** A multi-statement
+//     logical operation therefore spans connections and CANNOT be made atomic or
+//     rolled back through this shim -- use withTransaction(). Session-scoped
+//     state (SET, temp tables, advisory locks) is unusable here for the same
+//     reason: the next call will not see it.
+// 10. A `statement_timeout` (default 15s) is now in force. A long query aborts
+//     with SQLSTATE 57014 where SQLite would simply have kept going.
+// 11. `err.code` is a 5-character SQLSTATE ('23505', '22P02'), not a string like
+//     'SQLITE_CONSTRAINT'. Nothing currently branches on it -- keep it that way,
+//     or match on SQLSTATE deliberately.
+// 12. Sorting uses the DATABASE's collation, not SQLite's byte order, so
+//     `ORDER BY game_name` orders mixed case differently. The frontend re-sorts
+//     with localeCompare, which is why this is currently invisible.
+// 13. **A SELECT with no ORDER BY has no stable order.** SQLite returned rowid
+//     order; Postgres returns heap order, and an UPDATE physically moves a row
+//     to the end. Add an explicit ORDER BY wherever order is meaningful.
 //
 // Anything not on this list behaves as it did under node-sqlite3.
 // ===========================================================================
@@ -59,9 +78,10 @@ function buildPoolConfig() {
     statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15000),
   };
 
-  if (process.env.DATABASE_URL) {
-    return { ...base, connectionString: process.env.DATABASE_URL };
-  }
+  // Deliberately NO DATABASE_URL branch. A malformed DSN makes Node raise
+  // ERR_INVALID_URL with the whole string -- password included -- on err.input,
+  // and several call sites log the entire error object. Discrete PG* variables
+  // cannot leak that way, and nothing in this deployment sets DATABASE_URL.
   return {
     ...base,
     host: process.env.PGHOST || 'db',
@@ -74,8 +94,9 @@ function buildPoolConfig() {
 
 const pool = new Pool(buildPoolConfig());
 
-// A connection error must never surface the DSN (it contains the password) into
-// logs. Log the driver's short code and message only.
+// Log the driver's short code and message only -- never the error object, which
+// can carry connection details. Note this handler covers IDLE-client errors only;
+// connect and query errors are delivered to the caller.
 pool.on('error', (err) => {
   console.error(`[DB] Idle client error: ${err.code || 'ERR'} ${err.message}`);
 });
@@ -142,12 +163,21 @@ function toPgPlaceholders(sql) {
 // ---------------------------------------------------------------------------
 async function query(sql, params = []) {
   const { sql: text, count } = toPgPlaceholders(sql);
-  // Arity invariant. The scanner is a hand-written parser, and a mismatch is the
-  // signature of every way it can go wrong: a `?` inside a construct it does not
-  // understand (dollar-quoted blocks, E'' escapes, the JSONB `?` operator), or a
-  // statement that mixes `?` with a literal `$n`. Without this check those fail
-  // silently or bind the wrong value; with it they fail loudly at the call site.
-  // Statements with no placeholders and no params are exempt (plain DDL/SELECT).
+  // Arity invariant -- a useful net, but NOT a complete one. Be precise about what
+  // it does and does not catch, because an overstated guarantee is how the last two
+  // bugs got through.
+  //
+  // CATCHES: a `?` the scanner mis-parsed such that the resulting placeholder COUNT
+  // no longer matches the parameter count -- E'' escapes and the JSONB `?` operator
+  // in the cases tested.
+  //
+  // DOES NOT CATCH (count still matches, wrong value still binds):
+  //   * Mixing `?` with a literal `$n`: `WHERE a = $1 AND b = ?` with one parameter
+  //     rewrites to `a = $1 AND b = $1` and binds the same value twice.
+  //   * Dollar-quoted blocks: `SELECT $$a ? b$$, ?` rewrites INSIDE the string
+  //     literal. The scanner has no dollar-quote state.
+  // Neither pattern exists in this codebase. Do not introduce one: write `?`
+  // exclusively, and never `$n` by hand.
   if (count !== params.length) {
     throw new Error(
       `Placeholder/parameter arity mismatch: SQL declares ${count} placeholder(s) ` +

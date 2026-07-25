@@ -35,9 +35,23 @@ WHAT CHANGED:
   • schema-migrate.js + migrations/*.sql — ordered, transactional migrations tracked in
     a schema_migrations table. ANY failure is fatal. This replaces initializeSchema(),
     whose swallowed errors shipped fresh installs missing four columns.
-  • scripts/migrate-sqlite-to-postgres.js — the one-shot data migration (manual, idempotent).
+  • scripts/migrate-sqlite-to-postgres.js — the one-shot data migration. MANUAL, never at
+    boot, and SINGLE-SHOT rather than idempotent: an aborted run rolls back completely and
+    can be re-run, but a COMPLETED run refuses to run again (exit 5) because the target is
+    no longer empty. --dry-run performs the entire load and then rolls it back, so
+    constraint and type failures surface during the rehearsal, not mid-cutover.
   • backend now runs with read_only: true. SQLite's need for a writable /app was the
     only thing blocking it.
+
+BEHAVIOUR CHANGE — DELETING A USER NOW DESTROYS THEIR LIBRARY:
+  ON DELETE CASCADE was added to user_games.user_id and both user_shares columns. SQLite
+  DECLARED these foreign keys but ran with PRAGMA foreign_keys OFF, so they never fired —
+  which is exactly how the 30 orphaned user_games rows accumulated.
+  This is not purely a safety fix. Previously, DELETE /api/users/:id left the user's whole
+  library behind in the table, theoretically recoverable by recreating the account at the
+  same id. It is now deleted with them, permanently. There is exactly one such delete path,
+  it is admin-only, root cannot be deleted, and the frontend confirms first — but the
+  operator should know the semantics changed.
 
 SCHEMA DECISIONS:
   • user_games.game_id is TEXT, not INTEGER. The SQLite column was DECLARED INTEGER but
@@ -67,7 +81,14 @@ DATA PROBLEMS FOUND IN PRODUCTION (Postgres will enforce what SQLite ignored):
      Generate with: openssl rand -base64 32
   3. Merge -> CI deploys -> postgres-gametracker comes up empty and the backend
      applies migrations/001_initial_schema.sql automatically.
-  4. Stop the backend, keeping the database running:
+  3.5 IMMEDIATELY stop the backend and frontend — before anyone can reach them.
+     CI leaves the stack RUNNING against an empty database. In that window an LDAP
+     user logging in is auto-provisioned, which makes the target non-empty and NOT
+     bootstrap-root-only, so step 6 refuses with exit 5 and the only way forward is
+     destroying the volume. Real users would also see an empty library and may
+     re-add games. Do not rely on the script's refusal to save you here.
+
+  4. Confirm the backend is stopped, keeping the database running:
        docker compose -f docker-compose.yaml stop backend
      >>> IMPORTANT: by this point the backend has already booted once and created
          a BOOTSTRAP `root` account with a randomly generated password (printed in
@@ -109,6 +130,25 @@ DATA PROBLEMS FOUND IN PRODUCTION (Postgres will enforce what SQLite ignored):
   Leave the gametracker-pgdata volume in place; it costs nothing and preserves the
   migrated state for a second attempt.
 
+  *** ROLLING BACK DISCARDS EVERY WRITE MADE SINCE CUTOVER. *** The SQLite file is
+  a snapshot frozen at step 6. Any game added, status changed, backlog reordered or
+  account setting saved against Postgres is LOST on rollback and cannot be merged
+  back. This is why the rollback window matters: the longer the app runs on
+  Postgres, the more expensive reverting becomes. Tell users nothing is durable
+  until you have committed to the migration, and prefer fixing forward once real
+  traffic has landed.
+
+>>> ROTATING POSTGRES_PASSWORD (read before you try):
+  POSTGRES_PASSWORD is only consumed by the image's FIRST-RUN initdb. After that
+  the role's password lives inside the gametracker-pgdata volume. Changing the
+  GitHub Actions secret therefore changes what the BACKEND presents, but NOT what
+  the SERVER expects — the backend then fails authentication on every boot.
+  To rotate, change it in BOTH places:
+    docker exec -it postgres-gametracker \
+      psql -U gametracker -d gametracker \
+      -c "ALTER ROLE gametracker WITH PASSWORD 'new-secret-here';"
+    # then update the Actions secret and redeploy
+
 >>> BACKUP / RESTORE (new — none previously existed):
   Backup (safe while running):
     docker exec postgres-gametracker pg_dump -U gametracker -Fc gametracker \
@@ -116,10 +156,17 @@ DATA PROBLEMS FOUND IN PRODUCTION (Postgres will enforce what SQLite ignored):
   Restore into an empty database:
     docker exec -i postgres-gametracker pg_restore -U gametracker -d gametracker \
       --clean --if-exists < ~/gametracker-YYYY-MM-DD.dump
-  Suggested cron (daily 02:00, keep 14 days) — add to the operator's crontab:
-    0 2 * * * docker exec postgres-gametracker pg_dump -U gametracker -Fc gametracker \
-      > /home/docker/gametracker/backups/gt-$(date +\%F).dump && \
-      find /home/docker/gametracker/backups -name 'gt-*.dump' -mtime +14 -delete
+  Suggested cron (daily 02:00, keep 14 days) — add to the operator's crontab.
+  Create the directory first: mkdir -p /home/docker/gametracker/backups
+  Dump to a temp file and only publish it if pg_dump SUCCEEDED and produced bytes.
+  A naive `pg_dump > file` leaves a zero-byte file behind on failure — a
+  dump-shaped object that is not a backup, and that the retention rule then keeps:
+    0 2 * * * D=/home/docker/gametracker/backups; T=$D/.tmp-$$.dump; \
+      docker exec postgres-gametracker pg_dump -U gametracker -Fc gametracker > $T \
+      && [ -s $T ] && mv $T $D/gt-$(date +\%F).dump \
+      && find $D -name 'gt-*.dump' -mtime +14 -delete; rm -f $T
+  Verify a dump is restorable at least once — an untested backup is not a backup:
+    docker exec -i postgres-gametracker pg_restore -l < ~/gametracker-YYYY-MM-DD.dump
   NOTE: `docker compose down --volumes` DELETES gametracker-pgdata. The deploy job
   never passes --volumes; do not add it.
 
