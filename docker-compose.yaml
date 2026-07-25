@@ -1,6 +1,39 @@
-version: '3.8'
 services:
-  backend: # nosemgrep: yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
+  # ───────────────────────────────────────────────────────────────────────────
+  # PostgreSQL — GameTracker's OWN database.
+  #
+  # This host runs other Postgres instances (an unrelated app on postgres:16-alpine,
+  # Guacamole on postgres:15.2-alpine). This one is deliberately separate: its own
+  # container, database, role and volume. Do not point GameTracker at any of them.
+  #
+  # The port is NOT published. Nothing outside the compose network needs it, and
+  # every other database container on this host follows the same pattern.
+  # ───────────────────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: postgres-gametracker
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-gametracker}
+      - POSTGRES_USER=${POSTGRES_USER:-gametracker}
+      # Fail fast rather than booting a database with a blank or default password.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env)}
+    volumes:
+      # Named volume, not a bind mount: a bind mount under /home/docker/gametracker/
+      # would need its ownership matched to the postgres UID inside the image, which
+      # is a recurring source of "database directory has wrong ownership" failures.
+      # A named volume avoids that class of problem entirely.
+      - gametracker-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gametracker} -d ${POSTGRES_DB:-gametracker}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  backend:
     image: local/gametracker-backend:latest
     pull_policy: never
     ports:
@@ -22,7 +55,10 @@ services:
       # because that adds a second proxy hop. See README "Reverse proxy topology".
       - "${BACKEND_BIND:-0.0.0.0}:${BACKEND_PORT:-3000}:3000"
     volumes:
-      - /home/docker/gametracker/data/gametracker.db:/app/gametracker.db
+      # The SQLite mount is gone. These two JSON files are still file-backed in this
+      # phase; moving them into Postgres is tracked as follow-up work. Bind-mounted
+      # files stay writable even with read_only: true below — only the container's
+      # own filesystem layers become read-only.
       - /home/docker/gametracker/data/settings.json:/app/settings.json
       - /home/docker/gametracker/data/sent_notifications.json:/app/sent_notifications.json
     environment:
@@ -30,16 +66,33 @@ services:
       # `backend:3000`; only the published host port varies per environment.
       - PORT=3000
       - NODE_ENV=production
+      # Database connection. The host is the compose SERVICE name (db), not the
+      # container_name — service names are what the compose network resolves.
+      - PGHOST=db
+      - PGPORT=5432
+      - PGDATABASE=${POSTGRES_DB:-gametracker}
+      - PGUSER=${POSTGRES_USER:-gametracker}
+      - PGPASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env)}
+      # Ephemeral caches on tmpfs — required for read_only: true. See CACHE_DIR in index.js.
+      - CACHE_DIR=/app/cache
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}
       - RAWG_API_KEY=${RAWG_API_KEY}
       # No insecure default — JWT_SECRET must be provided (via .env or the shell env).
       # The backend refuses to start if it is missing, too short, or 'supersecretkey'.
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set (see .env)}
+    depends_on:
+      db:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
-    # read_only: true cannot be set — SQLite requires a writable /app/ directory
-    # for WAL and journal files alongside the mounted gametracker.db file.
+    # Now possible: SQLite's need for a writable /app (WAL + journal files) was the
+    # only thing preventing this. The two remaining JSON files are bind mounts, which
+    # are unaffected by read_only, and the ephemeral caches live on the tmpfs below.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/cache
     restart: unless-stopped
 
   frontend:
@@ -55,3 +108,6 @@ services:
       - /var/cache/nginx
       - /var/run
     restart: unless-stopped
+
+volumes:
+  gametracker-pgdata:

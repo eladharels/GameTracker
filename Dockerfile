@@ -32,9 +32,16 @@ RUN npm ci --omit=dev && \
 COPY . .
 ENV NODE_ENV=production
 # Transfer ownership to the built-in node user before dropping privileges.
-# NOTE: volume-mounted data files (/app/gametracker.db etc.) must also be
-# owned by UID 1000 on the host. Run once after first deploy:
-#   chown -R 1000:1000 /home/docker/gametracker/data/
+# NOTE: the remaining volume-mounted data files (/app/settings.json,
+# /app/sent_notifications.json) must also be owned by UID 1000 on the host:
+#   chown 1000:1000 /home/docker/gametracker/data/settings.json \
+#                   /home/docker/gametracker/data/sent_notifications.json
+# The database itself is no longer a mounted file — it lives in Postgres.
+#
+# The sqlite3 dependency and its build toolchain above are retained solely so
+# scripts/migrate-sqlite-to-postgres.js can read the legacy database during
+# cutover. Once the migration is done and the rollback window has closed, both
+# can be dropped to shrink the image and its CVE surface.
 RUN chown -R node:node /app
 USER node
 EXPOSE 3000

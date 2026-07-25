@@ -4,43 +4,75 @@
 # Always launched with: docker compose -p gametracker-smoke -f docker-compose.test.yml ...
 #
 # ISOLATION:
-#   - Ports 3099 (backend) and 8099 (frontend) — no conflict with production (3000/8080)
-#     or staging (3001/8085).
+#   - Ports 3099 (backend) and 8099 (frontend) — no conflict with production (3000/8080).
+#   - The database is a THROWAWAY container with an anonymous volume, torn down by
+#     `down --volumes`. It never touches the production volume gametracker-pgdata.
 #   - Data mounted from /tmp/gametracker-smoke-data/ — never touches the real
 #     production volume at /home/docker/gametracker/data/.
 #   - restart: "no" prevents orphan containers after CI teardown.
-#   - All API keys are dummy placeholder values — no real credentials needed.
-
-version: '3.8'
+#   - All API keys and the database password are dummy placeholder values.
 
 services:
-  backend: # nosemgrep: yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
+  db:
+    image: postgres:16-alpine
+    container_name: postgres-gametracker-smoke
+    # No published port — the backend reaches it over the compose network.
+    environment:
+      - POSTGRES_DB=gametracker
+      - POSTGRES_USER=gametracker
+      # Dummy credential for an ephemeral throwaway database that is never
+      # reachable from outside the compose network. Not a real secret.
+      - POSTGRES_PASSWORD=smoke-test-not-a-real-password
+    # No volumes: entry at all. The data directory lives in the container's
+    # anonymous storage and is destroyed by `down --volumes`, so no state can
+    # survive between CI runs.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gametracker -d gametracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  backend:
     image: local/gametracker-backend:latest
     container_name: gametracker-backend-smoke
     pull_policy: never
     ports:
-      # Host port varies to avoid clashing with prod/staging; the CONTAINER port is
-      # fixed at 3000 so the frontend image's nginx `/api` proxy works unchanged.
+      # Host port varies to avoid clashing with prod; the CONTAINER port is fixed
+      # at 3000 so the frontend image's nginx `/api` proxy works unchanged.
       #
-      # Hard-coded to loopback (unlike prod/staging, which use BACKEND_BIND): the CI
+      # Hard-coded to loopback (unlike prod, which uses BACKEND_BIND): the CI
       # smoke test curls localhost on the same runner, so nothing off-box ever needs
       # to reach this port, and an ephemeral test stack should not be LAN-visible.
       - "127.0.0.1:${BACKEND_TEST_PORT:-3099}:3000"
     volumes:
-      - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/gametracker.db:/app/gametracker.db
       - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/settings.json:/app/settings.json
       - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/sent_notifications.json:/app/sent_notifications.json
     environment:
       - PORT=3000
       - NODE_ENV=production
+      - PGHOST=db
+      - PGPORT=5432
+      - PGDATABASE=gametracker
+      - PGUSER=gametracker
+      - PGPASSWORD=smoke-test-not-a-real-password
+      - CACHE_DIR=/app/cache
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:-smoke-test-dummy}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN:-smoke-test-dummy}
       - RAWG_API_KEY=${RAWG_API_KEY:-smoke-test-dummy}
       - JWT_SECRET=${JWT_SECRET:-smoke-test-jwt-secret-not-real}
+    depends_on:
+      db:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
-    # read_only: true cannot be set — SQLite requires a writable /app/ directory
-    # for WAL and journal files alongside the mounted gametracker.db file.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/cache
     restart: "no"
     healthcheck:
       # Port 3000, NOT BACKEND_TEST_PORT: this runs INSIDE the container, where the

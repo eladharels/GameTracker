@@ -322,7 +322,8 @@ jobs:
           set -euo pipefail
           SMOKE_DATA_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gametracker-smoke.XXXXXXXX")"
           echo "SMOKE_DATA_DIR=${SMOKE_DATA_DIR}" >> "$GITHUB_ENV"
-          touch "${SMOKE_DATA_DIR}/gametracker.db"
+          # No gametracker.db any more — the smoke stack brings up its own
+          # throwaway Postgres container and the backend creates the schema.
           echo '{}' > "${SMOKE_DATA_DIR}/settings.json"
           echo '[]' > "${SMOKE_DATA_DIR}/sent_notifications.json"
           # mktemp -d already creates the directory 0700. Only ownership needs
@@ -478,7 +479,17 @@ jobs:
           persist-credentials: false
 
       - name: Stop existing production stack
+        # The env block is REQUIRED even to stop the stack: `docker compose down`
+        # still interpolates the compose file, and both JWT_SECRET and
+        # POSTGRES_PASSWORD use the `:?` fail-fast form. Without them the command
+        # errors on interpolation and `|| true` swallows it, leaving the old stack
+        # running and the deploy silently updating nothing.
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
+          # NEVER add --volumes here. That would delete gametracker-pgdata,
+          # which is now the production database.
           docker compose -f docker-compose.yaml down || true
 
       - name: Start production stack
@@ -487,6 +498,7 @@ jobs:
           IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           docker compose -f docker-compose.yaml up -d
 
