@@ -217,9 +217,18 @@ All honour `DB_PATH` so you can point them at the right `gametracker.db`.
 
 - **Backend**: `index.js` — a single-file Express server (routes, cron jobs, notification senders).
 - **Frontend**: `frontend/src/App.jsx` — React 18 + React Router 6, built with Vite.
-- **Database**: SQLite. The schema is created and migrated at boot inside `initializeSchema()`.
+- **Database**: PostgreSQL 16, in its own `postgres-gametracker` container on the compose network.
+  The connection lives in `db.js`; the schema is applied at boot by `schema-migrate.js` from the
+  ordered files in `migrations/`, inside a transaction, tracked in a `schema_migrations` table.
+  **A migration failure is fatal — the backend will not start against an unverified schema.**
+  To change the schema, add a new numbered file in `migrations/`; never edit an applied one.
+- **Migrating from the old SQLite build**: `scripts/migrate-sqlite-to-postgres.js`, run manually.
+  See `PRODUCTION_CHANGELOG.txt` for the full cutover, rollback and backup procedure.
 - **Never commit** `.env`, `settings.json`, or `gametracker.db` — all three are gitignored, and CI runs
   Gitleaks over the full history.
+- **Backups**: `docker exec postgres-gametracker pg_dump -U gametracker -Fc gametracker > file.dump`.
+  Note that `docker compose down --volumes` deletes the `gametracker-pgdata` volume — never pass
+  `--volumes` against the production stack.
 - CI (`.github/workflows/docker-build-deploy.yml`) gates every push to `main` on Gitleaks, Semgrep,
   ESLint + Vite build, Trivy on both images, and a smoke test that exercises the real
   browser → nginx → backend request path.

@@ -11,7 +11,8 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 ### Backend
 - **Runtime**: Node.js 18
 - **Framework**: Express.js 5.x
-- **Database**: SQLite3 (file-based, `gametracker.db`)
+- **Database**: PostgreSQL 16 (`pg` driver, promise-based; `db.js` exposes a node-sqlite3-shaped
+  callback shim so the legacy call sites in `index.js` did not have to be rewritten)
 - **Authentication**: JWT (jsonwebtoken) + bcryptjs for local auth, ldapjs for LDAP/Active Directory
 - **Email**: Nodemailer (SMTP)
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
@@ -31,7 +32,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Containerization**: Docker + docker-compose
 - **Backend port**: 3000
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
-- **Persistent volumes**: SQLite database, settings.json, sent_notifications.json
+- **Persistent volumes**: `gametracker-pgdata` (named volume, Postgres data), settings.json, sent_notifications.json
 
 > **Dockerfile layer order (critical):** The backend `Dockerfile` must install system build tools (`python3`, `make`, `g++`, `sqlite3`) **before** running `npm ci --omit=dev`. The `sqlite3` package has no prebuilt NAPI binary for the `node:18-slim` image and compiles from source via `node-gyp`, which requires Python3. Wrong order → build failure.
 >
@@ -53,7 +54,11 @@ GameTracker/
 ├── settings.example.json           # Template for settings.json (committed, no secrets)
 ├── settings.json                   # SMTP / LDAP / Telegram / API-key runtime config
 │                                   #   (GITIGNORED — holds live credentials)
-├── gametracker.db                  # SQLite database (gitignored)
+├── db.js                           # Postgres pool + node-sqlite3-compatible shim
+├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
+├── migrations/                     # Numbered .sql schema migrations
+├── scripts/
+│   └── migrate-sqlite-to-postgres.js   # One-shot data migration (manual, idempotent)
 ├── sent_notifications.json         # Notification deduplication log (gitignored)
 ├── crackwatch-cache.json           # Cached DRM status (gitignored)
 ├── system-status-cache.json        # Last-OK timestamps per service (gitignored)
@@ -106,11 +111,21 @@ GameTracker/
   identity; **privilege is re-read from the database on every request**, so revoking admin or deleting
   an account takes effect immediately rather than at token expiry.
 
-> **Schema initialization is order-sensitive.** All `CREATE TABLE` / `ALTER TABLE` statements run inside
-> `db.serialize()` in `initializeSchema()`. node-sqlite3 defaults to *parallel* mode, where the ALTER
-> migrations race the CREATEs and fail on a fresh database — which silently shipped installs missing
-> `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Never add schema statements outside
-> that block, and never pass an empty error callback to a migration.
+> **Schema changes go in `migrations/`, nowhere else.** `schema-migrate.js` applies the numbered
+> `.sql` files in order, each in its own transaction, recording them in a `schema_migrations` table.
+> **Any failure is fatal and rolls back** — the backend refuses to serve traffic against a schema it
+> could not verify. Add a new numbered file; never edit one that has already been applied, and never
+> issue DDL from a route handler.
+>
+> This replaced `initializeSchema()`, where `ALTER TABLE` statements raced the `CREATE TABLE`s on a
+> fresh database and their empty error callbacks swallowed the failures — silently shipping installs
+> missing `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Postgres removes the race,
+> but the swallowing was the real defect. Do not reintroduce a "log and continue" migration path.
+
+> **`user_games.game_id` is TEXT, not a number.** Search emits ids like `igdb_12345` / `rawg_999`
+> and the frontend posts them verbatim. The old SQLite column was *declared* `INTEGER` and stored
+> strings anyway, which only worked because of SQLite's flexible typing. Anything that compares,
+> joins or indexes `game_id` must treat it as text.
 
 ---
 
@@ -140,7 +155,7 @@ GameTracker/
 |---|---|---|
 | id | PK | Auto-increment |
 | user_id | FK → users.id | |
-| game_id | INTEGER | External API game ID |
+| game_id | **TEXT** | External API game ID — a STRING like `igdb_12345`, never numeric. Was declared `INTEGER` under SQLite and stored strings anyway |
 | game_name | TEXT | |
 | cover_url | TEXT | Image URL |
 | release_date | TEXT | YYYY-MM-DD |
@@ -188,7 +203,7 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 
 ## Authentication & Security
 
-- **Local auth**: bcrypt-hashed passwords stored in SQLite
+- **Local auth**: bcrypt-hashed passwords stored in Postgres
 - **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
@@ -342,7 +357,8 @@ deploy  (needs: ALL 7 upstream jobs)
 |---|---|
 | Backend | `no-new-privileges:true`, runs as `node` user (UID 1000) |
 | Frontend | `no-new-privileges:true`, `read_only: true`, tmpfs for `/tmp`, `/var/cache/nginx`, `/var/run`, runs as `nginx` user via `nginxinc/nginx-unprivileged:alpine` |
-| Backend read_only | **Cannot be enabled** — SQLite requires writable `/app/` for WAL/journal files |
+| Backend read_only | **Enabled.** SQLite's need for a writable `/app/` was the only blocker. Bind-mounted files (`settings.json`, `sent_notifications.json`) stay writable under `read_only`; the ephemeral CrackWatch and system-status caches live on a tmpfs at `/app/cache` via `CACHE_DIR` |
+| Database | `postgres-gametracker` (postgres:16-alpine). Port **not published**; backend gated on `condition: service_healthy`. Named volume `gametracker-pgdata` |
 
 ### Smoke Test Isolation
 

@@ -9,6 +9,121 @@ with the date applied.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- PREPARED 2026-07-25 (SQLite -> PostgreSQL migration, PHASE 1) — NOT YET APPLIED ---
+Summary: Replaces SQLite with a dedicated PostgreSQL container. Phase 1 moves the
+         three relational tables (users, user_games, user_shares) ONLY. settings.json
+         and sent_notifications.json remain file-backed and are deliberately out of
+         scope — see "Phasing" below.
+
+BASE COMMIT WARNING — READ FIRST:
+  This work is branched from claude/codebase-review-hml32s, which is NOT merged into
+  main and is NOT in production. Production currently runs unhardened main (verified:
+  /api/health still returns totalUsers and rootUser, which the hardening removed).
+  Merging this branch therefore ships the security hardening AND the database
+  migration together. If you want them separate, merge and deploy the hardening
+  branch on its own first — it is a clean fast-forward.
+
+WHAT CHANGED:
+  • New dedicated Postgres service in both compose files:
+      production  -> container_name postgres-gametracker, named volume gametracker-pgdata
+      CI smoke    -> container_name postgres-gametracker-smoke, no volume at all
+    The port is NOT published in either. The backend is gated on service_healthy.
+    This is GameTracker's own database — it does not touch the unrelated Postgres
+    instances on this host (the other app's postgres:16-alpine, or Guacamole's 15.2).
+  • db.js — pg connection pool plus a run/get/all shim matching node-sqlite3's callback
+    surface, so the ~65 existing call sites port without being rewritten.
+  • schema-migrate.js + migrations/*.sql — ordered, transactional migrations tracked in
+    a schema_migrations table. ANY failure is fatal. This replaces initializeSchema(),
+    whose swallowed errors shipped fresh installs missing four columns.
+  • scripts/migrate-sqlite-to-postgres.js — the one-shot data migration (manual, idempotent).
+  • backend now runs with read_only: true. SQLite's need for a writable /app was the
+    only thing blocking it.
+
+SCHEMA DECISIONS:
+  • user_games.game_id is TEXT, not INTEGER. The SQLite column was DECLARED INTEGER but
+    every one of the 379 production rows holds a string like 'igdb_19564'. Postgres would
+    have rejected every insert. This was verified against the live database, not assumed.
+  • Booleans stay INTEGER (0/1) and dates stay TEXT. Both are load-bearing across the
+    backend, the frontend AND the Android client. Converting them is a behaviour change
+    and belongs in its own commit.
+  • can_create_users is preserved: unused by the backend but read by frontend App.jsx:181,
+    and root has it set in production.
+
+DATA PROBLEMS FOUND IN PRODUCTION (Postgres will enforce what SQLite ignored):
+  • 30 user_games rows reference user_id 2, 3, 4, 5 or 8 — none of which exist any more
+    (19 of them belong to the missing user 5). The migration HALTS on these by default
+    and requires an explicit operator decision. It will not delete data on your behalf.
+  • 2 user_shares rows point at 'Orelsh' where the user row is 'orelsh'. This is a case
+    mismatch, not a dead user, and is repaired automatically.
+  • No ghost users found: every NULL-password account has origin='ldap', which is correct.
+
+>>> CUTOVER PROCEDURE (operator runs this):
+  1. BACK UP FIRST. There is no existing backup story.
+       cp /home/docker/gametracker/data/gametracker.db  ~/gametracker.db.$(date +%F)
+       cp /home/docker/gametracker/data/settings.json   ~/settings.json.$(date +%F)
+       cp /home/docker/gametracker/data/sent_notifications.json ~/sent.json.$(date +%F)
+  2. Add POSTGRES_PASSWORD to the repository's GitHub Actions secrets, and to
+     /srv/actions-runner/_work/GameTracker/GameTracker/.env if you deploy by hand.
+     Generate with: openssl rand -base64 32
+  3. Merge -> CI deploys -> postgres-gametracker comes up empty and the backend
+     applies migrations/001_initial_schema.sql automatically.
+  4. Stop the backend, keeping the database running:
+       docker compose -f docker-compose.yaml stop backend
+  5. Dry run the migration and READ THE REPORT:
+       docker compose -f docker-compose.yaml run --rm --no-deps \
+         -v /home/docker/gametracker/data/gametracker.db:/legacy.db:ro backend \
+         node scripts/migrate-sqlite-to-postgres.js --sqlite /legacy.db --dry-run
+     It will halt on the 30 orphaned rows and exit 3. That is expected.
+  6. Re-run with a decision. Recommended (nothing is lost):
+       ... node scripts/migrate-sqlite-to-postgres.js --sqlite /legacy.db \
+             --allow-orphans=quarantine
+     Confirm the VERIFICATION table reports OK on all three rows.
+  7. docker compose -f docker-compose.yaml start backend
+  8. Verify by hand: log in, view the library, open notification settings, check sharing.
+  9. Leave the SQLite file untouched for at least a week. It is the rollback.
+
+>>> ROLLBACK (if the deploy goes wrong):
+  The SQLite file is never written to by the migration, so rollback is just
+  redeploying the previous image:
+    git revert <merge commit>   # or: git checkout <previous main sha>
+    docker compose -f docker-compose.yaml down
+    docker compose -f docker-compose.yaml up -d
+  The old code reads /home/docker/gametracker/data/gametracker.db exactly as before.
+  Note the pre-Postgres compose does not mount gametracker.db any more, so a revert
+  must restore the OLD docker-compose.yaml too — reverting the whole merge does this.
+  Leave the gametracker-pgdata volume in place; it costs nothing and preserves the
+  migrated state for a second attempt.
+
+>>> BACKUP / RESTORE (new — none previously existed):
+  Backup (safe while running):
+    docker exec postgres-gametracker pg_dump -U gametracker -Fc gametracker \
+      > ~/gametracker-$(date +%F).dump
+  Restore into an empty database:
+    docker exec -i postgres-gametracker pg_restore -U gametracker -d gametracker \
+      --clean --if-exists < ~/gametracker-YYYY-MM-DD.dump
+  Suggested cron (daily 02:00, keep 14 days) — add to the operator's crontab:
+    0 2 * * * docker exec postgres-gametracker pg_dump -U gametracker -Fc gametracker \
+      > /home/docker/gametracker/backups/gt-$(date +\%F).dump && \
+      find /home/docker/gametracker/backups -name 'gt-*.dump' -mtime +14 -delete
+  NOTE: `docker compose down --volumes` DELETES gametracker-pgdata. The deploy job
+  never passes --volumes; do not add it.
+
+PHASING — WHY settings.json IS STILL A FILE:
+  Moving settings into Postgres makes loadSettings() async at 48 call sites on the hot
+  path of every search, login and notification. It also forces a decision about whether
+  the LDAP bind password and SMTP password should live in the database at all, which
+  needs CISO sign-off (see SECURITY_HARDENING_2026-07.md section 10). Bundling that with
+  a 65-call-site engine swap, in a codebase with no test suite, is how you get an outage
+  you cannot bisect. Phase 2 is tracked separately.
+
+STILL TO DO (not in this change):
+  • Re-key user_shares from username to users.id. A recreated account currently inherits
+    a deleted one's shares. Deliberately excluded: it changes every share query.
+  • crackwatch-cache.json is still a file scanned linearly by lookupCrackStatus(). It is
+    a genuine candidate for an indexed table; recommended for Phase 2, not urgent.
+  • Once the rollback window closes, drop the sqlite3 dependency and its build toolchain
+    (python3/make/g++) from the Dockerfile to shrink the image and its CVE surface.
+
 --- APPLIED 2026-07-25 (Remediation pass — full codebase + docs review, round 2) ---
 Summary: Full review of every MD file and the codebase, with independent CISO and
          Architect reviews. Fixes a leaked LDAP credential in git history, a broken

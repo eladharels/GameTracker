@@ -364,3 +364,93 @@ would have failed the next Trivy run. Bumped to `>=5.0.8`, plus `qs >=6.15.3`, `
   only the format is validated. A verification token is a feature, not a patch.
 - **Long-running bulk refresh** is still a synchronous 5-minute HTTP request. The right shape is
   `202 Accepted` + a job id; deferred as a feature.
+
+---
+
+## 10. SQLite → PostgreSQL migration — security review (July 2026, Phase 1)
+
+Branched from `claude/codebase-review-hml32s`. **That branch is not merged and not in
+production**, so merging this ships the section 9 hardening and the database migration
+together. Verified: production `/api/health` still returns `totalUsers` and `rootUser`,
+which section 9.3 removed — production is running unhardened `main`.
+
+### 10.1 Hardening items explicitly re-verified after the port
+
+Each of these was tested against a real PostgreSQL 16 server, not reasoned about:
+
+| Item | Status |
+|---|---|
+| Settings `__unchanged__` sentinel | **Intact.** `GET /api/settings` returns no cleartext secret; POSTing that response back preserves the stored password; empty string still clears it. |
+| No auto-create on read | **Intact.** Unknown username → 404, user count unchanged. |
+| Null-prototype notification maps | **Untouched.** Still `Object.create(null)` with `__proto__`/`constructor`/`prototype` rejection. `game_id` remains attacker-controlled, and is now `TEXT` in the database. |
+| Privilege re-read per request | **Intact.** Demoting an admin takes effect on an already-issued token; a deleted user's token returns 401. |
+| SSRF blocklist | **Untouched** — no notification-URL code was modified. |
+| Schema-init error swallowing | **Fixed properly.** Replaced with transactional migrations that are fatal on failure. Fault-injection test: a deliberately broken migration exits 1 and leaves no partial state. |
+
+### 10.2 New security posture
+
+- **Database port is not published** in either compose file. The database is reachable
+  only over the compose network. This matches every other database container on the host.
+- **`POSTGRES_PASSWORD` uses the `:?` fail-fast form** — compose refuses to render without
+  it, so the database can never come up with a blank or defaulted password. It must be
+  added to the repository's Actions secrets before merge.
+- **No credentials in logs.** `db.js` logs only the driver error code and message; the
+  DSN (which contains the password) is never interpolated into a log line or an error
+  response. Route handlers continue to return a generic `{ error: 'DB error' }`.
+- **`read_only: true` is now set on the backend container** — SQLite's need for a writable
+  `/app` was the only thing blocking it. Verified empirically that bind-mounted files stay
+  writable under `read_only` while unmounted `/app` paths fail with `EROFS`.
+- **Foreign keys are enforced for the first time.** SQLite declared them but ran with
+  `PRAGMA foreign_keys` OFF, so deleting a user left dangling rows. `ON DELETE CASCADE`
+  now prevents that class of debris accumulating.
+
+### 10.3 Ghost users — section 9's follow-up item, now resolved
+
+Section 9 left "existing ghost users" open pending a live-data check. Checked:
+
+```
+SELECT id, username, origin FROM users WHERE password IS NULL AND origin = 'local';
+-- 0 rows
+```
+
+**There are no ghost users.** All eleven NULL-password accounts have `origin='ldap'`,
+which is correct and expected — LDAP users authenticate against the directory. This item
+can be closed.
+
+### 10.4 Pre-existing data integrity problems surfaced by the migration
+
+Postgres enforces what SQLite ignored, so these had to be dealt with:
+
+- **30 `user_games` rows** reference `user_id` 2, 3, 4, 5 or 8 — none of which exist.
+  Not previously known. Unreachable through the API, but still data: the migration halts
+  and requires an explicit operator decision rather than dropping them.
+- **2 `user_shares` rows** target `'Orelsh'` where the account is `'orelsh'`. A case
+  mismatch, not a dead user — repaired by normalisation. Worth noting as a latent bug:
+  usernames are lowercased on the user record but were not on the share record.
+
+### 10.5 OPEN — requires CISO decision before Phase 2
+
+**Should the LDAP bind password and SMTP password live in PostgreSQL at all?**
+
+Phase 1 deliberately does not answer this: `settings.json` is untouched and still holds
+those credentials at mode `0600`. The question only becomes live when settings move into
+the database.
+
+The honest framing is that storing them in the database **moves the secret rather than
+removing it** — the connection string becomes the thing worth stealing, and it sits in
+the environment of a container that is reachable from the internet-facing app. Options:
+
+1. **Keep credentials in environment variables; store only non-secret config in the
+   database.** Smallest secret surface. Costs the ability to edit them from the admin UI —
+   a real usability regression the operator relies on today.
+2. **Store encrypted, with the key from the environment.** Keeps the admin UI. The key
+   still lives beside the data in the same container's environment, so it mainly protects
+   against database backups and dumps leaking — which, given a new `pg_dump` backup
+   procedure is being introduced here, is not a trivial benefit.
+3. **Store plaintext and rely on database access control.** Weakest. A read-only SQL
+   injection or a leaked dump yields the directory bind credential outright.
+
+**Recommendation: option 2**, on the grounds that the operator has just rotated the LDAP
+credentials after a leak, backups are about to start being written to disk regularly, and
+option 1's loss of the admin UI is likely to be rejected in practice. This needs sign-off
+before Phase 2 begins; it is not decided by this change.
