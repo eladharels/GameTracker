@@ -477,7 +477,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The env block is REQUIRED even though `down` starts nothing: compose still
+      # interpolates the file, and JWT_SECRET uses the `${VAR:?}` fail-fast form.
+      # Without it the command errors on interpolation and `|| true` swallows the
+      # failure -- leaving the OLD stack running while the deploy reports success.
       - name: Stop existing production stack
+        env:
+          IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
+          IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
+          RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           docker compose -f docker-compose.yaml down || true
 
