@@ -125,7 +125,11 @@ const ensureRootUser = async () => {
 // before the tables exist raced the schema and failed with "no such table".
 // migrateOrExit() terminates the process if the schema cannot be brought up to
 // date, so nothing below ever runs against an unknown schema.
-migrateOrExit().then(() => ensureRootUser());
+//
+// Exported as `schemaReady` so the listener at the bottom of this file can wait
+// on it. Without that the port opened before the tables existed and /api/health
+// — the deploy gate — answered "ok" against an empty database.
+const schemaReady = migrateOrExit().then(() => ensureRootUser());
 
 // Helper: look up a user WITHOUT creating one.
 //
@@ -1644,7 +1648,12 @@ app.post('/api/user/:username/games', authRequired, ownershipRequired, async (re
           backlogOrder = row.backlog_order;
         } else {
           const maxRow = await new Promise((resolve, reject) => {
-            db.get('SELECT MAX(backlog_order) as maxOrder FROM user_games WHERE user_id = ?', [user.id], (err, r) => {
+            // The alias MUST stay double-quoted. Postgres folds unquoted
+            // identifiers to lower case, so `as maxOrder` returns a `maxorder`
+            // property, `r.maxOrder` reads undefined, and every new backlog item
+            // silently gets order 1 -- which also makes the up/down reorder a
+            // permanent no-op because every row shares the same value.
+            db.get('SELECT MAX(backlog_order) AS "maxOrder" FROM user_games WHERE user_id = ?', [user.id], (err, r) => {
               if (err) reject(err); else resolve(r);
             });
           });
@@ -1794,7 +1803,11 @@ app.put('/api/user/:username/games/:gameId/backlog-order', authRequired, ownersh
   }
   withExistingUser(res, normalizedUsername, (user) => {
     db.all(
-      'SELECT id, game_id, backlog_order FROM user_games WHERE user_id = ? AND status = ? ORDER BY backlog_order ASC',
+      // NULLS FIRST is required to preserve SQLite's ordering. SQLite sorts NULL
+      // first on ASC; Postgres sorts it last. Without this, every backlog row
+      // with a NULL backlog_order (rows predating the column) would silently
+      // jump from the top of the user's list to the bottom on cutover.
+      'SELECT id, game_id, backlog_order FROM user_games WHERE user_id = ? AND status = ? ORDER BY backlog_order ASC NULLS FIRST',
       [user.id, 'backlog'],
       (err, rows) => {
         if (err) return res.status(500).json({ error: 'DB error' });
@@ -3934,9 +3947,22 @@ cron.schedule('0 3 * * 1', async () => { // Every Monday at 3:00 AM
 // listener and register all the cron jobs as a side effect of the import, so
 // `node run_notifications.js` left a server running and never exited.
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  // Bind the port only AFTER the schema is verified. Previously app.listen() ran
+  // synchronously during module evaluation while migrateOrExit() was still a
+  // pending promise, so there was a window in which the port was open and
+  // /api/health answered {"status":"ok"} against a database with no tables.
+  // That endpoint is both the container healthcheck and the CI deploy gate, so a
+  // green answer there must mean the schema is actually present.
+  schemaReady
+    .then(() => {
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Server running on port ${PORT}`);
+      });
+    })
+    .catch((err) => {
+      console.error(`[FATAL] Refusing to start: ${err.message}`);
+      process.exit(1);
+    });
 }
 
 // Export functions for manual scripts

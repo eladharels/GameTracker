@@ -69,17 +69,32 @@ DATA PROBLEMS FOUND IN PRODUCTION (Postgres will enforce what SQLite ignored):
      applies migrations/001_initial_schema.sql automatically.
   4. Stop the backend, keeping the database running:
        docker compose -f docker-compose.yaml stop backend
+     >>> IMPORTANT: by this point the backend has already booted once and created
+         a BOOTSTRAP `root` account with a randomly generated password (printed in
+         its logs). That row occupies id=1 and would collide with the real root
+         row from SQLite. Step 6 handles this explicitly; do not skip the flag.
   5. Dry run the migration and READ THE REPORT:
        docker compose -f docker-compose.yaml run --rm --no-deps \
          -v /home/docker/gametracker/data/gametracker.db:/legacy.db:ro backend \
          node scripts/migrate-sqlite-to-postgres.js --sqlite /legacy.db --dry-run
-     It will halt on the 30 orphaned rows and exit 3. That is expected.
-  6. Re-run with a decision. Recommended (nothing is lost):
-       ... node scripts/migrate-sqlite-to-postgres.js --sqlite /legacy.db \
-             --allow-orphans=quarantine
-     Confirm the VERIFICATION table reports OK on all three rows.
+     Expected outcomes, both normal:
+       exit 5 — "TARGET DATABASE IS NOT EMPTY" because of the bootstrap root row.
+       exit 3 — halted on the 30 orphaned user_games rows.
+     The script refuses to load into a non-empty database. That refusal is the
+     safety net: loading on top of the bootstrap row would silently DISCARD the
+     real root account's password hash and permissions while still reporting OK.
+  6. Run the load, replacing the bootstrap root and quarantining the orphans:
+       docker compose -f docker-compose.yaml run --rm --no-deps \
+         -v /home/docker/gametracker/data/gametracker.db:/legacy.db:ro backend \
+         node scripts/migrate-sqlite-to-postgres.js --sqlite /legacy.db \
+           --allow-orphans=quarantine --replace-bootstrap-root
+     The VERIFICATION table must read OK on all three rows, in BOTH the
+     "expected" and "inserted" columns. An "inserted" count lower than "expected"
+     means rows were skipped rather than loaded — stop and investigate.
   7. docker compose -f docker-compose.yaml start backend
-  8. Verify by hand: log in, view the library, open notification settings, check sharing.
+  8. Verify by hand: log in as root with the ORIGINAL production password (not
+     the generated one from step 3 — it belonged to the bootstrap row, which the
+     migration removed), view the library, open notification settings, check sharing.
   9. Leave the SQLite file untouched for at least a week. It is the rollback.
 
 >>> ROLLBACK (if the deploy goes wrong):

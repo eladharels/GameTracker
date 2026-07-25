@@ -11,6 +11,26 @@
  *   set DB_PATH=e:\path\to\gametracker.db && node create-local-admin.js admin MyPass123
  *   (PowerShell: $env:DB_PATH="e:\path\to\gametracker.db"; node create-local-admin.js admin MyPass123)
  */
+// ===========================================================================
+// NOT YET PORTED TO POSTGRESQL.
+//
+// This script still opens the legacy SQLite file, which is no longer the source
+// of truth. node-sqlite3 opens with OPEN_CREATE by default, so without this
+// guard it would silently CREATE an empty gametracker.db and then cheerfully
+// report "no rows found" -- looking like a successful no-op while the real
+// database was untouched. Fail loudly instead.
+//
+// To port: replace the sqlite3 handle with `require('./db')`, which exposes the
+// same run/get/all callback surface. See reset-root-password.js for a worked
+// example. Remove this guard when done.
+// ===========================================================================
+if (!process.env.ALLOW_LEGACY_SQLITE_SCRIPT) {
+  console.error('[UNPORTED] ' + __filename.split('/').pop() + ' still targets SQLite, which GameTracker no longer uses.');
+  console.error('           Porting it to ./db is required before it will do anything useful.');
+  console.error('           Set ALLOW_LEGACY_SQLITE_SCRIPT=1 only to run it against an old .db file on purpose.');
+  process.exit(1);
+}
+
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const path = require('path');

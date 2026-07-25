@@ -209,7 +209,11 @@ Unknown `/api/*` paths return a JSON 404.
 | `backfill_ldap_display_names.js` | Sync display names from LDAP |
 | `test_ldap_sync.js` | Debug the LDAP connection |
 
-All honour `DB_PATH` so you can point them at the right `gametracker.db`.
+Only `reset-root-password.js` and `run_notifications.js` are ported to PostgreSQL; run them inside
+the backend container so the `PG*` variables are already set. The remaining scripts still target the
+old SQLite file and now **exit 1 with a clear message** rather than silently creating an empty
+database — port them to `./db` (see `reset-root-password.js` for a worked example) before use.
+`DB_PATH` no longer applies.
 
 ---
 

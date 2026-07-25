@@ -3,17 +3,20 @@
  * Run from project root: node reset-root-password.js "YourNewPassword"
  * Password must be at least 8 characters.
  *
- * Use same DB as the app: set DB path if app runs from another directory:
- *   set DB_PATH=e:\path\to\gametracker.db && node reset-root-password.js "NewPass"
- *   (PowerShell: $env:DB_PATH="e:\path\to\gametracker.db"; node reset-root-password.js "NewPass")
+ * This is the break-glass recovery path for an admin lockout, so it must always
+ * talk to the database the application actually reads. It now uses ./db, which
+ * takes its connection from the same PG* environment variables as the backend.
+ * Run it inside the backend container so those are already set:
+ *
+ *   docker compose -f docker-compose.yaml exec backend \
+ *     node reset-root-password.js "YourNewPassword"
+ *
+ * DB_PATH is gone. It pointed at the SQLite file, which is no longer the source
+ * of truth; leaving it in place meant this script would silently CREATE an empty
+ * gametracker.db and then report "no root user found" while production was fine.
  */
-const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
-const path = require('path');
-
-// Use DB_PATH env if set (so you can point to the same file the app uses); else project root
-const DBSOURCE = process.env.DB_PATH || path.join(__dirname, 'gametracker.db');
-const db = new sqlite3.Database(DBSOURCE);
+const db = require('./db');
 
 const newPassword = process.argv[2];
 if (!newPassword || newPassword.length < 8) {
@@ -22,42 +25,35 @@ if (!newPassword || newPassword.length < 8) {
   process.exit(1);
 }
 
-console.log('Using database:', DBSOURCE);
+console.log('Using database: %s @ %s', process.env.PGDATABASE || 'gametracker', process.env.PGHOST || 'db');
 
-// First check that root user exists
-db.get('SELECT id, username, length(password) as pwd_len FROM users WHERE username = ?', ['root'], (err, row) => {
-  if (err) {
-    console.error('Error reading database:', err.message);
-    db.close();
-    process.exit(1);
-  }
+const fail = async (msg) => {
+  console.error(msg);
+  await db.close();
+  process.exit(1);
+};
+
+db.get('SELECT id, username, length(password) AS pwd_len FROM users WHERE username = ?', ['root'], async (err, row) => {
+  if (err) return fail(`Error reading database: ${err.message}`);
   if (!row) {
-    console.error('No user with username "root" found in this database.');
-    console.error('Make sure you are using the same database file the app uses (see DB_PATH above).');
-    db.close();
-    process.exit(1);
+    return fail(
+      'No user with username "root" found in this database.\n' +
+      'Check that PGHOST/PGDATABASE point at the database the app uses.'
+    );
   }
   console.log('Found root user id=%s, current password length=%s', row.id, row.pwd_len == null ? 'NULL' : row.pwd_len);
 
-  bcrypt.hash(newPassword, 10).then((hash) => {
-    db.run('UPDATE users SET password = ? WHERE username = ?', [hash, 'root'], function (err) {
-      if (err) {
-        console.error('Error updating password:', err.message);
-        db.close();
-        process.exit(1);
-      }
-      if (this.changes === 0) {
-        console.error('Update affected 0 rows.');
-        db.close();
-        process.exit(1);
-      }
-      console.log('Root user password updated successfully.');
-      db.close();
-    });
-  }).catch((err) => {
-    console.error('Error hashing password:', err.message);
-    db.close();
-    process.exit(1);
+  let hash;
+  try {
+    hash = await bcrypt.hash(newPassword, 10);
+  } catch (e) {
+    return fail(`Error hashing password: ${e.message}`);
+  }
+
+  db.run('UPDATE users SET password = ? WHERE username = ?', [hash, 'root'], async function (err2) {
+    if (err2) return fail(`Error updating password: ${err2.message}`);
+    if (this.changes === 0) return fail('Update affected 0 rows.');
+    console.log('Root user password updated successfully.');
+    await db.close();
   });
 });
-
