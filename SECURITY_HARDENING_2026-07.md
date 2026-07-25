@@ -312,9 +312,13 @@ would have failed the next Trivy run. Bumped to `>=5.0.8`, plus `qs >=6.15.3`, `
   block is simply never reached.**
 - The **container** backend port is now fixed at `3000` in all three compose files (only the *host*
   port varies), which is what makes that proxy work in the smoke stack too.
-- Backend published ports bound to **`127.0.0.1`**. On `0.0.0.0` the backend was reachable directly,
-  bypassing nginx — and with `trust proxy: 1` a direct client controls `X-Forwarded-For` and can present
-  a fresh IP per login attempt.
+- Backend publish interface is now controlled by **`BACKEND_BIND`**. On `0.0.0.0` the backend is
+  reachable directly, bypassing nginx — and with `trust proxy` set, a direct client controls
+  `X-Forwarded-For` and can present a fresh IP per login attempt, defeating the rate limiter.
+
+  **It defaults to `0.0.0.0`, which does NOT close that hole.** This deployment's reverse proxy runs on
+  a separate machine and reaches the backend across the network, so a loopback default would have taken
+  the API down on deploy. Closing it properly is an operator step, not a code change — see 9.6.
 - **Smoke test now proves the real request path**: `/api/health` *through* the frontend port, plus a
   JSON-404 assertion. This is the first functional CI gate beyond "the process started".
 - Smoke-test data directory moved from a fixed `/tmp` path to `mktemp -d`. The old path on a shared
@@ -334,6 +338,23 @@ would have failed the next Trivy run. Bumped to `>=5.0.8`, plus `qs >=6.15.3`, `
 - **Cleartext `ldap://`.** A simple bind sends every user password and the service-account password
   unencrypted. The code now **warns loudly at startup** but does not refuse, because refusing would lock
   out the running deployment. **Switch to `ldaps://` and rotate.**
+- **Backend directly reachable on the LAN (`BACKEND_BIND=0.0.0.0`).** The edge proxy lives on another
+  host and currently points at **two** upstreams — `/api` → backend `:3000`, everything else →
+  frontend `:8080` — so the backend port must stay published. While it is, anyone who can reach
+  `<host>:3000` bypasses nginx and can spoof `X-Forwarded-For` past the login rate limiter.
+
+  Now that `frontend/nginx.conf` proxies `/api` itself, the frontend port can serve the whole app and
+  this exposure can be removed. Ordered so there is no downtime:
+
+  1. Deploy, then confirm `curl http://<host>:8080/api/health` returns `{"status":"ok"}`.
+  2. Repoint the edge proxy to send **all** paths to `:8080`; delete the `/api` → `:3000` rule.
+  3. Verify the site end to end.
+  4. Set `BACKEND_BIND=127.0.0.1` (or drop the backend's `ports:` entry) **and `TRUST_PROXY=2`**.
+
+  > Step 4's `TRUST_PROXY` bump is mandatory: routing through the frontend adds a second proxy hop.
+  > Left at `1`, `req.ip` becomes the frontend container's address and every failed login shares one
+  > bucket — five bad passwords from anyone locks out every user for 15 minutes.
+
 - **HSTS** — belongs on the TLS-terminating edge proxy, which is not in this repo.
 - **`sqlite3` 6.x** major bump (clears the last 5 LOW advisories).
 - **Existing ghost users** already in the database. Review with

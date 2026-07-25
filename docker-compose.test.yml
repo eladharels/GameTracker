@@ -21,6 +21,10 @@ services:
     ports:
       # Host port varies to avoid clashing with prod/staging; the CONTAINER port is
       # fixed at 3000 so the frontend image's nginx `/api` proxy works unchanged.
+      #
+      # Hard-coded to loopback (unlike prod/staging, which use BACKEND_BIND): the CI
+      # smoke test curls localhost on the same runner, so nothing off-box ever needs
+      # to reach this port, and an ephemeral test stack should not be LAN-visible.
       - "127.0.0.1:${BACKEND_TEST_PORT:-3099}:3000"
     volumes:
       - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/gametracker.db:/app/gametracker.db

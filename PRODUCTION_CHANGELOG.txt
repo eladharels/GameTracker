@@ -51,9 +51,13 @@ Files changed:
                                    with index.html and HTTP 200)
   • frontend/vite.config.js       (dev /api proxy — `npm run dev` per README could not
                                    reach the backend at all)
-  • docker-compose{,.staging,.test}  (container port fixed at 3000, host ports bound to
-                                   127.0.0.1, staging JWT_SECRET fail-fast, staging
-                                   NODE_ENV=production so stacks stop leaking err.stack)
+  • docker-compose{,.staging,.test}  (container port fixed at 3000; publish interface now
+                                   set by BACKEND_BIND, DEFAULT 0.0.0.0 to preserve the
+                                   current topology — the edge proxy is on another host and
+                                   points at :3000 directly, so a loopback default would
+                                   have taken the API down on deploy. The test stack is
+                                   loopback-only. Staging JWT_SECRET fail-fast, and staging
+                                   NODE_ENV=production so it stops leaking err.stack.)
   • .github/workflows/...         (smoke test now exercises browser -> nginx -> backend;
                                    mktemp -d instead of a fixed /tmp path; pinned scanner
                                    installs; least-privilege token)
@@ -67,6 +71,14 @@ Post-deploy verification (beyond the standard checklist):
     '__unchanged__' and POST maps it back to the stored value.
   • Confirm notifications still deliver: ntfy topics are now URL-encoded and the Gotify
     token moved from the query string to the X-Gotify-Key header.
+  • BACKEND_BIND defaults to 0.0.0.0, so the backend stays directly reachable on the LAN
+    and the X-Forwarded-For spoofing hole is NOT yet closed. To close it (no downtime):
+      1. deploy, then confirm  curl http://<host>:8080/api/health  -> {"status":"ok"}
+      2. repoint the edge proxy: ALL paths to :8080, delete the /api -> :3000 rule
+      3. verify the site end to end
+      4. set BACKEND_BIND=127.0.0.1 AND TRUST_PROXY=2
+    Step 4's TRUST_PROXY bump is mandatory — routing via the frontend adds a proxy hop, and
+    left at 1 every failed login shares one bucket (5 bad passwords locks out everyone).
   • On the host, review pre-existing ghost accounts:
       SELECT id, username, created_at FROM users WHERE password IS NULL AND origin='local';
     and delete the confirmed ones (plus their user_shares rows) by hand.

@@ -235,6 +235,12 @@ NODE_ENV=production
 # ROOT_PASSWORD=<fresh-DB root password; random-printed-once if unset>
 # CORS_ORIGINS=<comma-separated cross-origin allowlist; usually empty (same-origin app)>
 # TRUST_PROXY=<reverse-proxy hop count for the login rate limiter; default 1>
+# BACKEND_BIND=<host interface the backend port publishes on; default 0.0.0.0>
+#   0.0.0.0 is required when the reverse proxy is on ANOTHER machine. It also leaves the
+#   backend directly reachable, which lets a client spoof X-Forwarded-For past the login
+#   rate limiter. The fix is to route everything through the frontend port (its nginx
+#   proxies /api) and then set BACKEND_BIND=127.0.0.1 AND TRUST_PROXY=2 — the extra hop
+#   makes the TRUST_PROXY bump mandatory. See README "Reverse proxy topology".
 ```
 > In deployment `JWT_SECRET` (and the API keys) come from **GitHub Actions secrets** injected into the
 > compose env; the compose uses `${JWT_SECRET:?...}` (fail-fast). `.env` is gitignored and excluded from

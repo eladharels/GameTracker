@@ -51,6 +51,7 @@ PORT=3000
 ROOT_PASSWORD=            # password for the seeded `root` user on a FRESH database
 CORS_ORIGINS=             # comma-separated cross-origin allowlist; empty for a same-origin deploy
 TRUST_PROXY=1             # reverse-proxy hop count used by the login rate limiter
+BACKEND_BIND=0.0.0.0      # host interface the backend port is published on (Docker only)
 ```
 
 > **`JWT_SECRET` is mandatory.** The backend calls `process.exit(1)` at boot if it is missing, shorter
@@ -90,9 +91,12 @@ as `root`, then change it. There is no hardcoded default password.
 docker compose up --build
 ```
 
-Backend on **3000** (bound to `127.0.0.1`), frontend on **8080**. The frontend image's nginx serves the
-SPA *and* proxies `/api` to the backend container, so the stack is self-sufficient — if you also run an
-external reverse proxy that routes `/api` itself, that takes precedence and this proxy is never reached.
+Backend on **3000**, frontend on **8080**. The frontend image's nginx serves the SPA *and* proxies
+`/api` to the backend container, so the stack is self-sufficient — if you also run an external reverse
+proxy that routes `/api` itself, that takes precedence and this proxy is never reached.
+
+See [Reverse proxy topology](#reverse-proxy-topology) below before changing how the backend port is
+published — `BACKEND_BIND` and `TRUST_PROXY` have to move together.
 
 Persistent state is bind-mounted from the host and must be writable by UID 1000 (the container's `node`
 user). After the first deploy:
@@ -102,6 +106,38 @@ chown -R 1000:1000 /home/docker/gametracker/data/
 ```
 
 `JWT_SECRET` is **not** defaulted in compose — the stack refuses to start without it.
+
+### Reverse proxy topology
+
+The frontend image is self-sufficient: its nginx serves the SPA **and** proxies `/api` to the backend
+over the compose network. So a reverse proxy in front only needs **one** upstream — the frontend port.
+
+Two compose variables control how the backend is exposed:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BACKEND_BIND` | `0.0.0.0` | Host interface the backend port is published on |
+| `TRUST_PROXY` | `1` | Number of reverse-proxy hops in front of the backend |
+
+**If your reverse proxy runs on another machine** and points at the backend port directly, leave
+`BACKEND_BIND=0.0.0.0` — a loopback bind would make the API unreachable.
+
+> **Security note.** On `0.0.0.0` the backend is reachable directly, bypassing nginx. Because
+> `trust proxy` is enabled, a client connecting straight to that port controls `X-Forwarded-For` and can
+> present a fresh IP on every login attempt — walking straight through the rate limiter.
+
+**The hardened topology** removes that exposure entirely — point the proxy at the frontend port for
+everything, so the backend needs no published port at all:
+
+1. Deploy as-is and confirm `curl http://<host>:8080/api/health` returns `{"status":"ok"}`.
+2. Repoint the reverse proxy: send **all** paths to the frontend port. Delete any `/api` → backend rule.
+3. Verify the site works end to end.
+4. Set `BACKEND_BIND=127.0.0.1` (or remove the backend's `ports:` entry) **and set `TRUST_PROXY=2`**.
+
+> Step 4's `TRUST_PROXY` change is **mandatory**, not optional. Routing through the frontend adds a
+> second proxy hop. Left at `1`, `req.ip` resolves to the frontend container's address, so every failed
+> login in the world shares one bucket — five bad passwords from anyone locks out **every** user for
+> 15 minutes.
 
 ---
 

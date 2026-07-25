@@ -4,12 +4,23 @@ services:
     image: local/gametracker-backend:latest
     pull_policy: never
     ports:
-      # Bound to LOOPBACK. Published on 0.0.0.0 the backend was reachable directly,
-      # bypassing nginx — and with `trust proxy: 1` a client connecting straight to
-      # :3000 controls X-Forwarded-For, so every login attempt could claim a fresh
-      # IP and walk straight through the rate limiter. The frontend container reaches
-      # the backend over the compose network, not this published port.
-      - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
+      # BACKEND_BIND controls which host interface the backend is published on.
+      #
+      # Defaults to 0.0.0.0 because this deployment's reverse proxy lives on a
+      # DIFFERENT machine and reaches the backend across the network — a loopback
+      # bind would black-hole the API.
+      #
+      # SECURITY: on 0.0.0.0 the backend is reachable directly, bypassing nginx. With
+      # `trust proxy` set, a client connecting straight to this port controls
+      # X-Forwarded-For and can present a fresh IP on every login attempt, walking
+      # through the rate limiter. Prefer 127.0.0.1.
+      #
+      # To close that: frontend/nginx.conf now proxies /api to the backend over the
+      # compose network, so the frontend port alone can serve the whole app. Point
+      # the reverse proxy at the FRONTEND port for everything, then set
+      # BACKEND_BIND=127.0.0.1 (or drop this ports: entry) — and set TRUST_PROXY=2,
+      # because that adds a second proxy hop. See README "Reverse proxy topology".
+      - "${BACKEND_BIND:-0.0.0.0}:${BACKEND_PORT:-3000}:3000"
     volumes:
       - /home/docker/gametracker/data/gametracker.db:/app/gametracker.db
       - /home/docker/gametracker/data/settings.json:/app/settings.json
