@@ -43,7 +43,9 @@ services:
     # for WAL and journal files alongside the mounted gametracker.db file.
     restart: "no"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${BACKEND_TEST_PORT:-3099}/api/health || exit 1"]
+      # Port 3000, NOT BACKEND_TEST_PORT: this runs INSIDE the container, where the
+      # app always listens on 3000. BACKEND_TEST_PORT is only the host-side mapping.
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 12

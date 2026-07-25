@@ -692,7 +692,11 @@ function loadCrackWatchCacheFromFile() {
     if (fs.existsSync(CRACKWATCH_CACHE_FILE)) {
       const raw = fs.readFileSync(CRACKWATCH_CACHE_FILE, 'utf8');
       const data = JSON.parse(raw);
-      if (data && typeof data === 'object') crackWatchCache = data;
+      // Copy onto a null-prototype object rather than adopting the parsed literal,
+      // keeping the posture the initializer declares.
+      if (data && typeof data === 'object') {
+        crackWatchCache = Object.assign(Object.create(null), data);
+      }
       console.log('[CrackWatch] Loaded cache from file,', Object.keys(crackWatchCache).length, 'titles');
     }
   } catch (err) {
@@ -1060,6 +1064,21 @@ app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermis
 
 // --- Notification helpers ---
 
+// A single valid address, with no comma or semicolon.
+//
+// Nodemailer treats a comma-separated `to` as a recipient LIST, so any value that
+// smuggles a comma into users.email fans notifications out to arbitrary third
+// parties from this deployment's SPF/DKIM-aligned domain. There are four writers
+// (PUT /api/user/me/settings, POST /api/users, PUT /api/users/:id, and the LDAP
+// sync + backfill), so this is enforced at the WRITE sites *and* again at the send
+// sink in sendEmail — validating in only one place is how the hole stayed open.
+function isValidEmailAddress(value) {
+  if (typeof value !== 'string') return false;
+  const v = value.trim();
+  if (v === '') return false;
+  return /^[^\s@,;:<>"]+@[^\s@,;:<>"]+\.[^\s@,;:<>"]+$/.test(v);
+}
+
 function escapeHtml(value) {
   return String(value == null ? '' : value)
     .replace(/&/g, '&amp;')
@@ -1107,9 +1126,25 @@ function sanitizeDeliveryError(err, channel) {
 function isBlockedNotificationHost(url) {
   try {
     const u = new URL(url);
-    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    let host = u.hostname.toLowerCase()
+      .replace(/^\[|\]$/g, '')   // strip IPv6 brackets
+      .replace(/\.$/, '');       // "metadata.google.internal." resolves the same
+    // Unwrap IPv4-mapped IPv6. Note that `new URL()` does NOT keep the readable
+    // dotted form: it normalizes ::ffff:169.254.169.254 to ::ffff:a9fe:a9fe, so the
+    // two 16-bit hex groups have to be decoded back to octets before the checks
+    // below can see it. (Verified against Node's WHATWG URL parser.)
+    const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (mappedHex) {
+      const hi = parseInt(mappedHex[1], 16);
+      const lo = parseInt(mappedHex[2], 16);
+      host = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+    } else {
+      const mappedDotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+      if (mappedDotted) host = mappedDotted[1];
+    }
     if (METADATA_HOSTS.includes(host)) return true;
     // IPv4 link-local (169.254.0.0/16) covers the AWS/Azure/GCP metadata range.
+    // new URL() already normalizes decimal/octal/hex IPv4 forms to dotted quads.
     if (/^169\.254\./.test(host)) return true;
     // IPv6 link-local
     if (/^fe80:/i.test(host)) return true;
@@ -1137,6 +1172,12 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
   const finalRecipient = toOverride;
   if (!finalRecipient) {
     console.log('[Email] No recipient email found, skipping email send');
+    return;
+  }
+  // Last line of defence, at the sink. Even if a bad address reaches users.email
+  // through a path that skipped validation, nodemailer never sees a recipient list.
+  if (!isValidEmailAddress(finalRecipient)) {
+    console.error('[Email] Refusing to send: recipient is not a single valid address.');
     return;
   }
 
@@ -1240,19 +1281,22 @@ async function sendTelegram(title, message, chatId, photoUrl) {
   const botToken = telegram?.bot_token;
   if (!botToken || !chatId) return;
   const text = `*${title}*\n${message}`;
+  // Parity with sendNtfy/sendGotify: a hung api.telegram.org must not hold the
+  // request open indefinitely.
+  const opts = { timeout: 10000, maxRedirects: 0 };
   if (photoUrl) {
     await axios.post(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
       chat_id: chatId,
       photo: photoUrl,
       caption: text,
       parse_mode: 'Markdown',
-    });
+    }, opts);
   } else {
     await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       chat_id: chatId,
       text,
       parse_mode: 'Markdown',
-    });
+    }, opts);
   }
 }
 
@@ -1446,7 +1490,12 @@ async function notifyEvent(type, game, username, status) {
       if (userEmail) {
         console.log('Found email from LDAP:', userEmail);
         // Update the database with the LDAP email
-        db.run('UPDATE users SET email = ? WHERE username = ?', [userEmail, normalizedUsername]);
+        if (isValidEmailAddress(userEmail)) {
+          db.run('UPDATE users SET email = ? WHERE username = ?', [userEmail, normalizedUsername]);
+        } else {
+          console.warn('[LDAP] Ignoring malformed mail attribute for', normalizedUsername);
+          userEmail = null;
+        }
       }
     } catch (ldapErr) {
       console.error('Error getting email from LDAP:', ldapErr);
@@ -2886,6 +2935,10 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
     return res.status(400).json({ error: 'Password must be at least 8 characters long' });
   }
 
+  if (email !== '' && !isValidEmailAddress(email)) {
+    return res.status(400).json({ error: 'email must be a single valid address, or empty' });
+  }
+
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username.toLowerCase();
 
@@ -2930,8 +2983,12 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
     params.push(can_manage_users ? 1 : 0);
   }
   if (typeof email !== 'undefined') {
+    const cleanEmail = String(email).trim();
+    if (cleanEmail !== '' && !isValidEmailAddress(cleanEmail)) {
+      return res.status(400).json({ error: 'email must be a single valid address, or empty' });
+    }
     updates.push('email = ?');
-    params.push(email);
+    params.push(cleanEmail);
   }
   if (typeof ntfy_topic !== 'undefined') {
     updates.push('ntfy_topic = ?');
@@ -3384,7 +3441,7 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
     // recipient LIST, so an unvalidated value here let one account fan a
     // notification out to arbitrary third parties from the deployment's own domain.
     const cleanEmail = String(email).trim();
-    if (cleanEmail !== '' && !/^[^\s@,;:<>"]+@[^\s@,;:<>"]+\.[^\s@,;:<>"]+$/.test(cleanEmail)) {
+    if (cleanEmail !== '' && !isValidEmailAddress(cleanEmail)) {
       return res.status(400).json({ error: 'email must be a single valid address, or empty' });
     }
     updates.push('email = ?');

@@ -325,10 +325,11 @@ jobs:
           touch "${SMOKE_DATA_DIR}/gametracker.db"
           echo '{}' > "${SMOKE_DATA_DIR}/settings.json"
           echo '[]' > "${SMOKE_DATA_DIR}/sent_notifications.json"
-          # The container runs as UID 1000 (node). Grant that user ownership
-          # explicitly rather than making the tree world-writable.
+          # mktemp -d already creates the directory 0700. Only ownership needs
+          # changing, for the container's UID 1000 (node). Do NOT chmod after the
+          # chown — under `set -e` that would fail the job whenever the runner's
+          # own UID is not 1000.
           sudo chown -R 1000:1000 "${SMOKE_DATA_DIR}"
-          chmod 700 "${SMOKE_DATA_DIR}"
           echo "[smoke] Test data dir: ${SMOKE_DATA_DIR}"
 
       - name: Start smoke test stack
