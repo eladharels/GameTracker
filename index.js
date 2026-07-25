@@ -2,8 +2,10 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const axios = require('axios');
-const sqlite3 = require('sqlite3').verbose();
-const DBSOURCE = 'gametracker.db';
+// PostgreSQL. `db` keeps the same run/get/all callback surface node-sqlite3 had,
+// so the call sites below are unchanged -- see db.js for why.
+const db = require('./db');
+const { migrateOrExit } = require('./schema-migrate');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -70,102 +72,20 @@ app.use((req, res, next) => {
   next();
 });
 
-// Initialize SQLite DB
-const db = new sqlite3.Database(DBSOURCE, (err) => {
-  if (err) {
-    console.error('[FATAL] Could not connect to database:', err.message);
-    process.exit(1);
-  }
-});
+// The connection pool is created on require of ./db. Connections are established
+// lazily, so a first-query failure -- not a require-time throw -- is how an
+// unreachable database surfaces. The migration runner below is what actually
+// proves the database is reachable and correctly shaped before we serve traffic.
 
-// Schema creation + migrations.
+// Schema creation + migrations now live in ./schema-migrate.js and migrations/*.sql.
 //
-// Everything here MUST run inside db.serialize(). node-sqlite3 defaults to
-// PARALLEL mode, where queued statements may execute out of order — so the
-// ALTER TABLE migrations were racing the CREATE TABLE statements above them and
-// losing, failing with "no such table" on a FRESH database. Their error callbacks
-// were empty (`() => {}`), so every failure was swallowed silently and a brand-new
-// install came up missing user_games.backlog_order, users.telegram_chat_id,
-// users.ntfy_url and users.gotify_url — breaking add-game, backlog ordering and
-// the whole per-user notification feature. Long-lived databases were unaffected
-// because they were migrated incrementally as each column was introduced, which is
-// why this stayed hidden. The CI smoke test only asserts /api/health, so it passed.
-function initializeSchema(done) {
-  // SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so re-running a
-  // migration against an already-migrated database is EXPECTED to fail with
-  // exactly "duplicate column name". Anything else is a real fault and is logged
-  // rather than discarded.
-  const migrate = (sql) => db.run(sql, (err) => {
-    if (err && !/duplicate column name/i.test(err.message)) {
-      console.error(`[DB] Migration failed: ${sql.trim()} -> ${err.message}`);
-    }
-  });
-  const create = (label, sql) => db.run(sql, (err) => {
-    if (err) console.error(`[DB] Could not create ${label}:`, err.message);
-  });
-
-  db.serialize(() => {
-    create('users', `CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE,
-      password TEXT,
-      can_manage_users INTEGER DEFAULT 0,
-      email TEXT,
-      ntfy_topic TEXT,
-      gotify_token TEXT,
-      created_at TEXT,
-      origin TEXT DEFAULT 'local',
-      display_name TEXT,
-      shares_library INTEGER DEFAULT 0,
-      notification_days TEXT DEFAULT '[0,7,30]'
-    )`);
-    create('user_games', `CREATE TABLE IF NOT EXISTS user_games (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      game_id INTEGER,
-      game_name TEXT,
-      cover_url TEXT,
-      release_date TEXT,
-      status TEXT,
-      steam_app_id TEXT,
-      last_price TEXT,
-      last_price_updated TEXT,
-      crack_status TEXT,
-      UNIQUE(user_id, game_id),
-      FOREIGN KEY(user_id) REFERENCES users(id)
-    )`);
-    create('user_shares', `CREATE TABLE IF NOT EXISTS user_shares (
-      from_user TEXT,
-      to_user TEXT,
-      shared_at TEXT,
-      PRIMARY KEY (from_user, to_user),
-      FOREIGN KEY (from_user) REFERENCES users(username),
-      FOREIGN KEY (to_user) REFERENCES users(username)
-    )`);
-
-    // Add columns if missing (for migrations)
-    migrate(`ALTER TABLE users ADD COLUMN origin TEXT DEFAULT 'local'`);
-    migrate(`ALTER TABLE users ADD COLUMN display_name TEXT`);
-    migrate(`ALTER TABLE user_games ADD COLUMN steam_app_id TEXT`);
-    migrate(`ALTER TABLE user_games ADD COLUMN last_price TEXT`);
-    migrate(`ALTER TABLE user_games ADD COLUMN last_price_updated TEXT`);
-    migrate(`ALTER TABLE user_games ADD COLUMN crack_status TEXT`);
-    migrate(`ALTER TABLE user_games ADD COLUMN backlog_order INTEGER`);
-    migrate(`ALTER TABLE users ADD COLUMN gotify_token TEXT`);
-    migrate(`ALTER TABLE users ADD COLUMN notification_days TEXT`);
-    migrate(`ALTER TABLE users ADD COLUMN telegram_chat_id TEXT`);
-    // Per-user notification server URLs — each user points at their own ntfy/Gotify
-    // server (falls back to the optional admin-set global default if left empty).
-    migrate(`ALTER TABLE users ADD COLUMN ntfy_url TEXT`);
-    migrate(`ALTER TABLE users ADD COLUMN gotify_url TEXT`);
-
-    // Runs last in the serialized queue: every statement above has completed.
-    db.run('SELECT 1', () => {
-      console.log('Database initialized');
-      if (done) done();
-    });
-  });
-}
+// The previous implementation issued CREATE TABLE / ALTER TABLE statements whose
+// error callbacks discarded anything that was not "duplicate column name". On a
+// FRESH database the ALTERs raced the CREATEs, lost, and were silently swallowed,
+// shipping installs missing user_games.backlog_order, users.telegram_chat_id,
+// users.ntfy_url and users.gotify_url. Postgres removes the race, but the real
+// defect was the swallowing -- so the replacement is transactional, tracked in a
+// schema_migrations table, and FATAL on any error. See schema-migrate.js.
 
 // Ensure root user exists
 const ensureRootUser = async () => {
@@ -203,7 +123,9 @@ const ensureRootUser = async () => {
 
 // Schema first, THEN the root user — ensureRootUser queries `users`, so running it
 // before the tables exist raced the schema and failed with "no such table".
-initializeSchema(() => ensureRootUser());
+// migrateOrExit() terminates the process if the schema cannot be brought up to
+// date, so nothing below ever runs against an unknown schema.
+migrateOrExit().then(() => ensureRootUser());
 
 // Helper: look up a user WITHOUT creating one.
 //
@@ -251,7 +173,9 @@ function getOrCreateUser(username, cb, opts = {}) {
     // Use CN if provided and non-empty, otherwise fallback to username
     const displayNameToUse = (typeof opts.display_name === 'string' && opts.display_name.trim() !== '' ? opts.display_name : normalizedUsername);
     console.log('Creating user:', { username: normalizedUsername, display_name: displayNameToUse, origin: opts.origin });
-    db.run('INSERT INTO users (username, created_at, origin, display_name) VALUES (?, ?, ?, ?)', [normalizedUsername, new Date().toISOString(), opts.origin || 'local', displayNameToUse], function (err) {
+    // RETURNING id: Postgres does not hand back an insert id implicitly the way
+    // SQLite's lastID did. Without this clause `this.lastID` is undefined.
+    db.run('INSERT INTO users (username, created_at, origin, display_name) VALUES (?, ?, ?, ?) RETURNING id', [normalizedUsername, new Date().toISOString(), opts.origin || 'local', displayNameToUse], function (err) {
       if (err) return cb(err);
       cb(null, { id: this.lastID, username: normalizedUsername, created_at: new Date().toISOString(), origin: opts.origin || 'local', display_name: displayNameToUse });
     });
@@ -275,7 +199,15 @@ app.get('/api/health', (req, res) => {
 });
 
 // --- System status last-OK persistence ---
-const STATUS_CACHE_FILE = path.join(__dirname, 'system-status-cache.json');
+// Directory for PURELY EPHEMERAL caches (system status, CrackWatch). These are
+// rebuilt from scratch whenever they are missing and have never been persisted --
+// neither file was ever bind-mounted, so both were already destroyed on every
+// redeploy. Making the location configurable lets compose point them at a tmpfs,
+// which is what allows the backend container to run with read_only: true.
+// Defaults to __dirname, so behaviour is unchanged when CACHE_DIR is unset.
+const CACHE_DIR = process.env.CACHE_DIR || __dirname;
+
+const STATUS_CACHE_FILE = path.join(CACHE_DIR, 'system-status-cache.json');
 let statusOkCache = {}; // { serviceName: { lastOk: ISO, latency: ms } }
 
 (function loadStatusOkCache() {
@@ -669,7 +601,8 @@ app.get('/api/test/igdb', authRequired, requirePermission('can_manage_users'), a
 });
 
 // --- CrackWatch cache (Option B: cached crack status) ---
-const CRACKWATCH_CACHE_FILE = path.join(__dirname, 'crackwatch-cache.json');
+// Ephemeral — see CACHE_DIR above.
+const CRACKWATCH_CACHE_FILE = path.join(CACHE_DIR, 'crackwatch-cache.json');
 const CRACKWATCH_RATE_MS = 1200; // 1.2s between requests to respect API limit
 
 /** Normalize game title for matching: lowercase, trim, collapse spaces, remove most punctuation */
@@ -1722,7 +1655,8 @@ app.post('/api/user/:username/games', authRequired, ownershipRequired, async (re
       db.run(
         `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id, backlog_order)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status, steam_app_id=excluded.steam_app_id, backlog_order=excluded.backlog_order`,
+         ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status, steam_app_id=excluded.steam_app_id, backlog_order=excluded.backlog_order
+         RETURNING id`,
         [user.id, gameId, gameName, coverUrl, releaseDate, status, steamAppId, backlogOrder],
         async function (err) {
           if (err) {
@@ -2951,7 +2885,8 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
 
   bcrypt.hash(password, 10).then(hash => {
     db.run(
-      'INSERT INTO users (username, password, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      // RETURNING id -- required for this.lastID under Postgres. See db.js.
+      'INSERT INTO users (username, password, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
       [normalizedUsername, hash, can_manage_users ? 1 : 0, email, ntfy_topic, gotify_token, new Date().toISOString(), 'local', normalizedUsername, shares_library ? 1 : 0],
       function (err) {
         if (err) return res.status(400).json({ error: 'User already exists' });
@@ -3733,9 +3668,8 @@ cron.schedule('0 8 * * *', () => {
 });
 
 // --- Per-user Library Sharing (persistent) ---
-// The user_shares table is created by initializeSchema() at boot, alongside the
-// other tables and inside the same db.serialize() block — creating it here as well
-// raced everything else in the file.
+// The user_shares table is created by migrations/001_initial_schema.sql, applied
+// at boot by schema-migrate.js. Never create it here as well.
 
 // Share a user's list with one or more users
 app.post('/api/user/:username/share', authRequired, (req, res) => {
@@ -3757,9 +3691,10 @@ app.post('/api/user/:username/share', authRequired, (req, res) => {
       .filter(u => u && u !== normalizedUsername)
   )];
 
-  // The declared foreign keys on user_shares are not enforced (SQLite runs with
-  // PRAGMA foreign_keys OFF by default), so verify the targets exist ourselves
-  // rather than storing shares pointing at accounts that were never created.
+  // Postgres now enforces the user_shares foreign keys for real (SQLite declared
+  // them but ran with PRAGMA foreign_keys OFF). This explicit pre-check is still
+  // worth keeping: it turns an unknown recipient into a clean 400 listing exactly
+  // which usernames were wrong, instead of a bare 500 from a constraint violation.
   const verifyTargets = (cb) => {
     if (requested.length === 0) return cb(null, []);
     const placeholders = requested.map(() => '?').join(',');
@@ -3775,20 +3710,28 @@ app.post('/api/user/:username/share', authRequired, (req, res) => {
     if (unknown.length) {
       return res.status(400).json({ error: `Unknown user(s): ${unknown.join(', ')}` });
     }
-    // Remove all existing shares for this user
-    db.run('DELETE FROM user_shares WHERE from_user = ?', [normalizedUsername], (err) => {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      // Add new shares
-      if (existingUsers.length === 0) return res.json({ success: true });
-      const now = new Date().toISOString();
-      const stmt = db.prepare('INSERT OR IGNORE INTO user_shares (from_user, to_user, shared_at) VALUES (?, ?, ?)');
-      existingUsers.forEach(toUser => {
-        stmt.run(normalizedUsername, toUser, now);
-      });
-      stmt.finalize((err) => {
-        if (err) return res.status(500).json({ error: 'DB error' });
-        res.json({ success: true });
-      });
+    // Replace this user's share list atomically.
+    //
+    // The SQLite version issued the DELETE and the INSERTs as separate
+    // statements with no transaction, so a crash or connection loss between
+    // them left the user with NO shares at all. Same observable API behaviour,
+    // but now all-or-nothing. `db.prepare`/`stmt.finalize` were node-sqlite3
+    // specific and have no pg equivalent; a single transaction replaces them.
+    const now = new Date().toISOString();
+    db.withTransaction(async (tx) => {
+      await tx.query('DELETE FROM user_shares WHERE from_user = ?', [normalizedUsername]);
+      for (const toUser of existingUsers) {
+        // ON CONFLICT DO NOTHING is the Postgres spelling of INSERT OR IGNORE.
+        await tx.query(
+          'INSERT INTO user_shares (from_user, to_user, shared_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+          [normalizedUsername, toUser, now]
+        );
+      }
+    }).then(() => {
+      res.json({ success: true });
+    }).catch((err) => {
+      console.error(`[Shares] Failed to update shares: ${err.message}`);
+      res.status(500).json({ error: 'DB error' });
     });
   });
 });
