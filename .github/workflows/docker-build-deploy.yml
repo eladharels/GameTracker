@@ -516,7 +516,18 @@ jobs:
         run: |
           docker compose -f docker-compose.yaml up -d
 
+      # env is needed even though this step starts nothing: the failure path runs
+      # `docker compose logs`, which interpolates the compose file. Without it the
+      # diagnostic dies on `POSTGRES_PASSWORD is missing` and MASKS the real reason
+      # the backend is unhealthy — which is exactly what happened on the first
+      # Postgres deploy, hiding a `password authentication failed` behind it.
       - name: Verify production deployment health
+        env:
+          IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
+          IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
+          RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           echo "[deploy] Waiting for production backend to become healthy..."
           MAX_WAIT=90
@@ -524,7 +535,11 @@ jobs:
           until curl -sf http://localhost:3000/api/health > /dev/null 2>&1; do
             if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
               echo "[deploy] ERROR: Production backend not healthy after ${MAX_WAIT}s"
-              docker compose -f docker-compose.yaml logs backend
+              # `docker logs` by container name, NOT `docker compose logs` — it talks
+              # to the daemon directly and cannot fail on compose interpolation, so
+              # the diagnostic still works even when the compose file will not render.
+              docker logs --tail 50 gametracker-backend-1 2>&1 || \
+                docker compose -f docker-compose.yaml logs --tail 50 backend || true
               exit 1
             fi
             sleep 5
