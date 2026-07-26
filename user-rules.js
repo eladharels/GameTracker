@@ -23,4 +23,21 @@ function validateUsername(normalizedUsername) {
   return null;
 }
 
-module.exports = { RESERVED_USERNAMES, validateUsername };
+// Email validation lives here too: it is a rule about a user field, it is needed by
+// both index.js and services/users.js, and duplicating it is how the open-relay hole
+// stayed open once already — it must hold at EVERY write site and again at the send
+// sink, so there can only be one definition.
+// Nodemailer treats a comma-separated `to` as a recipient LIST, so any value that
+// smuggles a comma into users.email fans notifications out to arbitrary third
+// parties from this deployment's SPF/DKIM-aligned domain. There are four writers
+// (PUT /api/user/me/settings, POST /api/users, PUT /api/users/:id, and the LDAP
+// sync + backfill), so this is enforced at the WRITE sites *and* again at the send
+// sink in sendEmail — validating in only one place is how the hole stayed open.
+function isValidEmailAddress(value) {
+  if (typeof value !== 'string') return false;
+  const v = value.trim();
+  if (v === '') return false;
+  return /^[^\s@,;:<>"]+@[^\s@,;:<>"]+\.[^\s@,;:<>"]+$/.test(v);
+}
+
+module.exports = { RESERVED_USERNAMES, validateUsername, isValidEmailAddress };

@@ -38,8 +38,9 @@ const { escapeIgdbSearch } = require('./igdb-helpers');
 // implementation instead of two implementations that drift.
 const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
+const usersService = require('./services/users');
 const { CODES: SVC } = require('./services/errors');
-const { RESERVED_USERNAMES } = require('./user-rules');
+const { RESERVED_USERNAMES, isValidEmailAddress } = require('./user-rules');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1090,18 +1091,6 @@ app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermis
 
 // A single valid address, with no comma or semicolon.
 //
-// Nodemailer treats a comma-separated `to` as a recipient LIST, so any value that
-// smuggles a comma into users.email fans notifications out to arbitrary third
-// parties from this deployment's SPF/DKIM-aligned domain. There are four writers
-// (PUT /api/user/me/settings, POST /api/users, PUT /api/users/:id, and the LDAP
-// sync + backfill), so this is enforced at the WRITE sites *and* again at the send
-// sink in sendEmail — validating in only one place is how the hole stayed open.
-function isValidEmailAddress(value) {
-  if (typeof value !== 'string') return false;
-  const v = value.trim();
-  if (v === '') return false;
-  return /^[^\s@,;:<>"]+@[^\s@,;:<>"]+\.[^\s@,;:<>"]+$/.test(v);
-}
 
 // Sentinel distinguishing "the directory returned several entries for this user"
 // from "the directory has no such user". Both used to resolve as null, so the admin
@@ -3020,10 +3009,9 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
 
 // List users (manager only)
 app.get('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  db.all('SELECT id, username, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library FROM users', [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json(rows);
-  });
+  usersService.listAll()
+    .then((rows) => res.json(rows))
+    .catch(() => res.status(500).json({ error: 'DB error' }));
 });
 
 // Edit user (manager only)
@@ -3031,100 +3019,28 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
   const id = parseRouteId(req.params.id);
   if (id === null) return res.status(404).json({ error: 'User not found' });
   const { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library } = req.body;
-  const updates = [];
-  const params = [];
-  if (typeof can_manage_users !== 'undefined') {
-    updates.push('can_manage_users = ?');
-    params.push(can_manage_users ? 1 : 0);
-  }
-  if (typeof email !== 'undefined') {
-    const cleanEmail = String(email).trim();
-    if (cleanEmail !== '' && !isValidEmailAddress(cleanEmail)) {
-      return res.status(400).json({ error: 'email must be a single valid address, or empty' });
-    }
-    updates.push('email = ?');
-    params.push(cleanEmail);
-  }
-  if (typeof ntfy_topic !== 'undefined') {
-    updates.push('ntfy_topic = ?');
-    params.push(ntfy_topic);
-  }
-  if (typeof gotify_token !== 'undefined') {
-    updates.push('gotify_token = ?');
-    params.push(gotify_token);
-  }
-  if (typeof shares_library !== 'undefined') {
-    updates.push('shares_library = ?');
-    params.push(shares_library ? 1 : 0);
-  }
-  // Nothing to change: an empty body previously produced `UPDATE users SET  WHERE
-  // id = ?`, i.e. a SQL syntax error surfacing as an opaque 500.
-  if (updates.length === 0 && !password) {
-    return res.status(400).json({ error: 'No fields to update' });
-  }
-  // An admin must not be able to lock the instance out of its own administration by
-  // demoting themselves — there may be no other admin left to undo it.
-  if (typeof can_manage_users !== 'undefined' && !can_manage_users && String(req.user.id) === String(id)) {
-    return res.status(400).json({ error: 'You cannot remove your own admin permission.' });
-  }
 
-  const applyUpdate = () => {
-    params.push(id);
-    db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function (err) {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
-      res.json({ success: true });
+  usersService.update(id, { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library }, req.user.id)
+    .then(() => res.json({ success: true }))
+    .catch((err) => {
+      if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
+      if (err.code === SVC.NOT_FOUND) return res.status(404).json({ error: 'User not found' });
+      console.error('[Users] Update failed:', err.message);
+      res.status(500).json({ error: 'DB error' });
     });
-  };
-
-  if (password) {
-    // Must be a string: a JSON number passes `.length < 8` (undefined < 8 is false)
-    // and then rejects inside bcrypt.hash, crashing the process.
-    if (typeof password !== 'string') {
-      return res.status(400).json({ error: 'Password must be a string' });
-    }
-    // Password strength validation
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long' });
-    }
-
-    bcrypt.hash(password, 10).then(hash => {
-      updates.push('password = ?');
-      params.push(hash);
-      applyUpdate();
-    }).catch(err => {
-      console.error('[Users] Password hashing failed:', err.message);
-      res.status(500).json({ error: 'Failed to update user' });
-    });
-  } else {
-    applyUpdate();
-  }
 });
 
-// Delete user (manager only)
 app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
   const id = parseRouteId(req.params.id);
   if (id === null) return res.status(404).json({ error: 'User not found' });
-  // Deleting yourself, or deleting the seeded `root` account, can leave the
-  // instance with no way back in. Both are refused.
-  if (String(req.user.id) === String(id)) {
-    return res.status(400).json({ error: 'You cannot delete your own account.' });
-  }
-  db.get('SELECT username FROM users WHERE id = ?', [id], (err, row) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    if (!row) return res.status(404).json({ error: 'User not found' });
-    if (row.username === 'root') {
-      return res.status(400).json({ error: 'The root account cannot be deleted.' });
-    }
-    db.run('DELETE FROM users WHERE id = ?', [id], function (err) {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      // Shares reference usernames, not ids, and SQLite does not enforce the
-      // declared foreign keys — clean them up so the deleted user does not linger
-      // in other people's sharing lists.
-      db.run('DELETE FROM user_shares WHERE from_user = ? OR to_user = ?', [row.username, row.username]);
-      res.json({ success: true });
+  usersService.remove(id, req.user.id)
+    .then(() => res.json({ success: true }))
+    .catch((err) => {
+      if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
+      if (err.code === SVC.NOT_FOUND) return res.status(404).json({ error: 'User not found' });
+      console.error('[Users] Delete failed:', err.message);
+      res.status(500).json({ error: 'DB error' });
     });
-  });
 });
 
 // --- Test Notification endpoint for admins ---
