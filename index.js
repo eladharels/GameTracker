@@ -42,6 +42,9 @@ const usersService = require('./services/users');
 const settingsService = require('./services/settings');
 const notifications = require('./services/notifications');
 const { CODES: SVC } = require('./services/errors');
+// One table maps a service error code to a status and decides whether its message
+// may be shown to the caller. See services/problem.js — `expose` is the point.
+const problem = require('./services/problem');
 const { RESERVED_USERNAMES, isValidEmailAddress, validatePassword } = require('./user-rules');
 
 // Upper bound on PUT /api/user/:username/backlog-reorder.
@@ -991,10 +994,7 @@ app.post('/api/settings/apikeys', authRequired, requirePermission('can_manage_us
     settingsService.writeApiKeys(req.body || {});
     res.json({ success: true });
   } catch (err) {
-    if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
-    if (err.code === SVC.CONFLICT) return res.status(409).json({ error: err.message });
-    console.error('[API Keys] Write failed:', err.message);
-    res.status(500).json({ error: 'Failed to save API keys.' });
+    problem.send(res, err, { log: '[API Keys] Write failed:', fallback: 'Failed to save API keys.' });
   }
 });
 
@@ -1045,8 +1045,7 @@ app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermis
     // The same 409 the other two adapters return. Without it an unreadable
     // settings.json presented as a generic 500 here, so the admin retried — and each
     // retry mints and discards another token instead of pointing at the real cause.
-    if (err.code === SVC.CONFLICT) return res.status(409).json({ error: err.message });
-    res.status(500).json({ error: 'Token was refreshed but could not be saved to settings.json.' });
+    problem.send(res, err, { fallback: 'Token was refreshed but could not be saved to settings.json.' });
   }
 });
 
@@ -1174,11 +1173,7 @@ app.post('/api/settings', authRequired, express.json(), (req, res) => {
     settingsService.write(req.body || {}, !!req.user.can_manage_users);
     res.json({ success: true });
   } catch (err) {
-    if (err.code === SVC.FORBIDDEN) return res.status(403).json({ error: err.message });
-    if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
-    if (err.code === SVC.CONFLICT) return res.status(409).json({ error: err.message });
-    console.error('Error in /api/settings:', err.message);
-    res.status(500).json({ error: 'Failed to save settings.' });
+    problem.send(res, err, { log: 'Error in /api/settings:', fallback: 'Failed to save settings.' });
   }
 });
 
@@ -1401,8 +1396,7 @@ app.put('/api/user/:username/games/:gameId/backlog-order', authRequired, ownersh
     libraryService.moveBacklogItem(user.id, gameId, direction)
       .then(() => res.json({ success: true }))   // boundary no-op also reports success, as in v1
       .catch((err) => {
-        if (err.code === SVC.NOT_IN_BACKLOG) return res.status(404).json({ error: 'Game not in backlog' });
-        res.status(500).json({ error: 'DB error' });
+        problem.send(res, err);
       });
   });
 });
@@ -2585,10 +2579,7 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
   usersService.update(id, { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library }, req.user.id)
     .then(() => res.json({ success: true }))
     .catch((err) => {
-      if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
-      if (err.code === SVC.NOT_FOUND) return res.status(404).json({ error: 'User not found' });
-      console.error('[Users] Update failed:', err.message);
-      res.status(500).json({ error: 'DB error' });
+      problem.send(res, err, { log: '[Users] Update failed:', messages: { [SVC.NOT_FOUND]: 'User not found' } });
     });
 });
 
@@ -2598,10 +2589,7 @@ app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users')
   usersService.remove(id, req.user.id)
     .then(() => res.json({ success: true }))
     .catch((err) => {
-      if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
-      if (err.code === SVC.NOT_FOUND) return res.status(404).json({ error: 'User not found' });
-      console.error('[Users] Delete failed:', err.message);
-      res.status(500).json({ error: 'DB error' });
+      problem.send(res, err, { log: '[Users] Delete failed:', messages: { [SVC.NOT_FOUND]: 'User not found' } });
     });
 });
 
@@ -3191,9 +3179,7 @@ app.post('/api/user/:username/share', authRequired, selfOnly('You can only share
   sharesService.replaceOutgoing(normalizedUsername, req.body.toUsers)
     .then(() => res.json({ success: true }))
     .catch((err) => {
-      if (err.code === SVC.UNKNOWN_USERS) return res.status(400).json({ error: err.message });
-      console.error(`[Shares] Failed to update shares: ${err.message}`);
-      res.status(500).json({ error: 'DB error' });
+      problem.send(res, err, { log: '[Shares] Failed to update shares:' });
     });
 });
 
@@ -3212,8 +3198,7 @@ app.get('/api/user/:username/shared/:fromUser', authRequired, selfOnly('You can 
   sharesService.readSharedLibrary(normalizedFromUser, normalizedUsername)
     .then((games) => res.json(games))
     .catch((err) => {
-      if (err.code === SVC.NOT_SHARED) return res.status(403).json({ error: 'Not shared with you.' });
-      res.status(500).json({ error: 'DB error' });
+      problem.send(res, err);
     });
 });
 

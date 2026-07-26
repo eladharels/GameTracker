@@ -522,6 +522,57 @@ checkAsync('undefined `only` means every channel — what the SPA default sends'
   assert.strictEqual(calls.length, 4);
 }));
 
+// services/problem.js — the table that decides which error messages a caller may
+// see. Pure: it maps an error to {status, body} and touches nothing.
+const problem = require('../services/problem');
+const { serviceError, CODES: SVC } = require('../services/errors');
+
+console.log('problem.toProblem (the disclosure rule, not just the status):');
+check('our own validation messages ARE shown — they say what to fix', () => {
+  const p = problem.toProblem(serviceError(SVC.VALIDATION, 'password must be at least 8 characters'));
+  assert.deepStrictEqual(p, { status: 400, body: { error: 'password must be at least 8 characters' } });
+});
+check('a NOT_FOUND message is NOT shown', () => {
+  // Otherwise a caller probes for records they cannot read, one 404 message at a time.
+  const p = problem.toProblem(serviceError(SVC.NOT_FOUND, 'user 41 (alice@example.com) does not exist'));
+  assert.strictEqual(p.status, 404);
+  assert.strictEqual(p.body.error, 'Not found');
+  assert.ok(!p.body.error.includes('alice'), 'the service message leaked');
+});
+check('NOT_SHARED and NOT_IN_BACKLOG are fixed text too', () => {
+  assert.strictEqual(problem.toProblem(serviceError(SVC.NOT_SHARED, 'internal detail')).body.error,
+    'Not shared with you.');
+  assert.strictEqual(problem.toProblem(serviceError(SVC.NOT_IN_BACKLOG, 'internal detail')).body.error,
+    'Game not in backlog');
+});
+check('every code in the taxonomy has a mapping', () => {
+  // A code with no entry falls through to a 500, which is how a deliberate 4xx
+  // silently becomes an opaque server error.
+  for (const code of Object.values(SVC)) {
+    assert.ok(problem.PROBLEMS[code], `no problem mapping for code '${code}'`);
+  }
+});
+check('an unrecognised error is NOT pattern-matched into a 4xx', () => {
+  assert.strictEqual(problem.toProblem(new Error('connection terminated unexpectedly')), null);
+  assert.strictEqual(problem.toProblem(null), null);
+  assert.strictEqual(problem.toProblem({ code: 'not_a_real_code' }), null);
+});
+check('a per-route override replaces the text but cannot expose a hidden one', () => {
+  const p = problem.toProblem(serviceError(SVC.NOT_FOUND, 'secret detail'), { [SVC.NOT_FOUND]: 'User not found' });
+  assert.deepStrictEqual(p, { status: 404, body: { error: 'User not found' } });
+  // and it cannot change the status
+  assert.strictEqual(problem.toProblem(serviceError(SVC.CONFLICT, 'x'), { [SVC.CONFLICT]: 'nope' }).status, 409);
+});
+check('send() never echoes an unknown error message', () => {
+  // The same rule as `expose`, applied to the case where we do not know what it is.
+  let captured = null;
+  const res = { status(s) { this._s = s; return this; }, json(b) { captured = { status: this._s, body: b }; } };
+  problem.send(res, new Error('SELECT * FROM users -- connection string: postgres://u:p@h/db'),
+    { fallback: 'DB error' });
+  assert.deepStrictEqual(captured, { status: 500, body: { error: 'DB error' } });
+  assert.ok(!JSON.stringify(captured).includes('postgres://'), 'a raw error leaked into the response');
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

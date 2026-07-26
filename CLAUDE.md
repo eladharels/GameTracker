@@ -78,6 +78,10 @@ GameTracker/
 │   │                               #   and the coming /api/v2 stay two skins over ONE
 │   │                               #   implementation. No req/res or status codes in here
 │   ├── errors.js                   # ServiceError + the frozen CODES taxonomy adapters map
+│   ├── problem.js                  # The ONE code -> {status, title, expose} table. `expose`
+│                                   #   decides whether a service's message may be shown to the
+│                                   #   caller; a 500 never echoes one. Adapters call
+│                                   #   problem.send(res, err, ...) instead of hand-rolling a ladder
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
 │   ├── library.js                  # Game library + backlog ordering
 │   ├── users.js                    # Admin user management; the lockout safety rules
