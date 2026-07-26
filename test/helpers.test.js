@@ -18,7 +18,7 @@
 const assert = require('assert');
 const {
   escapeLdapFilterValue, buildUserSearchFilter, entryAttributes, attrValue, attrValues,
-  isCompatMirrorDn,
+  isCompatMirrorDn, dropPairedCompatMirrors,
 } = require("../ldap-helpers");
 const { escapeIgdbSearch } = require('../igdb-helpers');
 const { validateUsername, RESERVED_USERNAMES } = require('../user-rules');
@@ -133,12 +133,63 @@ check('tolerates empty/missing input', () => {
   assert.strictEqual(isCompatMirrorDn(null), false);
   assert.strictEqual(isCompatMirrorDn(undefined), false);
 });
-check('the real pair from production resolves to exactly one entry', () => {
-  const matched = [
+console.log('dropPairedCompatMirrors (a mirror is only dropped when its twin is present):');
+check('the real production pair collapses to the canonical entry', () => {
+  assert.deepStrictEqual(dropPairedCompatMirrors([
     'uid=eladharels,cn=users,cn=compat,dc=etech,dc=com',
     'uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com',
-  ].filter(dn => !isCompatMirrorDn(dn));
-  assert.deepStrictEqual(matched, ['uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com']);
+  ]), ['uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com']);
+});
+check('AUTH BYPASS REGRESSION: a compat-ONLY account is never dropped', () => {
+  // FreeIPA with an AD trust publishes trusted-domain users under cn=compat and
+  // nowhere else. Dropping this entry would leave the attacker's colliding entry as
+  // the sole match, so matchCount == 1 and the ambiguity guard lets them in as jane
+  // using THEIR OWN password. Verified as a real 401 -> 200 regression.
+  const dns = [
+    'uid=jane,cn=users,cn=compat,dc=etech,dc=com',   // the real (trusted-domain) jane
+    'uid=jane,ou=contractors,dc=etech,dc=com',       // attacker-controlled entry
+  ];
+  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns, 'a compat-only account was discarded');
+  assert.strictEqual(dropPairedCompatMirrors(dns).length, 2, 'must stay ambiguous so login is refused');
+});
+check('a lone compat entry with no counterpart survives', () => {
+  const dns = ['uid=jane,cn=users,cn=compat,dc=etech,dc=com'];
+  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns);
+});
+check('two genuinely different people still collide', () => {
+  const dns = [
+    'uid=jane,ou=staff,dc=etech,dc=com',
+    'uid=jane,ou=contractors,dc=etech,dc=com',
+  ];
+  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns);
+});
+check('counterpart matching is case-insensitive', () => {
+  assert.deepStrictEqual(dropPairedCompatMirrors([
+    'UID=Jane,CN=Users,CN=Compat,DC=etech,DC=com',
+    'uid=jane,cn=users,cn=accounts,dc=etech,dc=com',
+  ]), ['uid=jane,cn=users,cn=accounts,dc=etech,dc=com']);
+});
+check('a mirror is not paired against an unrelated cn=accounts entry', () => {
+  const dns = [
+    'uid=jane,cn=users,cn=compat,dc=etech,dc=com',
+    'uid=bob,cn=users,cn=accounts,dc=etech,dc=com',
+  ];
+  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns);
+});
+check('empty input is handled', () => {
+  assert.deepStrictEqual(dropPairedCompatMirrors([]), []);
+});
+
+check('PINS ldapjs DN normalisation: an escaped comma arrives as \\2c, not \\,', () => {
+  // isCompatMirrorDn is a string test, so its safety against a DN like
+  // `cn=x\,cn=compat,...` rests on ldapjs emitting `\2c` for an escaped comma. If
+  // that ever changed to `\,` the regex would start matching, and a REAL account
+  // would be dropped — the one direction that does harm. Pin the assumption.
+  const wireForm = 'cn=x\\2ccn=compat,dc=etech,dc=com';   // what ldapjs actually delivers
+  const hypothetical = 'cn=x\\,cn=compat,dc=etech,dc=com'; // what it must NOT deliver
+  assert.strictEqual(isCompatMirrorDn(wireForm), false, 'escaped-comma DN was misread as a compat entry');
+  assert.strictEqual(isCompatMirrorDn(hypothetical), true,
+    'if ldapjs ever emits \\, this form matches — re-check dropPairedCompatMirrors');
 });
 
 console.log('escapeIgdbSearch:');

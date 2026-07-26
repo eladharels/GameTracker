@@ -101,15 +101,47 @@ function warnIfCleartextLdap(url) {
 //
 // Those are one person, but the login path cannot know that: it sees two matches
 // for one username and refuses to authenticate rather than bind as an arbitrarily
-// chosen DN. Correct behaviour, wrong input — so filter the mirror out BEFORE the
+// chosen DN. Correct behaviour, wrong input — so drop the mirror BEFORE the
 // ambiguity check rather than loosening the check.
 //
-// This cannot hide a real account: every cn=compat entry is by construction a view
-// of an entry that also exists under cn=accounts, so anything dropped here is still
-// found via its canonical DN. A genuine collision between two DIFFERENT people is
-// untouched and still refused.
+// !! A cn=compat DN IS NOT PROOF OF A MIRROR. !!
+//
+// The obvious implementation — "drop anything under cn=compat" — is an
+// authentication BYPASS, and shipped here once. FreeIPA with an Active Directory
+// trust publishes trusted-domain users under cn=compat and NOWHERE ELSE; the same
+// is true of any 389-ds slapi-nis compat tree fed from a non-IPA source. For such an
+// account there is no cn=accounts counterpart, so a blanket drop deletes the REAL
+// user from the result set. An attacker who controls any other entry answering the
+// same username is then the only remaining match, sails through the ambiguity guard
+// with matchCount == 1, and is issued a session as that user — using their own
+// password. Measured: HTTP 401 before the blanket filter, HTTP 200 after.
+//
+// So a mirror is only discarded when the entry it mirrors is ACTUALLY PRESENT in the
+// same result set. That is what makes it provably a duplicate rather than the only
+// copy of somebody's account.
 function isCompatMirrorDn(dn) {
   return /(^|,)\s*cn=compat\s*(,|$)/i.test(String(dn == null ? '' : dn));
+}
+
+// The cn=accounts DN that a given cn=compat DN would be a mirror of.
+function canonicalCounterpartDn(dn) {
+  return String(dn == null ? '' : dn).toLowerCase()
+    .replace(/(^|,)(\s*)cn=compat(\s*)(?=,|$)/i, '$1$2cn=accounts$3');
+}
+
+// Given every DN a user search returned, drop only those cn=compat entries whose
+// cn=accounts counterpart is also present. Everything else is kept — including a
+// compat-only account, which therefore still counts toward the ambiguity check and
+// still causes a refusal when it collides with another entry.
+//
+// Pure and order-preserving so it can be tested without a directory.
+function dropPairedCompatMirrors(dns) {
+  const present = new Set(dns.map((d) => String(d == null ? '' : d).toLowerCase()));
+  return dns.filter((dn) => {
+    if (!isCompatMirrorDn(dn)) return true;
+    // Keep the mirror unless the thing it mirrors is right here beside it.
+    return !present.has(canonicalCounterpartDn(dn));
+  });
 }
 
 // --- Search-entry attribute access ---
@@ -168,4 +200,6 @@ module.exports = {
   attrValue,
   attrValues,
   isCompatMirrorDn,
+  canonicalCounterpartDn,
+  dropPairedCompatMirrors,
 };

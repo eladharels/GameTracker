@@ -30,7 +30,7 @@ const {
   entryAttributes,
   attrValue,
   attrValues,
-  isCompatMirrorDn,
+  dropPairedCompatMirrors,
 } = require('./ldap-helpers');
 const { escapeIgdbSearch } = require('./igdb-helpers');
 const { RESERVED_USERNAMES } = require('./user-rules');
@@ -1366,17 +1366,24 @@ async function getLdapEmail(username) {
           return;
         }
         
-        let foundEmail = null;
-        searchRes.on('searchEntry', (entry) => {
-          // Same cn=compat skip as the login path — otherwise whichever of the two
-          // mirrored entries arrives last wins, arbitrarily.
-          if (isCompatMirrorDn(entry.dn.toString())) return;
-          foundEmail = attrValue(entryAttributes(entry), 'mail', 'email');
-        });
-        
+        // Buffered, and the SAME pairing rule as the login path — a bare
+        // "skip anything under cn=compat" would discard a compat-only account's
+        // entry outright and read the email off whatever else matched the username.
+        const rawEntries = [];
+        searchRes.on('searchEntry', (entry) => rawEntries.push(entry));
+
         searchRes.on('end', () => {
           client.markHandled();
           client.unbind();
+          const keptDns = new Set(dropPairedCompatMirrors(rawEntries.map((e) => e.dn.toString())));
+          const entries = rawEntries.filter((e) => keptDns.has(e.dn.toString()));
+          // NOTE: unlike the login path there is deliberately no ambiguity refusal
+          // here, because this is not an authentication decision — but it is still
+          // last-wins across genuine collisions, which is tracked separately.
+          let foundEmail = null;
+          for (const entry of entries) {
+            foundEmail = attrValue(entryAttributes(entry), 'mail', 'email') || foundEmail;
+          }
           resolve(foundEmail);
         });
         
@@ -2721,32 +2728,16 @@ app.post('/api/auth/login', (req, res) => {
           return fallbackLocalAuth();
         }
 
-        let foundUser = null;
-        let matchCount = 0;
+        // Entries are BUFFERED rather than folded down as they arrive, because
+        // whether a cn=compat entry is a redundant mirror or somebody's only account
+        // cannot be judged from that entry alone -- it depends on whether its
+        // cn=accounts counterpart is elsewhere in the same result set. Deciding per
+        // entry is what made the first version of this an authentication bypass.
+        // See dropPairedCompatMirrors.
+        const rawEntries = [];
         searchRes.on('searchEntry', (entry) => {
-          // Skip FreeIPA's cn=compat mirror of this same account before counting,
-          // or a stock FreeIPA directory searched from the domain root looks like an
-          // ambiguous username and every login is refused. See isCompatMirrorDn.
-          if (isCompatMirrorDn(entry.dn.toString())) {
-            console.log('[LDAP] Ignoring cn=compat mirror entry:', entry.dn.toString());
-            return;
-          }
-          matchCount++;
           console.log('[LDAP] Search entry received for user lookup.');
-
-          // Manually construct the user object from the entry's properties.
-          // This is more reliable than the .object getter.
-          // Read anything out of this with attrValue/attrValues, never by property
-          // access -- the keys carry whatever casing the directory sent.
-          const attributes = entryAttributes(entry);
-
-          foundUser = {
-            dn: entry.dn.toString(),
-            ...attributes
-          };
-          // Log the DN only. Dumping the whole entry put mail addresses and full
-          // group membership into shared logs for every single login.
-          console.log('[LDAP] Parsed user object for DN:', foundUser.dn);
+          rawEntries.push(entry);
         });
 
         searchRes.on('error', (err) => {
@@ -2758,6 +2749,27 @@ app.post('/api/auth/login', (req, res) => {
 
         searchRes.on('end', (result) => {
           console.log('[LDAP] Search finished. Result status:', result ? result.status : 'N/A');
+
+          // Discard ONLY those cn=compat entries whose cn=accounts counterpart is
+          // also in this result set — proving them redundant duplicates. A
+          // compat-ONLY account (FreeIPA AD trust) is kept and still counts below.
+          const allDns = rawEntries.map((e) => e.dn.toString());
+          const keptDns = new Set(dropPairedCompatMirrors(allDns));
+          for (const dn of allDns) {
+            if (!keptDns.has(dn)) console.log('[LDAP] Ignoring cn=compat mirror of a matched account:', dn);
+          }
+          const entries = rawEntries.filter((e) => keptDns.has(e.dn.toString()));
+          const matchCount = entries.length;
+
+          // Read anything out of this with attrValue/attrValues, never by property
+          // access -- the keys carry whatever casing the directory sent.
+          const foundUser = matchCount
+            ? { dn: entries[0].dn.toString(), ...entryAttributes(entries[0]) }
+            : null;
+          // Log the DN only. Dumping the whole entry put mail addresses and full
+          // group membership into shared logs for every single login.
+          if (foundUser) console.log('[LDAP] Parsed user object for DN:', foundUser.dn);
+
           if (!foundUser) {
             console.log('[LDAP] User object was not populated from search. This could be a permissions issue or the user truly does not exist in the search base.');
             client.markHandled();
@@ -3278,21 +3290,28 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
                 return;
               }
 
-              let found = false;
-              searchRes.on('searchEntry', (entry) => {
-                // Same cn=compat skip as the login path.
-                if (isCompatMirrorDn(entry.dn.toString())) return;
-                console.log(`[LDAP Sync] Found user in LDAP: ${user.username}`);
-                const attrs = entryAttributes(entry);
-                found = true;
-                resolve(attrs);
-              });
+              // Buffered so the SAME pairing rule as the login path can be applied;
+              // resolving on the first entry could not tell a redundant mirror from
+              // a compat-only account's single real entry.
+              const rawEntries = [];
+              searchRes.on('searchEntry', (entry) => rawEntries.push(entry));
 
               searchRes.on('end', () => {
-                if (!found) {
+                const keptDns = new Set(dropPairedCompatMirrors(rawEntries.map((e) => e.dn.toString())));
+                const entries = rawEntries.filter((e) => keptDns.has(e.dn.toString()));
+                if (!entries.length) {
                   console.log(`[LDAP Sync] User not found in LDAP: ${user.username}`);
-                  resolve(null); // User not found in LDAP
+                  return resolve(null); // User not found in LDAP
                 }
+                // Ambiguous here means we cannot tell whose attributes these are, and
+                // this writes display_name/email onto an account. Skip rather than
+                // guess; the login path refuses the same shape outright.
+                if (entries.length > 1) {
+                  console.warn(`[LDAP Sync] ${entries.length} entries matched '${user.username}' — ambiguous, skipping.`);
+                  return resolve(null);
+                }
+                console.log(`[LDAP Sync] Found user in LDAP: ${user.username}`);
+                resolve(entryAttributes(entries[0]));
               });
 
               searchRes.on('error', (err) => {
