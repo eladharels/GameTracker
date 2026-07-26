@@ -12,6 +12,7 @@
 const axios = require('axios');
 require('dotenv').config();
 const db = require('./db');
+const { escapeIgdbSearch } = require('./igdb-helpers');
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
@@ -49,9 +50,11 @@ async function getSteamAppIdFromIGDB(gameName) {
   try {
     const res = await axios.post(
       'https://api.igdb.com/v4/games',
-      // The double quotes around the search term are IGDB's own syntax; a game name
-      // containing a `"` would break out of it, so strip them.
-      `search "${String(gameName).replace(/"/g, '')}"; fields external_games.category,external_games.uid; limit 1;`,
+      // escapeIgdbSearch, NOT a local replace. Game names are attacker-supplied
+      // (POST /api/user/:username/games takes game_name straight from the body), and
+      // an escape that handles `"` but not `\` lets a name ending in a backslash
+      // consume the closing quote and inject into the query.
+      `search "${escapeIgdbSearch(gameName)}"; fields external_games.category,external_games.uid; limit 1;`,
       {
         headers: {
           'Client-ID': IGDB_CLIENT_ID,
@@ -132,6 +135,14 @@ async function main() {
   }
 
   console.log(`[BACKFILL] Complete. ${found} ${DRY_RUN ? 'would be set' : 'set'}, ${notFound} not found.`);
+
+  // Same systemic-failure signal as update_library_prices.js. Every lookup coming
+  // back empty is far more likely to be no egress, an expired IGDB token or a RAWG
+  // rate limit than a library where not one game exists in either database.
+  if (games.length > 0 && notFound === games.length) {
+    console.error('[BACKFILL] Not one lookup matched. Check outbound network access and the RAWG/IGDB credentials.');
+    process.exitCode = 1;
+  }
 }
 
 main()

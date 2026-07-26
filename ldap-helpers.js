@@ -7,8 +7,8 @@
 // -- reintroducing, in backfill_ldap_display_names.js and test_ldap_sync.js, the exact
 // two defects that were fixed in the server months earlier.
 //
-// One implementation, one place. index.js re-exports these so its own call sites and
-// module.exports surface are unchanged.
+// One implementation, one place. index.js imports these rather than owning them; its
+// own module.exports surface is unchanged.
 
 const ldap = require('ldapjs');
 
@@ -73,11 +73,17 @@ function createLdapClient(url, onError) {
 // exposes directory credentials to any passive observer on the path. We warn
 // rather than refuse, because refusing would lock out an existing deployment
 // mid-upgrade — but this should be `ldaps://` (or StartTLS) in any real network.
-let warnedAboutCleartextLdap = false;
+// Keyed on the URL, not a bare boolean. A single latch warned about the first
+// cleartext URL it ever saw and then stayed silent — so an operator who fixed one URL
+// and later introduced a second cleartext one got nothing. index.js reloads
+// settings.json whenever its mtime changes, so that is a reachable sequence.
+const warnedCleartextUrls = new Set();
 function warnIfCleartextLdap(url) {
-  if (warnedAboutCleartextLdap || !url) return;
+  if (!url) return;
+  const key = String(url).trim().toLowerCase();
+  if (warnedCleartextUrls.has(key)) return;
   if (/^ldap:\/\//i.test(String(url).trim())) {
-    warnedAboutCleartextLdap = true;
+    warnedCleartextUrls.add(key);
     console.warn('[LDAP] WARNING: connecting over cleartext ldap://. Bind passwords ' +
       '(including the service account and every user password) traverse the network ' +
       'unencrypted. Switch the LDAP URL to ldaps:// — see SECURITY_HARDENING_2026-07.md.');

@@ -59,6 +59,14 @@ GameTracker/
 │                                   #   client, and case-insensitive search-entry attribute
 │                                   #   access. Shared by index.js and the operator scripts —
 │                                   #   never hand-roll an LDAP filter or client anywhere else
+├── igdb-helpers.js                 # escapeIgdbSearch() — the ONLY way to interpolate a
+│                                   #   value into an APIcalypse `search "..."` literal
+├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
+│                                   #   API and create-local-admin.js
+├── test/
+│   └── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
+│                                   #   `npm test`; runs in CI. NO database/directory/network
+│                                   #   tests here — those belong in the smoke test
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
 ├── migrations/                     # Numbered .sql schema migrations
 ├── scripts/
@@ -125,6 +133,17 @@ GameTracker/
 > fresh database and their empty error callbacks swallowed the failures — silently shipping installs
 > missing `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Postgres removes the race,
 > but the swallowing was the real defect. Do not reintroduce a "log and continue" migration path.
+
+> **Background schedulers go through `scheduleWhenServer()`, never `cron.schedule()`
+> directly** — and anything else that must not happen on import (the schema migration,
+> the root-user seed, the startup CrackWatch sweep) goes behind `isServerProcess`.
+>
+> `index.js` is `require`d by the operator scripts for its exports. When `cron.schedule()`
+> ran at module scope, importing it registered all three cron jobs; node-cron's timers keep
+> the event loop alive, so `run_notifications.js` printed "complete", closed the pool and
+> then hung forever. The 04:00 CrackWatch job touches no database, so a stray process really
+> did run a full unrequested sweep. `migrateOrExit()` was worse: a maintenance script
+> migrated production's schema as an import side effect.
 
 > **`user_games.game_id` is TEXT, not a number.** Search emits ids like `igdb_12345` / `rawg_999`
 > and the frontend posts them verbatim. The old SQLite column was *declared* `INTEGER` and stored
@@ -345,7 +364,7 @@ push: main
 │
 ├── secret-scan      Gitleaks — full git history scan
 ├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
-├── frontend-quality ESLint + Vite build (no test framework; build = typecheck)
+├── frontend-quality npm test (backend unit tests) + ESLint + Vite build (= typecheck)
 └── build-images     Build backend + frontend Docker images
     ├── trivy-api    Trivy — backend image  (CRITICAL/HIGH → fail)
     └── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
@@ -370,6 +389,7 @@ deploy  (needs: ALL 7 upstream jobs)
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
 | ESLint | `frontend-quality` | Any lint error |
 | Vite build | `frontend-quality` | Build failure |
+| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js` |
 | Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
 
 ### Container Hardening

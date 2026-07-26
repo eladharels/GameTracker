@@ -11,8 +11,12 @@
  * its connection from the same PG* environment variables as the backend. Run it
  * inside the backend container so those are already set:
  *
- *   docker compose -f docker-compose.yaml exec backend \
- *     node create-local-admin.js admin MySecurePass123 "Admin User"
+ *   docker compose -f docker-compose.yaml exec -e NEW_ADMIN_PASSWORD backend \
+ *     node create-local-admin.js jane "Jane Doe"
+ *
+ * Set NEW_ADMIN_PASSWORD in your shell first (`read -rs NEW_ADMIN_PASSWORD && export
+ * NEW_ADMIN_PASSWORD`) rather than passing the password as an argument — argv is
+ * visible in /proc, in the docker exec command line, and in your shell history.
  *
  * DB_PATH is gone. It pointed at the SQLite file, which is no longer the source of
  * truth; node-sqlite3 opens with OPEN_CREATE, so this script used to CREATE an empty
@@ -21,18 +25,48 @@
  */
 const bcrypt = require('bcryptjs');
 const db = require('./db');
+const { validateUsername } = require('./user-rules');
 
 const username = process.argv[2] ? process.argv[2].trim().toLowerCase() : '';
-const password = process.argv[3] || '';
-const displayName = (process.argv[4] || username).trim();
+
+// Prefer NEW_ADMIN_PASSWORD so the password does not land in /proc/<pid>/cmdline
+// (readable by any process in the container, which also runs the internet-facing
+// app), in the host's `docker exec` argv, or in the operator's shell history.
+//
+// The two forms take DIFFERENT positional arguments, deliberately -- an optional
+// positional password would make `create-local-admin.js jane "Jane Doe"` ambiguous,
+// and the ambiguity would resolve as "password = Jane Doe".
+//   with the env var:     <username> [display_name]
+//   without:              <username> <password> [display_name]
+const envPassword = process.env.NEW_ADMIN_PASSWORD || '';
+const password = envPassword || process.argv[3] || '';
+const displayName = ((envPassword ? process.argv[3] : process.argv[4]) || username).trim();
 
 if (!username || !password) {
   console.error('Usage: node create-local-admin.js <username> <password> [display_name]');
-  console.error('Example: node create-local-admin.js admin MySecurePass123 "Admin User"');
+  console.error('');
+  console.error('Preferred — keeps the password out of argv and shell history:');
+  console.error('  read -rs NEW_ADMIN_PASSWORD && export NEW_ADMIN_PASSWORD');
+  console.error('  node create-local-admin.js <username> [display_name]');
   process.exit(1);
 }
 if (password.length < 8) {
   console.error('Password must be at least 8 characters.');
+  process.exit(1);
+}
+
+// The same rule POST /api/users enforces. This script creates an ADMIN, and used to
+// skip the check entirely: it would create an account named `me`, which the
+// /api/user/me/* routes permanently shadow, leaving it unusable and undeletable.
+const usernameError = validateUsername(username);
+if (usernameError) {
+  console.error(usernameError);
+  process.exit(1);
+}
+// Anything outside this set is either unreachable in a URL path or invisible in the
+// admin UI. The API has no equivalent charset check; that is tracked separately.
+if (!/^[a-z0-9._-]+$/.test(username)) {
+  console.error('Username may contain only lowercase letters, digits, dot, underscore and hyphen.');
   process.exit(1);
 }
 

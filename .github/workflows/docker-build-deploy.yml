@@ -101,11 +101,13 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 3: Frontend Lint & Build (Typecheck)
   # Runs ESLint and Vite build. Vite build acts as the typecheck / compile
-  # verification step since the project has no TypeScript or test framework.
-  # Backend npm test is intentionally excluded (placeholder script, exits 1).
+  # verification step since the project has no TypeScript.
+  #
+  # Backend unit tests now run here too (`npm test`), no longer excluded: the
+  # placeholder script that exited 1 has been replaced by test/helpers.test.js.
   # ─────────────────────────────────────────────────────────────────────────────
   frontend-quality:
-    name: Frontend Lint & Build
+    name: Frontend Lint, Build & Backend Tests
     runs-on: self-hosted
     continue-on-error: false
     steps:
@@ -118,6 +120,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      # --ignore-scripts: the backend depends on sqlite3, which has no prebuilt
+      # binary for this platform and compiles from source via node-gyp (~60s). The
+      # unit tests are pure functions and never load it, so skip the build entirely.
+      # This is a TEST-only shortcut — the Dockerfile still does a full `npm ci`.
+      - name: Install backend dependencies
+        run: npm ci --ignore-scripts
+
+      # Pure-function unit tests only (no database, no directory, no network) —
+      # see the scope rule at the top of test/helpers.test.js.
+      - name: Run backend unit tests
+        run: npm test
 
       - name: Install frontend dependencies
         working-directory: ./frontend

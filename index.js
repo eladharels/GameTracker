@@ -31,6 +31,8 @@ const {
   attrValue,
   attrValues,
 } = require('./ldap-helpers');
+const { escapeIgdbSearch } = require('./igdb-helpers');
+const { RESERVED_USERNAMES } = require('./user-rules');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,9 +44,13 @@ const PORT = process.env.PORT || 3000;
 // SCHEDULERS have to as well, and did not: `cron.schedule()` ran at module scope, so
 // `node run_notifications.js` registered all three cron jobs as an import side
 // effect. node-cron's timers keep the event loop alive, so the script printed
-// "complete", closed the pool, and then hung forever -- and if the operator left it
-// hanging past 03:00/04:00/08:00 the stray process fired a SECOND copy of each job,
-// against a pool that had already been closed.
+// "complete", closed the pool, and then hung forever.
+//
+// A stray process left hanging past the scheduled times then re-ran the jobs. The
+// 03:00 price job and the 08:00 notification job both open with a query, so against
+// the script's closed pool they fail immediately and do nothing. The 04:00 CrackWatch
+// job touches no database at all -- it pages the CrackWatch API and rewrites the
+// cache file -- so that one really did run a full unrequested sweep.
 const isServerProcess = require.main === module;
 
 // cron.schedule(), but only in the server process. Returns null in a script so a
@@ -115,39 +121,53 @@ app.use((req, res, next) => {
 // defect was the swallowing -- so the replacement is transactional, tracked in a
 // schema_migrations table, and FATAL on any error. See schema-migrate.js.
 
-// Ensure root user exists
-const ensureRootUser = async () => {
+// Ensure root user exists.
+//
+// Promise-based, and the INSERT is AWAITED. It used to be a fire-and-forget db.run
+// with no callback at all, which under the connection pool meant the row could be
+// abandoned -- pool.end() drops queries still waiting for a connection without
+// invoking their callbacks. The banner below would then print a generated password
+// for an account that was never created, and nothing would report the failure.
+// The password is shown exactly once, so that is unrecoverable without a manual
+// reset. Announce the account only after the write is known to have landed.
+const ensureRootUser = () => new Promise((resolve) => {
   db.get('SELECT * FROM users WHERE username = ?', ['root'], async (err, user) => {
     if (err) {
       console.error('[FATAL] Could not check for the root user:', err.message);
-      return;
+      return resolve();
     }
-    if (!user) {
-      // Use an operator-supplied ROOT_PASSWORD, or generate a strong random one and
-      // print it ONCE at first boot — never ship a well-known default password.
-      let rootPassword = process.env.ROOT_PASSWORD;
-      let generated = false;
-      if (!rootPassword) {
-        rootPassword = crypto.randomBytes(12).toString('base64url');
-        generated = true;
-      }
+    if (user) return resolve();
+
+    // Use an operator-supplied ROOT_PASSWORD, or generate a strong random one and
+    // print it ONCE at first boot — never ship a well-known default password.
+    let rootPassword = process.env.ROOT_PASSWORD;
+    let generated = false;
+    if (!rootPassword) {
+      rootPassword = crypto.randomBytes(12).toString('base64url');
+      generated = true;
+    }
+    try {
       const hash = await bcrypt.hash(rootPassword, 10);
-      db.run(
+      await db.query(
         'INSERT INTO users (username, password, can_manage_users, origin, display_name) VALUES (?, ?, 1, ?, ?)',
         ['root', hash, 'local', 'root']
       );
-      if (generated) {
-        console.log('====================================================================');
-        console.log('Root user created with a GENERATED password (shown only once):');
-        console.log('    ' + rootPassword);
-        console.log('Log in as root and change it immediately, or set ROOT_PASSWORD.');
-        console.log('====================================================================');
-      } else {
-        console.log('Root user created with the operator-supplied ROOT_PASSWORD.');
-      }
+    } catch (insertErr) {
+      console.error('[FATAL] Could not create the root user:', insertErr.message);
+      return resolve();
     }
+    if (generated) {
+      console.log('====================================================================');
+      console.log('Root user created with a GENERATED password (shown only once):');
+      console.log('    ' + rootPassword);
+      console.log('Log in as root and change it immediately, or set ROOT_PASSWORD.');
+      console.log('====================================================================');
+    } else {
+      console.log('Root user created with the operator-supplied ROOT_PASSWORD.');
+    }
+    resolve();
   });
-};
+});
 
 // Schema first, THEN the root user — ensureRootUser queries `users`, so running it
 // before the tables exist raced the schema and failed with "no such table".
@@ -157,7 +177,20 @@ const ensureRootUser = async () => {
 // Exported as `schemaReady` so the listener at the bottom of this file can wait
 // on it. Without that the port opened before the tables existed and /api/health
 // — the deploy gate — answered "ok" against an empty database.
-const schemaReady = migrateOrExit().then(() => ensureRootUser());
+//
+// SERVER ONLY. Migrating the schema and seeding an administrator are DEPLOYMENT
+// actions, not library ones, and this ran unconditionally at module scope -- so
+// `node run_notifications.js` migrated production's schema as an import side effect,
+// and on an empty database it also created the root user. It additionally raced that
+// script's own db.close(), which surfaced as a bewildering "Cannot use a pool after
+// calling end" from a notification script.
+//
+// A script running inside the backend container is, by construction, pointed at an
+// already-migrated database. If it somehow is not, failing on a missing column is a
+// far better outcome than silently migrating production from a maintenance script.
+const schemaReady = isServerProcess
+  ? migrateOrExit().then(() => ensureRootUser())
+  : Promise.resolve();
 
 // Helper: look up a user WITHOUT creating one.
 //
@@ -348,7 +381,7 @@ app.get('/api/games/search', authRequired, async (req, res) => {
   }
   // Escape double-quotes so a crafted query can't break out of the IGDB
   // APIcalypse `search "..."` string literal (query injection into the IGDB call).
-  const safeQuery = String(query).replace(/["\\]/g, '\\$&');
+  const safeQuery = escapeIgdbSearch(query);
   try {
     // IGDB request
     const hasIgdbCredentials = resolveApiKey('IGDB_CLIENT_ID') && resolveApiKey('IGDB_BEARER_TOKEN');
@@ -571,7 +604,7 @@ app.get('/api/games/search', authRequired, async (req, res) => {
 app.get('/api/test/igdb', authRequired, requirePermission('can_manage_users'), async (req, res) => {
   const testQuery = req.query.q || 'Mario';
   // Escape quotes/backslashes so the query can't break out of the IGDB search literal.
-  const safeTestQuery = String(testQuery).replace(/["\\]/g, '\\$&');
+  const safeTestQuery = escapeIgdbSearch(testQuery);
   const hasClientId = !!resolveApiKey('IGDB_CLIENT_ID');
   const hasBearerToken = !!resolveApiKey('IGDB_BEARER_TOKEN');
   
@@ -1868,7 +1901,7 @@ app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired
           // Search for the game using the same logic as the search endpoint
           const query = game.game_name;
           // Escape quotes/backslashes in the stored name so it can't break out of the IGDB search literal.
-          const safeQuery = String(query).replace(/["\\]/g, '\\$&');
+          const safeQuery = escapeIgdbSearch(query);
 
           // IGDB request
           const igdbPromise = axios.post(
@@ -2184,7 +2217,7 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
       try {
         const query = game.game_name;
         // Escape quotes/backslashes in the stored name so it can't break out of the IGDB search literal.
-        const safeQuery = String(query).replace(/["\\]/g, '\\$&');
+        const safeQuery = escapeIgdbSearch(query);
 
         const igdbPromise = axios.post(
           'https://api.igdb.com/v4/games',
@@ -2849,7 +2882,8 @@ function parseRouteId(value) {
 // `me` would be shadowed by the /api/user/me/* routes registered before
 // /api/user/:username/*; `root`/`admin` are reserved to avoid impersonation
 // confusion with the seeded administrator account.
-const RESERVED_USERNAMES = ['me', 'root', 'admin'];
+// RESERVED_USERNAMES now lives in ./user-rules.js so create-local-admin.js — which
+// creates an ADMIN account — is held to the same rule. It was not.
 
 // Create user (admin only)
 app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {
@@ -3262,7 +3296,12 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
             // attrValue, not property access: `displayname` from the directory used
             // to miss here and silently reset every synced user's display name to
             // their username.
-            const newDisplayName = attrValue(userData, 'displayName', 'cn') || user.username;
+            //
+            // Deliberately NOT falling back to `cn` here, though the login path does
+            // (see the cnValue block above). Adding it would change which value gets
+            // written for users who have no displayName, which is a policy decision
+            // and not part of this casing fix. The inconsistency is pre-existing.
+            const newDisplayName = attrValue(userData, 'displayName') || user.username;
             const newEmail = attrValue(userData, 'mail', 'email') || user.email;
             
             console.log(`[LDAP Sync] User data for ${user.username}:`, {
@@ -3938,7 +3977,7 @@ scheduleWhenServer('0 3 * * 1', async () => { // Every Monday at 3:00 AM
 // `require('./index.js')` for its exports — which used to start a second HTTP
 // listener and register all the cron jobs as a side effect of the import, so
 // `node run_notifications.js` left a server running and never exited.
-if (require.main === module) {
+if (isServerProcess) {
   // Bind the port only AFTER the schema is verified. Previously app.listen() ran
   // synchronously during module evaluation while migrateOrExit() was still a
   // pending promise, so there was a window in which the port was open and

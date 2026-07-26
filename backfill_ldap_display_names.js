@@ -19,26 +19,26 @@ const DRY_RUN = process.argv.includes('--dry-run');
 
 // __dirname, not the process cwd. Reading 'settings.json' relative to wherever the
 // operator happened to be standing silently picked up a different file -- or none.
+// Throws rather than calling process.exit(): this runs from inside main(), after
+// require('./db') has already opened the pool, so exiting here would skip the
+// .finally(() => db.close()) that every other exit path in this file goes through.
 function loadLdapSettings() {
   const file = path.join(__dirname, 'settings.json');
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
   } catch (e) {
-    console.error(`Cannot read ${file}: ${e.message}`);
-    process.exit(1);
+    throw new Error(`Cannot read ${file}: ${e.message}`);
   }
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
-    console.error(`${file} is not valid JSON: ${e.message}`);
-    process.exit(1);
+    throw new Error(`${file} is not valid JSON: ${e.message}`);
   }
   const ldapSettings = parsed.ldap || {};
   if (!ldapSettings.url || !ldapSettings.base) {
-    console.error('settings.json has no LDAP url/base configured. Nothing to sync.');
-    process.exit(1);
+    throw new Error('settings.json has no LDAP url/base configured. Nothing to sync.');
   }
   return ldapSettings;
 }
@@ -84,17 +84,31 @@ function lookupDisplayName(client, ldapSettings, username) {
         return resolve(null);
       }
       let value = null;
+      // Counted so an ambiguous result can be REFUSED rather than resolved
+      // arbitrarily, matching the login path, which rejects when more than one entry
+      // matches. Taking the first match here would write some other account's display
+      // name onto this user.
+      let matchCount = 0;
       res.on('searchEntry', (entry) => {
-        if (value !== null) return; // first match wins
-        // Case-insensitive: a directory answering `displayname` would otherwise fall
-        // through to the cn and quietly overwrite every display name with it.
+        matchCount++;
+        if (value !== null) return;
+        // Case-insensitive. Against a directory that lowercases `displayname` but
+        // not `cn`, property access would have fallen through to the cn and written
+        // that instead; against one that lowercases both, it resolved to nothing and
+        // the user was skipped.
         value = attrValue(entryAttributes(entry), 'displayName', 'cn');
       });
       res.on('error', (e) => {
         console.error(`  LDAP search error for ${username}: ${e.message}`);
         resolve(null);
       });
-      res.on('end', () => resolve(value));
+      res.on('end', () => {
+        if (matchCount > 1) {
+          console.warn(`  ${username}: ${matchCount} directory entries matched — ambiguous, skipping`);
+          return resolve(null);
+        }
+        resolve(value);
+      });
     });
   });
 }
