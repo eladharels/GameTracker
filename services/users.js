@@ -12,7 +12,7 @@
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { serviceError, CODES } = require('./errors');
-const { isValidEmailAddress } = require('../user-rules');
+const { isValidEmailAddress, validatePassword } = require('../user-rules');
 
 const all = (sql, params = []) => new Promise((resolve, reject) => {
   db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
@@ -52,7 +52,7 @@ async function update(id, fields, actingUserId) {
 
   if (typeof fields.can_manage_users !== 'undefined') {
     if (!fields.can_manage_users && String(actingUserId) === String(id)) {
-      throw serviceError(CODES.VALIDATION, 'You cannot remove your own admin permission.');
+      throw serviceError(CODES.VALIDATION, 'You cannot remove your own admin permission.', { field: 'can_manage_users' });
     }
     updates.push('can_manage_users = ?');
     params.push(fields.can_manage_users ? 1 : 0);
@@ -63,7 +63,7 @@ async function update(id, fields, actingUserId) {
     // a comma turns notifications into an authenticated relay from this
     // deployment's SPF/DKIM-aligned domain.
     if (cleanEmail !== '' && !isValidEmailAddress(cleanEmail)) {
-      throw serviceError(CODES.VALIDATION, 'email must be a single valid address, or empty');
+      throw serviceError(CODES.VALIDATION, 'email must be a single valid address, or empty', { field: 'email' });
     }
     updates.push('email = ?');
     params.push(cleanEmail);
@@ -75,7 +75,15 @@ async function update(id, fields, actingUserId) {
     params.push(fields.shares_library ? 1 : 0);
   }
 
-  const wantsPassword = typeof fields.password === 'string' && fields.password.length > 0;
+  // Enforced HERE, not in the adapter, because it must hold for v2 too. Extracting
+  // this service dropped both checks: an admin could set any password to "a", and a
+  // non-string password was silently ignored while the call still reported success.
+  const wantsPassword = typeof fields.password !== 'undefined' && fields.password !== null && fields.password !== '';
+  if (wantsPassword) {
+    const problem = validatePassword(fields.password);
+    if (problem) throw serviceError(CODES.VALIDATION, problem, { field: 'password' });
+  }
+
   if (updates.length === 0 && !wantsPassword) {
     // An empty body once produced `UPDATE users SET  WHERE id = ?` — a SQL syntax
     // error surfacing as an opaque 500.
@@ -99,8 +107,13 @@ async function update(id, fields, actingUserId) {
 // enforces — SQLite declared the foreign keys but ran with them off, which is why
 // v1 also issued an explicit DELETE. That explicit statement was fire-and-forget:
 // the response was sent without awaiting it, so under the connection pool it could
-// be abandoned. Relying on the cascade removes the unawaited write, and the cascade
-// is covered by a test rather than assumed from the DDL.
+// be abandoned. Relying on the cascade removes the unawaited write.
+//
+// The cascade is declared at migrations/001_initial_schema.sql:81-82 (ON DELETE
+// CASCADE ON UPDATE CASCADE on both from_user and to_user) and was confirmed
+// empirically during the extraction. It is NOT covered by an automated test — both
+// current suites are database-free by design; a real regression test belongs in the
+// smoke stage, which has Postgres.
 async function remove(id, actingUserId) {
   if (String(actingUserId) === String(id)) {
     throw serviceError(CODES.VALIDATION, 'You cannot delete your own account.');

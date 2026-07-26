@@ -40,4 +40,23 @@ function isValidEmailAddress(value) {
   return /^[^\s@,;:<>"]+@[^\s@,;:<>"]+\.[^\s@,;:<>"]+$/.test(v);
 }
 
-module.exports = { RESERVED_USERNAMES, validateUsername, isValidEmailAddress };
+// Password policy, shared by every write site.
+//
+// It was enforced on create and — after the users service was extracted — silently
+// NOT on update, so an admin could set any password to "a", and a non-string
+// password was ignored rather than rejected: the update returned {success:true}
+// having changed nothing, which is the worst possible answer for someone resetting
+// a locked-out account. One definition, used by both, is the fix.
+const MIN_PASSWORD_LENGTH = 8;
+
+// Returns an error message, or null when the password is acceptable.
+function validatePassword(value) {
+  if (typeof value !== 'string') return 'Password must be a string';
+  if (value.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long`;
+  return null;
+}
+
+module.exports = {
+  RESERVED_USERNAMES, validateUsername, isValidEmailAddress,
+  MIN_PASSWORD_LENGTH, validatePassword,
+};

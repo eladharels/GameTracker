@@ -25,6 +25,7 @@ const CODES = Object.freeze({
   VALIDATION: 'validation',
   UNKNOWN_USERS: 'unknown_users',
   NOT_SHARED: 'not_shared',
+  NOT_IN_BACKLOG: 'not_in_backlog',
   CONFLICT: 'conflict',
 });
 

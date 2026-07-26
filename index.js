@@ -40,7 +40,10 @@ const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
 const usersService = require('./services/users');
 const { CODES: SVC } = require('./services/errors');
-const { RESERVED_USERNAMES, isValidEmailAddress } = require('./user-rules');
+const { RESERVED_USERNAMES, isValidEmailAddress, validatePassword } = require('./user-rules');
+
+// Upper bound on PUT /api/user/:username/backlog-reorder.
+const MAX_BACKLOG_REORDER = 1000;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1875,7 +1878,7 @@ app.put('/api/user/:username/games/:gameId/backlog-order', authRequired, ownersh
     libraryService.moveBacklogItem(user.id, gameId, direction)
       .then(() => res.json({ success: true }))   // boundary no-op also reports success, as in v1
       .catch((err) => {
-        if (err.code === 'not_in_backlog') return res.status(404).json({ error: 'Game not in backlog' });
+        if (err.code === SVC.NOT_IN_BACKLOG) return res.status(404).json({ error: 'Game not in backlog' });
         res.status(500).json({ error: 'DB error' });
       });
   });
@@ -1889,11 +1892,16 @@ app.put('/api/user/:username/backlog-reorder', authRequired, ownershipRequired, 
   if (!normalizedUsername || !Array.isArray(order) || order.length === 0) {
     return res.status(400).json({ error: 'Missing or invalid parameters' });
   }
+  // Bounded: one UPDATE per element inside a transaction, so an unbounded array
+  // holds a pooled connection for as long as the caller cares to make it.
+  if (order.length > MAX_BACKLOG_REORDER) {
+    return res.status(400).json({ error: `order may contain at most ${MAX_BACKLOG_REORDER} games` });
+  }
   withExistingUser(res, normalizedUsername, (user) => {
     libraryService.reorderBacklog(user.id, order)
       .then(() => res.json({ success: true }))
       .catch((err) => {
-        console.error(`[Library] Backlog reorder failed for ${normalizedUsername}: ${err.message}`);
+        console.error(`[Library] Backlog reorder failed for ${safeForLog(normalizedUsername, 64)}: ${err.message}`);
         res.status(500).json({ error: 'DB error' });
       });
   });
@@ -2550,6 +2558,29 @@ function requirePermission(permission) {
   requirePermissionMiddleware.requiredPermission = permission;
   return requirePermissionMiddleware;
 }
+// Self-only: the caller may act ONLY on their own :username resource. NO admin
+// bypass, deliberately — sharing is the one place an administrator has no business
+// reading or rewriting on someone else's behalf.
+//
+// This was five inline `if (req.user.username !== normalizedUsername)` checks. As
+// inline code it was invisible to test/api-surface.test.js, which walks the router's
+// middleware chain by NAME — so the gate could only assert the ABSENCE of
+// ownershipRequired, never the PRESENCE of this. A review deleted the guard from two
+// adapters and CI stayed green while a non-admin read and overwrote another user's
+// share list. Named middleware makes the check assertable.
+function selfOnly(message) {
+  const selfOnlyMiddleware = (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    const target = (req.params.username || '').toLowerCase();
+    if (target !== (req.user.username || '').toLowerCase()) {
+      return res.status(403).json({ error: message });
+    }
+    next();
+  };
+  selfOnlyMiddleware.isSelfOnly = true;
+  return selfOnlyMiddleware;
+}
+
 // Enforce that the authenticated user may only act on their OWN :username-scoped
 // resources, unless they are an admin (can_manage_users). Usernames are normalized to
 // lowercase everywhere, so compare case-insensitively. Must run AFTER authRequired.
@@ -2973,8 +3004,16 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
   }
 
   // Password strength requirements
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+  // ONE definition of the policy, shared with services/users.js. Create and update
+  // already drifted once: extracting the users service dropped both the type and
+  // length rules from the update path while create kept them, so a one-character
+  // password was settable on any account — including an admin's.
+  //
+  // The typeof check above still runs first, so its combined username+password
+  // message is unchanged; validatePassword supplies the length rule.
+  const passwordProblem = validatePassword(password);
+  if (passwordProblem) {
+    return res.status(400).json({ error: passwordProblem });
   }
 
   if (email !== '' && !isValidEmailAddress(email)) {
@@ -3730,11 +3769,10 @@ scheduleWhenServer('0 8 * * *', () => {
 // at boot by schema-migrate.js. Never create it here as well.
 
 // Share a user's list with one or more users
-app.post('/api/user/:username/share', authRequired, (req, res) => {
+app.post('/api/user/:username/share', authRequired, selfOnly('You can only share your own library.'), (req, res) => {
   const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
   // Self-only: deliberately NO admin bypass, unlike ownershipRequired. Kept in the
   // adapter next to req.user so test/api-surface.test.js can see it.
-  if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only share your own library.' });
   if (!Array.isArray(req.body.toUsers)) return res.status(400).json({ error: 'No users to share with.' });
 
   sharesService.replaceOutgoing(normalizedUsername, req.body.toUsers)
@@ -3747,19 +3785,17 @@ app.post('/api/user/:username/share', authRequired, (req, res) => {
 });
 
 // Get lists shared with the current user
-app.get('/api/user/:username/shared-with-me', authRequired, (req, res) => {
+app.get('/api/user/:username/shared-with-me', authRequired, selfOnly('You can only view your own shares.'), (req, res) => {
   const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
-  if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only view your own shares.' });
   sharesService.listIncoming(normalizedUsername)
     .then((rows) => res.json(rows))
     .catch(() => res.status(500).json({ error: 'DB error' }));
 });
 
 // Get a specific user's shared list (read-only, only if shared with you)
-app.get('/api/user/:username/shared/:fromUser', authRequired, (req, res) => {
+app.get('/api/user/:username/shared/:fromUser', authRequired, selfOnly('You can only view your own shares.'), (req, res) => {
   const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
   const normalizedFromUser = req.params.fromUser ? req.params.fromUser.toLowerCase() : '';
-  if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only view your own shares.' });
   sharesService.readSharedLibrary(normalizedFromUser, normalizedUsername)
     .then((games) => res.json(games))
     .catch((err) => {
@@ -3769,10 +3805,9 @@ app.get('/api/user/:username/shared/:fromUser', authRequired, (req, res) => {
 });
 
 // Revoke a share from a user
-app.delete('/api/user/:username/revoke-share/:fromUser', authRequired, (req, res) => {
+app.delete('/api/user/:username/revoke-share/:fromUser', authRequired, selfOnly('You can only revoke your own shares.'), (req, res) => {
   const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
   const normalizedFromUser = req.params.fromUser ? req.params.fromUser.toLowerCase() : '';
-  if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only revoke your own shares.' });
   sharesService.revokeIncoming(normalizedUsername, normalizedFromUser)
     .then(() => res.json({ success: true }))
     .catch(() => res.status(500).json({ error: 'DB error' }));
@@ -3786,9 +3821,8 @@ app.get('/api/all-users', authRequired, (req, res) => {
 });
 
 // Get the list of users I am sharing with
-app.get('/api/user/:username/share', authRequired, (req, res) => {
+app.get('/api/user/:username/share', authRequired, selfOnly('You can only view your own shares.'), (req, res) => {
   const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
-  if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only view your own shares.' });
   sharesService.listOutgoing(normalizedUsername)
     .then((toUsers) => res.json({ toUsers }))
     .catch(() => res.status(500).json({ error: 'DB error' }));
@@ -3955,6 +3989,7 @@ if (isServerProcess) {
 module.exports = {
   app,
   db,
+  parseRouteId,
   getAllUsers,
   getUserGames,
   wasNotificationSent,

@@ -15,6 +15,7 @@
 //     NULLS FIRST explicitly or those rows silently jump to the bottom.
 
 const db = require('../db');
+const { serviceError, CODES } = require('./errors');
 
 const norm = (v) => (v ? String(v).toLowerCase() : '');
 
@@ -100,9 +101,7 @@ async function moveBacklogItem(userId, gameId, direction) {
   const rows = await listBacklog(userId);
   const idx = rows.findIndex((r) => String(r.game_id) === String(gameId));
   if (idx === -1) {
-    const err = new Error('Game not in backlog');
-    err.code = 'not_in_backlog';
-    throw err;
+    throw serviceError(CODES.NOT_IN_BACKLOG, 'Game not in backlog');
   }
   const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
   if (swapIdx < 0 || swapIdx >= rows.length) return { moved: false };
