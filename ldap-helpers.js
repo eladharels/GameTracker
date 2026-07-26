@@ -90,6 +90,28 @@ function warnIfCleartextLdap(url) {
   }
 }
 
+// --- FreeIPA / 389-ds compatibility-tree mirrors ---
+//
+// FreeIPA's Schema Compatibility plugin republishes every account under cn=compat
+// for legacy clients, so a subtree search from the domain root returns each user
+// TWICE:
+//
+//   uid=jane,cn=users,cn=accounts,dc=example,dc=com   <- the real entry
+//   uid=jane,cn=users,cn=compat,dc=example,dc=com     <- the mirror
+//
+// Those are one person, but the login path cannot know that: it sees two matches
+// for one username and refuses to authenticate rather than bind as an arbitrarily
+// chosen DN. Correct behaviour, wrong input — so filter the mirror out BEFORE the
+// ambiguity check rather than loosening the check.
+//
+// This cannot hide a real account: every cn=compat entry is by construction a view
+// of an entry that also exists under cn=accounts, so anything dropped here is still
+// found via its canonical DN. A genuine collision between two DIFFERENT people is
+// untouched and still refused.
+function isCompatMirrorDn(dn) {
+  return /(^|,)\s*cn=compat\s*(,|$)/i.test(String(dn == null ? '' : dn));
+}
+
 // --- Search-entry attribute access ---
 //
 // Two problems with reading `entry.attributes` by hand, both of which this file's
@@ -145,4 +167,5 @@ module.exports = {
   entryAttributes,
   attrValue,
   attrValues,
+  isCompatMirrorDn,
 };

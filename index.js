@@ -30,6 +30,7 @@ const {
   entryAttributes,
   attrValue,
   attrValues,
+  isCompatMirrorDn,
 } = require('./ldap-helpers');
 const { escapeIgdbSearch } = require('./igdb-helpers');
 const { RESERVED_USERNAMES } = require('./user-rules');
@@ -1367,6 +1368,9 @@ async function getLdapEmail(username) {
         
         let foundEmail = null;
         searchRes.on('searchEntry', (entry) => {
+          // Same cn=compat skip as the login path — otherwise whichever of the two
+          // mirrored entries arrives last wins, arbitrarily.
+          if (isCompatMirrorDn(entry.dn.toString())) return;
           foundEmail = attrValue(entryAttributes(entry), 'mail', 'email');
         });
         
@@ -2720,6 +2724,13 @@ app.post('/api/auth/login', (req, res) => {
         let foundUser = null;
         let matchCount = 0;
         searchRes.on('searchEntry', (entry) => {
+          // Skip FreeIPA's cn=compat mirror of this same account before counting,
+          // or a stock FreeIPA directory searched from the domain root looks like an
+          // ambiguous username and every login is refused. See isCompatMirrorDn.
+          if (isCompatMirrorDn(entry.dn.toString())) {
+            console.log('[LDAP] Ignoring cn=compat mirror entry:', entry.dn.toString());
+            return;
+          }
           matchCount++;
           console.log('[LDAP] Search entry received for user lookup.');
 
@@ -3269,6 +3280,8 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
 
               let found = false;
               searchRes.on('searchEntry', (entry) => {
+                // Same cn=compat skip as the login path.
+                if (isCompatMirrorDn(entry.dn.toString())) return;
                 console.log(`[LDAP Sync] Found user in LDAP: ${user.username}`);
                 const attrs = entryAttributes(entry);
                 found = true;

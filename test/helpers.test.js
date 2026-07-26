@@ -18,7 +18,8 @@
 const assert = require('assert');
 const {
   escapeLdapFilterValue, buildUserSearchFilter, entryAttributes, attrValue, attrValues,
-} = require('../ldap-helpers');
+  isCompatMirrorDn,
+} = require("../ldap-helpers");
 const { escapeIgdbSearch } = require('../igdb-helpers');
 const { validateUsername, RESERVED_USERNAMES } = require('../user-rules');
 
@@ -109,6 +110,35 @@ check('the requiredGroup regression: lowercase memberof is no longer invisible',
   // Old code: foundUser.memberOf || []  ->  [] -> every login refused.
   assert.deepStrictEqual(foundUser.memberOf, undefined);
   assert.deepStrictEqual(attrValues(foundUser, 'memberOf'), ['CN=Gamers,DC=example,DC=com']);
+});
+
+console.log('isCompatMirrorDn (the FreeIPA duplicate that broke LDAP login):');
+check('identifies the cn=compat mirror', () => {
+  assert.strictEqual(isCompatMirrorDn('uid=jane,cn=users,cn=compat,dc=etech,dc=com'), true);
+  assert.strictEqual(isCompatMirrorDn('UID=JANE,CN=USERS,CN=COMPAT,DC=ETECH,DC=COM'), true);
+});
+check('leaves the canonical cn=accounts entry alone', () => {
+  assert.strictEqual(isCompatMirrorDn('uid=jane,cn=users,cn=accounts,dc=etech,dc=com'), false);
+  assert.strictEqual(isCompatMirrorDn('CN=Jane,OU=Staff,DC=corp,DC=example'), false);
+});
+check('does not match a substring of another RDN value', () => {
+  // `cn=compatibility` is a different container and must NOT be dropped, or a real
+  // account could be hidden — the one way this filter could do harm.
+  assert.strictEqual(isCompatMirrorDn('uid=jane,cn=compatibility,dc=etech,dc=com'), false);
+  assert.strictEqual(isCompatMirrorDn('uid=jane,cn=nocompat,dc=etech,dc=com'), false);
+  assert.strictEqual(isCompatMirrorDn('cn=compat-team,dc=etech,dc=com'), false);
+});
+check('tolerates empty/missing input', () => {
+  assert.strictEqual(isCompatMirrorDn(''), false);
+  assert.strictEqual(isCompatMirrorDn(null), false);
+  assert.strictEqual(isCompatMirrorDn(undefined), false);
+});
+check('the real pair from production resolves to exactly one entry', () => {
+  const matched = [
+    'uid=eladharels,cn=users,cn=compat,dc=etech,dc=com',
+    'uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com',
+  ].filter(dn => !isCompatMirrorDn(dn));
+  assert.deepStrictEqual(matched, ['uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com']);
 });
 
 console.log('escapeIgdbSearch:');
