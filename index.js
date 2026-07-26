@@ -238,7 +238,7 @@ function getOrCreateUser(username, cb, opts = {}) {
     }
     // Use CN if provided and non-empty, otherwise fallback to username
     const displayNameToUse = (typeof opts.display_name === 'string' && opts.display_name.trim() !== '' ? opts.display_name : normalizedUsername);
-    console.log('Creating user:', { username: normalizedUsername, display_name: displayNameToUse, origin: opts.origin });
+    console.log('Creating user:', { username: safeForLog(normalizedUsername, 64), display_name: safeForLog(displayNameToUse, 64), origin: opts.origin });
     // RETURNING id: Postgres does not hand back an insert id implicitly the way
     // SQLite's lastID did. Without this clause `this.lastID` is undefined.
     db.run('INSERT INTO users (username, created_at, origin, display_name) VALUES (?, ?, ?, ?) RETURNING id', [normalizedUsername, new Date().toISOString(), opts.origin || 'local', displayNameToUse], function (err) {
@@ -1571,13 +1571,34 @@ function maskSecrets(settings) {
 
 // Reverse of maskSecrets: an incoming SECRET_PLACEHOLDER means "leave as-is".
 // An empty string is a genuine request to clear the secret and is honoured.
+// Two ways a caller can say "leave this secret alone", and BOTH must work:
+//
+//   * the key is present and equals SECRET_PLACEHOLDER — what the browser form sends,
+//     because GET handed it the mask rather than the real value; and
+//   * the key is ABSENT — what any partial-update API client sends, and what a
+//     generated OpenAPI client does by default.
+//
+// Only the first was handled. A section written without its secret key REPLACED the
+// stored section, so `POST /api/settings {"ldap":{"url":"ldaps://..."}}` silently
+// deleted bindPass and killed LDAP login for every user, with a 200 and no error.
+// The browser never tripped it because the form always posts every field.
+//
+// An empty string still CLEARS a value — that is the deliberate way to unset one.
+//
+// The merge covers EVERY field, not just the secrets. A partial write was replacing
+// the whole section, so `{"ldap":{"url":"..."}}` destroyed bindDn, base and
+// requiredGroup as surely as it destroyed bindPass — and LDAP auth is equally dead
+// without any of them. Merging over the stored section gives an omitted key its
+// previous value, which is what a PATCH-style API client means by omitting it.
 function unmaskSecrets(incomingSection, sectionName, existing) {
-  const section = { ...(incomingSection || {}) };
+  const prior = existing?.[sectionName] || {};
+  // Stored values first, incoming on top: omitted keys survive, supplied keys win.
+  const section = { ...prior, ...(incomingSection || {}) };
   for (const [sec, key] of SECRET_FIELDS) {
     if (sec !== sectionName) continue;
+    // The browser posts back the mask it was shown; map it to the stored value.
     if (section[key] === SECRET_PLACEHOLDER) {
-      const prior = existing?.[sectionName]?.[key];
-      if (typeof prior === 'string') section[key] = prior;
+      if (typeof prior[key] === 'string') section[key] = prior[key];
       else delete section[key];
     }
   }
@@ -1626,8 +1647,10 @@ app.post('/api/settings', authRequired, express.json(), (req, res) => {
       smtp: canWrite('smtp') ? section('smtp') : (existing.smtp || {}),
       ldap: canWrite('ldap') ? section('ldap') : (existing.ldap || {}),
       telegram: canWrite('telegram') ? section('telegram') : (existing.telegram || {}),
-      ntfy: canWrite('ntfy') ? req.body.ntfy : (existing.ntfy || {}),
-      gotify: canWrite('gotify') ? req.body.gotify : (existing.gotify || {}),
+      // Through section() as well, for the merge — these hold no secrets, but a
+      // partial write would otherwise blank their url just the same.
+      ntfy: canWrite('ntfy') ? section('ntfy') : (existing.ntfy || {}),
+      gotify: canWrite('gotify') ? section('gotify') : (existing.gotify || {}),
       apikeys: existing.apikeys || {},  // always preserve — managed via /api/settings/apikeys
     };
     saveSettings(merged);
@@ -1726,7 +1749,14 @@ app.post('/api/user/:username/games', authRequired, ownershipRequired, async (re
       db.run(
         `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id, backlog_order)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status, steam_app_id=excluded.steam_app_id, backlog_order=excluded.backlog_order
+         ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status,
+           -- COALESCE, not a bare overwrite: the frontend's status-change call omits
+           -- steamAppId, which bound as NULL and WIPED the stored Steam App ID every
+           -- time a game moved between statuses. Prices then silently stopped
+           -- resolving until backfill_steam_app_ids.js was run -- which is why that
+           -- script kept finding work to do. Omitted now means unchanged.
+           steam_app_id=COALESCE(excluded.steam_app_id, user_games.steam_app_id),
+           backlog_order=excluded.backlog_order
          RETURNING id`,
         [user.id, gameId, gameName, coverUrl, releaseDate, status, steamAppId, backlogOrder],
         async function (err) {
@@ -2618,7 +2648,7 @@ function trackFailedAttempt(clientIP, username) {
     if (attempts.count === 1) attempts.firstAttempt = now;
     loginAttempts.set(key, attempts);
   }
-  console.log(`[Auth] Failed login attempt from IP ${clientIP} for '${username || 'unknown'}'.`);
+  console.log(`[Auth] Failed login attempt from IP ${clientIP} for '${safeForLog(username || 'unknown', 64)}'.`);
 }
 
 // Clear only the keys belonging to the account that actually authenticated.
@@ -2652,7 +2682,7 @@ app.post('/api/auth/login', (req, res) => {
   // Check rate limiting (per-IP AND per-account — see attemptKeys above)
   const lockedFor = isLockedOut(clientIP, normalizedUsername);
   if (lockedFor) {
-    console.log(`[Auth] Rate limited: IP ${clientIP} / user '${normalizedUsername}'. ${lockedFor} minutes remaining.`);
+    console.log(`[Auth] Rate limited: IP ${clientIP} / user '${safeForLog(normalizedUsername, 64)}'. ${lockedFor} minutes remaining.`);
     return res.status(429).json({
       error: `Too many login attempts. Please try again in ${lockedFor} minutes.`
     });
@@ -2670,37 +2700,37 @@ app.post('/api/auth/login', (req, res) => {
   function fallbackLocalAuth() {
     if (authCompleted) return;
     authCompleted = true;
-    console.log('[Auth] Using fallback local authentication for user:', normalizedUsername);
+    console.log('[Auth] Using fallback local authentication for user:', safeForLog(normalizedUsername, 64));
     db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername], async (err, user) => {
       if (err) {
         console.error('[Auth] Database error during user lookup:', err);
         return res.status(500).json({ error: 'Database error' });
       }
       if (!user) {
-        console.log('[Auth] Local user not found:', normalizedUsername);
+        console.log('[Auth] Local user not found:', safeForLog(normalizedUsername, 64));
         // Track failed attempt
         trackFailedAttempt(clientIP, normalizedUsername);
         return res.status(401).json({ error: 'Invalid credentials' });
       }
-      console.log('[Auth] Found user in database:', { id: user.id, username: user.username, origin: user.origin });
+      console.log('[Auth] Found user in database:', { id: user.id, username: safeForLog(user.username, 64), origin: user.origin });
       try {
         // LDAP users have no local password — reject cleanly instead of crashing bcrypt.
         // The reason goes to the server log only: telling the *client* that this is
         // an LDAP account confirmed both that the username exists and that it is a
         // domain account, which is a ready-made target list for spraying against AD.
         if (!user.password || typeof user.password !== 'string') {
-          console.log(`[Auth] User '${normalizedUsername}' has no local password (origin=${user.origin}). Local auth not possible.`);
+          console.log(`[Auth] User '${safeForLog(normalizedUsername, 64)}' has no local password (origin=${user.origin}). Local auth not possible.`);
           trackFailedAttempt(clientIP, normalizedUsername);
           return res.status(401).json({ error: 'Invalid credentials' });
         }
         const valid = await bcrypt.compare(String(password), user.password);
         if (!valid) {
-          console.log('[Auth] Local password validation failed for user:', normalizedUsername);
+          console.log('[Auth] Local password validation failed for user:', safeForLog(normalizedUsername, 64));
           // Track failed attempt
           trackFailedAttempt(clientIP, normalizedUsername);
           return res.status(401).json({ error: 'Invalid credentials' });
         }
-        console.log('[Auth] Password validation successful for user:', normalizedUsername);
+        console.log('[Auth] Password validation successful for user:', safeForLog(normalizedUsername, 64));
         // Clear failed attempts on successful login
         clearFailedAttempts(clientIP, normalizedUsername);
         const token = jwt.sign({
