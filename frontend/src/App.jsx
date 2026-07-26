@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
@@ -1685,22 +1685,31 @@ function SectionSaveBar({ sectionKey, saving, saveStatus, saveError, dirty, onSa
   return (
     <div className="ent-save-bar">
       {/* The server's reason, not just "Failed". A 409 (settings.json unreadable) and
-          a 400 (malformed section) both need an action the retry button cannot do,
-          and telling the admin to retry is the one instruction guaranteed to fail. */}
-      {message
-        ? <span className="ent-save-error" role="alert"><FaExclamationCircle /> {message}</span>
-        : <span className={`ent-unsaved-hint${dirty ? ' visible' : ''}`}>
-            <FaExclamationCircle /> Unsaved changes
-          </span>}
+          a 400 (malformed section) both need an action the button cannot perform.
+          Its OWN row: sharing one with the button squeezed it to ~120px on a phone,
+          wrapped a real message to twelve lines, and let a long unbroken value paint
+          over the button. And it sits ALONGSIDE the dirty hint rather than replacing
+          it — the error survives until the next save attempt, so replacing it hid
+          "Unsaved changes" for the whole editing session that follows a failure. */}
+      {message && (
+        <span className="ent-save-error" role="alert">
+          <FaExclamationCircle aria-hidden="true" /> {message}
+        </span>
+      )}
+      <span className={`ent-unsaved-hint${dirty ? ' visible' : ''}`}>
+        <FaExclamationCircle aria-hidden="true" /> Unsaved changes
+      </span>
       <button
         type="button"
         className={`ent-save-btn${dirty ? ' ent-save-btn--dirty' : ''}${status === 'saved' ? ' ent-save-btn--saved' : ''}${status === 'error' ? ' ent-save-btn--error' : ''}`}
         onClick={onSave}
         disabled={saving[sectionKey]}
       >
+        {/* No "retry" verdict on failure: next to "restore the file on the server",
+            it advertises the one action that cannot work. The red styling still says
+            it did not save; the message next to it says what to do instead. */}
         {saving[sectionKey] ? <><FaSync className="ent-spin" /> Saving…</>
           : status === 'saved'  ? <><FaCheckCircle /> Saved</>
-          : status === 'error'  ? <><FaExclamationCircle /> Failed — retry</>
           : <>Save {label}</>}
       </button>
     </div>
@@ -2167,8 +2176,11 @@ function SettingsPage() {
   const isAdmin = (() => { try { return JSON.parse(atob(token.split('.')[1])).can_manage_users } catch { return false } })()
   const authH   = { headers: { Authorization: `Bearer ${token}` } }
 
-  // ── Load from server on mount
-  useEffect(() => {
+  // ── Load from server. A callback, not just an effect, because a save that succeeds
+  // while the unreadable banner is up means someone repaired the file on disk — and
+  // every OTHER section is still holding the blank degraded read. Clearing the flag
+  // alone would leave those blanks on screen with the explanation removed.
+  const fetchSettings = useCallback(() => (
     axios.get(`${API_BASE}/settings`)
       .then(res => {
         const s = res.data || {}
@@ -2180,8 +2192,17 @@ function SettingsPage() {
         setLdap(s.ldap       || {})
         setTelegram(s.telegram || {})
       })
+  ), [])
+
+  useEffect(() => {
+    fetchSettings()
       .finally(() => setLoadingSettings(false))
-  }, [])
+  }, [fetchSettings])
+
+  // Announce the degraded state once per transition, and drop a keyboard user at the
+  // top of the panel where the explanation is.
+  const unreadableRef = useRef(null)
+  useEffect(() => { if (settingsUnreadable) unreadableRef.current?.focus() }, [settingsUnreadable])
 
   // ── Load API keys meta (admin only)
   useEffect(() => {
@@ -2213,7 +2234,10 @@ function SettingsPage() {
     try {
       await axios.post(`${API_BASE}/settings`, { [key]: data })
       setServerSettings(p => ({ ...p, [key]: { ...data } }))
-      setSettingsUnreadable(false)
+      // A save cannot succeed while the file is unreadable, so reaching here with the
+      // banner up means it was repaired on disk. Refetch: the other sections are still
+      // holding the blank degraded read.
+      if (settingsUnreadable) fetchSettings()
       setSaveStatus(p => ({ ...p, [key]: 'saved' }))
       setTimeout(() => setSaveStatus(p => ({ ...p, [key]: null })), 3000)
     } catch (err) {
@@ -2221,10 +2245,17 @@ function SettingsPage() {
       // The server's own message where it has one: a 409 says settings.json cannot be
       // read and must be restored on disk, a 400 says which section was malformed.
       // Neither is fixed by pressing the button again.
+      //
+      // No 401 branch: the response interceptor clears the token and navigates to
+      // /login before any of this renders, and "log out and log back in" would be
+      // wrong anyway — by then they already are logged out.
       setSaveError(p => ({ ...p, [key]:
-        status === 401 ? 'Session expired — log out and log back in.'
-        : status === 403 ? 'Admin permission required.'
-        : (err.response?.data?.error || 'Save failed. Check the server log.') }))
+        status === 403 ? 'Access denied — admin permission required.'
+        : err.response
+          ? (err.response.data?.error || `Save failed (HTTP ${status}). Check the server log.`)
+          // No response at all: backend down, network gone, proxy refused. There is no
+          // server log entry to check, so do not send them looking for one.
+          : 'Could not reach the server — check that the backend is running.' }))
       if (status === 409) setSettingsUnreadable(true)
       setSaveStatus(p => ({ ...p, [key]: 'error' }))
     }
@@ -2333,7 +2364,11 @@ function SettingsPage() {
         </div>
 
         {visibleNAV.map(s => {
-          const configured = s.data !== null ? isConfigured(s.data) : null
+          // 'unknown' when settings.json could not be read. Otherwise every section
+          // arrives empty and every badge says "not configured" — five confident
+          // wrong answers, next to a banner explaining that the blanks are not real.
+          const configured = settingsUnreadable ? 'unknown'
+            : (s.data !== null ? isConfigured(s.data) : null)
           const dirty      = s.data !== null ? isDirty(s.key)       : false
           return (
             <button
@@ -2350,6 +2385,10 @@ function SettingsPage() {
                 {dirty && <span className="ent-badge ent-badge--dirty">●</span>}
                 {!dirty && configured === true  && <span className="ent-badge ent-badge--ok">✓</span>}
                 {!dirty && configured === false && <span className="ent-badge ent-badge--off">—</span>}
+                {!dirty && configured === 'unknown' && (
+                  <span className="ent-badge ent-badge--unknown"
+                        aria-label="Unknown — settings.json could not be read">?</span>
+                )}
               </div>
             </button>
           )
@@ -2359,14 +2398,25 @@ function SettingsPage() {
       {/* ── Right panel ── */}
       <div className="ent-panel">
 
+        {/* role="status", not "alert": this enters the DOM together with its whole
+            container on first render, which screen readers announce unreliably, and
+            on the 409 path it would be a second assertive interruption saying what
+            the save-bar alert just said. Moving focus here announces it once and
+            puts a keyboard user at the top of the panel. */}
         {settingsUnreadable && (
-          <div className="ent-settings-alert" role="alert">
-            <FaExclamationCircle />
+          <div className="gt-alert gt-alert--danger gt-alert--page"
+               ref={unreadableRef} tabIndex={-1} role="status">
+            <FaExclamationCircle aria-hidden="true" />
             <div>
-              <strong>settings.json could not be read.</strong> Every section below is showing
-              as empty because of that, not because it is unconfigured — and saving is blocked
-              so the stored credentials are not overwritten with blanks. Restore or repair the
-              file on the server, then reload this page. The server log has the parse error.
+              <strong>settings.json could not be read — restore the file on the server, then reload.</strong>
+              <br />The sections below are blank because of that, not because they are
+              unconfigured. Saves are rejected until it is fixed, so nothing is overwritten
+              with blanks. The parse error is in the server log.
+              <div>
+                <button type="button" className="gt-alert-action" onClick={() => window.location.reload()}>
+                  Reload page
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -2467,8 +2517,8 @@ function SettingsPage() {
 
             {/* Session expired warning */}
             {apiKeysAuthError && (
-              <div className="ak-session-expired">
-                <FaExclamationCircle />
+              <div className="gt-alert gt-alert--danger" role="alert">
+                <FaExclamationCircle aria-hidden="true" />
                 <span><strong>Session expired.</strong> Please log out and log back in — your admin session needs to be refreshed before you can view or save API keys.</span>
               </div>
             )}

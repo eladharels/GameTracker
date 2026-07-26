@@ -4684,6 +4684,14 @@ body, html {
   border: 1px solid var(--color-border);
 }
 
+/* "settings.json could not be read", not "not configured" — the difference matters,
+   because the second is a confident wrong answer. */
+.ent-badge--unknown {
+  background: rgba(239,68,68,0.12);
+  color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.3);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.55; }
@@ -5035,7 +5043,9 @@ body, html {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 1rem;
+  row-gap: 0.85rem;   /* after `gap`, which would otherwise reset it */
   padding-top: 1.5rem;
   border-top: 1px solid var(--color-border);
 }
@@ -5103,15 +5113,19 @@ body, html {
   color: #f87171;
 }
 
-/* The server's reason for refusing a save, shown where the "Unsaved changes" hint
-   sits. Takes the remaining width so a sentence wraps instead of pushing the button
-   off the row. */
+/* The server's reason for refusing a save. Always its OWN full-width row, so the
+   button never competes with it for space: sharing the row collapsed the message to
+   ~120px on a phone (the button will not shrink below its min-content) and wrapped a
+   real sentence to twelve lines. `overflow-wrap: anywhere` because the message can
+   carry a server-echoed path with no break opportunity in it, which otherwise
+   overflowed the box and painted over the button. */
 .ent-save-error {
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
-  flex: 1;
+  flex: 1 0 100%;
   min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 0.82rem;
   line-height: 1.45;
   color: #fca5a5;
@@ -5119,24 +5133,6 @@ body, html {
   text-align: left;
 }
 .ent-save-error svg { flex-shrink: 0; margin-top: 0.15rem; color: #ef4444; }
-
-/* settings.json unreadable — the whole page is showing empty sections that are not
-   really empty, so this sits above every tab. Mirrors .ak-session-expired. */
-.ent-settings-alert {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.65rem;
-  padding: 0.85rem 1.1rem;
-  margin-bottom: 1.5rem;
-  background: rgba(239,68,68,0.08);
-  border: 1px solid rgba(239,68,68,0.35);
-  border-radius: var(--radius-md);
-  color: #fca5a5;
-  font-size: 0.88rem;
-  line-height: 1.5;
-}
-.ent-settings-alert svg { flex-shrink: 0; margin-top: 0.2rem; color: #ef4444; }
-.ent-settings-alert strong { color: #fecaca; }
 
 .ent-save-btn:disabled {
   opacity: 0.55;
@@ -5640,21 +5636,59 @@ body, html {
   color: var(--text-muted);
 }
 
-.ak-session-expired {
+/* ── Alert banner ──
+   ONE definition. This and the settings-unreadable banner were two hand-maintained
+   copies that already computed identically apart from a 0.05rem icon offset and a
+   margin — which is how a codebase ends up with two red banners that look subtly
+   different. Variant classes carry the differences that are real. */
+.gt-alert {
   display: flex;
   align-items: flex-start;
   gap: 0.65rem;
   padding: 0.85rem 1.1rem;
-  background: rgba(239,68,68,0.08);
-  border: 1px solid rgba(239,68,68,0.35);
+  margin-bottom: 1rem;
   border-radius: var(--radius-md);
-  color: #fca5a5;
   font-size: 0.88rem;
   line-height: 1.5;
-  margin-bottom: 1rem;
 }
-.ak-session-expired svg { flex-shrink: 0; margin-top: 0.15rem; color: #ef4444; }
-.ak-session-expired strong { color: #fecaca; }
+.gt-alert svg    { flex-shrink: 0; margin-top: 0.15rem; }
+.gt-alert strong { color: #fecaca; }
+
+.gt-alert--danger {
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.35);
+  color: #fca5a5;
+}
+.gt-alert--danger svg { color: #ef4444; }
+
+/* A page-level condition rather than one section's. Sticky because .ent-panel
+   scrolls: on a long tab the banner otherwise scrolls away and the admin is back to
+   looking at a blank form with no idea why it is blank. */
+.gt-alert--page {
+  margin-bottom: 1.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  backdrop-filter: blur(8px);
+}
+
+.gt-alert-action {
+  margin-top: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.35);
+  color: #fecaca;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.gt-alert-action:hover { background: rgba(239,68,68,0.2); }
 
 .ak-section-header {
   font-size: 0.78rem;
