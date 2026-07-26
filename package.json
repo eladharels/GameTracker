@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "test": "node test/helpers.test.js"
+    "test": "node test/helpers.test.js && node test/api-surface.test.js"
   },
   "keywords": [],
   "author": "",

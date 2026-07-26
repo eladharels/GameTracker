@@ -2587,12 +2587,20 @@ function authRequired(req, res, next) {
     });
 }
 function requirePermission(permission) {
-  return (req, res, next) => {
+  // NAMED, and tagged with the permission it enforces. Both matter: the Express
+  // router exposes each route's middleware chain by function name, and
+  // test/api-surface.test.js walks that chain to prove every route's authorization
+  // tier is what the API contract says it is. An anonymous closure here made every
+  // admin route indistinguishable from a merely-authenticated one, so the strictest
+  // tier in the app was the one the check could not see.
+  const requirePermissionMiddleware = (req, res, next) => {
     if (!req.user || !req.user[permission]) {
       return res.status(403).json({ error: 'Forbidden' });
     }
     next();
   };
+  requirePermissionMiddleware.requiredPermission = permission;
+  return requirePermissionMiddleware;
 }
 // Enforce that the authenticated user may only act on their OWN :username-scoped
 // resources, unless they are an admin (can_manage_users). Usernames are normalized to

@@ -64,9 +64,12 @@ GameTracker/
 ├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
 │                                   #   API and create-local-admin.js
 ├── test/
-│   └── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
-│                                   #   `npm test`; runs in CI. NO database/directory/network
-│                                   #   tests here — those belong in the smoke test
+│   ├── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
+│   │                               #   `npm test`; runs in CI. NO database/directory/network
+│   │                               #   tests here — those belong in the smoke test
+│   └── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
+│                                   #   Express router and asserts every route's auth tier.
+│                                   #   Adding a route without recording its tier FAILS CI
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
 ├── migrations/                     # Numbered .sql schema migrations
 ├── scripts/
@@ -133,6 +136,22 @@ GameTracker/
 > fresh database and their empty error callbacks swallowed the failures — silently shipping installs
 > missing `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Postgres removes the race,
 > but the swallowing was the real defect. Do not reintroduce a "log and continue" migration path.
+
+> **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
+> router and asserts the authorization tier of all 42 routes — public / auth / owner-or-admin /
+> admin — derived from the middleware chain, not from the path. CI fails on a route that is not
+> in the inventory, on a tier that changed, and on any unauthenticated route outside the
+> two-item allowlist (`GET /api/health`, `POST /api/auth/login`).
+>
+> This exists because authorization here has repeatedly been decided by omission: a route under
+> `/api/admin/` that is not admin-gated, two different ownership rules on the same path prefix,
+> debug endpoints shipped to production. A missing middleware looks exactly like a route nobody
+> has read yet. When the test fails it is usually right — record the intended tier, don't
+> loosen the assertion.
+>
+> `requirePermission()` returns a **named** middleware carrying `.requiredPermission`. Both are
+> load-bearing for that check: an anonymous closure made every admin route indistinguishable
+> from a merely-authenticated one.
 
 > **Background schedulers go through `scheduleWhenServer()`, never `cron.schedule()`
 > directly** — and anything else that must not happen on import (the schema migration,
@@ -389,7 +408,7 @@ deploy  (needs: ALL 7 upstream jobs)
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
 | ESLint | `frontend-quality` | Any lint error |
 | Vite build | `frontend-quality` | Build failure |
-| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js` |
+| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js` or `test/api-surface.test.js` |
 | Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
 
 ### Container Hardening
