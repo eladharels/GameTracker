@@ -1104,7 +1104,7 @@ function sanitizeDirectoryText(value, maxLength = 200) {
 // the SAME error-listening client without pulling in this entire file. See the
 // header comment there for what went wrong when they could not.
 
-// --- LDAP Email Lookup ---
+// --- Notification Triggers ---
 // Compose and deliver a library event. Delivery itself — which channels the user has,
 // resolving their address through the directory, and never letting one channel's
 // failure stop another — is services/notifications.js.
@@ -3124,9 +3124,9 @@ scheduleWhenServer('0 8 * * *', () => {
                       console.error(`[CRON] Failed to update status for game ${game.game_name} (user: ${username}):`, err);
                     } else {
                       console.log(`[CRON] Successfully updated status for game ${game.game_name} (user: ${username}) from unreleased to wishlist`);
-                      notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist').catch(err => {
-                        console.error(`[CRON] Failed to send release notification for game ${game.game_name} (user: ${username}):`, err);
-                      });
+                      // No .catch(): notifyEvent cannot reject, and logs each
+                      // channel's outcome itself.
+                      notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist');
                     }
                   }
                 );
@@ -3148,12 +3148,17 @@ scheduleWhenServer('0 8 * * *', () => {
                       const delivered = Object.values(results || {}).some((r) => r.sent);
                       if (delivered) {
                         markNotificationSent(username, game.game_id, type);
-                        console.log(`Sent ${type} release reminder to ${safeForLog(username, 64)} for game ${game.game_name}`);
+                        console.log(`Sent ${type} release reminder to ${safeForLog(username, 64)} for game ${safeForLog(game.game_name, 80)}`);
                       } else {
-                        console.warn(`[CRON] No channel delivered the ${type} reminder to ${safeForLog(username, 64)} for game ${game.game_name} — will retry`);
+                        // NOT "will retry": diffDays decrements daily and is matched
+                        // against the user's notification_days, so a failed 30-day
+                        // reminder is not re-attempted at 30 days — it is dropped, and
+                        // the next threshold (7, then 0) is the next chance. Still
+                        // better than recording an undelivered reminder as sent.
+                        console.warn(`[CRON] No channel delivered the ${type} reminder to ${safeForLog(username, 64)} for game ${safeForLog(game.game_name, 80)} — not marking it sent`);
                       }
                     }).catch(err => {
-                      console.error(`Failed to send ${type} reminder to ${safeForLog(username, 64)} for game ${game.game_name}:`, err.message);
+                      console.error(`Failed to send ${type} reminder to ${safeForLog(username, 64)} for game ${safeForLog(game.game_name, 80)}:`, err.message);
                     });
                     found = true;
                   } else {
@@ -3273,11 +3278,16 @@ app.post('/api/admin/check-releases', authRequired, requirePermission('can_manag
                     updatedGames.push({ username, gameName: game.game_name, gameId: game.game_id });
                     
                     // Send release notification
-                    notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist').then(() => {
-                      notificationsSent.push({ username, gameName: game.game_name });
-                    }).catch(err => {
-                      console.error(`[MANUAL API] Failed to send release notification for game ${game.game_name} (user: ${username}):`, err);
-                    });
+                    // No .catch(): notifyEvent cannot reject (see its definition).
+                    // Report only what a channel ACTUALLY delivered — the .then() runs
+                    // unconditionally now, so pushing here regardless would report a
+                    // notification nobody received. Same rule as the cron reminder.
+                    notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist')
+                      .then((results) => {
+                        if (Object.values(results || {}).some((r) => r.sent)) {
+                          notificationsSent.push({ username, gameName: game.game_name });
+                        }
+                      });
                   }
                 }
               );

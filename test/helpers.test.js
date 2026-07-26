@@ -10,6 +10,19 @@
 // (docker-compose.test.yml), NOT here. The moment this file needs a service, it has
 // stopped being cheap and has become the test framework this project chose to avoid.
 //
+// ONE MODULE HERE HAS DEPENDENCIES: services/notifications.js requires db.js and
+// settings-store.js. It is in scope anyway, and deleting these tests to honour the
+// paragraph above would be the wrong reading. The rule is about what the tests TOUCH
+// at run time, and these touch nothing: `pg`'s Pool is lazy, so requiring db.js
+// opens no connection (verified with every PG* variable unset, which is also CI's
+// situation), and the functions exercised — the guards, and dispatch() via the
+// `transports` seam — take their inputs as arguments and perform no I/O.
+//
+// dispatch() is here rather than in the smoke test on purpose. Its contract, that
+// one channel's failure never stops another, was broken in production precisely
+// because nothing could reach it: the channel table used to close over the transport
+// bindings directly. The seam exists so this file can assert it.
+//
 // Why these particular functions: both the escaping and the attribute lookup guard
 // defects that are invisible to code review. Swapping two .replace() calls in
 // escapeLdapFilterValue still looks correct but breaks the escaping; a directory
@@ -480,6 +493,17 @@ checkAsync('`only` restricts delivery; every channel still appears in the result
   assert.deepStrictEqual(Object.keys(r).sort(), ['email', 'gotify', 'ntfy', 'telegram']);
   assert.deepStrictEqual(r.gotify, { sent: false, error: null });
   assert.deepStrictEqual(r.telegram, { sent: false, error: null });
+}));
+checkAsync('dispatch never throws, even on a malformed channels argument', () => withTransports({}, async () => {
+  // services/errors.js tells adapters they may rely on this absolutely. It must not
+  // depend on every caller normalising first — both current ones happen to, two
+  // functions away, which is a convention rather than a guarantee.
+  for (const bad of [null, undefined, 0, '', 'nonsense']) {
+    const r = await notifications.dispatch(bad, { subject: 's', text: 't', title: 'T', message: 'm' });
+    assert.deepStrictEqual(Object.keys(r).sort(), ['email', 'gotify', 'ntfy', 'telegram'],
+      `dispatch(${JSON.stringify(bad)}) did not return a full result`);
+    for (const k of CHANNEL_KEYS) assert.strictEqual(r[k].sent, false);
+  }
 }));
 checkAsync('a transport that DECLINED is not reported as sent', () => withTransports({ sendEmail: 'skip' }, async () => {
   // "Resolved without throwing" is not delivery. Every transport short-circuits on

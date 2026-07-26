@@ -373,6 +373,11 @@ const CHANNEL_KEYS = Object.freeze(CHANNELS.map((c) => c.key));
 // time). Returns { channel: {sent, error} } for every channel considered — the
 // caller decides whether anyone wants to hear about it.
 async function dispatch(channels, payload, { only } = {}) {
+  // An absolute "never throws" is only absolute if it does not depend on every
+  // caller normalising first. Both current callers happen to `|| {}` two functions
+  // away; that is a convention, and services/errors.js now tells adapters to rely on
+  // this guarantee.
+  channels = channels || {};
   // EVERY channel appears in the result, including ones `only` excluded — they come
   // back {sent:false, error:null}, meaning "not attempted". v1's shape, and the
   // admin Diagnostics panel renders a row per channel unconditionally.
@@ -387,11 +392,18 @@ async function dispatch(channels, payload, { only } = {}) {
   // It also makes independence structural: there is no ordering in which one
   // channel's failure could precede and prevent another's attempt.
   await Promise.all(wanted.map(async (channel) => {
-    if (!channel.configured(channels)) {
-      results[channel.key].error = channel.missing;
-      return;
-    }
     try {
+      // configured() is INSIDE the try. Outside it, a channel row with an unexpected
+      // shape threw out of the map callback — and Promise.all would then reject out
+      // of a function documented as never throwing. Total callback, so Promise.all
+      // is correct by construction rather than by coincidence. (allSettled would be
+      // the wrong fix: it would swallow such a throw into {sent:false, error:null},
+      // which is the reserved "not attempted" sentinel and renders as a bare
+      // "✗ Failed" in the admin panel.)
+      if (!channel.configured(channels)) {
+        results[channel.key].error = channel.missing;
+        return;
+      }
       // A transport returns `true` when it actually delivered, or a STRING saying
       // why it declined. "Resolved without throwing" is not delivery: every
       // transport short-circuits on a missing server URL, an unconfigured SMTP host,

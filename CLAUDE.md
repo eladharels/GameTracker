@@ -18,7 +18,8 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~3950 lines — monolithic Express server)
+- **Entry point**: `index.js` (~3400 lines — Express server; the service layer under `services/`
+  is progressively taking the logic out of it)
 
 ### Frontend
 - **Framework**: React 18 with React Router 6
@@ -63,6 +64,11 @@ GameTracker/
 │                                   #   value into an APIcalypse `search "..."` literal
 ├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
 │                                   #   API and create-local-admin.js
+├── directory.js                    # getLdapEmail() — the directory read that is NOT part of
+│                                   #   authentication. Lives here, not in a service, so
+│                                   #   services/notifications.js can require it without a cycle;
+│                                   #   passing it in as a parameter made the address validation
+│                                   #   conditional on the caller remembering to
 ├── settings-store.js               # The SOLE reader/writer of settings.json, with the one
 │                                   #   mtime-validated cache and the settings-over-env
 │                                   #   API-key precedence (resolveApiKey). readSettings()
@@ -75,6 +81,9 @@ GameTracker/
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
 │   ├── library.js                  # Game library + backlog ordering
 │   ├── users.js                    # Admin user management; the lockout safety rules
+│   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
+│                                   #   dispatch() is the ONE service that never throws — four
+│                                   #   independent outcomes, advisory result. See services/errors.js
 │   └── settings.js                 # settings.json ADMIN-EDITING surface (mask, merge,
 │                                   #   role-filter). Consumers that need an UNMASKED value
 │                                   #   (SMTP, LDAP, notifications) use settings-store direct
