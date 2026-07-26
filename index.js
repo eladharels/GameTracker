@@ -30,7 +30,7 @@ const {
   entryAttributes,
   attrValue,
   attrValues,
-  dropPairedCompatMirrors,
+  compatTreeAdvice,
 } = require('./ldap-helpers');
 const { escapeIgdbSearch } = require('./igdb-helpers');
 const { RESERVED_USERNAMES } = require('./user-rules');
@@ -1375,11 +1375,14 @@ async function getLdapEmail(username) {
         searchRes.on('end', () => {
           client.markHandled();
           client.unbind();
-          const keptDns = new Set(dropPairedCompatMirrors(rawEntries.map((e) => e.dn.toString())));
-          const entries = rawEntries.filter((e) => keptDns.has(e.dn.toString()));
-          // NOTE: unlike the login path there is deliberately no ambiguity refusal
-          // here, because this is not an authentication decision — but it is still
-          // last-wins across genuine collisions, which is tracked separately.
+          // No compat filtering — see ldap-helpers.js. An ambiguous match means we
+          // cannot say whose address this is, and it gets written to the account and
+          // used as a notification recipient, so decline rather than guess.
+          const entries = rawEntries;
+          if (entries.length > 1) {
+            console.warn(`[LDAP] ${entries.length} entries matched during email lookup — ambiguous, skipping.`);
+            return resolve(null);
+          }
           let foundEmail = null;
           for (const entry of entries) {
             foundEmail = attrValue(entryAttributes(entry), 'mail', 'email') || foundEmail;
@@ -2733,7 +2736,7 @@ app.post('/api/auth/login', (req, res) => {
         // cannot be judged from that entry alone -- it depends on whether its
         // cn=accounts counterpart is elsewhere in the same result set. Deciding per
         // entry is what made the first version of this an authentication bypass.
-        // See dropPairedCompatMirrors.
+        // Nothing is discarded; see the 'end' handler.
         const rawEntries = [];
         searchRes.on('searchEntry', (entry) => {
           console.log('[LDAP] Search entry received for user lookup.');
@@ -2750,15 +2753,16 @@ app.post('/api/auth/login', (req, res) => {
         searchRes.on('end', (result) => {
           console.log('[LDAP] Search finished. Result status:', result ? result.status : 'N/A');
 
-          // Discard ONLY those cn=compat entries whose cn=accounts counterpart is
-          // also in this result set — proving them redundant duplicates. A
-          // compat-ONLY account (FreeIPA AD trust) is kept and still counts below.
-          const allDns = rawEntries.map((e) => e.dn.toString());
-          const keptDns = new Set(dropPairedCompatMirrors(allDns));
-          for (const dn of allDns) {
-            if (!keptDns.has(dn)) console.log('[LDAP] Ignoring cn=compat mirror of a matched account:', dn);
-          }
-          const entries = rawEntries.filter((e) => keptDns.has(e.dn.toString()));
+          // NOTHING IS FILTERED OUT HERE, deliberately. Two attempts to recognise
+          // and discard FreeIPA's cn=compat duplicate were both authentication
+          // bypasses, because a DN is a name rather than evidence: any shape treated
+          // as proof that two entries are the same person can be created by an
+          // attacker who can add a directory entry. See ldap-helpers.js.
+          //
+          // Every matched entry therefore counts, and the fail-closed ambiguity
+          // refusal below decides. A too-broad search base is reported as the
+          // configuration error it is.
+          const entries = rawEntries;
           const matchCount = entries.length;
 
           // Read anything out of this with attrValue/attrValues, never by property
@@ -2782,6 +2786,10 @@ app.post('/api/auth/login', (req, res) => {
           // guessing; binding as an arbitrary matched DN is an authentication bug.
           if (matchCount > 1) {
             console.error(`[LDAP] Ambiguous login: ${matchCount} entries matched username '${normalizedUsername}'. Refusing to authenticate.`);
+            // Overwhelmingly the cause is a search base that spans a compat tree.
+            // Say so — this used to present as an unexplained total login outage.
+            const advice = compatTreeAdvice(entries.map((e) => e.dn.toString()), ldapSettings.base);
+            if (advice) console.error(`[LDAP] ${advice}`);
             client.markHandled();
             client.unbind();
             trackFailedAttempt(clientIP, normalizedUsername);
@@ -3297,8 +3305,8 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
               searchRes.on('searchEntry', (entry) => rawEntries.push(entry));
 
               searchRes.on('end', () => {
-                const keptDns = new Set(dropPairedCompatMirrors(rawEntries.map((e) => e.dn.toString())));
-                const entries = rawEntries.filter((e) => keptDns.has(e.dn.toString()));
+                // No compat filtering — see ldap-helpers.js.
+                const entries = rawEntries;
                 if (!entries.length) {
                   console.log(`[LDAP Sync] User not found in LDAP: ${user.username}`);
                   return resolve(null); // User not found in LDAP

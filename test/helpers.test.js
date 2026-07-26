@@ -18,7 +18,7 @@
 const assert = require('assert');
 const {
   escapeLdapFilterValue, buildUserSearchFilter, entryAttributes, attrValue, attrValues,
-  isCompatMirrorDn, dropPairedCompatMirrors,
+  isCompatMirrorDn, compatTreeAdvice,
 } = require("../ldap-helpers");
 const { escapeIgdbSearch } = require('../igdb-helpers');
 const { validateUsername, RESERVED_USERNAMES } = require('../user-rules');
@@ -133,63 +133,40 @@ check('tolerates empty/missing input', () => {
   assert.strictEqual(isCompatMirrorDn(null), false);
   assert.strictEqual(isCompatMirrorDn(undefined), false);
 });
-console.log('dropPairedCompatMirrors (a mirror is only dropped when its twin is present):');
-check('the real production pair collapses to the canonical entry', () => {
-  assert.deepStrictEqual(dropPairedCompatMirrors([
-    'uid=eladharels,cn=users,cn=compat,dc=etech,dc=com',
-    'uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com',
-  ]), ['uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com']);
+console.log('compatTreeAdvice (diagnostic only — NOTHING is filtered):');
+check('advises when a compat entry is among the matches', () => {
+  const advice = compatTreeAdvice([
+    'uid=jane,cn=users,cn=compat,dc=etech,dc=com',
+    'uid=jane,cn=users,cn=accounts,dc=etech,dc=com',
+  ], 'dc=etech,dc=com');
+  assert.match(advice, /Narrow the LDAP base/);
+  // Must NOT nominate one of the matched DNs as the real one — in the attack this
+  // guard exists to stop, that would be pointing the operator at the attacker.
+  assert.ok(!advice.includes('uid=jane'), 'advice named a specific matched entry');
 });
-check('AUTH BYPASS REGRESSION: a compat-ONLY account is never dropped', () => {
-  // FreeIPA with an AD trust publishes trusted-domain users under cn=compat and
-  // nowhere else. Dropping this entry would leave the attacker's colliding entry as
-  // the sole match, so matchCount == 1 and the ambiguity guard lets them in as jane
-  // using THEIR OWN password. Verified as a real 401 -> 200 regression.
-  const dns = [
-    'uid=jane,cn=users,cn=compat,dc=etech,dc=com',   // the real (trusted-domain) jane
-    'uid=jane,ou=contractors,dc=etech,dc=com',       // attacker-controlled entry
-  ];
-  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns, 'a compat-only account was discarded');
-  assert.strictEqual(dropPairedCompatMirrors(dns).length, 2, 'must stay ambiguous so login is refused');
-});
-check('a lone compat entry with no counterpart survives', () => {
-  const dns = ['uid=jane,cn=users,cn=compat,dc=etech,dc=com'];
-  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns);
-});
-check('two genuinely different people still collide', () => {
-  const dns = [
+check('stays silent when the compat tree is not involved', () => {
+  assert.strictEqual(compatTreeAdvice([
     'uid=jane,ou=staff,dc=etech,dc=com',
     'uid=jane,ou=contractors,dc=etech,dc=com',
-  ];
-  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns);
-});
-check('counterpart matching is case-insensitive', () => {
-  assert.deepStrictEqual(dropPairedCompatMirrors([
-    'UID=Jane,CN=Users,CN=Compat,DC=etech,DC=com',
-    'uid=jane,cn=users,cn=accounts,dc=etech,dc=com',
-  ]), ['uid=jane,cn=users,cn=accounts,dc=etech,dc=com']);
-});
-check('a mirror is not paired against an unrelated cn=accounts entry', () => {
-  const dns = [
-    'uid=jane,cn=users,cn=compat,dc=etech,dc=com',
-    'uid=bob,cn=users,cn=accounts,dc=etech,dc=com',
-  ];
-  assert.deepStrictEqual(dropPairedCompatMirrors(dns), dns);
-});
-check('empty input is handled', () => {
-  assert.deepStrictEqual(dropPairedCompatMirrors([]), []);
+  ], 'dc=etech,dc=com'), null);
+  assert.strictEqual(compatTreeAdvice([], 'dc=etech,dc=com'), null);
+  assert.strictEqual(compatTreeAdvice(null, 'dc=etech,dc=com'), null);
 });
 
-check('PINS ldapjs DN normalisation: an escaped comma arrives as \\2c, not \\,', () => {
-  // isCompatMirrorDn is a string test, so its safety against a DN like
-  // `cn=x\,cn=compat,...` rests on ldapjs emitting `\2c` for an escaped comma. If
-  // that ever changed to `\,` the regex would start matching, and a REAL account
-  // would be dropped — the one direction that does harm. Pin the assumption.
-  const wireForm = 'cn=x\\2ccn=compat,dc=etech,dc=com';   // what ldapjs actually delivers
-  const hypothetical = 'cn=x\\,cn=compat,dc=etech,dc=com'; // what it must NOT deliver
-  assert.strictEqual(isCompatMirrorDn(wireForm), false, 'escaped-comma DN was misread as a compat entry');
-  assert.strictEqual(isCompatMirrorDn(hypothetical), true,
-    'if ldapjs ever emits \\, this form matches — re-check dropPairedCompatMirrors');
+console.log('THE INVARIANT: no DN-shape rule may ever shrink an auth result set');
+check('ldap-helpers exports no filtering function', () => {
+  // Both bypasses came from a helper that removed entries from the search result
+  // before the ambiguity guard counted them. The guard is only fail-closed if the
+  // set it counts is complete. If a future change reintroduces such a helper, this
+  // fails and points at the two CVEs-in-miniature recorded in ldap-helpers.js.
+  const exported = Object.keys(require('../ldap-helpers'));
+  const filtering = exported.filter(name => /^(drop|filter|dedupe|prune|collapse|resolve)/i.test(name));
+  assert.deepStrictEqual(filtering, [],
+    `ldap-helpers exports filtering helper(s): ${filtering.join(', ')} — read the header comment before adding one`);
+});
+check('isCompatMirrorDn is diagnostic only and still identifies the tree', () => {
+  assert.strictEqual(isCompatMirrorDn('uid=jane,cn=users,cn=compat,dc=etech,dc=com'), true);
+  assert.strictEqual(isCompatMirrorDn('uid=jane,cn=compatibility,dc=etech,dc=com'), false);
 });
 
 console.log('escapeIgdbSearch:');

@@ -104,44 +104,54 @@ function warnIfCleartextLdap(url) {
 // chosen DN. Correct behaviour, wrong input — so drop the mirror BEFORE the
 // ambiguity check rather than loosening the check.
 //
-// !! A cn=compat DN IS NOT PROOF OF A MIRROR. !!
+// !! NOTHING BELOW FILTERS THE AUTHENTICATION RESULT SET. THIS IS DIAGNOSTIC ONLY. !!
 //
-// The obvious implementation — "drop anything under cn=compat" — is an
-// authentication BYPASS, and shipped here once. FreeIPA with an Active Directory
-// trust publishes trusted-domain users under cn=compat and NOWHERE ELSE; the same
-// is true of any 389-ds slapi-nis compat tree fed from a non-IPA source. For such an
-// account there is no cn=accounts counterpart, so a blanket drop deletes the REAL
-// user from the result set. An attacker who controls any other entry answering the
-// same username is then the only remaining match, sails through the ambiguity guard
-// with matchCount == 1, and is issued a session as that user — using their own
-// password. Measured: HTTP 401 before the blanket filter, HTTP 200 after.
+// Two attempts were made to resolve the duplicate automatically, and BOTH were
+// authentication bypasses:
 //
-// So a mirror is only discarded when the entry it mirrors is ACTUALLY PRESENT in the
-// same result set. That is what makes it provably a duplicate rather than the only
-// copy of somebody's account.
+//   1. "Drop anything under cn=compat." FreeIPA with an AD trust publishes
+//      trusted-domain users under cn=compat and NOWHERE ELSE, so this deleted the
+//      real user. An attacker holding any colliding entry became the sole match and
+//      was issued a session with their own password. Measured 401 -> 200.
+//
+//   2. "Drop a cn=compat entry only when its cn=accounts counterpart is present,
+//      proving it redundant." The attacker simply CREATES the counterpart:
+//      given real `uid=karen,cn=users,cn=compat,...`, planting
+//      `uid=karen,cn=users,cn=accounts,...` makes the real entry look like a
+//      redundant mirror. It is dropped, the attacker is the sole match, and the
+//      legitimate user is simultaneously locked out. Measured 401 -> 200.
+//
+// The defect both share: a DN is a NAME, not evidence. Whatever shape the code
+// treats as proof of "these two entries are the same person", an attacker who can
+// create a directory entry can produce that shape. There is no string test over
+// DNs that fixes this, so no third variant should be attempted.
+//
+// The duplicate is a CONFIGURATION problem and is fixed in configuration: point
+// ldap.base at the accounts subtree (e.g. cn=accounts,dc=example,dc=com) so the
+// compat mirror is never in search scope. The login path keeps its unconditional
+// "refuse when more than one entry matches" guard, which is fail-closed and cannot
+// be tricked. isCompatMirrorDn exists only so an operator whose base is too broad
+// is TOLD that, instead of staring at an unexplained login failure.
 function isCompatMirrorDn(dn) {
   return /(^|,)\s*cn=compat\s*(,|$)/i.test(String(dn == null ? '' : dn));
 }
 
-// The cn=accounts DN that a given cn=compat DN would be a mirror of.
-function canonicalCounterpartDn(dn) {
-  return String(dn == null ? '' : dn).toLowerCase()
-    .replace(/(^|,)(\s*)cn=compat(\s*)(?=,|$)/i, '$1$2cn=accounts$3');
-}
-
-// Given every DN a user search returned, drop only those cn=compat entries whose
-// cn=accounts counterpart is also present. Everything else is kept — including a
-// compat-only account, which therefore still counts toward the ambiguity check and
-// still causes a refusal when it collides with another entry.
-//
-// Pure and order-preserving so it can be tested without a directory.
-function dropPairedCompatMirrors(dns) {
-  const present = new Set(dns.map((d) => String(d == null ? '' : d).toLowerCase()));
-  return dns.filter((dn) => {
-    if (!isCompatMirrorDn(dn)) return true;
-    // Keep the mirror unless the thing it mirrors is right here beside it.
-    return !present.has(canonicalCounterpartDn(dn));
-  });
+// Remediation advice for an ambiguous match, or null when the compat tree is not
+// what caused it. Returned as text rather than logged here so the caller controls
+// where it goes.
+function compatTreeAdvice(dns, configuredBase) {
+  if (!Array.isArray(dns) || !dns.some(isCompatMirrorDn)) return null;
+  // Deliberately does NOT nominate one of the matched DNs as "the real one".
+  // An earlier draft pointed at the first non-compat entry, which in the very attack
+  // this guard exists to stop is the ATTACKER's DN — advice telling an operator to
+  // trust the attacker's entry is worse than no advice.
+  return (
+    `The search base ${configuredBase ? `'${configuredBase}' ` : ''}includes a cn=compat subtree, ` +
+    'which republishes accounts that also exist elsewhere, so a single user can match twice. ' +
+    'Narrow the LDAP base to the accounts subtree — e.g. cn=accounts,dc=example,dc=com. ' +
+    'This is deliberately NOT resolved automatically: a DN cannot prove two entries are the ' +
+    'same person, and both attempts to infer it were authentication bypasses.'
+  );
 }
 
 // --- Search-entry attribute access ---
@@ -200,6 +210,5 @@ module.exports = {
   attrValue,
   attrValues,
   isCompatMirrorDn,
-  canonicalCounterpartDn,
-  dropPairedCompatMirrors,
+  compatTreeAdvice,
 };
