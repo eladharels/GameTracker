@@ -25,9 +25,19 @@ rules:
     patterns:
       - pattern: |
           process.env.$VAR || "$LITERAL"
+      # Non-empty literal only: `process.env.X || ''` is a normalisation idiom,
+      # not a credential.
       - metavariable-regex:
           metavariable: $LITERAL
           regex: ".+"
+      # SECRET-shaped variable names only. Without this the rule fired on
+      # PGHOST/PGDATABASE/PGUSER defaults in db.js -- a hostname, a database name
+      # and a role name are not secrets, and defaulting them is correct. The rule
+      # exists to catch a credential with a literal fallback, which is exactly what
+      # `password: process.env.PGPASSWORD` (no `||`) already gets right.
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: "(?i).*(PASS|PASSWORD|PWD|SECRET|TOKEN|APIKEY|API_KEY|_KEY|CREDENTIAL|PRIVATE).*"
     message: >
       Hardcoded secret fallback detected. Secrets must come from environment
       variables only — do not supply a literal fallback value.

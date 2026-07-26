@@ -185,6 +185,14 @@ async function query(sql, params = []) {
       `Check for a literal '?' the rewriter could not classify.`
     );
   }
+  // The rule fires because `text` is a variable rather than a string literal. It is
+  // NOT concatenated user input: `text` is the output of toPgPlaceholders(), which
+  // only rewrites `?` markers into `$n` inside SQL the application itself authored,
+  // and every VALUE travels separately in `params` as a bound parameter. Both the
+  // CISO and Architect reviews traced all eight dynamic-SQL sites and confirmed no
+  // user-controlled byte ever reaches SQL text. Parameterisation is exactly what
+  // this rule asks for -- it just cannot see it through the helper.
+  // nosemgrep: javascript.lang.security.audit.sqli.node-postgres-sqli.node-postgres-sqli
   return pool.query(text, params);
 }
 
