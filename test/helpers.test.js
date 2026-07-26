@@ -337,4 +337,69 @@ check('maskKey reveals at most the last 6 characters', () => {
   assert.ok(!maskKey('abcdefghijklmnop').includes('abcdefghij'));
 });
 
+// services/notifications.js — the pure guards only. Requiring the module constructs
+// no pool and opens no connection (verified), so this stays inside the scope rule;
+// dispatch/resolveEmail need a database and are exercised outside CI.
+const {
+  isSafeImageUrl, isBlockedNotificationHost, escapeHtml, CHANNEL_KEYS,
+} = require('../services/notifications');
+
+console.log('isBlockedNotificationHost (SSRF to cloud metadata):');
+check('blocks every instance-metadata endpoint', () => {
+  assert.strictEqual(isBlockedNotificationHost('http://169.254.169.254/latest/meta-data/'), true);
+  assert.strictEqual(isBlockedNotificationHost('http://169.254.1.2/'), true);   // whole /16
+  assert.strictEqual(isBlockedNotificationHost('http://metadata.google.internal/'), true);
+  assert.strictEqual(isBlockedNotificationHost('http://100.100.100.200/'), true);
+  assert.strictEqual(isBlockedNotificationHost('http://[fd00:ec2::254]/'), true);
+  assert.strictEqual(isBlockedNotificationHost('http://[fe80::1]/'), true);
+});
+check('normalised IPv4 forms cannot slip past', () => {
+  // new URL() rewrites decimal/octal/hex to dotted quads before we look.
+  assert.strictEqual(isBlockedNotificationHost('http://2852039166/'), true);       // 169.254.169.254
+  assert.strictEqual(isBlockedNotificationHost('http://0251.0376.0251.0376/'), true);
+});
+check('refuses anything it cannot parse', () => {
+  assert.strictEqual(isBlockedNotificationHost('not a url'), true);
+  assert.strictEqual(isBlockedNotificationHost(''), true);
+  assert.strictEqual(isBlockedNotificationHost(null), true);
+});
+check('still ALLOWS a self-hosted LAN server — the documented feature', () => {
+  // Blocking RFC1918 would break every user running ntfy or Gotify at home, which is
+  // why the rule targets metadata endpoints specifically rather than private space.
+  assert.strictEqual(isBlockedNotificationHost('http://192.168.1.10:8080/'), false);
+  assert.strictEqual(isBlockedNotificationHost('http://10.0.0.5/'), false);
+  assert.strictEqual(isBlockedNotificationHost('https://ntfy.sh'), false);
+});
+
+console.log('isSafeImageUrl (cover art is client-supplied):');
+check('accepts only https on a known image host', () => {
+  assert.strictEqual(isSafeImageUrl('https://images.igdb.com/x.png'), true);
+  assert.strictEqual(isSafeImageUrl('https://cdn.thegamesdb.net/x.png'), true);
+  assert.strictEqual(isSafeImageUrl('https://sub.media.rawg.io/x.png'), true);
+});
+check('rejects plaintext, credentials, unknown hosts and non-strings', () => {
+  assert.strictEqual(isSafeImageUrl('http://images.igdb.com/x.png'), false);
+  assert.strictEqual(isSafeImageUrl('https://user:pw@images.igdb.com/x.png'), false);
+  assert.strictEqual(isSafeImageUrl('https://evil.test/x.png'), false);
+  // Suffix matching must not accept a lookalike domain that merely ENDS with the host.
+  assert.strictEqual(isSafeImageUrl('https://notimages.igdb.com.evil.test/x.png'), false);
+  assert.strictEqual(isSafeImageUrl(null), false);
+  assert.strictEqual(isSafeImageUrl(12345), false);
+});
+
+console.log('escapeHtml (game names reach an outbound email body):');
+check('escapes every character that could open a tag or an attribute', () => {
+  assert.strictEqual(escapeHtml('<img src=x onerror="alert(1)">'),
+    '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
+  assert.strictEqual(escapeHtml("it's & <that>"), 'it&#39;s &amp; &lt;that&gt;');
+  // Ampersand first, or the escapes would themselves be escaped.
+  assert.strictEqual(escapeHtml('&lt;'), '&amp;lt;');
+  assert.strictEqual(escapeHtml(null), '');
+});
+
+console.log('notification channels:');
+check('all four channels are in the table', () => {
+  assert.deepStrictEqual(CHANNEL_KEYS, ['email', 'ntfy', 'gotify', 'telegram']);
+});
+
 console.log(`\n${n} assertions passed.`);

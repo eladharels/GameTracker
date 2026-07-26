@@ -18,7 +18,6 @@ if (!JWT_SECRET || JWT_SECRET === 'supersecretkey' || JWT_SECRET.length < 16) {
   process.exit(1);
 }
 const fs = require('fs');
-const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const path = require('path');
 // ldapjs itself is no longer required here -- createLdapClient() is the only way
@@ -41,6 +40,7 @@ const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
 const usersService = require('./services/users');
 const settingsService = require('./services/settings');
+const notifications = require('./services/notifications');
 const { CODES: SVC } = require('./services/errors');
 const { RESERVED_USERNAMES, isValidEmailAddress, validatePassword } = require('./user-rules');
 
@@ -1094,226 +1094,10 @@ function sanitizeDirectoryText(value, maxLength = 200) {
   return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trim() : cleaned;
 }
 
-function escapeHtml(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-// Cover art comes from IGDB/RAWG/TheGamesDB, but the client supplies the value, so
-// treat it as untrusted: https only, no credentials, and a known image host.
-const ALLOWED_IMAGE_HOSTS = [
-  'images.igdb.com', 'media.rawg.io', 'cdn.thegamesdb.net',
-  'cdn.cloudflare.steamstatic.com', 'shared.akamai.steamstatic.com',
-];
-function isSafeImageUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-  try {
-    const u = new URL(url);
-    if (u.protocol !== 'https:') return false;
-    if (u.username || u.password) return false;
-    return ALLOWED_IMAGE_HOSTS.some(h => u.hostname === h || u.hostname.endsWith('.' + h));
-  } catch {
-    return false;
-  }
-}
-
-// Per-user notification servers are deliberately allowed to be private/LAN
-// addresses — users self-host ntfy and Gotify on their own networks, and blocking
-// RFC1918 would break the documented feature. What is NOT acceptable is reaching a
-// cloud instance-metadata endpoint, which is the one target that turns a blind
-// SSRF into credential theft. Block those specifically.
-const METADATA_HOSTS = ['169.254.169.254', 'metadata.google.internal', 'fd00:ec2::254', '100.100.100.200'];
-// Raw axios errors distinguish ECONNREFUSED / 404 / timeout, which turns the
-// Diagnostics "send test notification" button into an open/closed/filtered port
-// scanner for the server's internal network. Collapse every network-level outcome
-// into one indistinguishable message; the detail still goes to the server log where
-// the operator (and only the operator) can see it.
-function sanitizeDeliveryError(err, channel) {
-  console.error(`[Notify] ${channel} delivery failed:`, err?.message || err);
-  if (err?.message === 'Notification server host is not permitted') return err.message;
-  return 'Delivery failed. Check the server URL and credentials in My Account, then try again.';
-}
-
-function isBlockedNotificationHost(url) {
-  try {
-    const u = new URL(url);
-    let host = u.hostname.toLowerCase()
-      .replace(/^\[|\]$/g, '')   // strip IPv6 brackets
-      .replace(/\.$/, '');       // "metadata.google.internal." resolves the same
-    // Unwrap IPv4-mapped IPv6. Note that `new URL()` does NOT keep the readable
-    // dotted form: it normalizes ::ffff:169.254.169.254 to ::ffff:a9fe:a9fe, so the
-    // two 16-bit hex groups have to be decoded back to octets before the checks
-    // below can see it. (Verified against Node's WHATWG URL parser.)
-    const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-    if (mappedHex) {
-      const hi = parseInt(mappedHex[1], 16);
-      const lo = parseInt(mappedHex[2], 16);
-      host = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
-    } else {
-      const mappedDotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-      if (mappedDotted) host = mappedDotted[1];
-    }
-    if (METADATA_HOSTS.includes(host)) return true;
-    // IPv4 link-local (169.254.0.0/16) covers the AWS/Azure/GCP metadata range.
-    // new URL() already normalizes decimal/octal/hex IPv4 forms to dotted quads.
-    if (/^169\.254\./.test(host)) return true;
-    // IPv6 link-local
-    if (/^fe80:/i.test(host)) return true;
-    return false;
-  } catch {
-    return true; // unparseable -> refuse
-  }
-}
-
-// --- Notification Functions ---
-async function sendEmail(subject, text, toOverride, coverUrl) {
-  const { smtp } = loadSettings();
-  if (!smtp.host || !smtp.port || !smtp.from) {
-    console.log('[Email] SMTP settings incomplete:', { host: smtp.host, port: smtp.port, from: smtp.from });
-    return;
-  }
-
-  // Log the email destination decision process
-  console.log('[Email] Determining recipient:', {
-    userProvidedEmail: toOverride,
-    settingsDefaultEmail: smtp.to,
-    fallbackEmail: process.env.DEFAULT_EMAIL
-  });
-
-  const finalRecipient = toOverride;
-  if (!finalRecipient) {
-    console.log('[Email] No recipient email found, skipping email send');
-    return;
-  }
-  // Last line of defence, at the sink. Even if a bad address reaches users.email
-  // through a path that skipped validation, nodemailer never sees a recipient list.
-  if (!isValidEmailAddress(finalRecipient)) {
-    console.error('[Email] Refusing to send: recipient is not a single valid address.');
-    return;
-  }
-
-  console.log('[Email] Will send email to:', finalRecipient);
-
-  const options = {
-    host: smtp.host,
-    port: Number(smtp.port),
-    secure: Number(smtp.port) === 465,
-  };
-  if (smtp.user && smtp.pass) {
-    options.auth = { user: smtp.user, pass: smtp.pass };
-  }
-
-  console.log('[Email] SMTP Configuration:', {
-    host: options.host,
-    port: options.port,
-    secure: options.secure,
-    hasAuth: !!options.auth
-  });
-
-  const transporter = nodemailer.createTransport(options);
-  // Both `text` and `coverUrl` derive from user-supplied game data (gameName /
-  // coverUrl on POST /api/user/:username/games, and the test-notification body), so
-  // interpolating them raw let an authenticated user author arbitrary HTML in a mail
-  // sent from the deployment's own SPF/DKIM-aligned domain — a ready-made phishing
-  // primitive. Escape the text, and only accept an https image URL.
-  const safeText = escapeHtml(text);
-  const safeCover = isSafeImageUrl(coverUrl) ? coverUrl : null;
-  const html = safeCover
-    ? `<div style="font-family:sans-serif;max-width:480px">` +
-      `<img src="${escapeHtml(safeCover)}" alt="Game cover" style="max-width:200px;border-radius:6px;display:block;margin-bottom:12px">` +
-      `<p style="margin:0;font-size:15px">${safeText}</p></div>`
-    : `<div style="font-family:sans-serif;max-width:480px">` +
-      `<p style="margin:0;font-size:15px">${safeText}</p></div>`;
-  try {
-    const result = await transporter.sendMail({
-      from: smtp.from,
-      to: finalRecipient,
-      subject,
-      text,
-      ...(html && { html }),
-    });
-    console.log('[Email] Successfully sent email:', {
-      messageId: result.messageId,
-      recipient: finalRecipient,
-      subject: subject
-    });
-  } catch (err) {
-    console.error('[Email] Failed to send email:', {
-      error: err.message,
-      recipient: finalRecipient,
-      subject: subject
-    });
-    throw err;  // Re-throw to let caller handle the error
-  }
-}
-
-async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
-  // Prefer the user's own ntfy server; fall back to the optional global default.
-  const url = (serverUrl && serverUrl.trim()) || loadSettings().ntfy?.url;
-  if (!url || !topic) return;
-  if (isBlockedNotificationHost(url)) {
-    throw new Error('Notification server host is not permitted');
-  }
-  const headers = { Title: title };
-  if (isSafeImageUrl(attachUrl)) headers.Attach = attachUrl;
-  // encodeURIComponent: `topic` is unvalidated user input, so interpolating it raw
-  // let the caller append their own path, query string and fragment to the request
-  // — turning "pick your own server" into "craft an arbitrary request from the
-  // server's network position".
-  await axios.post(`${url.replace(/\/$/, '')}/${encodeURIComponent(topic)}`, message, {
-    headers,
-    timeout: 10000,
-    maxRedirects: 0,
-  });
-}
-
-async function sendGotify(title, message, token, priority = 5, imageUrl, serverUrl) {
-  // Prefer the user's own Gotify server; fall back to the optional global default.
-  const url = (serverUrl && serverUrl.trim()) || loadSettings().gotify?.url;
-  if (!url || !token) return;
-  if (isBlockedNotificationHost(url)) {
-    throw new Error('Notification server host is not permitted');
-  }
-  const body = { title, message, priority };
-  if (isSafeImageUrl(imageUrl)) {
-    body.extras = { 'client::notification': { bigImageUrl: imageUrl } };
-  }
-  // Token goes in the header, not the query string: query strings land in reverse
-  // proxy and Gotify access logs. Header also removes the path-injection sink.
-  await axios.post(`${url.replace(/\/$/, '')}/message`, body, {
-    headers: { 'Content-Type': 'application/json', 'X-Gotify-Key': token },
-    timeout: 10000,
-    maxRedirects: 0,
-  });
-}
-
-async function sendTelegram(title, message, chatId, photoUrl) {
-  const { telegram } = loadSettings();
-  const botToken = telegram?.bot_token;
-  if (!botToken || !chatId) return;
-  const text = `*${title}*\n${message}`;
-  // Parity with sendNtfy/sendGotify: a hung api.telegram.org must not hold the
-  // request open indefinitely.
-  const opts = { timeout: 10000, maxRedirects: 0 };
-  if (photoUrl) {
-    await axios.post(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-      chat_id: chatId,
-      photo: photoUrl,
-      caption: text,
-      parse_mode: 'Markdown',
-    }, opts);
-  } else {
-    await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      chat_id: chatId,
-      text,
-      parse_mode: 'Markdown',
-    }, opts);
-  }
-}
+// Notification helpers and transports (escapeHtml, isSafeImageUrl, the
+// instance-metadata host guard, sendEmail/sendNtfy/sendGotify/sendTelegram and the
+// delivery-error sanitiser) now live in services/notifications.js, together with the
+// fan-out that was duplicated across three call sites. Imported at the top of this file.
 
 // --- LDAP primitives ---
 // Moved to ./ldap-helpers.js so the operator scripts can use the SAME escaping and
@@ -1399,8 +1183,10 @@ async function getLdapEmail(username) {
 }
 
 // --- Notification Triggers ---
+// Compose and deliver a library event. Delivery itself — which channels the user has,
+// resolving their address through the directory, and never letting one channel's
+// failure stop another — is services/notifications.js.
 async function notifyEvent(type, game, username, status) {
-  // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
   const coverUrl = game.coverUrl || null;
   let subject, text, title, message;
@@ -1408,100 +1194,29 @@ async function notifyEvent(type, game, username, status) {
     subject = `Game added: ${game.gameName}`;
     text = `User ${normalizedUsername} added "${game.gameName}" to their library.`;
     title = 'Game Added';
-    message = `User ${normalizedUsername} added "${game.gameName}" to their library.`;
+    message = text;
   } else if (type === 'status') {
     subject = `Game status changed: ${game.gameName}`;
     text = `User ${normalizedUsername} changed status of "${game.gameName}" to ${status}.`;
     title = 'Game Status Changed';
-    message = `User ${normalizedUsername} changed status of "${game.gameName}" to ${status}.`;
+    message = text;
   } else if (type === 'release') {
     subject = `Game released: ${game.gameName}`;
     text = `"${game.gameName}" has been released!`;
     title = 'Game Released';
-    message = `"${game.gameName}" has been released!`;
-  }
-  
-  // Get user details from database
-  const userDetails = await new Promise((resolve, reject) => {
-    db.get('SELECT email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(userRow);
-      }
-    });
-  });
-
-  let userEmail = userDetails && userDetails.email;
-  const userNtfy = userDetails && userDetails.ntfy_topic;
-  const userNtfyUrl = userDetails && userDetails.ntfy_url;
-  const userGotifyToken = userDetails && userDetails.gotify_token;
-  const userGotifyUrl = userDetails && userDetails.gotify_url;
-  const userTelegramChatId = userDetails && userDetails.telegram_chat_id;
-
-  // If no email in database, try LDAP
-  if (!userEmail) {
-    console.log('No email found in database for user:', normalizedUsername, 'trying LDAP...');
-    try {
-      userEmail = await getLdapEmail(normalizedUsername);
-      if (userEmail) {
-        console.log('Found email from LDAP:', userEmail);
-        // Update the database with the LDAP email
-        if (isValidEmailAddress(userEmail)) {
-          db.run('UPDATE users SET email = ? WHERE username = ?', [userEmail, normalizedUsername]);
-        } else {
-          console.warn('[LDAP] Ignoring malformed mail attribute for', normalizedUsername);
-          userEmail = null;
-        }
-      }
-    } catch (ldapErr) {
-      console.error('Error getting email from LDAP:', ldapErr);
-    }
+    message = text;
   }
 
-  // Try to send email
-  if (userEmail) {
-    try {
-      console.log('Attempting to send email to:', userEmail);
-      await sendEmail(subject, text, userEmail, coverUrl);
-      console.log('Email sent successfully');
-    } catch (emailErr) {
-      console.error('Error sending email:', emailErr);
-    }
+  const results = await notifications.dispatchToUsername(
+    normalizedUsername,
+    { subject, text, title, message, coverUrl },
+    { ldapLookup: getLdapEmail },
+  );
+  for (const [channel, r] of Object.entries(results)) {
+    if (r.sent) console.log(`[Notify Event] ${channel} sent for user ${normalizedUsername}`);
+    else if (r.error) console.log(`[Notify Event] ${channel} not sent for user ${normalizedUsername}: ${r.error}`);
   }
-
-  if (userNtfy) {
-    try {
-      await sendNtfy(title, message, userNtfy, coverUrl, userNtfyUrl);
-      console.log(`[Notify Event] Ntfy sent successfully to topic ${userNtfy} for user ${normalizedUsername}`);
-    } catch (ntfyErr) {
-      console.error(`[Notify Event] Error sending ntfy for user ${normalizedUsername}:`, ntfyErr);
-    }
-  } else {
-    console.log(`[Notify Event] No personal ntfy topic set for user ${normalizedUsername}, skipping ntfy`);
-  }
-
-  if (userGotifyToken) {
-    try {
-      await sendGotify(title, message, userGotifyToken, 5, coverUrl, userGotifyUrl);
-      console.log(`[Notify Event] Gotify sent successfully for user ${normalizedUsername}`);
-    } catch (gotifyErr) {
-      console.error(`[Notify Event] Error sending Gotify for user ${normalizedUsername}:`, gotifyErr);
-    }
-  } else {
-    console.log(`[Notify Event] No personal Gotify token set for user ${normalizedUsername}, skipping Gotify`);
-  }
-
-  if (userTelegramChatId) {
-    try {
-      await sendTelegram(title, message, userTelegramChatId, coverUrl);
-      console.log(`[Notify Event] Telegram sent successfully for user ${normalizedUsername}`);
-    } catch (telegramErr) {
-      console.error(`[Notify Event] Error sending Telegram for user ${normalizedUsername}:`, telegramErr);
-    }
-  } else {
-    console.log(`[Notify Event] No personal Telegram chat ID set for user ${normalizedUsername}, skipping Telegram`);
-  }
+  return results;
 }
 
 // --- Settings API ---
@@ -2997,84 +2712,14 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
     const title = 'Test Notification';
     const message = text;
     
-    const results = {
-      email: { sent: false, error: null },
-      ntfy: { sent: false, error: null },
-      gotify: { sent: false, error: null },
-      telegram: { sent: false, error: null },
-    };
-
-    // Get current user's email, ntfy topic, gotify token, and telegram chat id
-    const userId = req.user.id;
-    const userDetails = await new Promise((resolve, reject) => {
-      db.get('SELECT email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id FROM users WHERE id = ?', [userId], (err, userRow) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(userRow);
-        }
-      });
-    });
-
-    // Send email notification if requested
-    if (service === 'email' || service === 'both') {
-      if (userDetails && userDetails.email) {
-        try {
-          await sendEmail(subject, text, userDetails.email, coverUrl);
-          results.email.sent = true;
-          console.log(`[Test Notification] Email sent successfully to ${userDetails.email}`);
-        } catch (error) {
-          results.email.error = sanitizeDeliveryError(error, 'email');
-        }
-      } else {
-        results.email.error = 'No email configured for current user';
-      }
-    }
-
-    // Send ntfy notification if requested
-    if (service === 'ntfy' || service === 'both') {
-      if (userDetails?.ntfy_topic) {
-        try {
-          await sendNtfy(title, message, userDetails.ntfy_topic, coverUrl, userDetails.ntfy_url);
-          results.ntfy.sent = true;
-          console.log(`[Test Notification] Ntfy sent successfully to topic ${userDetails.ntfy_topic}`);
-        } catch (error) {
-          results.ntfy.error = sanitizeDeliveryError(error, 'ntfy');
-        }
-      } else {
-        results.ntfy.error = 'No personal NTFY topic set — configure it in My Account';
-      }
-    }
-
-    // Send Gotify notification if requested
-    if (service === 'gotify' || service === 'both') {
-      if (userDetails?.gotify_token) {
-        try {
-          await sendGotify(title, message, userDetails.gotify_token, 5, coverUrl, userDetails.gotify_url);
-          results.gotify.sent = true;
-          console.log(`[Test Notification] Gotify sent successfully`);
-        } catch (error) {
-          results.gotify.error = sanitizeDeliveryError(error, 'gotify');
-        }
-      } else {
-        results.gotify.error = 'No personal Gotify token set — configure it in My Account';
-      }
-    }
-
-    // Send Telegram notification if requested
-    if (service === 'telegram' || service === 'both') {
-      if (userDetails?.telegram_chat_id) {
-        try {
-          await sendTelegram(title, message, userDetails.telegram_chat_id, coverUrl);
-          results.telegram.sent = true;
-          console.log(`[Test Notification] Telegram sent successfully`);
-        } catch (error) {
-          results.telegram.error = sanitizeDeliveryError(error, 'telegram');
-        }
-      } else {
-        results.telegram.error = 'No personal Telegram chat ID set — configure it in My Account';
-      }
-    }
+    // 'both' predates Gotify and Telegram and still means "email + ntfy".
+    const only = service === 'both' ? ['email', 'ntfy'] : [service];
+    const channels = await notifications.channelsForId(req.user.id);
+    const results = await notifications.dispatch(
+      channels,
+      { subject, text, title, message, coverUrl },
+      { only },
+    );
 
     res.json({
       success: true,
@@ -3488,86 +3133,28 @@ function getAllUsers(cb) {
 function getUserGames(username, cb) {
   libraryService.listGamesFor(username).then((rows) => cb(null, rows), (err) => cb(err));
 }
+// Compose and deliver a release reminder. Delivery is services/notifications.js.
+//
+// It used to await sendEmail OUTSIDE a try/catch while wrapping the other three, so
+// an SMTP failure rejected before ntfy, Gotify or Telegram were attempted — one
+// broken channel silenced all four, for every user, every day. dispatch() cannot do
+// that: each channel is independently caught.
 async function sendReleaseReminder(username, game, days) {
-  // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
-  const coverUrl = game.cover_url || null;
-  let when = days === 0 ? 'today' : `in ${days} days`;
-  let subject = `Reminder: "${game.game_name}" releases ${when}!`;
-  let text = `The game "${game.game_name}" you are following releases ${when} (${game.release_date}).`;
-  let title = 'Game Release Reminder';
-  let message = text;
+  const when = days === 0 ? 'today' : `in ${days} days`;
+  const subject = `Reminder: "${game.game_name}" releases ${when}!`;
+  const text = `The game "${game.game_name}" you are following releases ${when} (${game.release_date}).`;
 
-  // Get user's email from database or LDAP
-  const userEmail = await getUserEmail(normalizedUsername);
-  if (userEmail) {
-    await sendEmail(subject, text, userEmail, coverUrl);
+  const results = await notifications.dispatchToUsername(
+    normalizedUsername,
+    { subject, text, title: 'Game Release Reminder', message: text, coverUrl: game.cover_url || null },
+    { ldapLookup: getLdapEmail },
+  );
+  for (const [channel, r] of Object.entries(results)) {
+    if (r.sent) console.log(`[Release Reminder] ${channel} sent for user ${normalizedUsername}`);
+    else if (r.error) console.log(`[Release Reminder] ${channel} not sent for user ${normalizedUsername}: ${r.error}`);
   }
-  
-  // Get user's ntfy topic, gotify token, and telegram chat id
-  const userPushSettings = await new Promise((resolve) => {
-    db.get('SELECT ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id FROM users WHERE username = ?', [normalizedUsername], (err, userRow) => {
-      if (err || !userRow) {
-        resolve({});
-      } else {
-        resolve(userRow);
-      }
-    });
-  });
-
-  if (userPushSettings.ntfy_topic) {
-    try {
-      await sendNtfy(title, message, userPushSettings.ntfy_topic, coverUrl, userPushSettings.ntfy_url);
-      console.log(`[Release Reminder] Ntfy sent successfully to topic ${userPushSettings.ntfy_topic} for user ${normalizedUsername}`);
-    } catch (error) {
-      console.error(`[Release Reminder] Ntfy failed for user ${normalizedUsername}:`, error.message);
-    }
-  } else {
-    console.log(`[Release Reminder] No personal ntfy topic set for user ${normalizedUsername}, skipping ntfy`);
-  }
-
-  if (userPushSettings.gotify_token) {
-    try {
-      await sendGotify(title, message, userPushSettings.gotify_token, 5, coverUrl, userPushSettings.gotify_url);
-      console.log(`[Release Reminder] Gotify sent successfully for user ${normalizedUsername}`);
-    } catch (error) {
-      console.error(`[Release Reminder] Gotify failed for user ${normalizedUsername}:`, error.message);
-    }
-  } else {
-    console.log(`[Release Reminder] No personal Gotify token set for user ${normalizedUsername}, skipping Gotify`);
-  }
-
-  if (userPushSettings.telegram_chat_id) {
-    try {
-      await sendTelegram(title, message, userPushSettings.telegram_chat_id, coverUrl);
-      console.log(`[Release Reminder] Telegram sent successfully for user ${normalizedUsername}`);
-    } catch (error) {
-      console.error(`[Release Reminder] Telegram failed for user ${normalizedUsername}:`, error.message);
-    }
-  } else {
-    console.log(`[Release Reminder] No personal Telegram chat ID set for user ${normalizedUsername}, skipping Telegram`);
-  }
-}
-
-// Helper function to get user email from LDAP if not in database
-async function getUserEmail(username) {
-  return new Promise((resolve) => {
-    // Normalize username to lowercase to prevent case sensitivity issues
-    const normalizedUsername = username ? username.toLowerCase() : '';
-    db.get('SELECT email FROM users WHERE username = ?', [normalizedUsername], async (err, userRow) => {
-      if (err || !userRow || !userRow.email) {
-        // Try to get email from LDAP
-        const ldapEmail = await getLdapEmail(normalizedUsername);
-        if (ldapEmail) {
-          // Update database with LDAP email
-          db.run('UPDATE users SET email = ? WHERE username = ?', [ldapEmail, normalizedUsername]);
-        }
-        resolve(ldapEmail);
-      } else {
-        resolve(userRow.email);
-      }
-    });
-  });
+  return results;
 }
 
 console.log('About to schedule cron job');
