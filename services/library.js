@@ -15,16 +15,12 @@
 //     NULLS FIRST explicitly or those rows silently jump to the bottom.
 
 const db = require('../db');
+// Shared promise surface — see db.js. Four services had each written their own.
+const { all, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
 
 const norm = (v) => (v ? String(v).toLowerCase() : '');
 
-const all = (sql, params = []) => new Promise((resolve, reject) => {
-  db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
-});
-const run = (sql, params = []) => new Promise((resolve, reject) => {
-  db.run(sql, params, function (err) { return err ? reject(err) : resolve(this); });
-});
 
 // Every game row for a user, by username.
 //

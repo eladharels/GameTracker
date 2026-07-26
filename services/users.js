@@ -11,18 +11,11 @@
 
 const bcrypt = require('bcryptjs');
 const db = require('../db');
+// Shared promise surface — see db.js. Four services had each written their own.
+const { all, get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
 const { isValidEmailAddress, validatePassword } = require('../user-rules');
 
-const all = (sql, params = []) => new Promise((resolve, reject) => {
-  db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
-});
-const get = (sql, params = []) => new Promise((resolve, reject) => {
-  db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-});
-const run = (sql, params = []) => new Promise((resolve, reject) => {
-  db.run(sql, params, function (err) { return err ? reject(err) : resolve(this); });
-});
 
 // Columns the admin list exposes.
 //

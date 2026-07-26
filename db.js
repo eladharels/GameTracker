@@ -291,6 +291,37 @@ async function withTransaction(fn) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Promise surface, for the service layer
+// ---------------------------------------------------------------------------
+// The callback shims above exist for index.js's legacy call sites. Services are
+// promise-based, and each of the four had written its own three-line wrapper AROUND
+// those shims — a promise wrapping a callback wrapping query(), which is itself a
+// promise. Four identical copies is the point at which the fifth gets written by
+// habit, so these live here instead, going straight to query().
+//
+// Deliberately NOT named run/get/all at the top level: those are taken by the
+// callback versions, and a service that got the wrong one would find `await` on a
+// function returning undefined — which succeeds silently and yields undefined rows.
+//
+// Transactions do not come through here. They use the `tx.query` handed to
+// withTransaction(), because a transaction has to stay on ONE connection and these
+// take whatever the pool gives them (db.js divergence #9).
+const promises = {
+  all: async (sql, params = []) => (await query(sql, params)).rows,
+  get: async (sql, params = []) => (await query(sql, params)).rows[0],
+  // Resolves to the same { changes, lastID } the callback shim binds to `this`, so
+  // a call site reads identically either way. lastID is populated only when the
+  // statement carried a RETURNING id (divergence #2).
+  run: async (sql, params = []) => {
+    const res = await query(sql, params);
+    return {
+      changes: res.rowCount,
+      lastID: res.rows && res.rows[0] ? res.rows[0].id : undefined,
+    };
+  },
+};
+
 // Shut the pool down. Exists so the one-shot operator scripts (which are not
 // long-lived servers) can exit instead of hanging on idle sockets.
 async function close() {
@@ -303,6 +334,7 @@ module.exports = {
   run,
   get,
   all,
+  promises,
   withTransaction,
   close,
   // Exported for unit-level checking of the placeholder scanner.

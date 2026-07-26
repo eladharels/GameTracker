@@ -28,16 +28,12 @@
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const db = require('../db');
+// Shared promise surface — see db.js. Four services had each written their own.
+const { get, run } = db.promises;
 const { loadSettings } = require('../settings-store');
 const { isValidEmailAddress } = require('../user-rules');
 const { getLdapEmail } = require('../directory');
 
-const get = (sql, params = []) => new Promise((resolve, reject) => {
-  db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-});
-const run = (sql, params = []) => new Promise((resolve, reject) => {
-  db.run(sql, params, function (err) { return err ? reject(err) : resolve(this); });
-});
 
 function escapeHtml(value) {
   return String(value == null ? '' : value)

@@ -11,6 +11,8 @@
 // the adapter, next to req.user, where test/api-surface.test.js can see it.
 
 const db = require('../db');
+// Shared promise surface — see db.js. Four services had each written their own.
+const { all, get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
 // One implementation of "this user's games" — see services/library.js.
 const libraryService = require('./library');
@@ -19,15 +21,6 @@ const norm = (v) => (v ? String(v).toLowerCase() : '');
 
 // Promise wrappers over the node-sqlite3-shaped callback shim. New code should
 // prefer db.query(); these exist so this module reads as one style throughout.
-const all = (sql, params = []) => new Promise((resolve, reject) => {
-  db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
-});
-const get = (sql, params = []) => new Promise((resolve, reject) => {
-  db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-});
-const run = (sql, params = []) => new Promise((resolve, reject) => {
-  db.run(sql, params, function (err) { return err ? reject(err) : resolve(this); });
-});
 
 // Usernames this user shares their library WITH.
 async function listOutgoing(fromUser) {
