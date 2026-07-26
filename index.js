@@ -1105,84 +1105,6 @@ function sanitizeDirectoryText(value, maxLength = 200) {
 // header comment there for what went wrong when they could not.
 
 // --- LDAP Email Lookup ---
-async function getLdapEmail(username) {
-  return new Promise((resolve) => {
-    // Normalize username to lowercase to prevent case sensitivity issues
-    const normalizedUsername = username ? username.toLowerCase() : '';
-    const settings = loadSettings();
-    const ldapSettings = settings.ldap || {};
-    
-    if (!ldapSettings.url || !ldapSettings.bindDn || !ldapSettings.bindPass) {
-      resolve(null);
-      return;
-    }
-
-    warnIfCleartextLdap(ldapSettings.url);
-    // A socket error here resolves null (no email found) instead of crashing.
-    const client = createLdapClient(ldapSettings.url, () => resolve(null));
-    client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
-      if (err) {
-        console.log('[LDAP] Service account bind failed for email lookup:', err.message);
-        client.markHandled();
-        client.unbind();
-        resolve(null);
-        return;
-      }
-      
-      // Try multiple username attributes: first sAMAccountName (AD), then uid (FreeIPA).
-      // Using an OR filter means if either matches, we get a result. The username is
-      // RFC 4515-escaped so it cannot alter the filter's structure.
-      const searchOptions = {
-        filter: buildUserSearchFilter(normalizedUsername),
-        scope: 'sub',
-        attributes: ['mail', 'email']
-      };
-      
-      client.search(ldapSettings.base, searchOptions, (err, searchRes) => {
-        if (err) {
-          console.log('[LDAP] Search failed for email lookup:', err);
-          client.markHandled();
-          client.unbind();
-          resolve(null);
-          return;
-        }
-        
-        // Buffered, and the SAME pairing rule as the login path — a bare
-        // "skip anything under cn=compat" would discard a compat-only account's
-        // entry outright and read the email off whatever else matched the username.
-        const rawEntries = [];
-        searchRes.on('searchEntry', (entry) => rawEntries.push(entry));
-
-        searchRes.on('end', () => {
-          client.markHandled();
-          client.unbind();
-          // No compat filtering — see ldap-helpers.js. An ambiguous match means we
-          // cannot say whose address this is, and it gets written to the account and
-          // used as a notification recipient, so decline rather than guess.
-          const entries = rawEntries;
-          if (entries.length > 1) {
-            console.warn(`[LDAP] ${entries.length} entries matched during email lookup — ambiguous, skipping.`);
-            return resolve(null);
-          }
-          let foundEmail = null;
-          for (const entry of entries) {
-            foundEmail = attrValue(entryAttributes(entry), 'mail', 'email') || foundEmail;
-          }
-          resolve(foundEmail);
-        });
-        
-        searchRes.on('error', (err) => {
-          console.error('[LDAP] Search error during email lookup:', err);
-          client.markHandled();
-          client.unbind();
-          resolve(null);
-        });
-      });
-    });
-  });
-}
-
-// --- Notification Triggers ---
 // Compose and deliver a library event. Delivery itself — which channels the user has,
 // resolving their address through the directory, and never letting one channel's
 // failure stop another — is services/notifications.js.
@@ -1207,14 +1129,23 @@ async function notifyEvent(type, game, username, status) {
     message = text;
   }
 
-  const results = await notifications.dispatchToUsername(
-    normalizedUsername,
-    { subject, text, title, message, coverUrl },
-    { ldapLookup: getLdapEmail },
-  );
+  // NEVER REJECTS. dispatch() does not throw, but the channel lookup behind it reads
+  // the database and can — and every caller here awaits this BEFORE res.json(), so a
+  // pool blip would leave the request hanging with no response at all. A notification
+  // is a side effect of adding a game; it must not be able to fail adding a game.
+  let results = {};
+  try {
+    results = await notifications.dispatchToUsername(
+      normalizedUsername,
+      { subject, text, title, message, coverUrl },
+    );
+  } catch (err) {
+    console.error(`[Notify Event] Could not dispatch for user ${safeForLog(normalizedUsername, 64)}:`, err.message);
+    return {};
+  }
   for (const [channel, r] of Object.entries(results)) {
-    if (r.sent) console.log(`[Notify Event] ${channel} sent for user ${normalizedUsername}`);
-    else if (r.error) console.log(`[Notify Event] ${channel} not sent for user ${normalizedUsername}: ${r.error}`);
+    if (r.sent) console.log(`[Notify Event] ${channel} sent for user ${safeForLog(normalizedUsername, 64)}`);
+    else if (r.error) console.log(`[Notify Event] ${channel} not sent for user ${safeForLog(normalizedUsername, 64)}: ${r.error}`);
   }
   return results;
 }
@@ -2712,8 +2643,10 @@ app.post('/api/admin/test-notification', authRequired, async (req, res) => {
     const title = 'Test Notification';
     const message = text;
     
-    // 'both' predates Gotify and Telegram and still means "email + ntfy".
-    const only = service === 'both' ? ['email', 'ntfy'] : [service];
+    // 'both' is the name the value had when there were two channels; it has gated
+    // ALL of them since Gotify and Telegram were added, and it is what the SPA sends
+    // by default, labelled "All Services". undefined = every channel.
+    const only = service === 'both' ? undefined : [service];
     const channels = await notifications.channelsForId(req.user.id);
     const results = await notifications.dispatch(
       channels,
@@ -3148,11 +3081,10 @@ async function sendReleaseReminder(username, game, days) {
   const results = await notifications.dispatchToUsername(
     normalizedUsername,
     { subject, text, title: 'Game Release Reminder', message: text, coverUrl: game.cover_url || null },
-    { ldapLookup: getLdapEmail },
   );
   for (const [channel, r] of Object.entries(results)) {
-    if (r.sent) console.log(`[Release Reminder] ${channel} sent for user ${normalizedUsername}`);
-    else if (r.error) console.log(`[Release Reminder] ${channel} not sent for user ${normalizedUsername}: ${r.error}`);
+    if (r.sent) console.log(`[Release Reminder] ${channel} sent for user ${safeForLog(normalizedUsername, 64)}`);
+    else if (r.error) console.log(`[Release Reminder] ${channel} not sent for user ${safeForLog(normalizedUsername, 64)}: ${r.error}`);
   }
   return results;
 }
@@ -3205,11 +3137,23 @@ scheduleWhenServer('0 8 * * *', () => {
                   const type = `${diffDays}days`;
                   if (!wasNotificationSent(username, game.game_id, type)) {
                     console.log(`[CRON] Sending ${type} reminder to ${username} for game ${game.game_name}`);
-                    sendReleaseReminder(username, game, diffDays).then(() => {
-                      markNotificationSent(username, game.game_id, type);
-                      console.log(`Sent ${type} release reminder to ${username} for game ${game.game_name}`);
+                    sendReleaseReminder(username, game, diffDays).then((results) => {
+                      // Mark it sent only if a channel ACTUALLY delivered. Before the
+                      // fan-out was extracted, an SMTP failure rejected the whole
+                      // function, so the mark was skipped and the reminder retried the
+                      // next day. dispatch() no longer rejects for a channel failure —
+                      // which is the point — so the retry decision has to be made here
+                      // instead, from the result, or a total outage would be recorded
+                      // as delivered and never retried.
+                      const delivered = Object.values(results || {}).some((r) => r.sent);
+                      if (delivered) {
+                        markNotificationSent(username, game.game_id, type);
+                        console.log(`Sent ${type} release reminder to ${safeForLog(username, 64)} for game ${game.game_name}`);
+                      } else {
+                        console.warn(`[CRON] No channel delivered the ${type} reminder to ${safeForLog(username, 64)} for game ${game.game_name} — will retry`);
+                      }
                     }).catch(err => {
-                      console.error(`Failed to send ${type} reminder to ${username} for game ${game.game_name}:`, err);
+                      console.error(`Failed to send ${type} reminder to ${safeForLog(username, 64)} for game ${game.game_name}:`, err.message);
                     });
                     found = true;
                   } else {

@@ -353,6 +353,20 @@ check('blocks every instance-metadata endpoint', () => {
   assert.strictEqual(isBlockedNotificationHost('http://[fd00:ec2::254]/'), true);
   assert.strictEqual(isBlockedNotificationHost('http://[fe80::1]/'), true);
 });
+check('IPv4-mapped IPv6 and a trailing dot cannot slip past', () => {
+  // Both of these were allowed by a version of this function that an extraction
+  // silently reverted to. The assertions that existed at the time passed against the
+  // WEAKENED code, because they only covered the vectors it still handled — a
+  // regression and a test arriving together and agreeing with each other.
+  //
+  // new URL() normalises ::ffff:169.254.169.254 to ::ffff:a9fe:a9fe, so the hex
+  // groups must be decoded back to octets before any check can see the address.
+  assert.strictEqual(isBlockedNotificationHost('http://[::ffff:169.254.169.254]/'), true);
+  assert.strictEqual(isBlockedNotificationHost('http://[::ffff:a9fe:a9fe]/'), true);
+  // A trailing dot is a fully-qualified name that resolves to exactly the same host.
+  assert.strictEqual(isBlockedNotificationHost('http://metadata.google.internal./'), true);
+  assert.strictEqual(isBlockedNotificationHost('http://169.254.169.254./'), true);
+});
 check('normalised IPv4 forms cannot slip past', () => {
   // new URL() rewrites decimal/octal/hex to dotted quads before we look.
   assert.strictEqual(isBlockedNotificationHost('http://2852039166/'), true);       // 169.254.169.254
@@ -399,7 +413,101 @@ check('escapes every character that could open a tag or an attribute', () => {
 
 console.log('notification channels:');
 check('all four channels are in the table', () => {
-  assert.deepStrictEqual(CHANNEL_KEYS, ['email', 'ntfy', 'gotify', 'telegram']);
+  assert.deepStrictEqual([...CHANNEL_KEYS], ['email', 'ntfy', 'gotify', 'telegram']);
 });
 
-console.log(`\n${n} assertions passed.`);
+// dispatch() touches no database — it is handed the user's channel row — so the
+// contract this module exists to guarantee is testable right here. It was NOT tested
+// before, which is how a broken try/catch silenced three channels in production.
+const notifications = require('../services/notifications');
+const ALL_CHANNELS = { email: 'a@b.c', ntfy_topic: 't', ntfy_url: '', gotify_token: 'g', gotify_url: '', telegram_chat_id: '1' };
+
+// Substitute the transports for recorders. Restored after each case.
+function withTransports(behaviour, fn) {
+  const real = { ...notifications.transports };
+  const calls = [];
+  for (const name of Object.keys(real)) {
+    notifications.transports[name] = async () => {
+      calls.push(name);
+      if (behaviour[name] === 'fail') throw new Error(`boom ${name}`);
+      if (behaviour[name] === 'skip') return 'declined for a reason';
+      return true;   // a transport returns true ONLY when it actually delivered
+    };
+  }
+  return Promise.resolve(fn(calls)).finally(() => Object.assign(notifications.transports, real));
+}
+
+const asyncChecks = [];
+const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
+
+console.log('dispatch (THE contract: one channel down must not silence the rest):');
+checkAsync('a failing channel does not stop the other three', () => withTransports({ sendEmail: 'fail' }, async (calls) => {
+  const r = await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' });
+  assert.deepStrictEqual(calls.sort(), ['sendEmail', 'sendGotify', 'sendNtfy', 'sendTelegram'],
+    'a channel was never attempted');
+  assert.strictEqual(r.email.sent, false);
+  for (const k of ['ntfy', 'gotify', 'telegram']) {
+    assert.strictEqual(r[k].sent, true, `${k} did not send when email failed`);
+  }
+}));
+checkAsync('every channel failing still reports every channel', () => withTransports(
+  { sendEmail: 'fail', sendNtfy: 'fail', sendGotify: 'fail', sendTelegram: 'fail' }, async () => {
+    const r = await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' });
+    for (const k of CHANNEL_KEYS) {
+      assert.strictEqual(r[k].sent, false);
+      assert.ok(r[k].error, `${k} failed silently`);
+    }
+  }));
+checkAsync('the raw transport error never reaches the caller', () => withTransports({ sendNtfy: 'fail' }, async () => {
+  // sanitizeDeliveryError exists because raw axios errors distinguish
+  // ECONNREFUSED / 404 / timeout, which makes the admin test button a port scanner.
+  const r = await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' });
+  assert.ok(!/boom/.test(r.ntfy.error), `raw error leaked: ${r.ntfy.error}`);
+  assert.match(r.ntfy.error, /Delivery failed/);
+}));
+checkAsync('an unconfigured channel is not attempted and says why', () => withTransports({}, async (calls) => {
+  const r = await notifications.dispatch({ email: '', ntfy_topic: '', gotify_token: '', telegram_chat_id: '' },
+    { subject: 's', text: 't', title: 'T', message: 'm' });
+  assert.deepStrictEqual(calls, []);
+  for (const k of CHANNEL_KEYS) assert.ok(r[k].error, `${k} gave no explanation`);
+}));
+checkAsync('`only` restricts delivery; every channel still appears in the result', () => withTransports({}, async (calls) => {
+  const r = await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' },
+    { only: ['email', 'ntfy'] });
+  assert.deepStrictEqual(calls.sort(), ['sendEmail', 'sendNtfy']);
+  // v1's shape — the admin Diagnostics panel renders a row per channel
+  // unconditionally, so a missing key would render as a red "✗ Failed".
+  assert.deepStrictEqual(Object.keys(r).sort(), ['email', 'gotify', 'ntfy', 'telegram']);
+  assert.deepStrictEqual(r.gotify, { sent: false, error: null });
+  assert.deepStrictEqual(r.telegram, { sent: false, error: null });
+}));
+checkAsync('a transport that DECLINED is not reported as sent', () => withTransports({ sendEmail: 'skip' }, async () => {
+  // "Resolved without throwing" is not delivery. Every transport short-circuits on
+  // an unconfigured server — or, the one that matters, on a recipient the sink
+  // refused as malformed. Reporting that as sent showed an admin with no SMTP four
+  // green rows, and told an operator repairing a bad address that it had worked.
+  const r = await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' });
+  assert.strictEqual(r.email.sent, false, 'a declined delivery was reported as sent');
+  assert.strictEqual(r.email.error, 'declined for a reason');
+  assert.strictEqual(r.ntfy.sent, true);
+}));
+checkAsync('undefined `only` means every channel — what the SPA default sends', () => withTransports({}, async (calls) => {
+  // `both` is the SPA's default, labelled "All Services". Narrowing it to a subset
+  // silently stopped testing two channels AND rendered them as failures.
+  await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' }, { only: undefined });
+  assert.strictEqual(calls.length, 4);
+}));
+
+// The async cases run last. A rejection here must fail the process — an async
+// assertion that only prints would be a test that always passes.
+(async () => {
+  for (const [label, fn] of asyncChecks) {
+    await fn();
+    n++;
+    console.log('  ok  ' + label);
+  }
+  console.log(`\n${n} assertions passed.`);
+})().catch((err) => {
+  console.error('\nFAILED:', err.message);
+  process.exit(1);
+});

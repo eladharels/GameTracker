@@ -15,12 +15,22 @@
 // Reads settings through settings-store DIRECTLY, never services/settings.js: it
 // needs the real SMTP password and bot token, and the admin surface hands back
 // '__unchanged__' in their place.
+//
+// THROWING, precisely — the split matters and is not obvious:
+//   * dispatch() NEVER throws. Four independent outcomes, one advisory result. See
+//     services/errors.js for why this is the taxonomy's one deliberate exception,
+//     and for the rule that no adapter may turn a channel error into a 500.
+//   * everything that touches the database — channelsForUsername, channelsForId,
+//     resolveEmail, and therefore dispatchToUsername — CAN reject. A caller that
+//     treats "notifications never throw" as covering the whole module leaves an
+//     Express handler with an unsent response on a pool error.
 
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const db = require('../db');
 const { loadSettings } = require('../settings-store');
 const { isValidEmailAddress } = require('../user-rules');
+const { getLdapEmail } = require('../directory');
 
 const get = (sql, params = []) => new Promise((resolve, reject) => {
   db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
@@ -65,9 +75,22 @@ const METADATA_HOSTS = ['169.254.169.254', 'metadata.google.internal', 'fd00:ec2
 function isBlockedNotificationHost(url) {
   try {
     const u = new URL(url);
-    let host = u.hostname.toLowerCase();
-    // new URL() keeps the brackets on an IPv6 literal.
-    if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+    let host = u.hostname.toLowerCase()
+      .replace(/^\[|\]$/g, '')   // strip IPv6 brackets
+      .replace(/\.$/, '');       // "metadata.google.internal." resolves the same
+    // Unwrap IPv4-mapped IPv6. Note that `new URL()` does NOT keep the readable
+    // dotted form: it normalizes ::ffff:169.254.169.254 to ::ffff:a9fe:a9fe, so the
+    // two 16-bit hex groups have to be decoded back to octets before the checks
+    // below can see it. (Verified against Node's WHATWG URL parser.)
+    const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (mappedHex) {
+      const hi = parseInt(mappedHex[1], 16);
+      const lo = parseInt(mappedHex[2], 16);
+      host = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+    } else {
+      const mappedDotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+      if (mappedDotted) host = mappedDotted[1];
+    }
     if (METADATA_HOSTS.includes(host)) return true;
     // IPv4 link-local (169.254.0.0/16) covers the AWS/Azure/GCP metadata range.
     // new URL() already normalizes decimal/octal/hex IPv4 forms to dotted quads.
@@ -97,25 +120,33 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
   const { smtp } = loadSettings();
   if (!smtp.host || !smtp.port || !smtp.from) {
     console.log('[Email] SMTP settings incomplete:', { host: smtp.host, port: smtp.port, from: smtp.from });
-    return;
+    return 'SMTP is not configured on this server.';
   }
 
   const finalRecipient = toOverride;
   if (!finalRecipient) {
     console.log('[Email] No recipient email found, skipping email send');
-    return;
+    return 'No recipient address for this account.';
   }
   // Last line of defence, at the sink. Even if a bad address reaches users.email
   // through a path that skipped validation, nodemailer never sees a recipient list.
   if (!isValidEmailAddress(finalRecipient)) {
     console.error('[Email] Refusing to send: recipient is not a single valid address.');
-    return;
+    return 'The stored address is not a single valid address.';
   }
 
   const options = {
     host: smtp.host,
     port: Number(smtp.port),
     secure: Number(smtp.port) === 465,
+    // Parity with the other three transports, which all cap at 10s. This was the one
+    // channel with no timeout at all: nodemailer's defaults are a 30s greeting, a
+    // 2-minute connection and a TEN-MINUTE socket, and this call sits ahead of the
+    // response on POST /api/user/:username/games. One unreachable SMTP host held the
+    // request open far longer than any client would wait.
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   };
   if (smtp.user && smtp.pass) {
     options.auth = { user: smtp.user, pass: smtp.pass };
@@ -144,6 +175,7 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
       ...(html && { html }),
     });
     console.log('[Email] Sent:', { messageId: result.messageId, subject });
+    return true;
   } catch (err) {
     console.error('[Email] Failed to send:', { error: err.message, subject });
     throw err;  // Re-throw to let caller handle the error
@@ -153,7 +185,8 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
 async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
   // Prefer the user's own ntfy server; fall back to the optional global default.
   const url = (serverUrl && serverUrl.trim()) || loadSettings().ntfy?.url;
-  if (!url || !topic) return;
+  if (!url) return 'No ntfy server URL — set one in My Account, or ask an admin for a default.';
+  if (!topic) return 'No ntfy topic.';
   if (isBlockedNotificationHost(url)) {
     throw new Error('Notification server host is not permitted');
   }
@@ -168,12 +201,14 @@ async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
     timeout: 10000,
     maxRedirects: 0,
   });
+  return true;
 }
 
 async function sendGotify(title, message, token, priority = 5, imageUrl, serverUrl) {
   // Prefer the user's own Gotify server; fall back to the optional global default.
   const url = (serverUrl && serverUrl.trim()) || loadSettings().gotify?.url;
-  if (!url || !token) return;
+  if (!url) return 'No Gotify server URL — set one in My Account, or ask an admin for a default.';
+  if (!token) return 'No Gotify token.';
   if (isBlockedNotificationHost(url)) {
     throw new Error('Notification server host is not permitted');
   }
@@ -188,20 +223,29 @@ async function sendGotify(title, message, token, priority = 5, imageUrl, serverU
     timeout: 10000,
     maxRedirects: 0,
   });
+  return true;
 }
 
 async function sendTelegram(title, message, chatId, photoUrl) {
   const { telegram } = loadSettings();
   const botToken = telegram?.bot_token;
-  if (!botToken || !chatId) return;
+  if (!botToken) return 'No Telegram bot token configured on this server.';
+  if (!chatId) return 'No Telegram chat ID.';
   const text = `*${title}*\n${message}`;
   // Parity with sendNtfy/sendGotify: a hung api.telegram.org must not hold the
   // request open indefinitely.
   const opts = { timeout: 10000, maxRedirects: 0 };
-  if (photoUrl) {
+  // Telegram was the ONE channel that did not filter the cover URL — email, ntfy and
+  // Gotify all gate on isSafeImageUrl, this took whatever the client supplied and
+  // handed it to Telegram's servers to fetch. Body-identical to the pre-extraction
+  // code, so not a regression; putting the four channels side by side in one table
+  // is what made the odd one out visible. An unsafe URL degrades to a text message
+  // rather than dropping the notification.
+  const safePhoto = isSafeImageUrl(photoUrl) ? photoUrl : null;
+  if (safePhoto) {
     await axios.post(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
       chat_id: chatId,
-      photo: photoUrl,
+      photo: safePhoto,
       caption: text,
       parse_mode: 'Markdown',
     }, opts);
@@ -212,6 +256,7 @@ async function sendTelegram(title, message, chatId, photoUrl) {
       parse_mode: 'Markdown',
     }, opts);
   }
+  return true;
 }
 
 // --- Recipients -----------------------------------------------------------
@@ -232,9 +277,6 @@ async function channelsForId(id) {
 
 // The account's email, falling back to the directory and caching what it finds.
 //
-// `ldapLookup` is passed in rather than imported: LDAP belongs to the auth path, not
-// to notifications, and requiring index.js from here would be a cycle.
-//
 // TWO things this fixes, both of which were live on the daily release cron:
 //
 //   * the address read from LDAP was written to the account and used as a recipient
@@ -245,15 +287,18 @@ async function channelsForId(id) {
 //   * the backfill UPDATE was fire-and-forget. Per db.js, pool.end() abandons queries
 //     still waiting for a connection WITHOUT invoking their callbacks, so in a script
 //     or a shutting-down process the write vanishes silently. Awaited now.
-async function resolveEmail(username, ldapLookup) {
+async function resolveEmail(username, knownEmail) {
   const name = username ? String(username).toLowerCase() : '';
-  const row = await get('SELECT email FROM users WHERE username = ?', [name]);
-  if (row?.email) return row.email;
-  if (typeof ldapLookup !== 'function') return null;
+  // `knownEmail` lets a caller that has already SELECTed the row skip a second
+  // round-trip; undefined means "look it up".
+  const cached = knownEmail !== undefined
+    ? knownEmail
+    : (await get('SELECT email FROM users WHERE username = ?', [name]))?.email;
+  if (cached) return cached;
 
   let fromLdap = null;
   try {
-    fromLdap = await ldapLookup(name);
+    fromLdap = await getLdapEmail(name);
   } catch (err) {
     console.error('[Notify] LDAP email lookup failed for', name, '-', err.message);
     return null;
@@ -274,36 +319,48 @@ async function resolveEmail(username, ldapLookup) {
 
 // --- Fan-out --------------------------------------------------------------
 
-// One channel table. Adding a channel means adding a row here, not a fourth
-// copy of the same try/catch in a third call site.
-const CHANNELS = [
+// The transports, reachable through one object so a test can substitute them.
+//
+// Not decoration: the property this module exists to guarantee — one channel's
+// failure never stops another — is exactly the one that cannot be asserted if the
+// table closes over the four bindings directly. That property was already broken
+// once, in a way review caught and tests did not, because there were no tests that
+// could reach it. `dispatch` touches no database, so with these substitutable the
+// whole contract is testable in the database-free CI suite.
+const transports = { sendEmail, sendNtfy, sendGotify, sendTelegram };
+
+// One channel table. Its value is NOT that a fifth channel is cheap to add — there
+// have been four for years. It is that independence is now a loop invariant instead
+// of four hand-placed try/catches, which is the drift that caused the bug.
+const CHANNELS = Object.freeze([
   {
     key: 'email',
     configured: (c) => !!c.email,
     missing: 'No email configured for current user',
-    send: (c, p) => sendEmail(p.subject, p.text, c.email, p.coverUrl),
+    send: (c, p) => transports.sendEmail(p.subject, p.text, c.email, p.coverUrl),
   },
   {
     key: 'ntfy',
     configured: (c) => !!c.ntfy_topic,
     missing: 'No personal NTFY topic set — configure it in My Account',
-    send: (c, p) => sendNtfy(p.title, p.message, c.ntfy_topic, p.coverUrl, c.ntfy_url),
+    send: (c, p) => transports.sendNtfy(p.title, p.message, c.ntfy_topic, p.coverUrl, c.ntfy_url),
   },
   {
     key: 'gotify',
     configured: (c) => !!c.gotify_token,
     missing: 'No personal Gotify token set — configure it in My Account',
-    send: (c, p) => sendGotify(p.title, p.message, c.gotify_token, 5, p.coverUrl, c.gotify_url),
+    send: (c, p) => transports.sendGotify(p.title, p.message, c.gotify_token, 5, p.coverUrl, c.gotify_url),
   },
   {
     key: 'telegram',
     configured: (c) => !!c.telegram_chat_id,
     missing: 'No personal Telegram chat ID set — configure it in My Account',
-    send: (c, p) => sendTelegram(p.title, p.message, c.telegram_chat_id, p.coverUrl),
+    send: (c, p) => transports.sendTelegram(p.title, p.message, c.telegram_chat_id, p.coverUrl),
   },
-];
+].map(Object.freeze));
 
-const CHANNEL_KEYS = CHANNELS.map((c) => c.key);
+// Frozen: this drives a response shape the admin Diagnostics panel iterates.
+const CHANNEL_KEYS = Object.freeze(CHANNELS.map((c) => c.key));
 
 // Deliver `payload` on every configured channel.
 //
@@ -323,33 +380,53 @@ async function dispatch(channels, payload, { only } = {}) {
   for (const key of CHANNEL_KEYS) results[key] = { sent: false, error: null };
 
   const wanted = only ? CHANNELS.filter((c) => only.includes(c.key)) : CHANNELS;
-  for (const channel of wanted) {
+
+  // CONCURRENT, deliberately. Sequentially the worst case was the SUM of four
+  // timeouts — up to 40s of third-party latency inside POST /api/user/:username/games
+  // before the response, and per user in the daily cron. It is now the MAX of them.
+  // It also makes independence structural: there is no ordering in which one
+  // channel's failure could precede and prevent another's attempt.
+  await Promise.all(wanted.map(async (channel) => {
     if (!channel.configured(channels)) {
       results[channel.key].error = channel.missing;
-      continue;
+      return;
     }
     try {
-      await channel.send(channels, payload);
-      results[channel.key].sent = true;
+      // A transport returns `true` when it actually delivered, or a STRING saying
+      // why it declined. "Resolved without throwing" is not delivery: every
+      // transport short-circuits on a missing server URL, an unconfigured SMTP host,
+      // or — the one that matters — a recipient the sink refused as malformed. That
+      // used to be reported as sent:true, so an admin with no SMTP configured saw
+      // four green rows in Diagnostics, and the operator repairing a bad directory
+      // address got "sent" as confirmation while nothing had left the building.
+      const outcome = await channel.send(channels, payload);
+      if (outcome === true) results[channel.key].sent = true;
+      else results[channel.key].error = typeof outcome === 'string' ? outcome : 'Not delivered.';
     } catch (err) {
       results[channel.key].error = sanitizeDeliveryError(err, channel.key);
     }
-  }
+  }));
   return results;
 }
 
 // Dispatch to a username, resolving the address through the directory if needed.
 async function dispatchToUsername(username, payload, opts = {}) {
   const channels = await channelsForUsername(username);
-  if (!channels.email) {
-    channels.email = await resolveEmail(username, opts.ldapLookup);
-  }
+  // channelsForUsername already read `email`; pass it so resolveEmail does not
+  // re-SELECT the same column before falling through to the directory.
+  channels.email = await resolveEmail(username, channels.email || '');
   return dispatch(channels, payload, opts);
 }
 
 module.exports = {
   // transports
   sendEmail, sendNtfy, sendGotify, sendTelegram,
+  // THE TEST SEAM. The CHANNELS rows are frozen and call through this object, so
+  // substituting a transport here is the only way to exercise dispatch() without a
+  // network — and dispatch()'s contract (one channel's failure never stops another)
+  // is the thing this module exists to guarantee. Production code must not reassign
+  // these; a test must restore what it replaced.
+  transports,
   // helpers other code still needs
   escapeHtml, isSafeImageUrl, isBlockedNotificationHost, sanitizeDeliveryError,
   ALLOWED_IMAGE_HOSTS, METADATA_HOSTS,

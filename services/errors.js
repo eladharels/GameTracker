@@ -8,6 +8,25 @@
 //
 // `details` carries structured, caller-actionable data (e.g. which usernames were
 // unknown). Keep it free of anything sensitive: it is destined for a response body.
+//
+// TWO RULES FOR ADAPTERS, both learned the hard way:
+//
+//   1. AWAIT EVERY SERVICE CALL AND HANDLE ITS REJECTION — including calls to a
+//      service documented as non-throwing. That documentation describes the intended
+//      shape, not the database underneath it: a pool error rejects regardless. An
+//      unhandled rejection in an Express handler means the response is never sent
+//      and the request hangs until the client gives up.
+//
+//   2. THE ONE DELIBERATE EXCEPTION TO THE TAXONOMY is
+//      services/notifications.js#dispatch, which never throws. It returns
+//      {channel: {sent, error}} because the operation has four INDEPENDENT outcomes
+//      and no single status code describes "email sent, Gotify refused" — forcing
+//      that through an exception is what made three call sites re-derive per-channel
+//      state and drift apart, which is the bug that service exists to prevent.
+//
+//      Its result is ADVISORY. No adapter may turn a channel error into a request
+//      failure: adding a game must not 500 because the user's self-hosted ntfy box
+//      is down. If you find yourself wanting to, you are recreating the defect.
 class ServiceError extends Error {
   constructor(code, message, details) {
     super(message);
