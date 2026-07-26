@@ -63,6 +63,21 @@ GameTracker/
 │                                   #   value into an APIcalypse `search "..."` literal
 ├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
 │                                   #   API and create-local-admin.js
+├── settings-store.js               # The SOLE reader/writer of settings.json, with the one
+│                                   #   mtime-validated cache and the settings-over-env
+│                                   #   API-key precedence (resolveApiKey). readSettings()
+│                                   #   reports a DEGRADED load — writers must refuse then
+├── services/                       # The service layer. Route handlers are thin adapters:
+│   │                               #   they do auth and HTTP, services do the work, so /api
+│   │                               #   and the coming /api/v2 stay two skins over ONE
+│   │                               #   implementation. No req/res or status codes in here
+│   ├── errors.js                   # ServiceError + the frozen CODES taxonomy adapters map
+│   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
+│   ├── library.js                  # Game library + backlog ordering
+│   ├── users.js                    # Admin user management; the lockout safety rules
+│   └── settings.js                 # settings.json ADMIN-EDITING surface (mask, merge,
+│                                   #   role-filter). Consumers that need an UNMASKED value
+│                                   #   (SMTP, LDAP, notifications) use settings-store direct
 ├── test/
 │   ├── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
 │   │                               #   `npm test`; runs in CI. NO database/directory/network

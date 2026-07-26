@@ -33,7 +33,7 @@ const {
   compatTreeAdvice,
 } = require('./ldap-helpers');
 const { escapeIgdbSearch } = require('./igdb-helpers');
-const { SETTINGS_FILE, EMPTY_SETTINGS, loadSettings, saveSettings } = require('./settings-store');
+const { loadSettings, resolveApiKey } = require('./settings-store');
 // Service layer. Route handlers are adapters over these: they do auth and HTTP,
 // the services do the work. Lets /api and the coming /api/v2 be two skins over one
 // implementation instead of two implementations that drift.
@@ -972,12 +972,9 @@ app.get('/api/game-price/:steamAppId', authRequired, async (req, res) => {
 
 // --- Notification Settings ---
 // settings.json access lives in ./settings-store.js — one reader, one writer, one
-// mtime-validated cache. See that file for why a second cache would be a bug.
-// Resolve an API key: settings.json overrides env vars so admins can update keys via UI
-function resolveApiKey(envName) {
-  const fromSettings = loadSettings()?.apikeys?.[envName.toLowerCase()];
-  return (fromSettings && fromSettings.trim()) ? fromSettings.trim() : (process.env[envName] || '');
-}
+// mtime-validated cache, and one definition of the settings-over-env key precedence
+// (resolveApiKey, imported above). See that file for why a second copy of either
+// is a bug generator rather than a convenience.
 
 // API Keys — admin-only read/write
 app.get('/api/settings/apikeys', authRequired, requirePermission('can_manage_users'), (req, res) => {
@@ -994,6 +991,8 @@ app.post('/api/settings/apikeys', authRequired, requirePermission('can_manage_us
     settingsService.writeApiKeys(req.body || {});
     res.json({ success: true });
   } catch (err) {
+    if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
+    if (err.code === SVC.CONFLICT) return res.status(409).json({ error: err.message });
     console.error('[API Keys] Write failed:', err.message);
     res.status(500).json({ error: 'Failed to save API keys.' });
   }
@@ -1005,24 +1004,45 @@ app.post('/api/settings/apikeys', authRequired, requirePermission('can_manage_us
 // settings operation. The service is only asked to persist the result.
 app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermission('can_manage_users'), express.json(), async (req, res) => {
   const clientId = resolveApiKey('IGDB_CLIENT_ID');
-  const clientSecret = (loadSettings().apikeys?.igdb_client_secret || '').trim();
+  // Through the resolver, so IGDB_CLIENT_SECRET works from the environment like
+  // every other key. Reading settings.json directly here meant GET /api/settings/apikeys
+  // reported the secret as set (it checks env too) while this route insisted it was not.
+  const clientSecret = resolveApiKey('IGDB_CLIENT_SECRET');
   if (!clientId) return res.status(400).json({ error: 'IGDB Client ID is not set. Add it in API Keys first.' });
   if (!clientSecret) return res.status(400).json({ error: 'IGDB Client Secret is not set. Add it in API Keys first.' });
+  let access_token; let expires_in;
   try {
-    const resp = await axios.post('https://id.twitch.tv/oauth2/token', null, {
-      params: { client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' },
-      timeout: 15000,
-    });
-    const access_token = resp.data?.access_token;
-    const expires_in = resp.data?.expires_in;
+    // Credentials in the POST BODY, not in `params`. As a query string they land in
+    // the request line, which every TLS-terminating proxy and access log on the path
+    // records — and RFC 6749 §2.3.1 says body. axios sets the form content type for
+    // URLSearchParams itself.
+    const resp = await axios.post('https://id.twitch.tv/oauth2/token', new URLSearchParams({
+      client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials',
+    }), { timeout: 15000 });
+    access_token = resp.data?.access_token;
+    expires_in = resp.data?.expires_in;
     if (!access_token) return res.status(502).json({ error: 'Twitch returned no access_token in response' });
+  } catch (err) {
+    // safeForLog: this string comes from a third party (or from whatever proxy sits
+    // in front of it) and goes to both the log and the response. Unbounded and
+    // unsanitised, it can forge log lines — and a response that echoes the request
+    // URI would have carried the client secret with it before the change above.
+    const raw = err.response?.data?.message || err.response?.data?.error_description || err.message || 'Unknown error';
+    const msg = safeForLog(raw, 200);
+    console.error('[IGDB] Token refresh failed:', msg);
+    return res.status(502).json({ error: 'Twitch token request failed: ' + msg });
+  }
+
+  // Persisting is a SEPARATE try. Inside the one above, a failed write to
+  // settings.json would be reported as 502 "Twitch token request failed" — sending
+  // the admin to debug a third party that had just answered correctly.
+  try {
     const masked = settingsService.storeIgdbToken(access_token);
     console.log('[IGDB] Bearer token refreshed via Twitch OAuth, expires_in:', expires_in);
     res.json({ success: true, expires_in, masked });
   } catch (err) {
-    const msg = err.response?.data?.message || err.response?.data?.error_description || err.message || 'Unknown error';
-    console.error('[IGDB] Token refresh failed:', msg);
-    res.status(502).json({ error: 'Twitch token request failed: ' + msg });
+    console.error('[IGDB] Token minted but could not be saved:', err.message);
+    res.status(500).json({ error: 'Token was refreshed but could not be saved to settings.json.' });
   }
 });
 
@@ -1481,10 +1501,6 @@ async function notifyEvent(type, game, username, status) {
 }
 
 // --- Settings API ---
-// Secret-bearing fields inside settings.json, as [section, key] pairs. These are
-// never sent to a client in cleartext — not even to an admin. The admin UI needs
-// to know *whether* a secret is set, not what it is, so a set secret is returned
-// as SECRET_PLACEHOLDER and POST /api/settings maps that value back to whatever is
 // Secret masking, the __unchanged__ sentinel and the section merge now live in
 // services/settings.js — one definition, shared by the current routes and by
 // /api/v2. Keeping a second copy here is how the partial-write bug that silently
@@ -1504,6 +1520,8 @@ app.post('/api/settings', authRequired, express.json(), (req, res) => {
     res.json({ success: true });
   } catch (err) {
     if (err.code === SVC.FORBIDDEN) return res.status(403).json({ error: err.message });
+    if (err.code === SVC.VALIDATION) return res.status(400).json({ error: err.message });
+    if (err.code === SVC.CONFLICT) return res.status(409).json({ error: err.message });
     console.error('Error in /api/settings:', err.message);
     res.status(500).json({ error: 'Failed to save settings.' });
   }

@@ -206,4 +206,135 @@ check('accepts an ordinary username', () => {
   assert.strictEqual(validateUsername('jane'), null);
 });
 
+// services/settings.js is in scope for THIS FILE only via its pure functions.
+// mergeSection, maskSecrets, maskKey and normalizeApiKeyValue take and return plain
+// objects. readForRole/write/listApiKeys/writeApiKeys touch settings.json and must
+// stay out — requiring the module is fine, calling those is not.
+const {
+  mergeSection, maskSecrets, maskKey, normalizeApiKeyValue, SECRET_PLACEHOLDER,
+} = require('../services/settings');
+
+console.log('mergeSection (the partial write that killed LDAP login in production):');
+check('a partial section MERGES — absent keys are not deleted', () => {
+  // The outage: POST {"ldap":{"url":"ldaps://new"}} REPLACED the section, so
+  // bindPass, bindDn, base and requiredGroup vanished. 200 OK, and every LDAP
+  // login failed from that moment. The browser never tripped it because the form
+  // always posts every field.
+  const existing = { ldap: { url: 'ldaps://old', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'secret' } };
+  const merged = mergeSection({ url: 'ldaps://new' }, 'ldap', existing);
+  assert.deepStrictEqual(merged, {
+    url: 'ldaps://new', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'secret',
+  });
+});
+check('the placeholder means "leave the secret alone"', () => {
+  const existing = { ldap: { url: 'ldaps://x', bindPass: 'secret' } };
+  const merged = mergeSection({ url: 'ldaps://x', bindPass: SECRET_PLACEHOLDER }, 'ldap', existing);
+  assert.strictEqual(merged.bindPass, 'secret');
+});
+check('an ABSENT secret also leaves it alone', () => {
+  // The other way a caller says "don't touch this", and the default idiom of a
+  // generated OpenAPI client doing a partial update.
+  const existing = { smtp: { host: 'mail', pass: 'secret' } };
+  assert.strictEqual(mergeSection({ host: 'mail2' }, 'smtp', existing).pass, 'secret');
+});
+check('an EMPTY STRING still clears a secret', () => {
+  // The deliberate way to unset one — must keep working, or an admin can never
+  // remove a stored password.
+  const existing = { smtp: { host: 'mail', pass: 'secret' } };
+  assert.strictEqual(mergeSection({ pass: '' }, 'smtp', existing).pass, '');
+});
+check('the placeholder with no stored secret does not become a literal password', () => {
+  const merged = mergeSection({ bot_token: SECRET_PLACEHOLDER }, 'telegram', {});
+  assert.strictEqual(merged.bot_token, undefined);
+  assert.ok(!Object.prototype.hasOwnProperty.call(merged, 'bot_token'));
+});
+check('"leave it alone" preserves a NON-STRING stored secret', () => {
+  // `typeof prior[key] === 'string'` failed for a hand-edited numeric password, so
+  // the else-branch DELETED it — the partial-write bug surviving inside its own fix.
+  const merged = mergeSection({ bindPass: SECRET_PLACEHOLDER }, 'ldap', { ldap: { bindPass: 12345678 } });
+  assert.strictEqual(merged.bindPass, 12345678);
+});
+check('a section that is not an object is rejected, not spread', () => {
+  // `{...prior, ...'pwn'}` stored {"0":"p","1":"w","2":"n"}; a long string stored one
+  // key per character.
+  for (const bad of ['pwn', 42, ['a', 'b'], true]) {
+    assert.throws(() => mergeSection(bad, 'ldap', {}), /must be an object/,
+      `${JSON.stringify(bad)} was accepted as a section`);
+  }
+  // null keeps meaning "no change".
+  assert.deepStrictEqual(mergeSection(null, 'ldap', { ldap: { url: 'x' } }), { url: 'x' });
+});
+check('the placeholder is not honoured for a NON-secret field', () => {
+  // Only the declared secret fields get the sentinel treatment; anywhere else it is
+  // just a string the admin typed, and storing it verbatim is correct.
+  assert.strictEqual(mergeSection({ url: SECRET_PLACEHOLDER }, 'ldap', {}).url, SECRET_PLACEHOLDER);
+});
+
+console.log('maskSecrets:');
+check('every declared secret is replaced, and nothing else is', () => {
+  const masked = maskSecrets({
+    smtp: { host: 'mail.example', user: 'bot', pass: 'hunter2' },
+    ldap: { url: 'ldaps://x', bindDn: 'cn=svc', bindPass: 'bindpw' },
+    telegram: { bot_token: '123:ABC' },
+  });
+  assert.strictEqual(masked.smtp.pass, SECRET_PLACEHOLDER);
+  assert.strictEqual(masked.ldap.bindPass, SECRET_PLACEHOLDER);
+  assert.strictEqual(masked.telegram.bot_token, SECRET_PLACEHOLDER);
+  assert.strictEqual(masked.smtp.host, 'mail.example');
+  assert.strictEqual(masked.ldap.bindDn, 'cn=svc');
+  const dumped = JSON.stringify(masked);
+  for (const secret of ['hunter2', 'bindpw', '123:ABC']) {
+    assert.ok(!dumped.includes(secret), `${secret} leaked through maskSecrets`);
+  }
+});
+check('an UNSET secret stays empty — the UI must tell the two apart', () => {
+  assert.strictEqual(maskSecrets({ smtp: { pass: '' } }).smtp.pass, '');
+});
+check('a NON-STRING secret is masked too', () => {
+  // `typeof val === 'string'` sent a hand-edited numeric SMTP password, and an
+  // object-valued bind password, to the admin's browser in cleartext.
+  const masked = maskSecrets({ smtp: { pass: 987654321 }, ldap: { bindPass: { v: 'NESTED' } } });
+  assert.strictEqual(masked.smtp.pass, SECRET_PLACEHOLDER);
+  assert.strictEqual(masked.ldap.bindPass, SECRET_PLACEHOLDER);
+  assert.ok(!JSON.stringify(masked).includes('987654321'));
+  assert.ok(!JSON.stringify(masked).includes('NESTED'));
+});
+check('a null secret is left as null, not masked into a fake one', () => {
+  assert.strictEqual(maskSecrets({ smtp: { pass: null } }).smtp.pass, null);
+});
+check('does not mutate its argument', () => {
+  // It returns the object a route is about to serialise; mutating the cached
+  // settings object would replace the real password with the placeholder IN MEMORY,
+  // and the next SMTP send would authenticate with '__unchanged__'.
+  const original = { smtp: { pass: 'hunter2' } };
+  maskSecrets(original);
+  assert.strictEqual(original.smtp.pass, 'hunter2');
+});
+check('survives missing sections', () => {
+  assert.deepStrictEqual(maskSecrets(null), {});
+  assert.deepStrictEqual(maskSecrets({ ldap: {} }), { ldap: {} });
+});
+
+console.log('API key value handling:');
+check('null/false/0 CLEAR a key instead of being stringified', () => {
+  // Not `String(v)`: that stores the four characters "null", which reads as SET
+  // everywhere and authenticates with the literal word.
+  for (const cleared of [null, undefined, false, 0, '']) {
+    assert.strictEqual(normalizeApiKeyValue(cleared), '');
+  }
+  assert.strictEqual(normalizeApiKeyValue('  abc  '), 'abc');
+});
+check('a non-string is rejected, not stringified', () => {
+  for (const bad of [{}, [], 123, true]) {
+    assert.throws(() => normalizeApiKeyValue(bad, 'rawg_api_key'), /must be a string/,
+      `${JSON.stringify(bad)} was accepted as an API key`);
+  }
+});
+check('maskKey reveals at most the last 6 characters', () => {
+  assert.strictEqual(maskKey(''), '');
+  assert.strictEqual(maskKey('short'), '••••••');
+  assert.ok(maskKey('abcdefghijklmnop').endsWith('klmnop'));
+  assert.ok(!maskKey('abcdefghijklmnop').includes('abcdefghij'));
+});
+
 console.log(`\n${n} assertions passed.`);
