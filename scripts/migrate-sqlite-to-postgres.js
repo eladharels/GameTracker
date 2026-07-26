@@ -397,7 +397,11 @@ async function main() {
     // dies with a duplicate-key 23505. Assert we actually set something.
     for (const t of ['users', 'user_games']) {
       const r = await tx.query(
-        `SELECT setval(pg_get_serial_sequence($1, 'id'),
+        // `?`, NOT `$1`. Everything here goes through the db.js shim, which counts
+        // `?` markers and rewrites them to $n. A hand-written `$1` is invisible to
+        // that counter, so the statement declared 0 placeholders against 1 param
+        // and the arity guard aborted the whole migration.
+        `SELECT setval(pg_get_serial_sequence(?, 'id'),
                        GREATEST((SELECT COALESCE(MAX(id), 0) FROM ${t}), 1)) AS newval`,
         [t]
       );
