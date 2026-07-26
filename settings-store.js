@@ -24,7 +24,21 @@ const path = require('path');
 // __dirname is the repo root, which is why this module lives here and not under
 // services/: the path would then depend on the directory depth of its own file.
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
-const EMPTY_SETTINGS = { smtp: {}, ntfy: {}, gotify: {}, telegram: {}, ldap: {}, apikeys: {} };
+
+// Frozen, and so is everything loadSettings() hands out.
+//
+// Callers share one object: the cache is returned by reference, and EMPTY_SETTINGS'
+// nested sections are spread into it, so a single caller doing
+// `settings.smtp.host = x` would corrupt every later read in the process — including
+// the defaults, permanently. No current caller mutates; freezing is what keeps that
+// true as /api/v2 and the MCP layer add callers. Mutation throws in strict mode and
+// is a silent no-op otherwise, so writers must go through saveSettings, which is the
+// rule anyway.
+const deepFreeze = (obj) => {
+  for (const v of Object.values(obj)) if (v && typeof v === 'object') deepFreeze(v);
+  return Object.freeze(obj);
+};
+const EMPTY_SETTINGS = deepFreeze({ smtp: {}, ntfy: {}, gotify: {}, telegram: {}, ldap: {}, apikeys: {} });
 
 // loadSettings() sits on the hot path — resolveApiKey() calls it ~10x per search,
 // and every login, notification and settings read goes through it. Doing a
@@ -64,7 +78,7 @@ function readSettings() {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('settings.json does not contain a JSON object');
     }
-    settingsCache = { ...EMPTY_SETTINGS, ...parsed };
+    settingsCache = deepFreeze({ ...EMPTY_SETTINGS, ...parsed });
     settingsMtimeMs = mtimeMs;
     return { settings: settingsCache, degraded: false };
   } catch (err) {
@@ -118,7 +132,9 @@ function saveSettings(settings) {
       + ' users in this container. It holds the SMTP, LDAP and Telegram credentials:', err.message);
   }
 
-  settingsCache = { ...EMPTY_SETTINGS, ...settings };
+  // Copy before freezing: the caller built this object and freezing it in place
+  // would be a side effect on their local variable, not on our cache.
+  settingsCache = deepFreeze({ ...EMPTY_SETTINGS, ...JSON.parse(JSON.stringify(settings)) });
   try { settingsMtimeMs = fs.statSync(SETTINGS_FILE).mtimeMs; } catch { settingsMtimeMs = -1; }
   console.log('settings.json created/updated.');
 }

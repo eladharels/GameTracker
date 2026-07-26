@@ -118,6 +118,17 @@ function mergeSection(incomingSection, sectionName, existing) {
 // Non-admins get {} — NOT a 403. Preserving v1: the SPA calls this unconditionally
 // to render the Diagnostics tab and treats {} as "no server config to show".
 // v2 should return 403 and let the client ask for what it may actually see.
+// As readForRole, but also says whether the file could be read at all.
+//
+// A degraded read serves five empty sections, which is indistinguishable from an
+// unconfigured server: the admin sees a blank but plausible Settings page, edits it,
+// and only then discovers the write is refused. The flag lets the UI say so up front.
+// Admin-only, like the rest of the body — it is a fact about the server's internals.
+function readForRoleWithStatus(isAdmin) {
+  const { degraded } = readSettings();
+  return { sections: readForRole(isAdmin), degraded: isAdmin ? !!degraded : false };
+}
+
 function readForRole(isAdmin) {
   if (!isAdmin) return {};
   const all = loadSettings();
@@ -155,8 +166,22 @@ function write(body, isAdmin) {
     throw serviceError(CODES.FORBIDDEN,
       'Only administrators can change SMTP, LDAP, or Telegram settings.');
   }
-  const existing = loadForWrite();
   const canWrite = (k) => body[k] !== undefined && (isAdmin || !ADMIN_ONLY_SETTINGS.includes(k));
+
+  // A body with nothing writable in it does NOT touch the file.
+  //
+  // "Succeeds having changed nothing" used to mean a full truncate-in-place rewrite:
+  // every authenticated non-admin could POST {} on a loop and rewrite the credential
+  // file as fast as they liked. Two things came of that. Any section this service
+  // does not know about — a hand-added `oidc` block and its client secret — was
+  // deleted by a request from someone not allowed to change anything. And since
+  // there is deliberately no atomic rename here (settings.json is a single-file bind
+  // mount; a rename would detach it), every rewrite is a crash window that leaves the
+  // corrupt file loadForWrite() now refuses to write over. An unprivileged caller
+  // should not get to open that window at all, let alone on demand.
+  if (!SECTIONS.some(canWrite)) return;
+
+  const existing = loadForWrite();
   const next = {
     // Never writable here — managed by the dedicated API-keys endpoint.
     apikeys: existing.apikeys || {},
@@ -211,6 +236,10 @@ function normalizeApiKeyValue(value, name = 'api key') {
 
 // Write API keys. Unknown keys are dropped rather than stored.
 function writeApiKeys(body) {
+  // Same no-op rule as write(): a body naming no key rewrites nothing. This route is
+  // admin-only, so it is not the privilege-escalation half of that problem, but it is
+  // the same needless crash window over the same file.
+  if (!API_KEY_NAMES.some((name) => body[name] !== undefined)) return loadSettings().apikeys || {};
   const existing = loadForWrite();
   const apikeys = { ...(existing.apikeys || {}) };
   for (const name of API_KEY_NAMES) {
@@ -230,6 +259,6 @@ function storeIgdbToken(token) {
 
 module.exports = {
   SECTIONS, ADMIN_ONLY_SETTINGS, SECRET_PLACEHOLDER, SECRET_FIELDS, API_KEY_NAMES,
-  maskSecrets, mergeSection, readForRole, write,
+  maskSecrets, mergeSection, readForRole, readForRoleWithStatus, write,
   maskKey, normalizeApiKeyValue, listApiKeys, writeApiKeys, storeIgdbToken,
 };

@@ -168,6 +168,26 @@ Notification *servers* are now a per-user choice instead of a shared server sett
 2. Push to `main` → the pipeline (secret-scan, semgrep, trivy ×2, smoke test) gates the deploy.
 3. Post-deploy health: `GET /api/health` → `{"status":"ok"}` (the deploy job waits on this).
 
+### Recovering an unreadable `settings.json`
+The Settings page shows **"settings.json could not be read"** and every section is empty, and
+every save returns **409**. That is deliberate, and it is not the same as "unconfigured".
+
+`settings.json` is written with `flag: 'w'`, which truncates in place — a container kill or a
+full disk mid-write leaves a truncated, unparseable file. Before this refusal existed, the next
+`POST /api/settings` (from *any* authenticated user, admin or not) rebuilt the file from the
+empty defaults and **permanently erased** the SMTP password, the LDAP bind password, the Telegram
+bot token and all five API keys. The server now refuses to write over a file it could not read.
+
+Recover on the host — the UI cannot do this, by design:
+```bash
+docker compose -f docker-compose.yaml exec backend cat /app/settings.json   # see the damage
+# restore from your backup, or rebuild it from settings.example.json and re-enter the secrets
+docker compose -f docker-compose.yaml restart backend                       # not required: the
+#   mtime check picks the repaired file up on the next request, restart only if you prefer
+```
+The parse error is in the backend log as `[settings] Failed to read/parse settings.json:`.
+No restart is needed after a repair, and no credential is lost that was on disk before the crash.
+
 ### Key rotation (decision)
 - `JWT_SECRET`: rotate any time; all sessions invalidate (web + mobile re-login).
 - `IGDB_*` / `RAWG_API_KEY`: rotate **only if** a backend image built with a local `docker build .`

@@ -1679,13 +1679,19 @@ function SettingsField({ label, hint, saved, wide, children }) {
   )
 }
 
-function SectionSaveBar({ sectionKey, saving, saveStatus, dirty, onSave, label }) {
+function SectionSaveBar({ sectionKey, saving, saveStatus, saveError, dirty, onSave, label }) {
   const status = saveStatus[sectionKey]
+  const message = status === 'error' ? saveError?.[sectionKey] : null
   return (
     <div className="ent-save-bar">
-      <span className={`ent-unsaved-hint${dirty ? ' visible' : ''}`}>
-        <FaExclamationCircle /> Unsaved changes
-      </span>
+      {/* The server's reason, not just "Failed". A 409 (settings.json unreadable) and
+          a 400 (malformed section) both need an action the retry button cannot do,
+          and telling the admin to retry is the one instruction guaranteed to fail. */}
+      {message
+        ? <span className="ent-save-error" role="alert"><FaExclamationCircle /> {message}</span>
+        : <span className={`ent-unsaved-hint${dirty ? ' visible' : ''}`}>
+            <FaExclamationCircle /> Unsaved changes
+          </span>}
       <button
         type="button"
         className={`ent-save-btn${dirty ? ' ent-save-btn--dirty' : ''}${status === 'saved' ? ' ent-save-btn--saved' : ''}${status === 'error' ? ' ent-save-btn--error' : ''}`}
@@ -2121,6 +2127,10 @@ function SettingsPage() {
   const [ldap, setLdap] = useState({})
   const [telegram, setTelegram] = useState({})
   const [loadingSettings, setLoadingSettings] = useState(true)
+  // The server could not read settings.json. Every section then arrives EMPTY, which
+  // looks exactly like an unconfigured server — so without this the admin would edit
+  // a blank page and only discover the refusal on save.
+  const [settingsUnreadable, setSettingsUnreadable] = useState(false)
 
   // API Keys state (admin-only)
   const [apiKeysMeta, setApiKeysMeta] = useState({})   // { key: { masked, set, source } }
@@ -2131,6 +2141,7 @@ function SettingsPage() {
   const [apiKeysAuthError, setApiKeysAuthError] = useState(false)  // session expired
   const [saving, setSaving]       = useState({})
   const [saveStatus, setSaveStatus] = useState({})
+  const [saveError, setSaveError] = useState({})   // per-section server message
 
   // Testing tab state (preserved)
   const [userGames, setUserGames]             = useState([])
@@ -2161,6 +2172,7 @@ function SettingsPage() {
     axios.get(`${API_BASE}/settings`)
       .then(res => {
         const s = res.data || {}
+        setSettingsUnreadable(!!s.unreadable)
         setServerSettings(s)
         setSmtp(s.smtp       || {})
         setNtfy(s.ntfy       || {})
@@ -2197,12 +2209,23 @@ function SettingsPage() {
     const data = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : key === 'telegram' ? telegram : ldap
     setSaving(p => ({ ...p, [key]: true }))
     setSaveStatus(p => ({ ...p, [key]: null }))
+    setSaveError(p => ({ ...p, [key]: null }))
     try {
       await axios.post(`${API_BASE}/settings`, { [key]: data })
       setServerSettings(p => ({ ...p, [key]: { ...data } }))
+      setSettingsUnreadable(false)
       setSaveStatus(p => ({ ...p, [key]: 'saved' }))
       setTimeout(() => setSaveStatus(p => ({ ...p, [key]: null })), 3000)
-    } catch {
+    } catch (err) {
+      const status = err.response?.status
+      // The server's own message where it has one: a 409 says settings.json cannot be
+      // read and must be restored on disk, a 400 says which section was malformed.
+      // Neither is fixed by pressing the button again.
+      setSaveError(p => ({ ...p, [key]:
+        status === 401 ? 'Session expired — log out and log back in.'
+        : status === 403 ? 'Admin permission required.'
+        : (err.response?.data?.error || 'Save failed. Check the server log.') }))
+      if (status === 409) setSettingsUnreadable(true)
       setSaveStatus(p => ({ ...p, [key]: 'error' }))
     }
     setSaving(p => ({ ...p, [key]: false }))
@@ -2336,6 +2359,18 @@ function SettingsPage() {
       {/* ── Right panel ── */}
       <div className="ent-panel">
 
+        {settingsUnreadable && (
+          <div className="ent-settings-alert" role="alert">
+            <FaExclamationCircle />
+            <div>
+              <strong>settings.json could not be read.</strong> Every section below is showing
+              as empty because of that, not because it is unconfigured — and saving is blocked
+              so the stored credentials are not overwritten with blanks. Restore or repair the
+              file on the server, then reload this page. The server log has the parse error.
+            </div>
+          </div>
+        )}
+
         {/* Email */}
         {activeTab === 'email' && (
           <SettingsSection icon={FaEnvelope} title="Email Notifications" description="Configure SMTP to receive release reminders and status alerts by email." configured={isConfigured(smtp)}>
@@ -2359,7 +2394,7 @@ function SettingsPage() {
                 <input className="ent-input" value={smtp.to    || ''} onChange={e => setSmtp(p => ({ ...p, to:    e.target.value }))} placeholder="you@example.com" />
               </SettingsField>
             </div>
-            <SectionSaveBar sectionKey="smtp" saving={saving} saveStatus={saveStatus} dirty={isDirty('smtp')} onSave={() => saveSection('smtp')} label="Email Settings" />
+            <SectionSaveBar sectionKey="smtp" saving={saving} saveStatus={saveStatus} saveError={saveError} dirty={isDirty('smtp')} onSave={() => saveSection('smtp')} label="Email Settings" />
           </SettingsSection>
         )}
 
@@ -2371,7 +2406,7 @@ function SettingsPage() {
                 <input className="ent-input" value={ntfy.url || ''} onChange={e => setNtfy(p => ({ ...p, url: e.target.value }))} placeholder="https://ntfy.sh" />
               </SettingsField>
             </div>
-            <SectionSaveBar sectionKey="ntfy" saving={saving} saveStatus={saveStatus} dirty={isDirty('ntfy')} onSave={() => saveSection('ntfy')} label="NTFY Settings" />
+            <SectionSaveBar sectionKey="ntfy" saving={saving} saveStatus={saveStatus} saveError={saveError} dirty={isDirty('ntfy')} onSave={() => saveSection('ntfy')} label="NTFY Settings" />
           </SettingsSection>
         )}
 
@@ -2383,7 +2418,7 @@ function SettingsPage() {
                 <input className="ent-input" value={gotify.url || ''} onChange={e => setGotify(p => ({ ...p, url: e.target.value }))} placeholder="https://gotify.example.com" />
               </SettingsField>
             </div>
-            <SectionSaveBar sectionKey="gotify" saving={saving} saveStatus={saveStatus} dirty={isDirty('gotify')} onSave={() => saveSection('gotify')} label="Gotify Settings" />
+            <SectionSaveBar sectionKey="gotify" saving={saving} saveStatus={saveStatus} saveError={saveError} dirty={isDirty('gotify')} onSave={() => saveSection('gotify')} label="Gotify Settings" />
           </SettingsSection>
         )}
 
@@ -2395,7 +2430,7 @@ function SettingsPage() {
                 <input className="ent-input" type="password" value={telegram.bot_token || ''} onChange={e => setTelegram(p => ({ ...p, bot_token: e.target.value }))} placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
               </SettingsField>
             </div>
-            <SectionSaveBar sectionKey="telegram" saving={saving} saveStatus={saveStatus} dirty={isDirty('telegram')} onSave={() => saveSection('telegram')} label="Telegram Settings" />
+            <SectionSaveBar sectionKey="telegram" saving={saving} saveStatus={saveStatus} saveError={saveError} dirty={isDirty('telegram')} onSave={() => saveSection('telegram')} label="Telegram Settings" />
           </SettingsSection>
         )}
 
@@ -2422,7 +2457,7 @@ function SettingsPage() {
                 <input className="ent-input" value={ldap.requiredGroup || ''} onChange={e => setLdap(p => ({ ...p, requiredGroup: e.target.value }))} placeholder="GameTrackerUsers" />
               </SettingsField>
             </div>
-            <SectionSaveBar sectionKey="ldap" saving={saving} saveStatus={saveStatus} dirty={isDirty('ldap')} onSave={() => saveSection('ldap')} label="LDAP Settings" />
+            <SectionSaveBar sectionKey="ldap" saving={saving} saveStatus={saveStatus} saveError={saveError} dirty={isDirty('ldap')} onSave={() => saveSection('ldap')} label="LDAP Settings" />
           </SettingsSection>
         )}
 

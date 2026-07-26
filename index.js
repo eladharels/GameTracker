@@ -1042,6 +1042,10 @@ app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermis
     res.json({ success: true, expires_in, masked });
   } catch (err) {
     console.error('[IGDB] Token minted but could not be saved:', err.message);
+    // The same 409 the other two adapters return. Without it an unreadable
+    // settings.json presented as a generic 500 here, so the admin retried — and each
+    // retry mints and discards another token instead of pointing at the real cause.
+    if (err.code === SVC.CONFLICT) return res.status(409).json({ error: err.message });
     res.status(500).json({ error: 'Token was refreshed but could not be saved to settings.json.' });
   }
 });
@@ -1510,7 +1514,12 @@ app.get('/api/settings', authRequired, (req, res) => {
   // Content-dependent authorization: the BODY differs by role, which no middleware
   // can express. See services/settings.js. Non-admins get {} rather than 403 —
   // v1 behaviour the SPA depends on.
-  res.json(settingsService.readForRole(!!req.user.can_manage_users));
+  const { sections, degraded } = settingsService.readForRoleWithStatus(!!req.user.can_manage_users);
+  // `unreadable` sits alongside the sections rather than wrapping them, because the
+  // SPA reads `data.smtp` / `data.ldap` directly and an envelope would be a breaking
+  // change to v1. v2 gets a proper envelope. Present only when true, and only for
+  // admins, so the ordinary response is byte-identical to before.
+  res.json(degraded ? { ...sections, unreadable: true } : sections);
 });
 
 app.post('/api/settings', authRequired, express.json(), (req, res) => {
