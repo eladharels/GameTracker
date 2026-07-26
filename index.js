@@ -33,12 +33,14 @@ const {
   compatTreeAdvice,
 } = require('./ldap-helpers');
 const { escapeIgdbSearch } = require('./igdb-helpers');
+const { SETTINGS_FILE, EMPTY_SETTINGS, loadSettings, saveSettings } = require('./settings-store');
 // Service layer. Route handlers are adapters over these: they do auth and HTTP,
 // the services do the work. Lets /api and the coming /api/v2 be two skins over one
 // implementation instead of two implementations that drift.
 const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
 const usersService = require('./services/users');
+const settingsService = require('./services/settings');
 const { CODES: SVC } = require('./services/errors');
 const { RESERVED_USERNAMES, isValidEmailAddress, validatePassword } = require('./user-rules');
 
@@ -969,60 +971,8 @@ app.get('/api/game-price/:steamAppId', authRequired, async (req, res) => {
 });
 
 // --- Notification Settings ---
-// Absolute path. This was a bare relative 'settings.json', resolved against
-// process.cwd() — so a utility script run from another directory silently read,
-// or worse created, a DIFFERENT settings file. Matches STATUS_CACHE_FILE below.
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
-const EMPTY_SETTINGS = { smtp: {}, ntfy: {}, gotify: {}, telegram: {}, ldap: {}, apikeys: {} };
-
-// loadSettings() sits on the hot path — resolveApiKey() calls it ~10x per search,
-// and every login, notification and settings read goes through it. Doing a
-// synchronous readFileSync each time blocks the single-threaded event loop against
-// a single-file Docker bind mount: if that host path ever stalls, the whole server
-// stalls. Cache the parsed object and validate it with a much cheaper statSync.
-//
-// mtime validation (rather than only invalidating inside saveSettings) keeps
-// EXTERNAL writers working — the utility scripts and any `docker exec` edit — so an
-// admin's change still takes effect immediately, as CLAUDE.md advertises.
-let settingsCache = null;
-let settingsMtimeMs = -1;
-
-function loadSettings() {
-  try {
-    const { mtimeMs } = fs.statSync(SETTINGS_FILE);
-    if (settingsCache && mtimeMs === settingsMtimeMs) return settingsCache;
-    settingsCache = { ...EMPTY_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
-    settingsMtimeMs = mtimeMs;
-    return settingsCache;
-  } catch (err) {
-    // A missing file is normal on a fresh install. A corrupt one is NOT — it used
-    // to degrade silently to "no SMTP, no LDAP, no API keys" with no log line at
-    // all, which is a miserable thing to debug from the admin's side.
-    if (err.code !== 'ENOENT') {
-      console.error('[settings] Failed to read/parse settings.json:', err.message);
-    }
-    settingsCache = null;
-    settingsMtimeMs = -1;
-    return EMPTY_SETTINGS;
-  }
-}
-
-function saveSettings(settings) {
-  try {
-    // mode 0600: this file holds the SMTP password, the LDAP bind password and the
-    // Telegram bot token. The default 0644 made it world-readable in the container.
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), { flag: 'w', mode: 0o600 });
-    settingsCache = { ...EMPTY_SETTINGS, ...settings };
-    try { settingsMtimeMs = fs.statSync(SETTINGS_FILE).mtimeMs; } catch { settingsMtimeMs = -1; }
-    console.log('settings.json created/updated.');
-  } catch (err) {
-    console.error('Failed to write settings.json:', err);
-    // Never keep serving a cache we cannot vouch for.
-    settingsCache = null;
-    settingsMtimeMs = -1;
-  }
-}
-
+// settings.json access lives in ./settings-store.js — one reader, one writer, one
+// mtime-validated cache. See that file for why a second cache would be a bug.
 // Resolve an API key: settings.json overrides env vars so admins can update keys via UI
 function resolveApiKey(envName) {
   const fromSettings = loadSettings()?.apikeys?.[envName.toLowerCase()];
@@ -1031,58 +981,44 @@ function resolveApiKey(envName) {
 
 // API Keys — admin-only read/write
 app.get('/api/settings/apikeys', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  const k = loadSettings().apikeys || {};
-  const mask = v => v && v.trim() ? '••••••••' + v.trim().slice(-6) : '';
-  const row  = (storedVal, envVar) => ({
-    masked: mask(storedVal || process.env[envVar]),
-    set:    !!(storedVal  || process.env[envVar]),
-    source: storedVal ? 'settings' : (process.env[envVar] ? 'env' : 'none'),
-  });
-  res.json({
-    igdb_client_id:      row(k.igdb_client_id,      'IGDB_CLIENT_ID'),
-    igdb_client_secret:  row(k.igdb_client_secret,   'IGDB_CLIENT_SECRET'),
-    igdb_bearer_token:   row(k.igdb_bearer_token,    'IGDB_BEARER_TOKEN'),
-    rawg_api_key:        row(k.rawg_api_key,          'RAWG_API_KEY'),
-    thegamesdb_api_key:  row(k.thegamesdb_api_key,   'THEGAMESDB_API_KEY'),
-  });
+  try {
+    res.json(settingsService.listApiKeys());
+  } catch (err) {
+    console.error('[API Keys] Read failed:', err.message);
+    res.status(500).json({ error: 'Failed to read API keys.' });
+  }
 });
 
 app.post('/api/settings/apikeys', authRequired, requirePermission('can_manage_users'), express.json(), (req, res) => {
   try {
-    const allowed = ['igdb_client_id', 'igdb_client_secret', 'igdb_bearer_token', 'rawg_api_key', 'thegamesdb_api_key'];
-    const incoming = req.body || {};
-    const clean = {};
-    for (const k of allowed) {
-      if (k in incoming) clean[k] = String(incoming[k] || '').trim();
-    }
-    const existing = loadSettings();
-    saveSettings({ ...existing, apikeys: { ...(existing.apikeys || {}), ...clean } });
+    settingsService.writeApiKeys(req.body || {});
     res.json({ success: true });
   } catch (err) {
-    console.error('Error saving apikeys:', err);
+    console.error('[API Keys] Write failed:', err.message);
     res.status(500).json({ error: 'Failed to save API keys.' });
   }
 });
 
-// Refresh IGDB bearer token using stored Client ID + Client Secret (calls Twitch OAuth)
+// Mint a fresh IGDB bearer token from Twitch and store it.
+//
+// Stays in the adapter: it is an outbound OAuth exchange with a third party, not a
+// settings operation. The service is only asked to persist the result.
 app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermission('can_manage_users'), express.json(), async (req, res) => {
-  const clientId     = resolveApiKey('IGDB_CLIENT_ID');
-  const clientSecret = resolveApiKey('IGDB_CLIENT_SECRET');
-  if (!clientId)     return res.status(400).json({ error: 'IGDB Client ID is not set. Add it in API Keys first.' });
+  const clientId = resolveApiKey('IGDB_CLIENT_ID');
+  const clientSecret = (loadSettings().apikeys?.igdb_client_secret || '').trim();
+  if (!clientId) return res.status(400).json({ error: 'IGDB Client ID is not set. Add it in API Keys first.' });
   if (!clientSecret) return res.status(400).json({ error: 'IGDB Client Secret is not set. Add it in API Keys first.' });
   try {
-    const resp = await axios.post(
-      'https://id.twitch.tv/oauth2/token',
-      null,
-      { params: { client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' }, timeout: 10000 }
-    );
-    const { access_token, expires_in } = resp.data;
+    const resp = await axios.post('https://id.twitch.tv/oauth2/token', null, {
+      params: { client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' },
+      timeout: 15000,
+    });
+    const access_token = resp.data?.access_token;
+    const expires_in = resp.data?.expires_in;
     if (!access_token) return res.status(502).json({ error: 'Twitch returned no access_token in response' });
-    // Auto-save the new bearer token
-    const existing = loadSettings();
-    saveSettings({ ...existing, apikeys: { ...(existing.apikeys || {}), igdb_bearer_token: access_token } });
+    const masked = settingsService.storeIgdbToken(access_token);
     console.log('[IGDB] Bearer token refreshed via Twitch OAuth, expires_in:', expires_in);
-    res.json({ success: true, expires_in, masked: '••••••••' + access_token.slice(-6) });
+    res.json({ success: true, expires_in, masked });
   } catch (err) {
     const msg = err.response?.data?.message || err.response?.data?.error_description || err.message || 'Unknown error';
     console.error('[IGDB] Token refresh failed:', msg);
@@ -1549,112 +1485,26 @@ async function notifyEvent(type, game, username, status) {
 // never sent to a client in cleartext — not even to an admin. The admin UI needs
 // to know *whether* a secret is set, not what it is, so a set secret is returned
 // as SECRET_PLACEHOLDER and POST /api/settings maps that value back to whatever is
-// already stored (see unmaskSecrets). This keeps the LDAP bind password and SMTP
-// password out of browser memory, devtools, and any proxy log.
-const SECRET_PLACEHOLDER = '__unchanged__';
-const SECRET_FIELDS = [
-  ['smtp', 'pass'],
-  ['ldap', 'bindPass'],
-  ['telegram', 'bot_token'],
-];
-
-function maskSecrets(settings) {
-  const out = JSON.parse(JSON.stringify(settings || {}));
-  for (const [section, key] of SECRET_FIELDS) {
-    const val = out?.[section]?.[key];
-    if (typeof val === 'string' && val !== '') out[section][key] = SECRET_PLACEHOLDER;
-  }
-  return out;
-}
-
-// Reverse of maskSecrets: an incoming SECRET_PLACEHOLDER means "leave as-is".
-// An empty string is a genuine request to clear the secret and is honoured.
-// Two ways a caller can say "leave this secret alone", and BOTH must work:
-//
-//   * the key is present and equals SECRET_PLACEHOLDER — what the browser form sends,
-//     because GET handed it the mask rather than the real value; and
-//   * the key is ABSENT — what any partial-update API client sends, and what a
-//     generated OpenAPI client does by default.
-//
-// Only the first was handled. A section written without its secret key REPLACED the
-// stored section, so `POST /api/settings {"ldap":{"url":"ldaps://..."}}` silently
-// deleted bindPass and killed LDAP login for every user, with a 200 and no error.
-// The browser never tripped it because the form always posts every field.
-//
-// An empty string still CLEARS a value — that is the deliberate way to unset one.
-//
-// The merge covers EVERY field, not just the secrets. A partial write was replacing
-// the whole section, so `{"ldap":{"url":"..."}}` destroyed bindDn, base and
-// requiredGroup as surely as it destroyed bindPass — and LDAP auth is equally dead
-// without any of them. Merging over the stored section gives an omitted key its
-// previous value, which is what a PATCH-style API client means by omitting it.
-function unmaskSecrets(incomingSection, sectionName, existing) {
-  const prior = existing?.[sectionName] || {};
-  // Stored values first, incoming on top: omitted keys survive, supplied keys win.
-  const section = { ...prior, ...(incomingSection || {}) };
-  for (const [sec, key] of SECRET_FIELDS) {
-    if (sec !== sectionName) continue;
-    // The browser posts back the mask it was shown; map it to the stored value.
-    if (section[key] === SECRET_PLACEHOLDER) {
-      if (typeof prior[key] === 'string') section[key] = prior[key];
-      else delete section[key];
-    }
-  }
-  return section;
-}
+// Secret masking, the __unchanged__ sentinel and the section merge now live in
+// services/settings.js — one definition, shared by the current routes and by
+// /api/v2. Keeping a second copy here is how the partial-write bug that silently
+// deleted the LDAP bind password would have come back on one surface only.
 
 app.get('/api/settings', authRequired, (req, res) => {
-  const s = loadSettings();
-  const isAdmin = !!req.user.can_manage_users;
-  // Never expose the apikeys block here — it holds the IGDB client secret and is served
-  // (masked) only by the admin-only GET /api/settings/apikeys endpoint.
-  const { apikeys, ...rest } = s;
-  if (isAdmin) {
-    // Admins manage server infrastructure and need the current values to edit them,
-    // but secrets go out masked — see SECRET_FIELDS above.
-    return res.json(maskSecrets(rest));
-  }
-  // Non-admins configure their notifications entirely on the My Account page
-  // (personal ntfy/Gotify server URL + topic/token, Telegram chat ID). The server
-  // Settings sections are all administrator-only infrastructure, so a non-admin gets
-  // nothing sensitive here.
-  return res.json({});
+  // Content-dependent authorization: the BODY differs by role, which no middleware
+  // can express. See services/settings.js. Non-admins get {} rather than 403 —
+  // v1 behaviour the SPA depends on.
+  res.json(settingsService.readForRole(!!req.user.can_manage_users));
 });
-// All server Settings sections are administrator-only. They hold secrets (SMTP/LDAP
-// credentials, Telegram bot token) or act as an optional global default that would
-// affect every user (the ntfy/Gotify server URLs) — per-user notification servers are
-// set on My Account instead.
-const ADMIN_ONLY_SETTINGS = ['smtp', 'ldap', 'telegram', 'ntfy', 'gotify'];
+
 app.post('/api/settings', authRequired, express.json(), (req, res) => {
-  console.log('POST /api/settings called by', req.user.username);
+  console.log('POST /api/settings called by', safeForLog(req.user.username, 64));
   try {
-    const isAdmin = !!req.user.can_manage_users;
-    // If a non-admin tried to write an admin-only section, reject plainly.
-    if (!isAdmin && ADMIN_ONLY_SETTINGS.some(k => req.body[k] !== undefined)) {
-      return res.status(403).json({ error: 'Only administrators can change SMTP, LDAP, or Telegram settings.' });
-    }
-    // Merge incoming sections with existing — only overwrite sections that were sent,
-    // and only let admins overwrite the admin-only sections.
-    const existing = loadSettings();
-    const canWrite = (k) => req.body[k] !== undefined && (isAdmin || !ADMIN_ONLY_SETTINGS.includes(k));
-    // GET returns secrets as SECRET_PLACEHOLDER, so a section saved without the
-    // admin retyping the password comes back with the placeholder — map it to the
-    // stored value rather than overwriting the credential with the mask.
-    const section = (k) => unmaskSecrets(req.body[k], k, existing);
-    const merged = {
-      smtp: canWrite('smtp') ? section('smtp') : (existing.smtp || {}),
-      ldap: canWrite('ldap') ? section('ldap') : (existing.ldap || {}),
-      telegram: canWrite('telegram') ? section('telegram') : (existing.telegram || {}),
-      // Through section() as well, for the merge — these hold no secrets, but a
-      // partial write would otherwise blank their url just the same.
-      ntfy: canWrite('ntfy') ? section('ntfy') : (existing.ntfy || {}),
-      gotify: canWrite('gotify') ? section('gotify') : (existing.gotify || {}),
-      apikeys: existing.apikeys || {},  // always preserve — managed via /api/settings/apikeys
-    };
-    saveSettings(merged);
+    settingsService.write(req.body || {}, !!req.user.can_manage_users);
     res.json({ success: true });
   } catch (err) {
-    console.error('Error in /api/settings:', err);
+    if (err.code === SVC.FORBIDDEN) return res.status(403).json({ error: err.message });
+    console.error('Error in /api/settings:', err.message);
     res.status(500).json({ error: 'Failed to save settings.' });
   }
 });
