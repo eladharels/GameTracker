@@ -55,6 +55,10 @@ GameTracker/
 ├── settings.json                   # SMTP / LDAP / Telegram / API-key runtime config
 │                                   #   (GITIGNORED — holds live credentials)
 ├── db.js                           # Postgres pool + node-sqlite3-compatible shim
+├── ldap-helpers.js                 # RFC 4515 filter escaping, the error-listening ldapjs
+│                                   #   client, and case-insensitive search-entry attribute
+│                                   #   access. Shared by index.js and the operator scripts —
+│                                   #   never hand-roll an LDAP filter or client anywhere else
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
 ├── migrations/                     # Numbered .sql schema migrations
 ├── scripts/
@@ -298,16 +302,33 @@ NODE_ENV=production
 
 ## Utility Scripts
 
-| Script | Purpose |
-|---|---|
-| `create-local-admin.js` | Create a new admin user from the CLI |
-| `reset-root-password.js` | Reset the root user's password |
-| `update_library_prices.js` | Manually trigger a Steam price update |
-| `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token |
-| `backfill_steam_app_ids.js` | Populate missing Steam App IDs for existing library entries |
-| `backfill_ldap_display_names.js` | Sync display names from LDAP for all LDAP-origin users |
-| `test_ldap_sync.js` | Test and debug the LDAP connection and sync |
-| `run_notifications.js` | Manually trigger the release notification check |
+All of these talk to PostgreSQL through `db.js`, which takes its connection from the same
+`PG*` environment variables as the backend. **Run them inside the backend container** so
+those variables (and `settings.json`) are already the ones production uses:
+
+```bash
+docker compose -f docker-compose.yaml exec backend node <script> [args]
+```
+
+| Script | Purpose | `--dry-run` |
+|---|---|---|
+| `create-local-admin.js` | Create a new admin user from the CLI | — |
+| `reset-root-password.js` | Reset the root user's password | — |
+| `update_library_prices.js` | Manually trigger a Steam price update | — |
+| `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token | — |
+| `backfill_steam_app_ids.js` | Populate missing Steam App IDs for existing library entries | yes |
+| `backfill_ldap_display_names.js` | Sync display names from LDAP for all LDAP-origin users | yes |
+| `test_ldap_sync.js` | Diagnose the LDAP connection and resolve every ldap-origin user (read-only) | n/a |
+| `run_notifications.js` | Manually trigger the release notification check | — |
+
+> **`DB_PATH` is gone.** It pointed at the SQLite file. Because node-sqlite3 opens with
+> `OPEN_CREATE`, a script aimed at a missing path silently *created* an empty database,
+> operated on it, and reported success — while production was never touched.
+>
+> **Writes in a loop must be awaited.** `pool.end()` drains queries that already hold a
+> connection but abandons any still waiting for one, *without invoking their callbacks*.
+> Fire-and-forget `db.run` followed by `db.close()` therefore drops writes silently: measured
+> at one lost row per run in the sequential shape, and all 50 of 50 when dispatched as a burst.
 
 ---
 

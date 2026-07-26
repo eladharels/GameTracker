@@ -1,101 +1,165 @@
-// ===========================================================================
-// NOT YET PORTED TO POSTGRESQL.
-//
-// This script still opens the legacy SQLite file, which is no longer the source
-// of truth. node-sqlite3 opens with OPEN_CREATE by default, so without this
-// guard it would silently CREATE an empty gametracker.db and then cheerfully
-// report "no rows found" -- looking like a successful no-op while the real
-// database was untouched. Fail loudly instead.
-//
-// To port: replace the sqlite3 handle with `require('./db')`, which exposes the
-// same run/get/all callback surface. See reset-root-password.js for a worked
-// example. Remove this guard when done.
-// ===========================================================================
-if (!process.env.ALLOW_LEGACY_SQLITE_SCRIPT) {
-  console.error('[UNPORTED] ' + __filename.split('/').pop() + ' still targets SQLite, which GameTracker no longer uses.');
-  console.error('           Porting it to ./db is required before it will do anything useful.');
-  console.error('           Set ALLOW_LEGACY_SQLITE_SCRIPT=1 only to run it against an old .db file on purpose.');
-  process.exit(1);
-}
-
-const sqlite3 = require('sqlite3').verbose();
-const ldap = require('ldapjs');
+/**
+ * Sync display_name from LDAP for every ldap-origin user.
+ *
+ * Run inside the backend container so the PG* variables and settings.json are the
+ * same ones the application uses:
+ *
+ *   docker compose -f docker-compose.yaml exec backend node backfill_ldap_display_names.js
+ *
+ * Add --dry-run to print what would change without writing anything.
+ */
 const fs = require('fs');
+const path = require('path');
+const db = require('./db');
+const {
+  buildUserSearchFilter, createLdapClient, warnIfCleartextLdap, entryAttributes, attrValue,
+} = require('./ldap-helpers');
 
-// Load LDAP settings from settings.json
-const settings = JSON.parse(fs.readFileSync('settings.json', 'utf8'));
-const ldapSettings = settings.ldap;
+const DRY_RUN = process.argv.includes('--dry-run');
 
-const db = new sqlite3.Database('gametracker.db');
+// __dirname, not the process cwd. Reading 'settings.json' relative to wherever the
+// operator happened to be standing silently picked up a different file -- or none.
+function loadLdapSettings() {
+  const file = path.join(__dirname, 'settings.json');
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    console.error(`Cannot read ${file}: ${e.message}`);
+    process.exit(1);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    console.error(`${file} is not valid JSON: ${e.message}`);
+    process.exit(1);
+  }
+  const ldapSettings = parsed.ldap || {};
+  if (!ldapSettings.url || !ldapSettings.base) {
+    console.error('settings.json has no LDAP url/base configured. Nothing to sync.');
+    process.exit(1);
+  }
+  return ldapSettings;
+}
 
-function getLdapDisplayName(username, callback) {
-  const client = ldap.createClient({ url: ldapSettings.url });
-  client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
-    if (err) {
-      console.error(`LDAP bind failed for ${username}:`, err);
-      client.unbind();
-      return callback(null);
-    }
-    const searchOptions = {
-      filter: `(sAMAccountName=${username})`,
-      scope: 'sub',
-      attributes: ['displayName', 'cn']
-    };
-    client.search(ldapSettings.base, searchOptions, (err, res) => {
+// One bind for the whole run. The previous version created a fresh client and a
+// fresh bind PER USER -- 12 binds for 12 users, each one an unauthenticated socket
+// with no 'error' listener, so a directory that went away mid-run killed the process.
+function withBoundClient(ldapSettings, fn) {
+  return new Promise((resolve, reject) => {
+    warnIfCleartextLdap(ldapSettings.url);
+    const client = createLdapClient(ldapSettings.url, (err) => reject(err));
+    client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
       if (err) {
-        console.error(`LDAP search failed for ${username}:`, err);
-        client.unbind();
-        return callback(null);
+        client.markHandled();
+        try { client.unbind(); } catch { /* already closed */ }
+        return reject(new Error(`LDAP bind failed: ${err.message}`));
       }
-      let found = false;
-      res.on('searchEntry', (entry) => {
-        const attrs = entry.attributes.reduce((acc, attr) => {
-          acc[attr.type] = attr.vals[0];
-          return acc;
-        }, {});
-        const displayName = attrs.displayName || attrs.cn || username;
-        found = true;
-        callback(displayName);
-        client.unbind();
-      });
-      res.on('end', () => {
-        if (!found) {
-          callback(null);
-          client.unbind();
-        }
-      });
-      res.on('error', (err) => {
-        console.error(`LDAP search error for ${username}:`, err);
-        callback(null);
-        client.unbind();
-      });
+      fn(client)
+        .then(resolve, reject)
+        .finally(() => {
+          client.markHandled();
+          try { client.unbind(); } catch { /* already closed */ }
+        });
     });
   });
 }
 
-db.all("SELECT username FROM users WHERE origin = 'ldap'", [], (err, rows) => {
-  if (err) {
-    console.error('DB error:', err);
-    db.close();
-    return;
-  }
-  let processed = 0;
-  rows.forEach(row => {
-    getLdapDisplayName(row.username, (displayName) => {
-      if (displayName) {
-        db.run("UPDATE users SET display_name = ? WHERE username = ?", [displayName, row.username], (err) => {
-          if (err) {
-            console.error(`Failed to update ${row.username}:`, err);
-          } else {
-            console.log(`Updated ${row.username} to "${displayName}"`);
-          }
-          if (++processed === rows.length) db.close();
-        });
-      } else {
-        console.warn(`Could not find displayName for ${row.username}`);
-        if (++processed === rows.length) db.close();
+// Resolves to a display name, or null when the directory has no entry for the user.
+// Never rejects: one unresolvable user must not abort the whole backfill.
+function lookupDisplayName(client, ldapSettings, username) {
+  return new Promise((resolve) => {
+    const options = {
+      // Escaped, matching the server. A username containing `*` previously matched
+      // every entry in the directory and this script wrote whichever one arrived
+      // first into that user's display_name.
+      filter: buildUserSearchFilter(username),
+      scope: 'sub',
+      attributes: ['displayName', 'cn'],
+    };
+    client.search(ldapSettings.base, options, (err, res) => {
+      if (err) {
+        console.error(`  LDAP search failed for ${username}: ${err.message}`);
+        return resolve(null);
       }
+      let value = null;
+      res.on('searchEntry', (entry) => {
+        if (value !== null) return; // first match wins
+        // Case-insensitive: a directory answering `displayname` would otherwise fall
+        // through to the cn and quietly overwrite every display name with it.
+        value = attrValue(entryAttributes(entry), 'displayName', 'cn');
+      });
+      res.on('error', (e) => {
+        console.error(`  LDAP search error for ${username}: ${e.message}`);
+        resolve(null);
+      });
+      res.on('end', () => resolve(value));
     });
   });
-  if (rows.length === 0) db.close();
-});
+}
+
+function allUsers() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      "SELECT username, display_name FROM users WHERE origin = 'ldap' ORDER BY username",
+      [],
+      (err, rows) => (err ? reject(err) : resolve(rows))
+    );
+  });
+}
+
+function setDisplayName(username, displayName) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      'UPDATE users SET display_name = ? WHERE username = ?',
+      [displayName, username],
+      function (err) { return err ? reject(err) : resolve(this.changes); }
+    );
+  });
+}
+
+async function main() {
+  const ldapSettings = loadLdapSettings();
+  const users = await allUsers();
+  console.log(`Found ${users.length} ldap-origin user(s).${DRY_RUN ? ' (dry run)' : ''}`);
+  if (users.length === 0) return;
+
+  let updated = 0;
+  let unchanged = 0;
+  let missing = 0;
+
+  await withBoundClient(ldapSettings, async (client) => {
+    // Sequential on purpose: one connection, and a directory should not be hit with
+    // N concurrent searches for the sake of a maintenance script.
+    for (const user of users) {
+      const displayName = await lookupDisplayName(client, ldapSettings, user.username);
+      if (!displayName) {
+        console.warn(`  ${user.username}: no displayName/cn in the directory — left as-is`);
+        missing++;
+        continue;
+      }
+      if (displayName === user.display_name) {
+        unchanged++;
+        continue;
+      }
+      if (DRY_RUN) {
+        console.log(`  ${user.username}: "${user.display_name || ''}" -> "${displayName}" (not written)`);
+        updated++;
+        continue;
+      }
+      await setDisplayName(user.username, displayName);
+      console.log(`  ${user.username}: "${user.display_name || ''}" -> "${displayName}"`);
+      updated++;
+    }
+  });
+
+  console.log(`Done. ${updated} ${DRY_RUN ? 'would change' : 'updated'}, ${unchanged} already correct, ${missing} not found.`);
+}
+
+main()
+  .catch((err) => {
+    console.error('Backfill failed:', err.message);
+    process.exitCode = 1;
+  })
+  .finally(() => db.close());

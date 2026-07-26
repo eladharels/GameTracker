@@ -1,92 +1,149 @@
-// ===========================================================================
-// NOT YET PORTED TO POSTGRESQL.
-//
-// This script still opens the legacy SQLite file, which is no longer the source
-// of truth. node-sqlite3 opens with OPEN_CREATE by default, so without this
-// guard it would silently CREATE an empty gametracker.db and then cheerfully
-// report "no rows found" -- looking like a successful no-op while the real
-// database was untouched. Fail loudly instead.
-//
-// To port: replace the sqlite3 handle with `require('./db')`, which exposes the
-// same run/get/all callback surface. See reset-root-password.js for a worked
-// example. Remove this guard when done.
-// ===========================================================================
-if (!process.env.ALLOW_LEGACY_SQLITE_SCRIPT) {
-  console.error('[UNPORTED] ' + __filename.split('/').pop() + ' still targets SQLite, which GameTracker no longer uses.');
-  console.error('           Porting it to ./db is required before it will do anything useful.');
-  console.error('           Set ALLOW_LEGACY_SQLITE_SCRIPT=1 only to run it against an old .db file on purpose.');
-  process.exit(1);
+/**
+ * Diagnose the LDAP configuration: can we bind, can we find users, and do the
+ * ldap-origin rows in the database still resolve in the directory?
+ *
+ * Read-only — this script never writes to the database or the directory.
+ *
+ * Run inside the backend container so the PG* variables and settings.json are the
+ * same ones the application uses:
+ *
+ *   docker compose -f docker-compose.yaml exec backend node test_ldap_sync.js
+ */
+const fs = require('fs');
+const path = require('path');
+const db = require('./db');
+const {
+  buildUserSearchFilter, createLdapClient, warnIfCleartextLdap, entryAttributes, attrValue,
+} = require('./ldap-helpers');
+
+// __dirname, not the process cwd — see backfill_ldap_display_names.js.
+function loadLdapSettings() {
+  const file = path.join(__dirname, 'settings.json');
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    console.error(`❌ Cannot read ${file}: ${e.message}`);
+    process.exit(1);
+  }
+  return parsed.ldap || {};
 }
 
-const sqlite3 = require('sqlite3').verbose();
-const ldap = require('ldapjs');
-const fs = require('fs');
-
-// Load settings
-const settings = JSON.parse(fs.readFileSync('settings.json', 'utf8'));
-const ldapSettings = settings.ldap;
-
-const db = new sqlite3.Database('gametracker.db');
-
-console.log('Testing LDAP Sync Functionality...');
-console.log('LDAP Settings:', {
-  url: ldapSettings.url,
-  base: ldapSettings.base,
-  bindDn: ldapSettings.bindDn,
-  bindPass: ldapSettings.bindPass ? '[HIDDEN]' : 'NOT SET'
-});
-
-// Test LDAP connection
-async function testLdapConnection() {
+function bind(ldapSettings) {
   return new Promise((resolve, reject) => {
-    const client = ldap.createClient({ url: ldapSettings.url });
-    
+    warnIfCleartextLdap(ldapSettings.url);
+    // createLdapClient attaches the 'error' listener. Without it an unreachable
+    // directory did not fail this test — it killed the process outright, which is
+    // the single worst outcome for a script whose entire job is diagnosing a
+    // directory that might be unreachable.
+    const client = createLdapClient(ldapSettings.url, (err) => reject(err));
     client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
       if (err) {
-        console.error('❌ LDAP bind failed:', err.message);
-        client.unbind();
-        reject(err);
-        return;
+        client.markHandled();
+        try { client.unbind(); } catch { /* already closed */ }
+        return reject(err);
       }
-      
-      console.log('✅ LDAP connection successful');
-      client.unbind();
-      resolve();
+      resolve(client);
     });
   });
 }
 
-// Test getting LDAP users from database
-function testGetLdapUsers() {
-  return new Promise((resolve, reject) => {
-    db.all("SELECT id, username, email, display_name FROM users WHERE origin = 'ldap'", [], (err, rows) => {
-      if (err) {
-        console.error('❌ Database error:', err.message);
-        reject(err);
-        return;
-      }
-      
-      console.log(`✅ Found ${rows.length} LDAP users in database:`);
-      rows.forEach(user => {
-        console.log(`  - ${user.username} (${user.display_name || 'No display name'})`);
+function search(client, base, username) {
+  return new Promise((resolve) => {
+    client.search(base, { filter: buildUserSearchFilter(username), scope: 'sub', attributes: ['displayName', 'cn', 'mail'] }, (err, res) => {
+      if (err) return resolve({ error: err.message });
+      let entry = null;
+      res.on('searchEntry', (e) => {
+        if (entry) return;
+        entry = entryAttributes(e);
       });
-      
-      resolve(rows);
+      res.on('error', (e) => resolve({ error: e.message }));
+      res.on('end', () => resolve({ entry }));
     });
   });
 }
 
-// Main test function
-async function runTests() {
+function ldapUsers() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      "SELECT id, username, email, display_name FROM users WHERE origin = 'ldap' ORDER BY username",
+      [],
+      (err, rows) => (err ? reject(err) : resolve(rows))
+    );
+  });
+}
+
+async function main() {
+  const ldapSettings = loadLdapSettings();
+
+  console.log('Testing LDAP sync functionality...');
+  console.log('LDAP settings:', {
+    url: ldapSettings.url || 'NOT SET',
+    base: ldapSettings.base || 'NOT SET',
+    bindDn: ldapSettings.bindDn || 'NOT SET',
+    // Never print the value, only whether one exists.
+    bindPass: ldapSettings.bindPass ? '[HIDDEN]' : 'NOT SET',
+    requiredGroup: ldapSettings.requiredGroup || '(none)',
+  });
+
+  if (!ldapSettings.url || !ldapSettings.base) {
+    console.error('❌ settings.json has no LDAP url/base configured.');
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`\nDatabase: ${process.env.PGDATABASE || 'gametracker'} @ ${process.env.PGHOST || 'db'}`);
+  const users = await ldapUsers();
+  console.log(`✅ Found ${users.length} ldap-origin user(s) in the database:`);
+  for (const u of users) {
+    console.log(`  - ${u.username} (${u.display_name || 'no display name'}${u.email ? `, ${u.email}` : ''})`);
+  }
+
+  let client;
   try {
-    await testLdapConnection();
-    await testGetLdapUsers();
-    console.log('\n✅ All tests passed! LDAP sync should work correctly.');
-  } catch (error) {
-    console.error('\n❌ Tests failed:', error.message);
+    client = await bind(ldapSettings);
+    console.log('\n✅ LDAP bind successful');
+  } catch (err) {
+    console.error(`\n❌ LDAP bind failed: ${err.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    // The bind proves the service account works. It does NOT prove the base DN is
+    // right or that these users are still in the directory — which is the failure
+    // an operator is actually running this script to find.
+    console.log('\nResolving each user against the directory:');
+    let resolved = 0;
+    for (const u of users) {
+      const { entry, error } = await search(client, ldapSettings.base, u.username);
+      if (error) {
+        console.error(`  ❌ ${u.username}: search error — ${error}`);
+      } else if (!entry) {
+        console.warn(`  ⚠️  ${u.username}: no directory entry under ${ldapSettings.base}`);
+      } else {
+        resolved++;
+        const name = attrValue(entry, 'displayName', 'cn') || '(no displayName/cn)';
+        const mail = attrValue(entry, 'mail', 'email');
+        console.log(`  ✅ ${u.username}: ${name}${mail ? ` <${mail}>` : ''}`);
+      }
+    }
+    console.log(`\n${resolved}/${users.length} user(s) resolved in the directory.`);
+    if (resolved < users.length) {
+      console.warn('Some users did not resolve. Check the base DN, or expect LDAP login to fail for them.');
+      process.exitCode = 1;
+    } else {
+      console.log('✅ All checks passed — LDAP sync should work correctly.');
+    }
   } finally {
-    db.close();
+    client.markHandled();
+    try { client.unbind(); } catch { /* already closed */ }
   }
 }
 
-runTests();
+main()
+  .catch((err) => {
+    console.error('\n❌ Tests failed:', err.message);
+    process.exitCode = 1;
+  })
+  .finally(() => db.close());

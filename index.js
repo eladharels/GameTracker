@@ -21,10 +21,38 @@ const fs = require('fs');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const path = require('path');
-const ldap = require('ldapjs');
+// ldapjs itself is no longer required here -- createLdapClient() is the only way
+// this file should ever construct a client, and it lives in ./ldap-helpers.js.
+const {
+  buildUserSearchFilter,
+  createLdapClient,
+  warnIfCleartextLdap,
+  entryAttributes,
+  attrValue,
+  attrValues,
+} = require('./ldap-helpers');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// True only when this file is the process entry point (`node index.js`), false when
+// a utility script `require`s it for its exports.
+//
+// The listener at the bottom of the file already keys off this. Background
+// SCHEDULERS have to as well, and did not: `cron.schedule()` ran at module scope, so
+// `node run_notifications.js` registered all three cron jobs as an import side
+// effect. node-cron's timers keep the event loop alive, so the script printed
+// "complete", closed the pool, and then hung forever -- and if the operator left it
+// hanging past 03:00/04:00/08:00 the stray process fired a SECOND copy of each job,
+// against a pool that had already been closed.
+const isServerProcess = require.main === module;
+
+// cron.schedule(), but only in the server process. Returns null in a script so a
+// caller cannot accidentally act on a task that was never created.
+function scheduleWhenServer(expression, handler) {
+  if (!isServerProcess) return null;
+  return cron.schedule(expression, handler);
+}
 
 // Trust the reverse proxy (nginx) in front of us so req.ip reflects the real client
 // address (from X-Forwarded-For) rather than the proxy's — required for per-IP login
@@ -717,18 +745,22 @@ async function refreshCrackWatchCache() {
 loadCrackWatchCacheFromFile();
 
 // Cron: refresh CrackWatch cache daily at 4:00 AM
-cron.schedule('0 4 * * *', () => {
+scheduleWhenServer('0 4 * * *', () => {
   console.log('[CRON] Refreshing CrackWatch cache...');
   refreshCrackWatchCache().catch((err) => console.error('[CRON] CrackWatch refresh failed:', err));
 });
 
-// Optional: run first refresh 30s after startup if cache is empty
-setTimeout(() => {
-  if (Object.keys(crackWatchCache).length === 0) {
-    console.log('[CrackWatch] Cache empty, running initial refresh in background...');
-    refreshCrackWatchCache().catch((err) => console.error('[CrackWatch] Initial refresh failed:', err));
-  }
-}, 30000);
+// Optional: run first refresh 30s after startup if cache is empty.
+// Server only -- in a script this timer both held the event loop open for 30s and
+// then kicked off a full CrackWatch sweep the operator never asked for.
+if (isServerProcess) {
+  setTimeout(() => {
+    if (Object.keys(crackWatchCache).length === 0) {
+      console.log('[CrackWatch] Cache empty, running initial refresh in background...');
+      refreshCrackWatchCache().catch((err) => console.error('[CrackWatch] Initial refresh failed:', err));
+    }
+  }, 30000);
+}
 
 // Admin: manually trigger CrackWatch cache refresh
 app.post('/api/admin/refresh-crackwatch-cache', authRequired, requirePermission('can_manage_users'), async (req, res) => {
@@ -1252,77 +1284,10 @@ async function sendTelegram(title, message, chatId, photoUrl) {
   }
 }
 
-// --- LDAP filter escaping (RFC 4515) ---
-// A username goes straight into an LDAP search filter, so any of the filter
-// metacharacters must be escaped or the caller can rewrite the filter. Without
-// this, `username=*` matches every entry in the directory and the search picks an
-// arbitrary one; `)(uid=admin` splices in a whole extra assertion.
-// Backslash MUST be replaced first, or we would double-escape our own output.
-function escapeLdapFilterValue(value) {
-  return String(value == null ? '' : value)
-    .replace(/\\/g, '\\5c')
-    .replace(/\*/g, '\\2a')
-    .replace(/\(/g, '\\28')
-    .replace(/\)/g, '\\29')
-    .replace(/\0/g, '\\00');
-}
-
-// Build the "find this user" filter used by both the login and the email lookup.
-// Active Directory keys on sAMAccountName, FreeIPA on uid — match either.
-function buildUserSearchFilter(username) {
-  const safe = escapeLdapFilterValue(username);
-  return `(|(sAMAccountName=${safe})(uid=${safe}))`;
-}
-
-// Create an ldapjs client that cannot take the process down.
-//
-// ldapjs Client is an EventEmitter that emits 'error' on socket-level failures
-// (ECONNREFUSED, ETIMEDOUT, TCP reset, TLS failure). With no 'error' listener,
-// Node treats that as an uncaught exception and EXITS — so an unreachable domain
-// controller turned any anonymous POST /api/auth/login into a remote process kill,
-// and one /api/admin/ldap-sync against a down directory was a guaranteed crash.
-// The bind callback fires *first*, so the request itself often looked fine right
-// before the server died. Every crash also wiped the in-memory login rate-limit
-// counters, handing an attacker a lockout reset.
-//
-// `onError` lets a caller fail over (e.g. to local auth) exactly once.
-function createLdapClient(url, onError) {
-  const client = ldap.createClient({
-    url,
-    timeout: 10000,
-    connectTimeout: 10000,
-    reconnect: false,
-  });
-  let handled = false;
-  client.on('error', (err) => {
-    console.error('[LDAP] Client error:', err.message);
-    try { client.destroy(); } catch { /* already gone */ }
-    if (!handled) {
-      handled = true;
-      if (typeof onError === 'function') onError(err);
-    }
-  });
-  // Mark the failover as spent once the caller has moved on, so a late socket
-  // error cannot fire a second response on the same request.
-  client.markHandled = () => { handled = true; };
-  return client;
-}
-
-// Warn loudly about cleartext LDAP. A simple bind sends the user's password (and
-// the service-account password) unencrypted in the BER payload, so plain `ldap://`
-// exposes directory credentials to any passive observer on the path. We warn
-// rather than refuse, because refusing would lock out an existing deployment
-// mid-upgrade — but this should be `ldaps://` (or StartTLS) in any real network.
-let warnedAboutCleartextLdap = false;
-function warnIfCleartextLdap(url) {
-  if (warnedAboutCleartextLdap || !url) return;
-  if (/^ldap:\/\//i.test(String(url).trim())) {
-    warnedAboutCleartextLdap = true;
-    console.warn('[LDAP] WARNING: connecting over cleartext ldap://. Bind passwords ' +
-      '(including the service account and every user password) traverse the network ' +
-      'unencrypted. Switch the LDAP URL to ldaps:// — see SECURITY_HARDENING_2026-07.md.');
-  }
-}
+// --- LDAP primitives ---
+// Moved to ./ldap-helpers.js so the operator scripts can use the SAME escaping and
+// the SAME error-listening client without pulling in this entire file. See the
+// header comment there for what went wrong when they could not.
 
 // --- LDAP Email Lookup ---
 async function getLdapEmail(username) {
@@ -1369,11 +1334,7 @@ async function getLdapEmail(username) {
         
         let foundEmail = null;
         searchRes.on('searchEntry', (entry) => {
-          const attributes = {};
-          entry.attributes.forEach(attr => {
-            attributes[attr.type] = attr.vals.length === 1 ? attr.vals[0] : attr.vals;
-          });
-          foundEmail = attributes.mail || attributes.email || null;
+          foundEmail = attrValue(entryAttributes(entry), 'mail', 'email');
         });
         
         searchRes.on('end', () => {
@@ -2731,10 +2692,9 @@ app.post('/api/auth/login', (req, res) => {
 
           // Manually construct the user object from the entry's properties.
           // This is more reliable than the .object getter.
-          const attributes = {};
-          entry.attributes.forEach(attr => {
-            attributes[attr.type] = attr.vals.length === 1 ? attr.vals[0] : attr.vals;
-          });
+          // Read anything out of this with attrValue/attrValues, never by property
+          // access -- the keys carry whatever casing the directory sent.
+          const attributes = entryAttributes(entry);
 
           foundUser = {
             dn: entry.dn.toString(),
@@ -2794,8 +2754,11 @@ app.post('/api/auth/login', (req, res) => {
             // authenticates but is outside the required group is not authorized, so
             // clearing here would let them reset the throttle at will.
             if (ldapSettings.requiredGroup) {
-                const memberOf = foundUser.memberOf || [];
-                const groups = Array.isArray(memberOf) ? memberOf : [memberOf];
+                // Case-insensitive: a directory answering `memberof` used to leave
+                // this undefined, which read as "member of nothing" and refused every
+                // login with requiredGroup set. It fails closed, so it presented as a
+                // directory outage rather than as a bug here.
+                const groups = attrValues(foundUser, 'memberOf');
                 console.log('[LDAP] User is member of groups:', groups);
 
                 const isMember = groups.some(group =>
@@ -2820,7 +2783,7 @@ app.post('/api/auth/login', (req, res) => {
             client.markHandled();
             client.unbind();
             // Try to get CN from attribute, else extract from DN
-            let cnValue = Array.isArray(foundUser.cn) ? foundUser.cn[0] : foundUser.cn;
+            let cnValue = attrValue(foundUser, 'cn');
             if (!cnValue && foundUser.dn) {
               // Extract CN from DN string
               const match = foundUser.dn.match(/CN=([^,]+)/i);
@@ -2829,7 +2792,7 @@ app.post('/api/auth/login', (req, res) => {
             const displayName = (typeof cnValue === 'string' && cnValue.trim() !== '') ? cnValue : normalizedUsername;
             
             // Get email from LDAP attributes
-            const userEmail = foundUser.mail || foundUser.email || null;
+            const userEmail = attrValue(foundUser, 'mail', 'email');
             
             console.log('[DEBUG] Extracted cnValue:', cnValue);
             console.log('[DEBUG] Final displayName:', displayName);
@@ -3273,10 +3236,7 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
               let found = false;
               searchRes.on('searchEntry', (entry) => {
                 console.log(`[LDAP Sync] Found user in LDAP: ${user.username}`);
-                const attrs = entry.attributes.reduce((acc, attr) => {
-                  acc[attr.type] = attr.vals[0];
-                  return acc;
-                }, {});
+                const attrs = entryAttributes(entry);
                 found = true;
                 resolve(attrs);
               });
@@ -3299,8 +3259,11 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
 
           if (userData) {
             // User found in LDAP, update their information
-            const newDisplayName = userData.displayName || user.username;
-            const newEmail = userData.mail || user.email;
+            // attrValue, not property access: `displayname` from the directory used
+            // to miss here and silently reset every synced user's display name to
+            // their username.
+            const newDisplayName = attrValue(userData, 'displayName', 'cn') || user.username;
+            const newEmail = attrValue(userData, 'mail', 'email') || user.email;
             
             console.log(`[LDAP Sync] User data for ${user.username}:`, {
               current: { display_name: user.display_name, email: user.email },
@@ -3636,7 +3599,7 @@ async function getUserEmail(username) {
 }
 
 console.log('About to schedule cron job');
-cron.schedule('0 8 * * *', () => {
+scheduleWhenServer('0 8 * * *', () => {
   console.log('[CRON] Running scheduled notification check...');
   getAllUsers((err, users) => {
     if (err) return console.error('Error fetching users for notifications:', err);
@@ -3927,9 +3890,12 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // --- Scheduled Weekly Price Update for User Libraries ---
-cron.schedule('0 3 * * 1', async () => { // Every Monday at 3:00 AM
+scheduleWhenServer('0 3 * * 1', async () => { // Every Monday at 3:00 AM
   console.log('[CRON] Starting weekly Steam price update for all user libraries...');
-  db.all('SELECT * FROM user_games WHERE steam_app_id IS NOT NULL', [], async (err, games) => {
+  // `<> ''` as well as NOT NULL, matching update_library_prices.js: an empty
+  // steam_app_id can never resolve to a price, and `appids=` makes Steam answer 200
+  // with an empty body, which reads in the log like a game that simply has no price.
+  db.all("SELECT * FROM user_games WHERE steam_app_id IS NOT NULL AND steam_app_id <> '' ORDER BY id", [], async (err, games) => {
     if (err) {
       console.error('[CRON] Failed to fetch user games for price update:', err);
       return;
