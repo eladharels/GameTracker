@@ -33,6 +33,12 @@ const {
   compatTreeAdvice,
 } = require('./ldap-helpers');
 const { escapeIgdbSearch } = require('./igdb-helpers');
+// Service layer. Route handlers are adapters over these: they do auth and HTTP,
+// the services do the work. Lets /api and the coming /api/v2 be two skins over one
+// implementation instead of two implementations that drift.
+const sharesService = require('./services/shares');
+const libraryService = require('./services/library');
+const { CODES: SVC } = require('./services/errors');
 const { RESERVED_USERNAMES } = require('./user-rules');
 
 const app = express();
@@ -3632,10 +3638,9 @@ app.put('/api/user/me/sharing', authRequired, (req, res) => {
 
 // --- List all users who share their library ---
 app.get('/api/shared-libraries', authRequired, (req, res) => {
-  db.all('SELECT id, username, display_name, origin FROM users WHERE shares_library = 1', [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json(rows);
-  });
+  sharesService.listSharingUsers()
+    .then((rows) => res.json(rows))
+    .catch(() => res.status(500).json({ error: 'DB error' }));
 });
 
 // --- Scheduled Notifications for Unreleased Games ---
@@ -3691,17 +3696,12 @@ function getAllUsers(cb) {
     cb(null, rows.map(r => r.username));
   });
 }
+// Callback-shaped shim over libraryService.listGamesFor, kept because the cron
+// sweep and run_notifications.js call it this way. The QUERY lives in the service
+// so there is exactly one definition of "this user's games" — two copies of it is
+// precisely the drift the service layer exists to prevent.
 function getUserGames(username, cb) {
-  // Read-only, single round trip. Callers are the cron sweep (users always exist)
-  // and the shared-library view, where `fromUser` may have been deleted — the
-  // declared foreign keys on user_shares are not enforced, so orphan share rows
-  // are possible. An unknown user is simply an empty library, never a reason to
-  // provision an account (this used to call getOrCreateUser and did exactly that).
-  db.all(
-    'SELECT ug.* FROM user_games ug JOIN users u ON u.id = ug.user_id WHERE u.username = ?',
-    [username ? String(username).toLowerCase() : ''],
-    cb
-  );
+  libraryService.listGamesFor(username).then((rows) => cb(null, rows), (err) => cb(err));
 }
 async function sendReleaseReminder(username, game, days) {
   // Normalize username to lowercase to prevent case sensitivity issues
@@ -3862,129 +3862,67 @@ scheduleWhenServer('0 8 * * *', () => {
 
 // Share a user's list with one or more users
 app.post('/api/user/:username/share', authRequired, (req, res) => {
-  const { username } = req.params;
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  const { toUsers } = req.body;
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
+  // Self-only: deliberately NO admin bypass, unlike ownershipRequired. Kept in the
+  // adapter next to req.user so test/api-surface.test.js can see it.
   if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only share your own library.' });
-  if (!Array.isArray(toUsers)) return res.status(400).json({ error: 'No users to share with.' });
+  if (!Array.isArray(req.body.toUsers)) return res.status(400).json({ error: 'No users to share with.' });
 
-  // Usernames are stored lowercase everywhere and every lookup compares lowercase,
-  // so a mixed-case entry here would be written but never match — a share the user
-  // sees as active that silently does nothing. Normalize, drop blanks and self-shares,
-  // and de-duplicate before touching the table.
-  const requested = [...new Set(
-    toUsers
-      .filter(u => typeof u === 'string')
-      .map(u => u.trim().toLowerCase())
-      .filter(u => u && u !== normalizedUsername)
-  )];
-
-  // Postgres now enforces the user_shares foreign keys for real (SQLite declared
-  // them but ran with PRAGMA foreign_keys OFF). This explicit pre-check is still
-  // worth keeping: it turns an unknown recipient into a clean 400 listing exactly
-  // which usernames were wrong, instead of a bare 500 from a constraint violation.
-  const verifyTargets = (cb) => {
-    if (requested.length === 0) return cb(null, []);
-    const placeholders = requested.map(() => '?').join(',');
-    db.all(`SELECT username FROM users WHERE username IN (${placeholders})`, requested, (err, rows) => {
-      if (err) return cb(err);
-      cb(null, rows.map(r => r.username));
-    });
-  };
-
-  verifyTargets((err, existingUsers) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    const unknown = requested.filter(u => !existingUsers.includes(u));
-    if (unknown.length) {
-      return res.status(400).json({ error: `Unknown user(s): ${unknown.join(', ')}` });
-    }
-    // Replace this user's share list atomically.
-    //
-    // The SQLite version issued the DELETE and the INSERTs as separate
-    // statements with no transaction, so a crash or connection loss between
-    // them left the user with NO shares at all. Same observable API behaviour,
-    // but now all-or-nothing. `db.prepare`/`stmt.finalize` were node-sqlite3
-    // specific and have no pg equivalent; a single transaction replaces them.
-    const now = new Date().toISOString();
-    db.withTransaction(async (tx) => {
-      await tx.query('DELETE FROM user_shares WHERE from_user = ?', [normalizedUsername]);
-      for (const toUser of existingUsers) {
-        // ON CONFLICT DO NOTHING is the Postgres spelling of INSERT OR IGNORE.
-        await tx.query(
-          'INSERT INTO user_shares (from_user, to_user, shared_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
-          [normalizedUsername, toUser, now]
-        );
-      }
-    }).then(() => {
-      res.json({ success: true });
-    }).catch((err) => {
+  sharesService.replaceOutgoing(normalizedUsername, req.body.toUsers)
+    .then(() => res.json({ success: true }))
+    .catch((err) => {
+      if (err.code === SVC.UNKNOWN_USERS) return res.status(400).json({ error: err.message });
       console.error(`[Shares] Failed to update shares: ${err.message}`);
       res.status(500).json({ error: 'DB error' });
     });
-  });
 });
 
 // Get lists shared with the current user
 app.get('/api/user/:username/shared-with-me', authRequired, (req, res) => {
-  const { username } = req.params;
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
   if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only view your own shares.' });
-  db.all('SELECT from_user, shared_at FROM user_shares WHERE to_user = ?', [normalizedUsername], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json(rows);
-  });
+  sharesService.listIncoming(normalizedUsername)
+    .then((rows) => res.json(rows))
+    .catch(() => res.status(500).json({ error: 'DB error' }));
 });
 
 // Get a specific user's shared list (read-only, only if shared with you)
 app.get('/api/user/:username/shared/:fromUser', authRequired, (req, res) => {
-  const { username, fromUser } = req.params;
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  const normalizedFromUser = fromUser ? fromUser.toLowerCase() : '';
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
+  const normalizedFromUser = req.params.fromUser ? req.params.fromUser.toLowerCase() : '';
   if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only view your own shares.' });
-  db.get('SELECT 1 FROM user_shares WHERE from_user = ? AND to_user = ?', [normalizedFromUser, normalizedUsername], (err, row) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    if (!row) return res.status(403).json({ error: 'Not shared with you.' });
-    getUserGames(normalizedFromUser, (err, games) => {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      res.json(games);
+  sharesService.readSharedLibrary(normalizedFromUser, normalizedUsername)
+    .then((games) => res.json(games))
+    .catch((err) => {
+      if (err.code === SVC.NOT_SHARED) return res.status(403).json({ error: 'Not shared with you.' });
+      res.status(500).json({ error: 'DB error' });
     });
-  });
 });
 
 // Revoke a share from a user
 app.delete('/api/user/:username/revoke-share/:fromUser', authRequired, (req, res) => {
-  const { username, fromUser } = req.params;
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  const normalizedFromUser = fromUser ? fromUser.toLowerCase() : '';
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
+  const normalizedFromUser = req.params.fromUser ? req.params.fromUser.toLowerCase() : '';
   if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only revoke your own shares.' });
-  db.run('DELETE FROM user_shares WHERE from_user = ? AND to_user = ?', [normalizedFromUser, normalizedUsername], function (err) {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json({ success: true });
-  });
+  sharesService.revokeIncoming(normalizedUsername, normalizedFromUser)
+    .then(() => res.json({ success: true }))
+    .catch(() => res.status(500).json({ error: 'DB error' }));
 });
 
 // List all users (for sharing UI, not just admins)
 app.get('/api/all-users', authRequired, (req, res) => {
-  db.all('SELECT username, display_name, origin FROM users', [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json(rows);
-  });
+  sharesService.listDirectory()
+    .then((rows) => res.json(rows))
+    .catch(() => res.status(500).json({ error: 'DB error' }));
 });
 
 // Get the list of users I am sharing with
 app.get('/api/user/:username/share', authRequired, (req, res) => {
-  const { username } = req.params;
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
   if (req.user.username !== normalizedUsername) return res.status(403).json({ error: 'You can only view your own shares.' });
-  db.all('SELECT to_user FROM user_shares WHERE from_user = ?', [normalizedUsername], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json({ toUsers: rows.map(r => r.to_user) });
-  });
+  sharesService.listOutgoing(normalizedUsername)
+    .then((toUsers) => res.json({ toUsers }))
+    .catch(() => res.status(500).json({ error: 'DB error' }));
 });
 
 // Manual trigger for release status updates (for testing)
