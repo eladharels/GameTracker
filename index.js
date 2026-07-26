@@ -1825,22 +1825,15 @@ app.get('/api/debug/user/:username/game/:gameId', authRequired, ownershipRequire
 
 // --- Get current user's games for notification testing ---
 app.get('/api/user/me/games', authRequired, (req, res) => {
-  const userId = req.user.id;
-  console.log(`[DEBUG] Getting games for user ID: ${userId}`);
-  
-  db.all(`
-    SELECT game_id, game_name, cover_url, release_date, status
-    FROM user_games
-    WHERE user_id = ?
-    ORDER BY game_name ASC
-  `, [userId], (err, rows) => {
-    if (err) {
-      console.error('[DEBUG] Database error:', err);
-      return res.status(500).json({ error: 'DB error' });
-    }
-    console.log(`[DEBUG] Found ${rows.length} games for user ID ${userId}`);
-    res.json(rows);
-  });
+  libraryService.listOwnGames(req.user.id)
+    .then((rows) => {
+      console.log(`[Library] ${req.user.username}: returned ${rows.length} games (self)`);
+      res.json(rows);
+    })
+    .catch((err) => {
+      console.error('[Library] Error querying own games:', err.message);
+      res.status(500).json({ error: 'DB error' });
+    });
 });
 
 // Get all games for a user
@@ -1850,24 +1843,17 @@ app.get('/api/user/:username/games', authRequired, ownershipRequired, (req, res)
   const normalizedUsername = username ? username.toLowerCase() : '';
   
   withExistingUser(res, normalizedUsername, (user) => {
-    db.all('SELECT * FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
-      if (err) {
+    libraryService.listGamesWithAliases(user.id)
+      .then((mapped) => {
+        // One line per request. This previously logged every game in the library
+        // individually, so a normal page load wrote hundreds of lines.
+        console.log(`[Library] ${normalizedUsername}: returned ${mapped.length} games`);
+        res.json(mapped);
+      })
+      .catch((err) => {
         console.error('[Library] Error querying games:', err.message);
-        return res.status(500).json({ error: 'DB error' });
-      }
-
-      // Ensure steamAppId is included in the response
-      const mapped = rows.map(row => ({
-        ...row,
-        steamAppId: row.steam_app_id || null,
-        crackStatus: row.crack_status || null
-      }));
-
-      // One line per request. This previously logged every game in the library
-      // individually, so a normal page load wrote hundreds of lines.
-      console.log(`[Library] ${normalizedUsername}: returned ${mapped.length} games`);
-      res.json(mapped);
-    });
+        res.status(500).json({ error: 'DB error' });
+      });
   });
 });
 
@@ -1880,14 +1866,11 @@ app.delete('/api/user/:username/games/:gameId', authRequired, ownershipRequired,
     return res.status(400).json({ error: 'Missing username or gameId' });
   }
   withExistingUser(res, normalizedUsername, (user) => {
-    db.run(
-      'DELETE FROM user_games WHERE user_id = ? AND game_id = ?',
-      [user.id, gameId],
-      function (err) {
-        if (err) return res.status(500).json({ error: 'DB error' });
-        res.json({ success: true });
-      }
-    );
+    // v1 reports success whether or not a row existed; `removed` is available but
+    // deliberately not surfaced here, to keep the published response unchanged.
+    libraryService.removeGame(user.id, gameId)
+      .then(() => res.json({ success: true }))
+      .catch(() => res.status(500).json({ error: 'DB error' }));
   });
 });
 
@@ -1900,32 +1883,12 @@ app.put('/api/user/:username/games/:gameId/backlog-order', authRequired, ownersh
     return res.status(400).json({ error: 'Missing or invalid parameters' });
   }
   withExistingUser(res, normalizedUsername, (user) => {
-    db.all(
-      // NULLS FIRST is required to preserve SQLite's ordering. SQLite sorts NULL
-      // first on ASC; Postgres sorts it last. Without this, every backlog row
-      // with a NULL backlog_order (rows predating the column) would silently
-      // jump from the top of the user's list to the bottom on cutover.
-      'SELECT id, game_id, backlog_order FROM user_games WHERE user_id = ? AND status = ? ORDER BY backlog_order ASC NULLS FIRST',
-      [user.id, 'backlog'],
-      (err, rows) => {
-        if (err) return res.status(500).json({ error: 'DB error' });
-        const idx = rows.findIndex(r => String(r.game_id) === String(gameId));
-        if (idx === -1) return res.status(404).json({ error: 'Game not in backlog' });
-        const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-        if (swapIdx < 0 || swapIdx >= rows.length) {
-          return res.json({ success: true }); // already at boundary
-        }
-        const game = rows[idx];
-        const swapGame = rows[swapIdx];
-        db.run('UPDATE user_games SET backlog_order = ? WHERE id = ?', [swapGame.backlog_order, game.id], (err) => {
-          if (err) return res.status(500).json({ error: 'DB error' });
-          db.run('UPDATE user_games SET backlog_order = ? WHERE id = ?', [game.backlog_order, swapGame.id], (err) => {
-            if (err) return res.status(500).json({ error: 'DB error' });
-            res.json({ success: true });
-          });
-        });
-      }
-    );
+    libraryService.moveBacklogItem(user.id, gameId, direction)
+      .then(() => res.json({ success: true }))   // boundary no-op also reports success, as in v1
+      .catch((err) => {
+        if (err.code === 'not_in_backlog') return res.status(404).json({ error: 'Game not in backlog' });
+        res.status(500).json({ error: 'DB error' });
+      });
   });
 });
 
@@ -1938,22 +1901,12 @@ app.put('/api/user/:username/backlog-reorder', authRequired, ownershipRequired, 
     return res.status(400).json({ error: 'Missing or invalid parameters' });
   }
   withExistingUser(res, normalizedUsername, (user) => {
-    let completed = 0;
-    let hasError = false;
-    order.forEach((gameId, index) => {
-      db.run(
-        'UPDATE user_games SET backlog_order = ? WHERE user_id = ? AND game_id = ?',
-        [index + 1, user.id, gameId],
-        (err) => {
-          if (err) hasError = true;
-          completed++;
-          if (completed === order.length) {
-            if (hasError) return res.status(500).json({ error: 'DB error' });
-            res.json({ success: true });
-          }
-        }
-      );
-    });
+    libraryService.reorderBacklog(user.id, order)
+      .then(() => res.json({ success: true }))
+      .catch((err) => {
+        console.error(`[Library] Backlog reorder failed for ${normalizedUsername}: ${err.message}`);
+        res.status(500).json({ error: 'DB error' });
+      });
   });
 });
 
