@@ -148,6 +148,27 @@ everything, so the backend needs no published port at all:
   with an optional required-group check. Falls back to local auth when the directory is unreachable.
   > Use `ldaps://`. A simple bind over plain `ldap://` sends every user password and the service-account
   > password in cleartext; the backend logs a warning at startup if you do.
+  >
+  > **The LDAP base must not span a compatibility tree.** A username that matches more than one
+  > directory entry is **refused** — binding as an arbitrarily chosen match is an authentication bug.
+  > FreeIPA's Schema Compatibility plugin republishes every account under `cn=compat`, so a base of
+  > `dc=example,dc=com` returns each user *twice* and **no LDAP user can log in**. Point the base at the
+  > accounts subtree instead:
+  >
+  > ```
+  > ldap.base = cn=accounts,dc=example,dc=com     ✅
+  > ldap.base = dc=example,dc=com                 ❌ spans cn=compat
+  > ```
+  >
+  > This is deliberately **not** resolved automatically. Two attempts to detect and drop the duplicate
+  > from the DN were both authentication bypasses: a DN is a name, not evidence, and anyone who can
+  > create a directory entry can forge whatever shape the code treats as proof. When a refusal is caused
+  > by a compat tree the backend logs the remediation, so the failure explains itself.
+  >
+  > *Known limitation:* under a narrowed base, FreeIPA users that exist **only** under `cn=compat`
+  > (trusted-domain accounts from an AD trust) are out of scope and cannot log in. Supporting them needs
+  > a directory-data identity check (`ipaUniqueID`/`entryUUID`), not a DN heuristic — refusing is the
+  > safe default until someone needs it.
 - **JWT**, 12-hour expiry. Privilege is re-read from the database on every request, so revoking admin or
   deleting an account takes effect immediately rather than at token expiry.
 - **Login throttling**: 5 failed attempts per IP *and* per account → 15-minute lockout.

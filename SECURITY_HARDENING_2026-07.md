@@ -333,6 +333,48 @@ would have failed the next Trivy run. Bumped to `>=5.0.8`, plus `qs >=6.15.3`, `
 - Staging `JWT_SECRET` uses `${JWT_SECRET:?…}` like production (it defaulted to `supersecretkey`, which
   only failed closed by accident because that exact literal is on the boot deny-list).
 
+### 9.5b LDAP ambiguous matches and the FreeIPA `cn=compat` tree
+
+**Control.** A username that matches more than one directory entry is **refused**. Binding as an
+arbitrarily chosen match is an authentication bug: it lets whoever controls *any* matching entry
+authenticate as the user whose name they collide with.
+
+**Nothing is filtered out of the search result before that count is taken.** The guard is only
+fail-closed if the set it counts is complete.
+
+**The incident.** Adding this guard broke LDAP login completely for this deployment, and it stayed
+broken until someone tried to log in. FreeIPA's Schema Compatibility plugin republishes every account
+under `cn=compat`, so with `ldap.base = dc=etech,dc=com` every user matched twice:
+
+```
+uid=eladharels,cn=users,cn=accounts,dc=etech,dc=com   ← canonical
+uid=eladharels,cn=users,cn=compat,dc=etech,dc=com     ← republished mirror
+```
+
+**Resolution: configuration.** `ldap.base` must point at the accounts subtree
+(`cn=accounts,dc=etech,dc=com`) so the mirror is never in scope. When a refusal involves a compat
+entry the backend logs the remediation, so this cannot recur silently.
+
+**Two rejected code fixes, recorded so they are not retried.** Both were authentication bypasses,
+both verified as a 401 → 200 inversion against a live directory:
+
+1. *Drop anything under `cn=compat`.* FreeIPA with an AD trust publishes trusted-domain users under
+   `cn=compat` **only**, so this deleted the real user; an attacker holding any colliding entry became
+   the sole match and was issued a session with their own password.
+2. *Drop a `cn=compat` entry only when its `cn=accounts` counterpart is present, proving it redundant.*
+   The attacker **plants the counterpart**: given a real `uid=karen,…,cn=compat,…`, creating
+   `uid=karen,…,cn=accounts,…` makes the real entry look like a mirror. It is dropped, the attacker is
+   the sole match, and the legitimate user is locked out at the same time.
+
+**The rule.** A DN is a *name*, not evidence. Any DN shape treated as proof that two entries are the
+same person can be produced by anyone who can create a directory entry. Do not add a third variant.
+Proving it needs directory data — a stable identity attribute such as `ipaUniqueID` or `entryUUID`
+compared between the two entries. `test/helpers.test.js` asserts that `ldap-helpers.js` exports no
+filtering function at all; that test exists to make a reintroduction fail CI.
+
+**Known limitation.** Under a narrowed base, FreeIPA trusted-domain users that exist only under
+`cn=compat` cannot log in. Accepted: the failure is availability, not authentication.
+
 ### 9.6 Still open — deliberately not changed
 
 - **Cleartext `ldap://`.** A simple bind sends every user password and the service-account password

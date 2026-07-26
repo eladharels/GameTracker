@@ -1097,6 +1097,45 @@ function isValidEmailAddress(value) {
   return /^[^\s@,;:<>"]+@[^\s@,;:<>"]+\.[^\s@,;:<>"]+$/.test(v);
 }
 
+// Sentinel distinguishing "the directory returned several entries for this user"
+// from "the directory has no such user". Both used to resolve as null, so the admin
+// UI reported an ambiguous match as not_found_in_ldap.
+const AMBIGUOUS_LDAP_MATCH = Symbol('ambiguous-ldap-match');
+
+// Make a directory- or user-supplied value safe to put in a log line.
+//
+// Log files are read by humans and by log shippers that parse line by line, so a
+// value containing CR/LF can inject entire fabricated lines. A directory that serves
+// a cn of "bob\n[LDAP] Service account bind succeeded." writes a convincing lie into
+// the audit trail. ldapjs escapes control characters inside a DN, but ATTRIBUTE
+// values arrive raw, and the login path logs several of them.
+//
+// Also bounded: an attribute has no length limit, and a megabyte-long cn in the log
+// is its own denial of service.
+function safeForLog(value, maxLength = 200) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+  const flattened = text.replace(/[\r\n\t]/g, (ch) => ({ '\r': '\\r', '\n': '\\n', '\t': '\\t' }[ch]))
+    // Strip the remaining C0/C1 controls, which can move a terminal cursor around.
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
+  return flattened.length > maxLength ? `${flattened.slice(0, maxLength)}…[truncated]` : flattened;
+}
+
+// Clean a directory-supplied value before STORING it (safeForLog is for logs only,
+// and deliberately renders control characters as visible escapes).
+//
+// A directory can serve a cn containing newlines; that value becomes users.display_name
+// and is then rendered in the UI, included in notification subjects and written to
+// exports. React escapes markup so this is not XSS, but a multi-line display name
+// corrupts every one of those surfaces. Collapse whitespace, drop controls, bound it.
+function sanitizeDirectoryText(value, maxLength = 200) {
+  if (typeof value !== 'string') return '';
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trim() : cleaned;
+}
+
 function escapeHtml(value) {
   return String(value == null ? '' : value)
     .replace(/&/g, '&amp;')
@@ -2853,14 +2892,22 @@ app.post('/api/auth/login', (req, res) => {
               const match = foundUser.dn.match(/CN=([^,]+)/i);
               if (match) cnValue = match[1];
             }
-            const displayName = (typeof cnValue === 'string' && cnValue.trim() !== '') ? cnValue : normalizedUsername;
+            // Sanitised before it becomes users.display_name: a directory-supplied cn
+            // containing newlines was stored verbatim and then rendered in the UI,
+            // notification subjects and exports.
+            const cleanCn = sanitizeDirectoryText(cnValue);
+            const displayName = cleanCn !== '' ? cleanCn : normalizedUsername;
             
             // Get email from LDAP attributes
             const userEmail = attrValue(foundUser, 'mail', 'email');
             
-            console.log('[DEBUG] Extracted cnValue:', cnValue);
-            console.log('[DEBUG] Final displayName:', displayName);
-            console.log('[DEBUG] User email from LDAP:', userEmail);
+            // safeForLog: these are raw directory attribute values. ldapjs escapes
+            // control characters inside a DN but NOT inside attributes, so a cn of
+            // "bob\n[LDAP] Service account bind succeeded." wrote a fabricated line
+            // straight into the audit trail.
+            console.log('[DEBUG] Extracted cnValue:', safeForLog(cnValue));
+            console.log('[DEBUG] Final displayName:', safeForLog(displayName));
+            console.log('[DEBUG] User email from LDAP:', safeForLog(userEmail));
 
             getOrCreateUser(normalizedUsername, (err, user) => {
               if (err) {
@@ -2872,9 +2919,17 @@ app.post('/api/auth/login', (req, res) => {
               const updates = ['display_name = ?, origin = ?'];
               const params = [displayName, 'ldap'];
               
-              if (userEmail) {
+              // Validated at THIS write site, not only at the send sink. The
+              // comment on isValidEmailAddress names four writers that must all
+              // check; this one — the LDAP login path — was not among them, so a
+              // directory-supplied address smuggling a comma reached users.email and
+              // could fan notifications out to arbitrary third parties from this
+              // deployment's SPF/DKIM-aligned domain.
+              if (isValidEmailAddress(userEmail)) {
                 updates.push('email = ?');
-                params.push(userEmail);
+                params.push(userEmail.trim());
+              } else if (userEmail) {
+                console.warn('[LDAP] Ignoring malformed email from directory:', safeForLog(userEmail));
               }
               
               params.push(normalizedUsername);
@@ -3316,7 +3371,11 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
                 // guess; the login path refuses the same shape outright.
                 if (entries.length > 1) {
                   console.warn(`[LDAP Sync] ${entries.length} entries matched '${user.username}' — ambiguous, skipping.`);
-                  return resolve(null);
+                  // A distinct sentinel, not null. Folding this into "not found"
+                  // told the admin UI the account had been REMOVED from the
+                  // directory when in fact it was found twice — opposite diagnoses,
+                  // opposite remedies.
+                  return resolve(AMBIGUOUS_LDAP_MATCH);
                 }
                 console.log(`[LDAP Sync] Found user in LDAP: ${user.username}`);
                 resolve(entryAttributes(entries[0]));
@@ -3331,7 +3390,15 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
 
           // (the socket is closed in the finally block below, on every path)
 
-          if (userData) {
+          if (userData === AMBIGUOUS_LDAP_MATCH) {
+            // Reported distinctly: "found twice" and "not there" are opposite
+            // diagnoses. Nothing is written for this user.
+            syncResults.details.push({
+              username: user.username,
+              action: 'ambiguous_ldap_match',
+              changes: []
+            });
+          } else if (userData) {
             // User found in LDAP, update their information
             // attrValue, not property access: `displayname` from the directory used
             // to miss here and silently reset every synced user's display name to
@@ -3341,8 +3408,11 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
             // (see the cnValue block above). Adding it would change which value gets
             // written for users who have no displayName, which is a policy decision
             // and not part of this casing fix. The inconsistency is pre-existing.
-            const newDisplayName = attrValue(userData, 'displayName') || user.username;
-            const newEmail = attrValue(userData, 'mail', 'email') || user.email;
+            // Same sanitising and the same email validation as the login path — this
+            // is the other writer of display_name/email from directory data.
+            const newDisplayName = sanitizeDirectoryText(attrValue(userData, 'displayName')) || user.username;
+            const syncedEmail = attrValue(userData, 'mail', 'email');
+            const newEmail = isValidEmailAddress(syncedEmail) ? syncedEmail.trim() : user.email;
             
             console.log(`[LDAP Sync] User data for ${user.username}:`, {
               current: { display_name: user.display_name, email: user.email },
