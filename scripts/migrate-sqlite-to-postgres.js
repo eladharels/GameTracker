@@ -419,11 +419,48 @@ async function main() {
   });
 
   // --- Verify ------------------------------------------------------------
-  // After a dry run the transaction was rolled back, so the tables are empty again.
-  // Compare against what WOULD have been committed rather than what is on disk.
+  const liveCount = async (t) => Number((await db.query(`SELECT COUNT(*) AS n FROM ${t}`)).rows[0].n);
+
+  // PROVE the rollback happened. Do not assume it.
+  //
+  // This block previously printed "PostgreSQL is unchanged and still empty" as a
+  // hardcoded string, and reported the in-memory insert counters instead of
+  // querying the database -- so a dry run that silently COMMITTED looked
+  // identical to one that rolled back. That is the same defect the review caught
+  // in the original row-count check, reintroduced in the rehearsal path.
+  // A dry run now asks the database what is actually there, and fails loudly if
+  // anything was left behind.
+  if (DRY_RUN) {
+    const after = {
+      users: await liveCount('users'),
+      user_games: await liveCount('user_games'),
+      user_shares: await liveCount('user_shares'),
+    };
+    const leaked = after.users !== targetUsers.length
+      || after.user_games !== targetGames
+      || after.user_shares !== targetShares;
+    if (leaked) {
+      section('DRY RUN FAILED — ROLLBACK DID NOT TAKE EFFECT');
+      console.error('  The transaction was supposed to roll back, but the database changed:');
+      console.error(`    users        before ${targetUsers.length}  now ${after.users}`);
+      console.error(`    user_games   before ${targetGames}  now ${after.user_games}`);
+      console.error(`    user_shares  before ${targetShares}  now ${after.user_shares}`);
+      console.error('');
+      console.error('  DATA WAS WRITTEN BY A RUN THAT PROMISED NOT TO WRITE. Inspect the');
+      console.error('  database before doing anything else. Do NOT re-run this script: if the');
+      console.error('  load actually completed, re-running would be a second load.');
+      hr();
+      sdb.close();
+      await db.pool.end();
+      process.exit(6);
+    }
+  }
+
+  // After a verified-clean dry run the tables are back to their pre-run state, so
+  // report what WOULD have been committed. A live run reports what is on disk.
   const finalCount = DRY_RUN
     ? async (t) => ({ users: counts.users, user_games: counts.games, user_shares: counts.shares })[t]
-    : async (t) => Number((await db.query(`SELECT COUNT(*) AS n FROM ${t}`)).rows[0].n);
+    : liveCount;
 
   section(DRY_RUN ? 'DRY RUN — LOADED THEN ROLLED BACK' : 'LOADED');
   console.log(`  users        inserted ${counts.users}`);
