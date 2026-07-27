@@ -248,6 +248,13 @@ const EXPECTED_V2 = {
   'PUT /api/v2/library/backlog': 'pat',
   'GET /api/v2/catalog/search': 'pat',
   'POST /api/v2/library/games': 'pat',
+  'GET /api/v2/shares': 'pat',
+  'PUT /api/v2/shares/outgoing': 'pat',
+  'POST /api/v2/shares/outgoing': 'pat',
+  'DELETE /api/v2/shares/outgoing/:username': 'pat',
+  // No ownership middleware, deliberately: the grant check IS the authorization, and
+  // there is no admin bypass on this path. See openapi's `x-admin-bypass: false`.
+  'GET /api/v2/shares/incoming/:username/games': 'pat',
 };
 
 // separately and by hand. A route reaching 'public' without being on this list is a

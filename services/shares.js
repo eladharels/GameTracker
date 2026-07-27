@@ -66,9 +66,13 @@ async function replaceOutgoing(fromUser, toUsers) {
     const placeholders = requested.map(() => '?').join(',');
     const rows = await all(`SELECT username FROM users WHERE username IN (${placeholders})`, requested);
     existing = rows.map((r) => r.username);
-    const unknown = requested.filter((u) => !existing.includes(u));
-    if (unknown.length) {
-      throw serviceError(CODES.UNKNOWN_USERS, `Unknown user(s): ${unknown.join(', ')}`, { unknown });
+    const unknownUsers = requested.filter((u) => !existing.includes(u));
+    if (unknownUsers.length) {
+      // `unknownUsers` is the ONE spelling: services/v2.js publishes it as the
+      // UnknownUsersProblem extension, and v1 reads only the message. Two spellings of
+      // the same detail is how one of them ends up unpopulated.
+      throw serviceError(CODES.UNKNOWN_USERS,
+        `Unknown user(s): ${unknownUsers.join(', ')}`, { unknownUsers });
     }
   }
 
@@ -126,9 +130,122 @@ async function listSharingUsers() {
   );
 }
 
+// --- The v2 surface ---------------------------------------------------------
+//
+// v1 exposes sharing as two bare username lists and one POST with REPLACE semantics.
+// The shapes below carry a display name and a date because a client showing "shared
+// with" needs both and v1 made it fetch the whole directory to get them; the
+// single-add and single-remove exist because "add one" spelled as a replace is how an
+// agent revokes every other share while believing it added one.
+
+const SHARE_COLUMNS = 'u.display_name AS "displayName", s.shared_at AS "sharedAt"';
+
+// Accounts this library is shared WITH.
+//
+// LEFT JOIN, not an inner one: user_shares references users, but a row whose account
+// was removed out from under it must still appear in the owner's list — an inner join
+// would make it vanish from the UI while the grant is still on the table.
+async function listOutgoingShares(fromUser) {
+  return db.promises.all(
+    `SELECT s.to_user AS username, ${SHARE_COLUMNS}
+       FROM user_shares s LEFT JOIN users u ON u.username = s.to_user
+      WHERE s.from_user = ? ORDER BY s.to_user ASC`,
+    [norm(fromUser)]
+  );
+}
+
+// Accounts that share THEIR library with this one.
+async function listIncomingShares(toUser) {
+  return db.promises.all(
+    `SELECT s.from_user AS username, ${SHARE_COLUMNS}
+       FROM user_shares s LEFT JOIN users u ON u.username = s.from_user
+      WHERE s.to_user = ? ORDER BY s.from_user ASC`,
+    [norm(toUser)]
+  );
+}
+
+// Share with ONE more user. Additive, and idempotent: sharing with someone already on
+// the list is a no-op rather than an error, so a retried tool call is safe.
+//
+// The existence check is deliberate and is NOT a disclosure: the caller is naming an
+// account they intend to grant access to, so "no such user" tells them only about a
+// name they supplied. That is the opposite of removeOutgoingShare below, where the
+// same information WOULD be an oracle.
+async function addOutgoing(fromUser, toUser) {
+  const owner = norm(fromUser);
+  const target = typeof toUser === 'string' ? toUser.trim().toLowerCase() : '';
+  if (!target) {
+    throw serviceError(CODES.VALIDATION, 'username is required', { field: 'username' });
+  }
+  if (target === owner) {
+    throw serviceError(CODES.VALIDATION, 'you cannot share with yourself', { field: 'username' });
+  }
+  const exists = await db.promises.get('SELECT username FROM users WHERE username = ?', [target]);
+  if (!exists) {
+    throw serviceError(CODES.UNKNOWN_USERS, `Unknown user(s): ${target}`, { unknownUsers: [target] });
+  }
+  await db.promises.run(
+    'INSERT INTO user_shares (from_user, to_user, shared_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+    [owner, target, new Date().toISOString()]
+  );
+  // Read back rather than return what was sent: on the idempotent path the stored
+  // shared_at is the ORIGINAL one, and reporting today's date would tell the caller
+  // the grant is newer than it is.
+  return db.promises.get(
+    `SELECT s.to_user AS username, ${SHARE_COLUMNS}
+       FROM user_shares s LEFT JOIN users u ON u.username = s.to_user
+      WHERE s.from_user = ? AND s.to_user = ?`,
+    [owner, target]
+  );
+}
+
+// Stop sharing with one user.
+//
+// `removed` is decided PURELY by whether a share row went — never by whether the named
+// account exists. The adapter turns removed:false into a 404, so checking the users
+// table here would turn this route into a username oracle for any authenticated
+// caller: "404" for a real account with no share and "404" for a name that was never
+// an account have to be the same answer.
+async function removeOutgoing(fromUser, toUser) {
+  const ctx = await db.promises.run(
+    'DELETE FROM user_shares WHERE from_user = ? AND to_user = ?',
+    [norm(fromUser), norm(toUser)]
+  );
+  return { removed: ctx.changes };
+}
+
+// A shared library, PAGED. Same grant check as readSharedLibrary — and the check runs
+// BEFORE the page is read, so a viewer with no grant learns nothing about the size or
+// contents of the library, including from timing.
+//
+// There is deliberately no admin bypass anywhere on this path (openapi's
+// `x-admin-bypass: false`): a shared library is a consent relationship between two
+// users, not a resource the server owns.
+async function readSharedPage(ownerUsername, viewerUsername, opts = {}) {
+  const owner = norm(ownerUsername);
+  const viewer = norm(viewerUsername);
+  const grant = await db.promises.get(
+    `SELECT u.id AS "ownerId" FROM user_shares s JOIN users u ON u.username = s.from_user
+      WHERE s.from_user = ? AND s.to_user = ?`,
+    [owner, viewer]
+  );
+  // One answer for "no grant", "no such account" and "account deleted since". Telling
+  // them apart is a username oracle, and this is the route most likely to be probed.
+  if (!grant) throw serviceError(CODES.NOT_SHARED, 'Not shared with you.');
+  return libraryService.listPage(grant.ownerId, {
+    limit: opts.limit,
+    cursor: opts.cursor,
+  });
+}
+
 module.exports = {
   listOutgoing,
   listIncoming,
+  listOutgoingShares,
+  listIncomingShares,
+  addOutgoing,
+  removeOutgoing,
+  readSharedPage,
   replaceOutgoing,
   readSharedLibrary,
   revokeIncoming,

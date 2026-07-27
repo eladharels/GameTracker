@@ -617,6 +617,94 @@ const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
 // sit beside the catalog ones they belong with.
 const v2map = require('../services/v2');
 
+console.log('shares: the v2 surface (the SQL is itself the control here):');
+{
+  const dbMod = require('../db');
+  const sharesSvc = require('../services/shares');
+  const librarySvc = require('../services/library');
+  // The new share functions call db.promises.* THROUGH the module precisely so this
+  // works. A destructured binding would leave the stub installed and never called —
+  // the documented silent false pass, which has already happened once in this repo.
+  const withDb = async (handlers, fn) => {
+    const real = { get: dbMod.promises.get, all: dbMod.promises.all, run: dbMod.promises.run };
+    const issued = [];
+    for (const k of ['get', 'all', 'run']) {
+      dbMod.promises[k] = async (sql, params) => {
+        issued.push({ verb: k, sql: String(sql).replace(/\s+/g, ' ').trim(), params });
+        return handlers[k] ? handlers[k](sql, params) : (k === 'all' ? [] : null);
+      };
+    }
+    try { return { issued, result: await fn(issued) }; } finally { Object.assign(dbMod.promises, real); }
+  };
+
+  checkAsync('removeOutgoing NEVER looks at the users table', async () => {
+    // This is the username oracle. The adapter turns removed:false into a 404, so if
+    // this function distinguished "no such account" from "no such share" — even only
+    // by which query it runs, and so by how long it takes — any authenticated caller
+    // could enumerate accounts one DELETE at a time.
+    const { issued, result } = await withDb({ run: async () => ({ changes: 0 }) },
+      () => sharesSvc.removeOutgoing('root', 'ghost'));
+    assert.strictEqual(issued.length, 1, `expected exactly one statement, got ${issued.length}`);
+    assert.match(issued[0].sql, /^DELETE FROM user_shares WHERE from_user = \? AND to_user = \?$/);
+    assert.ok(!/\busers\b/.test(issued[0].sql), 'the revoke consulted the users table');
+    assert.deepStrictEqual(issued[0].params, ['root', 'ghost']);
+    assert.deepStrictEqual(result, { removed: 0 });
+  });
+  checkAsync('removeOutgoing lowercases both sides, or the DELETE matches nothing', async () => {
+    // Usernames are stored lowercase. A mixed-case path parameter that reached the
+    // DELETE verbatim would delete no row and report 404 on a share that plainly
+    // exists — v1 shipped exactly this bug in the admin release sweep.
+    const { issued } = await withDb({ run: async () => ({ changes: 1 }) },
+      () => sharesSvc.removeOutgoing('Root', 'ALICE'));
+    assert.deepStrictEqual(issued[0].params, ['root', 'alice']);
+  });
+
+  checkAsync('readSharedPage checks the grant BEFORE reading a single row', async () => {
+    let pageRead = 0;
+    const realPage = librarySvc.listPage;
+    librarySvc.listPage = async () => { pageRead++; return { data: [], meta: {} }; };
+    try {
+      const { issued } = await withDb({ get: async () => null },
+        () => sharesSvc.readSharedPage('root', 'ghost').catch((err) => err));
+      assert.strictEqual(pageRead, 0, 'a viewer with no grant reached the library');
+      assert.strictEqual(issued.length, 1, 'more than the grant check ran');
+      assert.match(issued[0].sql, /FROM user_shares s JOIN users u/);
+    } finally { librarySvc.listPage = realPage; }
+  });
+  checkAsync('a missing grant is not_shared — the SAME answer as no such account', async () => {
+    let code = null;
+    await withDb({ get: async () => null },
+      () => sharesSvc.readSharedPage('ghost', 'alice').catch((err) => { code = err.code; }));
+    assert.strictEqual(code, 'not_shared');
+  });
+
+  checkAsync('addOutgoing refuses a self-share and an empty name without touching the db', async () => {
+    for (const [from, to] of [['root', 'root'], ['root', 'ROOT'], ['root', '  '], ['root', null]]) {
+      const { issued } = await withDb({}, () => sharesSvc.addOutgoing(from, to).catch((e) => e));
+      assert.strictEqual(issued.length, 0, `addOutgoing(${from}, ${JSON.stringify(to)}) hit the database`);
+    }
+  });
+  checkAsync('addOutgoing READS BACK, so the idempotent path reports the original date', async () => {
+    // Returning the value just written would tell a caller re-adding an existing share
+    // that it was granted today. ON CONFLICT DO NOTHING means the stored row is the
+    // old one, so the response has to come from the table.
+    const stored = { username: 'alice', displayName: 'Alice', sharedAt: '2020-01-01T00:00:00.000Z' };
+    let call = 0;
+    const { result } = await withDb({
+      get: async () => { call++; return call === 1 ? { username: 'alice' } : stored; },
+      run: async () => ({ changes: 0 }),
+    }, () => sharesSvc.addOutgoing('root', 'Alice'));
+    assert.deepStrictEqual(result, stored);
+  });
+  checkAsync('an unknown recipient carries the name in unknownUsers, the v2 extension key', async () => {
+    let err = null;
+    await withDb({ get: async () => null },
+      () => sharesSvc.addOutgoing('root', 'ghost').catch((e) => { err = e; }));
+    assert.strictEqual(err.code, 'unknown_users');
+    assert.deepStrictEqual(err.details.unknownUsers, ['ghost']);
+  });
+}
+
 console.log('library.addResolvedGame (an omitted status must not DEMOTE a stored game):');
 {
   const lib = require('../services/library');

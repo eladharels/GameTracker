@@ -651,6 +651,7 @@ paths:
     get:
       tags: [sharing]
       operationId: listShares
+      x-implemented: true
       x-required-scope: library
       summary: Who this account shares with, and who shares with it
       responses:
@@ -677,6 +678,7 @@ paths:
     put:
       tags: [sharing]
       operationId: replaceOutgoingShares
+      x-implemented: true
       x-required-scope: library
       summary: Replace the whole outgoing share list
       description: |
@@ -721,6 +723,7 @@ paths:
     post:
       tags: [sharing]
       operationId: addOutgoingShare
+      x-implemented: true
       x-required-scope: library
       summary: Share with one more user
       description: Additive. Sharing with someone already on the list is a no-op, not an error.
@@ -757,6 +760,7 @@ paths:
     delete:
       tags: [sharing]
       operationId: removeOutgoingShare
+      x-implemented: true
       x-required-scope: library
       summary: Stop sharing with one user
       description: |
@@ -786,6 +790,7 @@ paths:
     get:
       tags: [sharing]
       operationId: getSharedLibrary
+      x-implemented: true
       x-required-scope: library
       # The ONE operation where being an administrator grants nothing. A shared library
       # is a consent relationship between two users, not a resource the server owns.

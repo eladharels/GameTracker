@@ -2198,6 +2198,86 @@ v2Router.post('/library/games', (req, res) => {
     .catch((err) => v2.send(res, err, { log: '[v2] add game failed:' }));
 });
 
+// GET /api/v2/shares — both directions in one call.
+//
+// v1 needs three requests and a directory fetch to build this: one for outgoing, one
+// for incoming, and the whole user list to turn usernames into display names.
+v2Router.get('/shares', (req, res) => {
+  Promise.all([
+    sharesService.listOutgoingShares(req.user.username),
+    sharesService.listIncomingShares(req.user.username),
+  ])
+    .then(([outgoing, incoming]) => res.json({
+      outgoing: outgoing.map(v2.share),
+      incoming: incoming.map(v2.share),
+    }))
+    .catch((err) => v2.send(res, err, { log: '[v2] share list failed:' }));
+});
+
+// PUT /api/v2/shares/outgoing — REPLACE, and spelled as the verb that means it.
+//
+// v1 spells this POST while giving it replace semantics, so an agent "adding a share"
+// by posting one name silently revoked every other one. Same service call, honest
+// method; POST below adds.
+v2Router.put('/shares/outgoing', (req, res) => {
+  const usernames = (req.body || {}).usernames;
+  if (!Array.isArray(usernames)) {
+    return v2.send(res, {
+      code: SVC.VALIDATION, message: 'usernames must be an array',
+      details: { field: 'usernames' },
+    });
+  }
+  if (usernames.length > 200) {
+    return v2.send(res, {
+      code: SVC.VALIDATION, message: 'usernames may contain at most 200 entries',
+      details: { field: 'usernames' },
+    });
+  }
+  sharesService.replaceOutgoing(req.user.username, usernames)
+    .then(() => sharesService.listOutgoingShares(req.user.username))
+    .then((rows) => res.json({ data: rows.map(v2.share) }))
+    .catch((err) => v2.send(res, err, { log: '[v2] share replace failed:' }));
+});
+
+// POST /api/v2/shares/outgoing — add ONE. Additive and idempotent.
+v2Router.post('/shares/outgoing', (req, res) => {
+  sharesService.addOutgoing(req.user.username, (req.body || {}).username)
+    // 201 on the idempotent path too: the resource named in the request exists after
+    // this call either way, and a 200/201 split here would only tell the caller
+    // whether they had already done it — which is not a fact worth a branch.
+    .then((row) => res.status(201).json(v2.share(row)))
+    .catch((err) => v2.send(res, err, { log: '[v2] share add failed:' }));
+});
+
+// DELETE /api/v2/shares/outgoing/:username — revoke one.
+//
+// The 404 is decided by whether a ROW was deleted, never by whether the account
+// exists. See services/shares.js#removeOutgoing: the alternative is a username oracle.
+v2Router.delete('/shares/outgoing/:username', (req, res) => {
+  sharesService.removeOutgoing(req.user.username, req.params.username)
+    .then(({ removed }) => {
+      if (!removed) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such share' });
+      res.status(204).end();
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] share revoke failed:' }));
+});
+
+// GET /api/v2/shares/incoming/:username/games — read a library shared with you.
+//
+// THE ONE OPERATION WHERE BEING AN ADMINISTRATOR GRANTS NOTHING, and the reason there
+// is no ownership middleware on this route: the grant check is the authorization, and
+// it is a consent relationship between two accounts rather than a resource the server
+// owns. A 403 here is deliberately indistinguishable from a library that does not
+// exist.
+v2Router.get('/shares/incoming/:username/games', (req, res) => {
+  sharesService.readSharedPage(req.params.username, req.user.username, {
+    limit: req.query.limit,
+    cursor: req.query.cursor,
+  })
+    .then((page) => res.json({ data: page.data.map(v2.libraryGame), meta: page.meta }))
+    .catch((err) => v2.send(res, err, { log: '[v2] shared library read failed:' }));
+});
+
 // ─── EVERY v2 ROUTE MUST BE REGISTERED ABOVE THIS LINE ───────────────────────
 //
 // Express matches layers in stack order, so the catch-all below answers anything

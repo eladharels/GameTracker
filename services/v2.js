@@ -241,8 +241,20 @@ function searchMeta(result) {
   };
 }
 
+// One side of a sharing relationship. `displayName` falls back to the username — the
+// LEFT JOIN behind this leaves it null when the account has been removed while the
+// grant survives, and a client rendering `null` as a name shows an empty row rather
+// than telling the owner who they are still sharing with.
+function share(row) {
+  return {
+    username: row.username,
+    displayName: row.displayName || row.username,
+    sharedAt: row.sharedAt ?? null,
+  };
+}
+
 module.exports = {
   toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings, backlogEntry,
-  catalogGame, searchMeta,
+  catalogGame, searchMeta, share,
   PLANNED_CODES, WWW_AUTHENTICATE,
 };
