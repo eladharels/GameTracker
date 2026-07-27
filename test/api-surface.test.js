@@ -255,6 +255,12 @@ const EXPECTED_V2 = {
   // No ownership middleware, deliberately: the grant check IS the authorization, and
   // there is no admin bypass on this path. See openapi's `x-admin-bypass: false`.
   'GET /api/v2/shares/incoming/:username/games': 'pat',
+  'GET /api/v2/users': 'pat-admin:can_manage_users',
+  'POST /api/v2/users': 'pat-admin:can_manage_users',
+  'PATCH /api/v2/users/:userId': 'pat-admin:can_manage_users',
+  'DELETE /api/v2/users/:userId': 'pat-admin:can_manage_users',
+  'GET /api/v2/settings': 'pat-admin:can_manage_users',
+  'PATCH /api/v2/settings': 'pat-admin:can_manage_users',
 };
 
 // separately and by hand. A route reaching 'public' without being on this list is a
@@ -431,11 +437,28 @@ check('v2 auth refusals are 401, and carry WWW-Authenticate', () => {
   // it guards (403 where the published contract says 401) shipped once already, and
   // nothing anywhere else would notice it coming back.
   const source = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
-  const fn = source.slice(source.indexOf('function patRequired'), source.indexOf('function requirePermission'));
+  // Bounded by the NEXT function, whatever it is. An earlier version sliced to
+  // `function requirePermission`, and requireAdminScope landing between the two put
+  // its (correct) SVC.FORBIDDEN inside the window — the assertion below fired on code
+  // it was never about. A boundary that moves when a function is inserted is a
+  // boundary that reports the wrong function.
+  const patStart = source.indexOf('function patRequired');
+  const fn = source.slice(patStart, source.indexOf('\nfunction ', patStart + 1));
   assert.ok(fn.includes('SVC.UNAUTHENTICATED'),
     'patRequired no longer answers 401 — 403 is what an insufficient SCOPE returns, and '
     + 'collapsing the two leaves a client unable to tell re-authenticate from stop-retrying');
   assert.ok(!fn.includes('SVC.FORBIDDEN'), 'patRequired answers FORBIDDEN somewhere');
+
+  // And the inverse conflation, which is the same defect pointing the other way: the
+  // scope guard must NOT answer 401, or a client holding a perfectly valid
+  // library-scoped token is told to re-authenticate and loops forever trying.
+  const adminStart = source.indexOf('function requireAdminScope');
+  assert.ok(adminStart !== -1, 'requireAdminScope is gone — the v2 admin routes have no guard');
+  const guard = source.slice(adminStart, source.indexOf('\nfunction ', adminStart + 1));
+  assert.ok(guard.includes('SVC.FORBIDDEN'), 'requireAdminScope no longer answers 403');
+  assert.ok(!guard.includes('SVC.UNAUTHENTICATED'),
+    'requireAdminScope answers 401 — an insufficient scope is not an authentication failure, '
+    + 'and a client told to re-authenticate over it will retry forever');
   assert.ok(fn.includes('WWW_AUTHENTICATE'), 'the 401 no longer carries WWW-Authenticate (RFC 9110)');
 });
 

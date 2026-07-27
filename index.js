@@ -50,7 +50,10 @@ const { CODES: SVC } = require('./services/errors');
 // One table maps a service error code to a status and decides whether its message
 // may be shown to the caller. See services/problem.js — `expose` is the point.
 const problem = require('./services/problem');
-const { sanitizeText: sanitizeDirectoryText, RESERVED_USERNAMES, isValidEmailAddress, validatePassword } = require('./user-rules');
+// RESERVED_USERNAMES and validatePassword are no longer imported here: the last route
+// that applied them by hand (POST /api/users) now calls services/users.js#create,
+// which holds both rules for BOTH surfaces.
+const { sanitizeText: sanitizeDirectoryText, isValidEmailAddress } = require('./user-rules');
 
 // Upper bound on PUT /api/user/:username/backlog-reorder.
 const MAX_BACKLOG_REORDER = 1000;
@@ -1420,12 +1423,31 @@ function patRequired(req, res, next) {
     .catch((err) => v2.send(res, err, { log: '[v2] Token verification failed:' }));
 }
 
-// NOTE: the v2 admin guard (`requireAdminScope`) is deliberately NOT here yet.
-// API_V2_DESIGN.md D1 addendum #1 states the rule — middleware guarding nothing is
-// the unused-code problem a previous review already raised — and the first version of
-// this slice broke it by defining the guard with no route to apply it to. It lands
-// with the first admin operation, together with the `pat-admin:` tier and the
-// x-required-scope comparison it is the only thing that exercises.
+// The v2 admin guard. Lands WITH the admin operations, not before them — a guard with
+// no route to apply to is the unused-code problem a previous review raised.
+//
+// It reads `req.user.can_manage_users`, which authService.authorize() has ALREADY
+// narrowed by the token's scopes: an admin account holding a library-scoped token
+// arrives here with the flag false. That is the whole scope model in one line —
+// re-deriving the answer from `req.auth.scopes` here would be a second copy of the
+// rule, and the two would eventually disagree about which one is authoritative.
+//
+// NAMED and tagged with `.requiredPermission`, exactly like requirePermission: it is
+// how test/api-surface.test.js derives the `pat-admin:` tier from the middleware chain
+// and compares it against the spec's `x-required-scope`. An anonymous closure makes
+// the strictest tier in the app the one the gate cannot see.
+function requireAdminScope(req, res, next) {
+  if (!req.user || !req.user.can_manage_users) {
+    // 403, not 404. The caller is authenticated and the resource exists; hiding that
+    // buys nothing here, because an administrative surface's existence is documented.
+    return v2.send(res, {
+      code: SVC.FORBIDDEN,
+      message: 'this operation requires a token with the admin scope',
+    });
+  }
+  return next();
+}
+requireAdminScope.requiredPermission = 'can_manage_users';
 
 function requirePermission(permission) {
   // NAMED, and tagged with the permission it enforces. Both matter: the Express
@@ -1867,81 +1889,26 @@ function parseRouteId(value) {
   return /^[0-9]+$/.test(String(value)) ? Number(value) : null;
 }
 
-// `me` would be shadowed by the /api/user/me/* routes registered before
-// /api/user/:username/*; `root`/`admin` are reserved to avoid impersonation
-// confusion with the seeded administrator account.
-// RESERVED_USERNAMES now lives in ./user-rules.js so create-local-admin.js — which
-// creates an ADMIN account — is held to the same rule. It was not.
-
 // Create user (admin only)
 app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  const { username, password, can_manage_users = 0, email = '', shares_library = 0 } = req.body || {};
-
-  // Same rule as the update path, from the same place. Creation was the other half
-  // of the write: an admin could not overwrite a user's notification target, but
-  // could plant one at provisioning time — and that survives the new user changing
-  // their password, so it outlives them taking ownership of the account.
-  //
-  // Checked before bcrypt.hash and before the INSERT. The columns are nullable, so
-  // the row is created without them and the user sets them on My Account.
-  try {
-    usersService.assertNotUserOwned(req.body);
-  } catch (err) {
-    return problem.send(res, err, { log: '[Users] Create rejected:' });
-  }
-
-  // Enhanced validation. Both fields must be STRINGS — a JSON number reaching
-  // bcrypt.hash rejects with "Illegal arguments", and an unhandled rejection takes
-  // the whole process down under Node's default --unhandled-rejections=throw.
-  if (typeof username !== 'string' || typeof password !== 'string') {
-    return res.status(400).json({ error: 'Username and password must be strings' });
-  }
-
-  if (!username.trim() || !password.trim()) {
-    return res.status(400).json({ error: 'Username and password cannot be empty' });
-  }
-
-  // Password strength requirements
-  // ONE definition of the policy, shared with services/users.js. Create and update
-  // already drifted once: extracting the users service dropped both the type and
-  // length rules from the update path while create kept them, so a one-character
-  // password was settable on any account — including an admin's.
-  //
-  // The typeof check above still runs first, so its combined username+password
-  // message is unchanged; validatePassword supplies the length rule.
-  const passwordProblem = validatePassword(password);
-  if (passwordProblem) {
-    return res.status(400).json({ error: passwordProblem });
-  }
-
-  if (email !== '' && !isValidEmailAddress(email)) {
-    return res.status(400).json({ error: 'email must be a single valid address, or empty' });
-  }
-
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username.toLowerCase();
-
-  // `me` collides with the /api/user/me/* routes, which are registered first and
-  // would shadow this account entirely; the others are reserved to avoid confusion
-  // with the seeded administrator.
-  if (RESERVED_USERNAMES.includes(normalizedUsername)) {
-    return res.status(400).json({ error: `'${normalizedUsername}' is a reserved username.` });
-  }
-
-  bcrypt.hash(password, 10).then(hash => {
-    db.run(
-      // RETURNING id -- required for this.lastID under Postgres. See db.js.
-      'INSERT INTO users (username, password, can_manage_users, email, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-      [normalizedUsername, hash, can_manage_users ? 1 : 0, email, new Date().toISOString(), 'local', normalizedUsername, shares_library ? 1 : 0],
-      function (err) {
-        if (err) return res.status(400).json({ error: 'User already exists' });
-        res.json({ success: true, id: this.lastID });
+  // The WHOLE body to the service, same as the update path and for the same reasons:
+  // every rule this route used to spell out — the string check that keeps a JSON
+  // number away from bcrypt.hash, the password policy, the email validation, the
+  // reserved-name list, the notification-target refusal — now lives in
+  // services/users.js#create, where /api/v2 gets exactly the same ones.
+  usersService.create(req.body || {})
+    .then((created) => res.json({ success: true, id: created.id }))
+    .catch((err) => {
+      // v1's ONE deliberate divergence from the taxonomy, and it is a compatibility
+      // shim rather than a rule: a duplicate username has always answered 400 here,
+      // and the service reports CONFLICT, which problem.js maps to 409. v2 gets the
+      // 409 its spec documents; this keeps the status v1 clients have seen since the
+      // beginning. The message is unchanged in both.
+      if (err && err.code === SVC.CONFLICT) {
+        return res.status(400).json({ error: 'User already exists' });
       }
-    );
-  }).catch(err => {
-    console.error('[Users] Password hashing failed:', err.message);
-    res.status(500).json({ error: 'Failed to create user' });
-  });
+      problem.send(res, err, { log: '[Users] Create failed:', fallback: 'Failed to create user' });
+    });
 });
 
 // List users (manager only)
@@ -2276,6 +2243,108 @@ v2Router.get('/shares/incoming/:username/games', (req, res) => {
   })
     .then((page) => res.json({ data: page.data.map(v2.libraryGame), meta: page.meta }))
     .catch((err) => v2.send(res, err, { log: '[v2] shared library read failed:' }));
+});
+
+// --- admin -------------------------------------------------------------------
+//
+// `requireAdminScope` is repeated per route rather than applied with a path-scoped
+// `v2Router.use('/users', ...)`. Both work; only one is visible to
+// test/api-surface.test.js, which credits a `.use()` to a route only when it is
+// mounted at the router root — deliberately, because attributing a path-scoped
+// middleware to every route in a router is the fail-open reporting that gate was
+// fixed for. Repeating the word makes each route's tier derivable from its own chain.
+
+// GET /api/v2/users — every account, without a single notification target.
+v2Router.get('/users', requireAdminScope, (req, res) => {
+  usersService.listAll()
+    .then((rows) => res.json({ data: rows.map(v2.user) }))
+    .catch((err) => v2.send(res, err, { log: '[v2] user list failed:' }));
+});
+
+// POST /api/v2/users — create an account. 409 on a duplicate, which is the status the
+// v1 route answers 400 for; see that route for why the two differ.
+v2Router.post('/users', requireAdminScope, (req, res) => {
+  let fields;
+  try {
+    fields = v2.userWrite(req.body || {}, { create: true });
+  } catch (err) { return v2.send(res, err); }
+  usersService.create(fields)
+    .then((created) => usersService.listAll()
+      .then((rows) => {
+        // From the admin projection, not from what was sent: it is the shape every
+        // other user response uses, and building this one from the request would let
+        // a client learn a value the database does not actually hold.
+        const row = rows.find((r) => r.id === created.id);
+        res.status(201).json(v2.user(row));
+      }))
+    .catch((err) => v2.send(res, err, { log: '[v2] user create failed:' }));
+});
+
+// PATCH /api/v2/users/:userId — partial update. PATCH, because that is what it does;
+// v1 spells the same partial semantics PUT.
+v2Router.patch('/users/:userId', requireAdminScope, (req, res) => {
+  const id = parseRouteId(req.params.userId);
+  if (id === null) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such user' });
+  let fields;
+  try {
+    fields = v2.userWrite(req.body || {}, { create: false });
+  } catch (err) { return v2.send(res, err); }
+  usersService.update(id, fields, req.user.id)
+    .then(() => usersService.listAll())
+    .then((rows) => {
+      const row = rows.find((r) => r.id === id);
+      if (!row) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such user' });
+      res.json(v2.user(row));
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] user update failed:' }));
+});
+
+// DELETE /api/v2/users/:userId — 204. The service refuses self-deletion and `root`.
+v2Router.delete('/users/:userId', requireAdminScope, (req, res) => {
+  const id = parseRouteId(req.params.userId);
+  if (id === null) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such user' });
+  usersService.remove(id, req.user.id)
+    .then(() => res.status(204).end())
+    .catch((err) => v2.send(res, err, { log: '[v2] user delete failed:' }));
+});
+
+// GET /api/v2/settings — server configuration, secrets masked.
+//
+// A non-admin gets 403 here. v1 answers 200 with `{}`, which for a browser rendering
+// the Diagnostics tab is harmless and for a programmatic client is a correctness hole:
+// `{}` cannot be told apart from "this server has no SMTP configured", so an agent
+// reasoning over it states something false about the system.
+v2Router.get('/settings', requireAdminScope, (req, res) => {
+  try {
+    const { sections, degraded } = settingsService.readForRoleWithStatus(true);
+    res.json(v2.maskedSettings(sections, settingsService.listApiKeys(), degraded));
+  } catch (err) {
+    v2.send(res, err, { log: '[v2] settings read failed:' });
+  }
+});
+
+// PATCH /api/v2/settings — partial, per section.
+//
+// TWO stores behind one operation: services/settings.js#write owns the five sections,
+// #writeApiKeys owns `apikeys`. They are separate because API keys are write-only —
+// there is no masked form to send back, which is what makes a read-modify-write here
+// unable to destroy them. Both refuse outright when the file could not be read, since
+// a merge on top of a failed load erases every credential on the instance.
+v2Router.patch('/settings', requireAdminScope, (req, res) => {
+  try {
+    const { sections, apikeys } = v2.settingsUpdate(req.body || {});
+    // Sections first. If the API-key write then throws, the sections are already
+    // saved — the alternative is a two-file transaction over a single JSON document,
+    // which does not exist. Both writers are refused as a unit by the same unreadable
+    // -file check, so the case this leaves open is a disk error mid-write, which
+    // loadForWrite() already refuses to compound.
+    settingsService.write(sections, true);
+    if (apikeys) settingsService.writeApiKeys(apikeys);
+    const { sections: after, degraded } = settingsService.readForRoleWithStatus(true);
+    res.json(v2.maskedSettings(after, settingsService.listApiKeys(), degraded));
+  } catch (err) {
+    v2.send(res, err, { log: '[v2] settings write failed:' });
+  }
 });
 
 // ─── EVERY v2 ROUTE MUST BE REGISTERED ABOVE THIS LINE ───────────────────────

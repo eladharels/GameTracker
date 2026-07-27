@@ -16,7 +16,7 @@ const db = require('../db');
 // so a test can observe the SQL it issues. See listAll.
 const { get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
-const { isValidEmailAddress, validatePassword, sanitizeText } = require('../user-rules');
+const { isValidEmailAddress, validatePassword, sanitizeText, RESERVED_USERNAMES } = require('../user-rules');
 
 
 // Where a user's notifications GO. The user's own setting, on My Account — never an
@@ -79,15 +79,17 @@ async function listAll() {
 // Gotify token and got `{success:true}` back has been told something false; a 400
 // naming the field is the only answer that leaves the caller correctly informed.
 //
-// EXPORTED because account CREATION never went through this service — it is still an
-// inline INSERT in index.js. A guard living only inside update() covered one of the
-// two write paths while the error message it threw claimed to cover both, so an
-// admin could simply plant the credentials at provisioning time instead: the new
-// user changes their password and every release notification keeps flowing to the
-// admin's device, surviving the user taking full ownership of the account.
+// Called by BOTH write paths — update() and create() — as their first statement, so
+// it cannot be reached past a partial write. It exists as a separate function rather
+// than as a line inside update() because a guard covering one of the two paths, while
+// its message claimed to cover both, is what let an admin plant the credentials at
+// provisioning time instead: the new user changes their password and every release
+// notification keeps flowing to the admin's device, surviving them taking full
+// ownership of the account.
 //
-// Callers must invoke this BEFORE any other work, so it cannot be reached past a
-// partial write.
+// Still exported. Nothing in this repository needs it from outside now that create()
+// lives here, but it is the shape of the rule an out-of-service write path would have
+// to honour, and un-exporting it is how the next one silently does not.
 function assertNotUserOwned(fields) {
   for (const column of USER_OWNED_NOTIFICATION_COLUMNS) {
     if (typeof fields?.[column] !== 'undefined') {
@@ -195,6 +197,71 @@ async function update(id, fields, actingUserId) {
   const ctx = await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
   if (ctx.changes === 0) throw serviceError(CODES.NOT_FOUND, 'User not found');
   return { updated: ctx.changes };
+}
+
+// Create an account.
+//
+// EXTRACTED FROM THE ROUTE, and both surfaces call it. Creation was the one write in
+// this file that lived in index.js as an inline INSERT, and the cost was already
+// visible: `assertNotUserOwned` had to be exported and invoked by hand from the route,
+// because a guard inside update() covered one of the two write paths while claiming
+// both. Every rule below was in the route; none of them is new.
+//
+// The ONE thing the adapters still differ on is the duplicate-username STATUS. This
+// throws CONFLICT, which v2 renders as the 409 its spec documents; the v1 route maps
+// it back to the 400 it has always answered, in the adapter, with a comment. v1's wire
+// behaviour is frozen — that does not mean its rules have to be a second copy.
+async function create(fields) {
+  // BEFORE hashing and before the INSERT: an admin must not be able to plant a
+  // notification target at provisioning time, which would survive the new user
+  // changing their password and so outlive them taking ownership of the account.
+  assertNotUserOwned(fields);
+
+  const { username, password } = fields || {};
+  // Both must be STRINGS. A JSON number reaching bcrypt.hash rejects with "Illegal
+  // arguments", and under Node's default --unhandled-rejections=throw that takes the
+  // whole process down.
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    throw serviceError(CODES.VALIDATION, 'Username and password must be strings');
+  }
+  if (!username.trim() || !password.trim()) {
+    throw serviceError(CODES.VALIDATION, 'Username and password cannot be empty');
+  }
+  const passwordProblem = validatePassword(password);
+  if (passwordProblem) throw serviceError(CODES.VALIDATION, passwordProblem, { field: 'password' });
+
+  const email = fields.email === undefined || fields.email === null ? '' : String(fields.email).trim();
+  if (email !== '' && !isValidEmailAddress(email)) {
+    throw serviceError(CODES.VALIDATION, 'email must be a single valid address, or empty', { field: 'email' });
+  }
+
+  const normalized = username.toLowerCase();
+  // `me` collides with the /api/user/me/* routes, which are registered first and would
+  // shadow the account entirely; the rest are reserved to avoid confusion with the
+  // seeded administrator.
+  if (RESERVED_USERNAMES.includes(normalized)) {
+    throw serviceError(CODES.VALIDATION, `'${normalized}' is a reserved username.`, { field: 'username' });
+  }
+
+  const hash = await bcrypt.hash(password, 10);
+  let ctx;
+  try {
+    ctx = await db.promises.run(
+      // RETURNING id — required for lastID under Postgres. See db.js.
+      'INSERT INTO users (username, password, can_manage_users, email, created_at, origin, display_name, shares_library)'
+      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      [normalized, hash, fields.can_manage_users ? 1 : 0, email, new Date().toISOString(),
+        'local', normalized, fields.shares_library ? 1 : 0]
+    );
+  } catch (err) {
+    // SQLSTATE, not message matching — db.js divergence #11. 23505 is unique_violation,
+    // and the only unique constraint on this table is the username.
+    if (err && err.code === '23505') {
+      throw serviceError(CODES.CONFLICT, 'User already exists', { field: 'username' });
+    }
+    throw err;
+  }
+  return { id: ctx.lastID, username: normalized };
 }
 
 // Delete an account. Refuses self-deletion and the root account.
@@ -313,7 +380,7 @@ async function updateNotificationSettings(userId, fields) {
 }
 
 module.exports = {
-  listAll, findById, update, remove,
+  listAll, findById, create, update, remove,
   assertNotUserOwned, ADMIN_LIST_COLUMNS, USER_OWNED_NOTIFICATION_COLUMNS,
   ADMIN_WRITABLE_COLUMNS,
   readNotificationSettings, updateNotificationSettings, NOTIFICATION_DAYS_DEFAULT,

@@ -617,6 +617,157 @@ const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
 // sit beside the catalog ones they belong with.
 const v2map = require('../services/v2');
 
+console.log('v2 admin mappers (the rename is where a guard stops recognising a field):');
+{
+  const v2m = require('../services/v2');
+  const usersSvc = require('../services/users');
+  const throws = (fn) => { try { fn(); } catch (err) { return err; } return null; };
+
+  check('userWrite refuses every user-owned notification target, in BOTH spellings', () => {
+    // This is the one that has to hold. `userWrite` RENAMES fields, so a body carrying
+    // `gotifyToken` would arrive at the service under a name its
+    // USER_OWNED_NOTIFICATION_COLUMNS guard does not recognise — turning the refusal
+    // that guard exists for into a silent pass-through, on the exact credential an
+    // admin must not be able to plant. Both the column name and its camelCase form
+    // have to be rejected here.
+    const camel = (c) => c.replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+    for (const column of usersSvc.USER_OWNED_NOTIFICATION_COLUMNS) {
+      for (const spelling of [column, camel(column)]) {
+        for (const opts of [{ create: true }, { create: false }]) {
+          const err = throws(() => v2m.userWrite({ username: 'x', password: 'y', [spelling]: 'v' }, opts));
+          assert.ok(err, `userWrite accepted ${spelling} (create: ${opts.create})`);
+          assert.strictEqual(err.code, 'validation');
+        }
+      }
+    }
+  });
+  check('userWrite maps exactly the four writable fields and nothing else', () => {
+    const out = v2m.userWrite({
+      password: 'p', email: 'e@x.y', canManageUsers: true, sharesLibrary: true,
+    }, { create: false });
+    assert.deepStrictEqual(out,
+      { password: 'p', email: 'e@x.y', can_manage_users: true, shares_library: true });
+    // The mapped names must be exactly the columns the service will write. A typo here
+    // is a field silently ignored, reported as a successful update.
+    for (const key of Object.keys(out)) {
+      assert.ok(usersSvc.ADMIN_WRITABLE_COLUMNS.includes(key),
+        `userWrite emits '${key}', which services/users.js will not write`);
+    }
+  });
+  check('userWrite carries username on create and REFUSES it on update', () => {
+    assert.strictEqual(v2m.userWrite({ username: 'bob', password: 'p' }, { create: true }).username, 'bob');
+    // Renaming an account is not an operation this API has. Passing it through would
+    // reach update(), which does not write it — a silent no-op reported as success.
+    assert.strictEqual(throws(() => v2m.userWrite({ username: 'bob' }, { create: false })).code, 'validation');
+  });
+  check('an empty update is refused before it becomes a SQL syntax error', () => {
+    assert.ok(throws(() => v2m.userWrite({}, { create: false })));
+    // ...but an empty CREATE is not this function's business to refuse — the service
+    // rejects a missing username and password with a message about those fields.
+    assert.deepStrictEqual(v2m.userWrite({}, { create: true }),
+      { can_manage_users: false, shares_library: false });
+  });
+
+  check('user() emits the User shape and no notification target can reach it', () => {
+    // Driven with a row carrying every user-owned column, which is what a `SELECT *`
+    // regression in the projection would hand this mapper.
+    const row = {
+      id: 7, username: 'u', display_name: 'U', email: 'e@x.y', can_manage_users: 1,
+      origin: 'ldap', shares_library: 0, created_at: '2020-01-01T00:00:00.000Z',
+      // Distinctive values: a one-character topic would match a letter of 'username'
+      // and make this assertion fire on nothing.
+      password: '$2a$10$hashvalue', ntfy_url: 'http://ntfy.example',
+      ntfy_topic: 'topic-secret', gotify_url: 'http://gotify.example',
+      gotify_token: 'gotify-secret', telegram_chat_id: '99887766',
+    };
+    const out = v2m.user(row);
+    assert.deepStrictEqual(Object.keys(out).sort(), ['canManageUsers', 'createdAt', 'displayName',
+      'email', 'id', 'origin', 'sharesLibrary', 'username']);
+    const body = JSON.stringify(out);
+    for (const secret of ['$2a$10$hashvalue', 'http://ntfy.example', 'topic-secret',
+      'http://gotify.example', 'gotify-secret', '99887766']) {
+      assert.ok(!body.includes(secret), `user() leaked ${secret}`);
+    }
+    assert.strictEqual(out.canManageUsers, true);
+    assert.strictEqual(out.sharesLibrary, false);
+  });
+
+  check('maskedSettings reports API keys as STATE — never a value, prefix or suffix', () => {
+    // v1 emits the last six characters of every key. That is a disclosure, and worse it
+    // round-trips: a client reading and writing back stores the mask AS the key.
+    const out = v2m.maskedSettings(
+      { smtp: { host: 'h', pass: '__unchanged__' }, telegram: { bot_token: '__unchanged__' } },
+      { rawg_api_key: { set: true, source: 'settings', masked: '••••••••abcdef' },
+        igdb_client_id: { set: false, source: null, masked: '' } },
+      false);
+    assert.deepStrictEqual(Object.keys(out.apikeys.rawgApiKey).sort(), ['configured', 'source']);
+    assert.strictEqual(out.apikeys.rawgApiKey.configured, true);
+    assert.strictEqual(out.apikeys.rawgApiKey.source, 'settings');
+    assert.strictEqual(out.apikeys.igdbClientId.source, null);
+    assert.ok(!JSON.stringify(out).includes('abcdef'), 'a fragment of an API key reached the response');
+    assert.ok(!JSON.stringify(out).includes('masked'));
+    // ...and the storage names are renamed, so a client never learns them either.
+    assert.strictEqual(out.telegram.botToken, '__unchanged__');
+    assert.ok(!('bot_token' in out.telegram));
+  });
+  check('maskedSettings reports every section and every key, always', () => {
+    // A section absent from settings.json must still appear as {} — an absent key
+    // cannot be told apart from an unreadable file, which is the exact defect the
+    // `degraded` flag exists to fix one level up.
+    const out = v2m.maskedSettings({}, {}, true);
+    assert.strictEqual(out.degraded, true);
+    assert.deepStrictEqual(Object.keys(out).sort(),
+      ['apikeys', 'degraded', 'gotify', 'ldap', 'ntfy', 'smtp', 'telegram']);
+    assert.deepStrictEqual(Object.keys(out.apikeys).sort(), Object.keys(v2m.API_KEY_FIELDS).sort());
+    for (const state of Object.values(out.apikeys)) {
+      assert.deepStrictEqual(state, { configured: false, source: null });
+    }
+  });
+
+  check('settingsUpdate renames both ways and refuses what the spec closes', () => {
+    const { sections, apikeys } = v2m.settingsUpdate({
+      telegram: { botToken: 'b' }, smtp: { pass: 'p' }, apikeys: { igdbClientId: 'c' },
+    });
+    assert.deepStrictEqual(sections.telegram, { bot_token: 'b' });
+    assert.deepStrictEqual(sections.smtp, { pass: 'p' });
+    assert.deepStrictEqual(apikeys, { igdb_client_id: 'c' });
+    // additionalProperties: false, enforced rather than described. Dropping quietly is
+    // the failure this API documents as unacceptable for notification targets; it is
+    // no better here, and it also fills settings.json with keys only a hand edit
+    // removes.
+    for (const bad of [{ oidc: {} }, { smtp: { hostname: 'x' } }, { apikeys: { openaiKey: 'x' } },
+      { telegram: { bot_token: 'b' } }]) {
+      assert.strictEqual(throws(() => v2m.settingsUpdate(bad))?.code, 'validation',
+        `settingsUpdate accepted ${JSON.stringify(bad)}`);
+    }
+    // No apikeys key at all means "do not touch them" — distinct from an empty object.
+    assert.strictEqual(v2m.settingsUpdate({ smtp: {} }).apikeys, null);
+  });
+  check('the two settings tables are inverses, field for field', () => {
+    // The read and the write mappers are separate tables. If they disagree, a client
+    // that reads a field cannot write it back under the name it was given — which is
+    // exactly how `smtp.to` became unsettable in an earlier revision of the spec.
+    const settingsSvc = require('../services/settings');
+    for (const section of Object.keys(v2m.SETTINGS_FIELDS)) {
+      assert.ok(settingsSvc.SECTIONS.includes(section),
+        `v2 exposes a settings section the service will not write: ${section}`);
+    }
+    for (const section of settingsSvc.SECTIONS) {
+      assert.ok(v2m.SETTINGS_FIELDS[section], `settings section '${section}' is unreachable from v2`);
+    }
+    // Every secret the service masks must be reachable under some wire name, or the
+    // mask is published for a field nothing can ever clear.
+    for (const [section, key] of settingsSvc.SECRET_FIELDS) {
+      const wireNames = Object.entries(v2m.SETTINGS_FIELDS[section] || {})
+        .filter(([, col]) => col === key).map(([wire]) => wire);
+      assert.strictEqual(wireNames.length, 1,
+        `secret ${section}.${key} maps to ${wireNames.length} wire names, expected exactly 1`);
+    }
+    assert.deepStrictEqual(Object.values(v2m.API_KEY_FIELDS).sort(),
+      [...settingsSvc.API_KEY_NAMES].sort());
+  });
+}
+
 console.log('shares: the v2 surface (the SQL is itself the control here):');
 {
   const dbMod = require('../db');
@@ -1310,7 +1461,15 @@ check('no INSERT into users writes a caller-supplied notification target', () =>
   const fs = require('fs');
   const path = require('path');
   const root = path.join(__dirname, '..');
-  const files = fs.readdirSync(root).filter((f) => f.endsWith('.js'));
+  // services/ too. The create route's INSERT moved into services/users.js, and a scan
+  // of the root alone would have gone from four statements to three WITHOUT noticing
+  // that one of them had simply moved out of view — a coverage hole that reports
+  // itself as a smaller, tidier codebase.
+  const files = [
+    ...fs.readdirSync(root).filter((f) => f.endsWith('.js')).map((f) => f),
+    ...fs.readdirSync(path.join(root, 'services')).filter((f) => f.endsWith('.js'))
+      .map((f) => path.join('services', f)),
+  ];
   const inserts = files.flatMap((f) =>
     [...fs.readFileSync(path.join(root, f), 'utf8').matchAll(/INSERT INTO users \([^)]*\)/g)]
       .map((m) => ({ file: f, sql: m[0] })));
@@ -1320,14 +1479,30 @@ check('no INSERT into users writes a caller-supplied notification target', () =>
       assert.ok(!statement.includes(column), `${column} is back in a user INSERT in ${file}: ${statement}`);
     }
   }
-  const source = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
-  // The create route must still run the guard; there is no other path that refuses a
-  // credential planted at provisioning time.
+  // The guard must still run on the create path. It now lives in the service, where
+  // BOTH surfaces reach it — checking index.js alone would pass while v2's create
+  // bypassed it entirely, which is the same "narrower than its own name" failure this
+  // test's comment above is about.
+  const createSource = fs.readFileSync(path.join(root, 'services', 'users.js'), 'utf8');
+  const createBody = createSource.slice(createSource.indexOf('async function create('),
+    createSource.indexOf('// Delete an account'));
   assert.ok(
-    /assertNotUserOwned/.test(source),
-    'index.js no longer calls assertNotUserOwned — POST /api/users can plant a '
-    + "notification target on a new account, which survives the user changing their password"
+    /assertNotUserOwned/.test(createBody),
+    'services/users.js#create no longer calls assertNotUserOwned — an admin can plant a '
+    + 'notification target on a new account, which survives the user changing their password'
   );
+});
+
+checkAsync('the create path REFUSES a planted notification target, on both surfaces', async () => {
+  // The assertion above reads the source; this drives the function. Both matter: the
+  // grep proves the call has not been deleted, and this proves it still refuses —
+  // a call whose result was ignored would satisfy the grep alone.
+  for (const column of usersService.USER_OWNED_NOTIFICATION_COLUMNS) {
+    let code = null;
+    await usersService.create({ username: 'victim', password: 'longenoughpassword', [column]: 'x' })
+      .catch((err) => { code = err.code; });
+    assert.strictEqual(code, 'validation', `create() accepted a caller-supplied ${column}`);
+  }
 });
 
 // --- services/auth.js: personal access tokens ---------------------------------

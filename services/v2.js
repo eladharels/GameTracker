@@ -12,6 +12,7 @@
 // table says must not be shown is not shown here either.
 
 const { PROBLEMS } = require('./problem');
+const { serviceError, CODES } = require('./errors');
 
 // The code used when nothing in the table matches — a bug or a database failure.
 const CODE_INTERNAL = 'internal';
@@ -253,8 +254,175 @@ function share(row) {
   };
 }
 
+// An account, as an administrator sees it.
+//
+// NO notification targets, in either direction. ntfy topic, Gotify token, Telegram
+// chat id and the two server URLs are bearer secrets addressing a user's devices; no
+// administrative function needs them, and v1 returned two of them for every user to
+// every admin. The projection behind this (services/users.js#ADMIN_LIST_COLUMNS) does
+// not select them, and this mapper names its fields one by one so a column added to
+// that projection cannot reach the wire by simply existing.
+function user(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name ?? null,
+    email: row.email ?? null,
+    canManageUsers: !!row.can_manage_users,
+    origin: row.origin || 'local',
+    sharesLibrary: !!row.shares_library,
+    createdAt: row.created_at ?? null,
+  };
+}
+
+// An account, as WRITTEN. camelCase in, column names out.
+//
+// A STRICT ALLOWLIST, and an unknown field is a 400. Two reasons, and the second is
+// the one that matters: `UserCreate` and `UserUpdate` are both
+// `additionalProperties: false`, and — because this maps names — a body carrying
+// `ntfy_topic` or `gotifyToken` would otherwise arrive at the service under a name its
+// USER_OWNED_NOTIFICATION_COLUMNS guard does not recognise, turning a refusal into a
+// silent drop. The guard still runs (it is the service's first statement); this makes
+// sure the two agree on what a field is called.
+const USER_WRITE_FIELDS = Object.freeze({
+  password: 'password',
+  email: 'email',
+  canManageUsers: 'can_manage_users',
+  sharesLibrary: 'shares_library',
+});
+
+function userWrite(body, { create = false } = {}) {
+  const input = Object(body);
+  const out = {};
+  for (const key of Object.keys(input)) {
+    if (create && key === 'username') { out.username = input.username; continue; }
+    const column = USER_WRITE_FIELDS[key];
+    if (!column) {
+      throw serviceError(CODES.VALIDATION, `unknown field: ${key}`, { field: key });
+    }
+    out[column] = input[key];
+  }
+  if (create) {
+    // Defaults are applied HERE rather than left to the column: the service reads
+    // `fields.can_manage_users ? 1 : 0`, so an absent key already means false — this
+    // only makes the spec's documented default explicit and the two impossible to
+    // disagree about.
+    if (out.can_manage_users === undefined) out.can_manage_users = false;
+    if (out.shares_library === undefined) out.shares_library = false;
+  } else if (Object.keys(out).length === 0) {
+    // `minProperties: 1` in the spec. The service also refuses an empty update, but
+    // with a message about SQL rather than about the request.
+    throw serviceError(CODES.VALIDATION, 'send at least one field to update');
+  }
+  return out;
+}
+
+// --- settings ----------------------------------------------------------------
+//
+// The ONE place the storage names and the wire names are related. settings.json keeps
+// `telegram.bot_token` and `apikeys.igdb_client_id`; the wire says `botToken` and
+// `igdbClientId`. Both directions are ALLOWLISTS built from the same table, so a
+// section or field that is not listed cannot be read out and cannot be written in.
+const SETTINGS_FIELDS = Object.freeze({
+  smtp: Object.freeze({ host: 'host', port: 'port', user: 'user', pass: 'pass', from: 'from', to: 'to' }),
+  ntfy: Object.freeze({ url: 'url' }),
+  gotify: Object.freeze({ url: 'url' }),
+  telegram: Object.freeze({ botToken: 'bot_token' }),
+  ldap: Object.freeze({ url: 'url', base: 'base', bindDn: 'bindDn', bindPass: 'bindPass', requiredGroup: 'requiredGroup' }),
+});
+
+const API_KEY_FIELDS = Object.freeze({
+  igdbClientId: 'igdb_client_id',
+  igdbClientSecret: 'igdb_client_secret',
+  igdbBearerToken: 'igdb_bearer_token',
+  rawgApiKey: 'rawg_api_key',
+  thegamesdbApiKey: 'thegamesdb_api_key',
+});
+
+// Server configuration as READ. Secrets arrive already masked by
+// services/settings.js#readForRole — this only renames.
+//
+// API keys are reported as STATE, never as a masked value. v1 emits the last six
+// characters of each key, which is a disclosure and, worse, round-trips: a client that
+// reads and writes back stores the mask AS the key. `configured` and `source` answer
+// the question an operator actually has ("is it set, and do I edit it here or restart
+// the container?") without either failure.
+function maskedSettings(sections, apiKeyStates, degraded) {
+  const out = { degraded: !!degraded, apikeys: {} };
+  for (const [section, fields] of Object.entries(SETTINGS_FIELDS)) {
+    const stored = sections?.[section] || {};
+    const mapped = {};
+    for (const [wire, key] of Object.entries(fields)) {
+      if (stored[key] !== undefined) mapped[wire] = stored[key];
+    }
+    out[section] = mapped;
+  }
+  for (const [wire, key] of Object.entries(API_KEY_FIELDS)) {
+    const state = apiKeyStates?.[key];
+    out.apikeys[wire] = {
+      configured: !!state?.set,
+      // `?? null`, and `source` is only ever 'settings' | 'env' | null. Nothing here
+      // carries any character of the key — see ApiKeyState in the spec for why that
+      // is a rule rather than a preference.
+      source: state?.set ? (state.source ?? null) : null,
+    };
+  }
+  return out;
+}
+
+// Server configuration as WRITTEN: the inverse of the table above, split into the two
+// stores that own the two halves.
+//
+// An unknown section or field is a 400, not a silent drop. The spec marks every object
+// here `additionalProperties: false`, and dropping quietly is the failure mode the
+// admin surface already documents for notification targets: a tool told the write
+// succeeded when it did not has been told something false. It also stops junk keys
+// reaching settings.json, which only a hand edit can remove.
+function settingsUpdate(body) {
+  const input = Object(body);
+  const sections = {};
+  let apikeys = null;
+  for (const name of Object.keys(input)) {
+    if (name === 'apikeys') {
+      const incoming = Object(input.apikeys);
+      apikeys = {};
+      for (const wire of Object.keys(incoming)) {
+        const key = API_KEY_FIELDS[wire];
+        if (!key) {
+          throw serviceError(CODES.VALIDATION, `unknown api key: ${wire}`, { field: `apikeys.${wire}` });
+        }
+        apikeys[key] = incoming[wire];
+      }
+      continue;
+    }
+    const fields = SETTINGS_FIELDS[name];
+    if (!fields) {
+      throw serviceError(CODES.VALIDATION, `unknown settings section: ${name}`, { field: name });
+    }
+    // Left as-is when it is not an object: services/settings.js#mergeSection has the
+    // one type check, and duplicating it here is how the two end up disagreeing about
+    // what `null` means.
+    const incoming = input[name];
+    if (incoming === null || typeof incoming !== 'object' || Array.isArray(incoming)) {
+      sections[name] = incoming;
+      continue;
+    }
+    const mapped = {};
+    for (const wire of Object.keys(incoming)) {
+      const key = fields[wire];
+      if (!key) {
+        throw serviceError(CODES.VALIDATION, `unknown field: ${name}.${wire}`, { field: `${name}.${wire}` });
+      }
+      mapped[key] = incoming[wire];
+    }
+    sections[name] = mapped;
+  }
+  return { sections, apikeys };
+}
+
 module.exports = {
   toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings, backlogEntry,
-  catalogGame, searchMeta, share,
+  catalogGame, searchMeta, share, user, userWrite, maskedSettings, settingsUpdate,
+  SETTINGS_FIELDS, API_KEY_FIELDS, USER_WRITE_FIELDS,
   PLANNED_CODES, WWW_AUTHENTICATE,
 };

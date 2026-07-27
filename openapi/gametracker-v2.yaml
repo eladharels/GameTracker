@@ -831,6 +831,7 @@ paths:
     get:
       tags: [admin]
       operationId: listUsers
+      x-implemented: true
       summary: All accounts
       x-required-scope: admin
       description: |
@@ -856,6 +857,7 @@ paths:
     post:
       tags: [admin]
       operationId: createUser
+      x-implemented: true
       summary: Create an account
       x-required-scope: admin
       description: |
@@ -891,6 +893,7 @@ paths:
     patch:
       tags: [admin]
       operationId: updateUser
+      x-implemented: true
       summary: Update an account
       x-required-scope: admin
       description: |
@@ -915,6 +918,7 @@ paths:
     delete:
       tags: [admin]
       operationId: deleteUser
+      x-implemented: true
       summary: Delete an account
       x-required-scope: admin
       description: |
@@ -936,6 +940,7 @@ paths:
     get:
       tags: [admin]
       operationId: getSettings
+      x-implemented: true
       summary: Server configuration
       x-required-scope: admin
       description: |
@@ -956,6 +961,7 @@ paths:
     patch:
       tags: [admin]
       operationId: updateSettings
+      x-implemented: true
       summary: Update server configuration
       x-required-scope: admin
       description: |
