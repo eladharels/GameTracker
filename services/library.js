@@ -18,6 +18,7 @@ const db = require('../db');
 // Shared promise surface — see db.js. Four services had each written their own.
 const { all, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
+const { sanitizeText } = require('../user-rules');
 
 const norm = (v) => (v ? String(v).toLowerCase() : '');
 
@@ -105,6 +106,12 @@ async function moveBacklogItem(userId, gameId, direction) {
   const game = rows[idx];
   const swap = rows[swapIdx];
   await db.withTransaction(async (tx) => {
+    // Same lock the upsert takes. Without it this two-row swap and reorderBacklog's
+    // row-by-row rewrite grab the same rows in opposite orders and deadlock —
+    // measured at 55 in 60 rounds of four concurrent writers, surfacing to the user
+    // as a bare 500 on a drag. Taking one lock first means there is no ordering left
+    // to invert.
+    await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, userId]);
     await tx.query('UPDATE user_games SET backlog_order = ? WHERE id = ?', [swap.backlog_order, game.id]);
     await tx.query('UPDATE user_games SET backlog_order = ? WHERE id = ?', [game.backlog_order, swap.id]);
   });
@@ -124,6 +131,8 @@ async function moveBacklogItem(userId, gameId, direction) {
 async function reorderBacklog(userId, order) {
   let updated = 0;
   await db.withTransaction(async (tx) => {
+    // See moveBacklogItem: every writer of backlog_order for a user takes this first.
+    await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, userId]);
     for (let i = 0; i < order.length; i++) {
       const result = await tx.query(
         'UPDATE user_games SET backlog_order = ? WHERE user_id = ? AND game_id = ?',
@@ -143,6 +152,32 @@ async function reorderBacklog(userId, order) {
 // App.jsx, plus 'unreleased' which the server assigns).
 const STATUSES = Object.freeze(['wishlist', 'playing', 'done', 'backlog', 'unreleased']);
 
+// The facts an upsert can produce. The notification layer MAPS these to text; it does
+// not define them. Before this they were bare string literals here that happened to
+// match notifyEvent's `type` parameter — an undeclared string match between two
+// modules, which is the drift the service layer exists to prevent.
+const EVENTS = Object.freeze({
+  ADDED: 'add',
+  STATUS_CHANGED: 'status',
+  RELEASED: 'release',
+});
+
+// Bounds. game_id is part of a unique btree index, whose per-row limit is 2704 bytes
+// — exceeding it raised a 500 where a 400 belongs. game_name reaches email subjects
+// and push notification bodies.
+const MAX_GAME_ID = 200;
+const MAX_GAME_NAME = 400;
+
+// A release date we are willing to reason about: YYYY-MM-DD (optionally with a time
+// suffix) that actually parses. Returns null for anything else, which the caller
+// treats as "no date".
+function validReleaseDate(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return null;
+  return Number.isFinite(Date.parse(s)) ? s : null;
+}
+
 // Date-only comparison. 'YYYY-MM-DD' parses as UTC midnight, so both sides are
 // flattened to local midnight — a game releasing TODAY counts as released, matching
 // the daily cron.
@@ -151,6 +186,29 @@ function isReleaseInFuture(dateStr) {
   const d = new Date(dateStr); d.setHours(0, 0, 0, 0);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return d > today;
+}
+
+// Which events an upsert produces, given the status before and after.
+//
+// Pure and exported so it can be asserted without a database: it decides how many
+// push notifications real people receive, and it was previously only reachable
+// through a transaction.
+//
+// v1's rules, preserved exactly — including the wart in the last line.
+function decideEvents(priorStatus, status) {
+  const events = [];
+  // A game leaving 'unreleased' for anything else has, by definition of the coercion
+  // above, a real release date that is not in the future. The extra `releaseDate &&
+  // !isReleaseInFuture(...)` conjuncts v1 carried here were provably redundant.
+  if (priorStatus === 'unreleased' && status !== 'unreleased') {
+    events.push(EVENTS.RELEASED);
+  }
+  // NOTE for v2 (also recorded on the v2 list, not only here): re-saving a row with
+  // an UNCHANGED status emits ADDED, so the user is told a game was added to a
+  // library it was already in. Left alone because changing it changes how many
+  // notifications people receive, which is not a refactor's call to make.
+  events.push(priorStatus !== null && priorStatus !== status ? EVENTS.STATUS_CHANGED : EVENTS.ADDED);
+  return events;
 }
 
 // Add a game, or update the one already there.
@@ -170,8 +228,17 @@ function isReleaseInFuture(dateStr) {
 // concurrent adds could read the same maximum and both claim it — a duplicate
 // position that makes the up/down reorder a no-op between the pair.
 async function upsertGame(userId, fields) {
-  const gameId = fields.gameId == null ? '' : String(fields.gameId);
-  const gameName = fields.gameName == null ? '' : String(fields.gameName);
+  // Bounded, and only real strings. An object became the literal '[object Object]',
+  // so two different objects collided onto ONE row; and a 5000-character id blew past
+  // the btree index limit (2704 bytes) and surfaced as a 500 "DB error" rather than a
+  // 400 — measured. express.json()'s 100kb default was the only ceiling in place.
+  const gameId = typeof fields.gameId === 'string' || typeof fields.gameId === 'number'
+    ? String(fields.gameId).trim() : '';
+  const gameName = sanitizeText(fields.gameName, MAX_GAME_NAME);
+  if (gameId.length > MAX_GAME_ID) {
+    throw serviceError(CODES.VALIDATION,
+      `gameId must be at most ${MAX_GAME_ID} characters`, { field: 'gameId' });
+  }
   // Normalised BEFORE the allowlist, not after. Rejecting 'Done' outright would be a
   // new 400 on input v1 accepted, and we know something has been sending capitalised
   // statuses — the stored 'Done' row is the evidence, and the SPA carries a
@@ -187,7 +254,14 @@ async function upsertGame(userId, fields) {
       `status must be one of: ${STATUSES.join(', ')}`, { field: 'status' });
   }
 
-  const releaseDate = fields.releaseDate || null;
+  // A releaseDate that is present but UNPARSEABLE used to defeat the coercion
+  // entirely: 'not-a-date' is truthy, so `!releaseDate` was false, and
+  // isReleaseInFuture compares NaN and returns false — so the game kept the status
+  // the caller asked for, with a garbage date, and the one control this function
+  // exists to enforce never fired. Anything that is not a real YYYY-MM-DD is treated
+  // as ABSENT, which routes it to 'unreleased'. Deliberately not a 400: v1 accepted
+  // these, and the safe default costs the caller nothing.
+  const releaseDate = validReleaseDate(fields.releaseDate);
   const status = (!releaseDate || isReleaseInFuture(releaseDate)) ? 'unreleased' : requested;
 
   return db.withTransaction(async (tx) => {
@@ -196,18 +270,7 @@ async function upsertGame(userId, fields) {
       [userId, gameId]
     )).rows[0];
 
-    // v1's event rules, preserved exactly.
-    //
-    // NOTE for v2: re-saving a row with an UNCHANGED status still emits 'add', so
-    // the user is told a game was added to a library it was already in. Left as-is
-    // here because changing it changes how many notifications people receive, which
-    // is not a refactor's call to make.
-    const events = [];
-    if (prior && prior.status === 'unreleased' && status !== 'unreleased'
-        && releaseDate && !isReleaseInFuture(releaseDate)) {
-      events.push('release');
-    }
-    events.push(prior && prior.status !== status ? 'status' : 'add');
+    const events = decideEvents(prior ? prior.status : null, status);
 
     let backlogOrder = null;
     if (status === 'backlog') {
@@ -225,9 +288,9 @@ async function upsertGame(userId, fields) {
         // Advisory rather than a row lock, because the thing being contended is the
         // NEXT position, and there is no row to lock for a value that does not exist
         // yet. Held to the end of this transaction and scoped by user_id, so two
-        // different users never wait on each other. 4242 is an arbitrary namespace
-        // that keeps this lock distinct from any other advisory lock.
-        await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [4242, userId]);
+        // different users never wait on each other. The namespace lives in db.js
+        // because advisory lock keys are database-global.
+        await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, userId]);
         // The alias MUST stay double-quoted. Postgres folds unquoted identifiers to
         // lower case, so `AS maxOrder` returns a `maxorder` property, `.maxOrder`
         // reads undefined, and every new backlog item silently gets order 1 — which
@@ -260,7 +323,8 @@ async function upsertGame(userId, fields) {
 }
 
 module.exports = {
-  STATUSES, isReleaseInFuture, upsertGame,
+  STATUSES, EVENTS, MAX_GAME_ID, MAX_GAME_NAME,
+  isReleaseInFuture, validReleaseDate, decideEvents, upsertGame,
   listGamesFor,
   listOwnGames,
   listGamesWithAliases,

@@ -582,6 +582,66 @@ check('send() never echoes an unknown error message', () => {
   assert.ok(!JSON.stringify(captured).includes('postgres://'), 'a raw error leaked into the response');
 });
 
+// services/library.js — the pure parts. decideEvents decides how many push
+// notifications real people receive, and until it was extracted it could not be
+// exercised without a database.
+const libraryService = require('../services/library');
+const { EVENTS } = libraryService;
+
+console.log('isReleaseInFuture (must agree with the cron AND with App.jsx):');
+check('today counts as released, tomorrow does not', () => {
+  const day = 86400000;
+  const iso = (t) => new Date(t).toISOString().slice(0, 10);
+  assert.strictEqual(libraryService.isReleaseInFuture(iso(Date.now())), false, 'today read as future');
+  assert.strictEqual(libraryService.isReleaseInFuture(iso(Date.now() + 2 * day)), true);
+  assert.strictEqual(libraryService.isReleaseInFuture(iso(Date.now() - day)), false);
+});
+check('an absent date is not "in the future"', () => {
+  for (const v of ['', null, undefined]) assert.strictEqual(libraryService.isReleaseInFuture(v), false);
+});
+
+console.log('validReleaseDate (an unparseable date used to defeat the coercion):');
+check('only a real YYYY-MM-DD survives', () => {
+  assert.strictEqual(libraryService.validReleaseDate('1998-11-19'), '1998-11-19');
+  assert.strictEqual(libraryService.validReleaseDate(' 2099-01-01 '), '2099-01-01');
+  // 'not-a-date' is TRUTHY, so `!releaseDate` was false, and isReleaseInFuture
+  // compares NaN and returns false — the coercion to 'unreleased' never fired and
+  // the game kept whatever status was asked for, with a garbage date stored.
+  for (const bad of ['not-a-date', 'tomorrow', '2024-13-99', '{"x":1}', 42, null, '']) {
+    assert.strictEqual(libraryService.validReleaseDate(bad), null, `${JSON.stringify(bad)} was accepted`);
+  }
+});
+
+console.log('decideEvents:');
+check('a new game is ADDED', () => {
+  assert.deepStrictEqual(libraryService.decideEvents(null, 'playing'), [EVENTS.ADDED]);
+});
+check('a changed status is STATUS_CHANGED', () => {
+  assert.deepStrictEqual(libraryService.decideEvents('done', 'playing'), [EVENTS.STATUS_CHANGED]);
+});
+check('leaving unreleased emits RELEASED first, then the status change', () => {
+  // Order matters: the user must not read "changed status" before "has been released".
+  assert.deepStrictEqual(libraryService.decideEvents('unreleased', 'playing'),
+    [EVENTS.RELEASED, EVENTS.STATUS_CHANGED]);
+});
+check('staying unreleased emits neither RELEASED nor a change', () => {
+  assert.deepStrictEqual(libraryService.decideEvents('unreleased', 'unreleased'), [EVENTS.ADDED]);
+});
+check('the preserved v1 wart: an unchanged re-save still says ADDED', () => {
+  // Documented, not accidental — changing it changes how many notifications people
+  // receive. Asserted so that if someone does change it, they do it deliberately.
+  assert.deepStrictEqual(libraryService.decideEvents('done', 'done'), [EVENTS.ADDED]);
+});
+check('every event value is one notifyEvent understands', () => {
+  assert.deepStrictEqual(Object.values(EVENTS).sort(), ['add', 'release', 'status']);
+});
+
+console.log('game field bounds:');
+check('STATUSES is the documented five, frozen', () => {
+  assert.deepStrictEqual([...libraryService.STATUSES], ['wishlist', 'playing', 'done', 'backlog', 'unreleased']);
+  assert.ok(Object.isFrozen(libraryService.STATUSES));
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

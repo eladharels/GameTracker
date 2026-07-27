@@ -45,7 +45,7 @@ const { CODES: SVC } = require('./services/errors');
 // One table maps a service error code to a status and decides whether its message
 // may be shown to the caller. See services/problem.js — `expose` is the point.
 const problem = require('./services/problem');
-const { RESERVED_USERNAMES, isValidEmailAddress, validatePassword } = require('./user-rules');
+const { sanitizeText: sanitizeDirectoryText, RESERVED_USERNAMES, isValidEmailAddress, validatePassword } = require('./user-rules');
 
 // Upper bound on PUT /api/user/:username/backlog-reorder.
 const MAX_BACKLOG_REORDER = 1000;
@@ -1084,14 +1084,8 @@ function safeForLog(value, maxLength = 200) {
 // and is then rendered in the UI, included in notification subjects and written to
 // exports. React escapes markup so this is not XSS, but a multi-line display name
 // corrupts every one of those surfaces. Collapse whitespace, drop controls, bound it.
-function sanitizeDirectoryText(value, maxLength = 200) {
-  if (typeof value !== 'string') return '';
-  const cleaned = value
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trim() : cleaned;
-}
+// sanitizeDirectoryText moved to user-rules.js — the game-name write path needs the
+// same collapse, and two copies of a sanitiser is how they drift.
 
 // Notification helpers and transports (escapeHtml, isSafeImageUrl, the
 // instance-metadata host guard, sendEmail/sendNtfy/sendGotify/sendTelegram and the
@@ -1210,10 +1204,16 @@ app.post('/api/user/:username/games', authRequired, ownershipRequired, (req, res
         // to go. notifyEvent already swallows, which is the one place that earns its
         // keep, but relying on that silently would be the kind of assumption this
         // codebase keeps paying for.
-        for (const event of result.events) {
-          notifyEvent(event, { gameName, coverUrl }, normalizedUsername, result.status)
-            .catch((err) => console.error('[Library] Notification dispatch failed:', err.message));
-        }
+        // CHAINED, not fired together. A game leaving 'unreleased' produces two
+        // events, and firing both at once makes their arrival order a race — the
+        // user could read "changed status to playing" before "has been released!".
+        // v1 was strictly sequential; only the position relative to the response
+        // changed. Chaining also stops two concurrent per-user channel lookups.
+        result.events.reduce(
+          (prev, event) => prev.then(() =>
+            notifyEvent(event, { gameName, coverUrl }, normalizedUsername, result.status)),
+          Promise.resolve(),
+        ).catch((err) => console.error('[Library] Notification dispatch failed:', err?.message || err));
       })
       .catch((err) => problem.send(res, err, { log: '[Library] Upsert failed:' }));
   });

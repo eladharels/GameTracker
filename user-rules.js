@@ -56,7 +56,26 @@ function validatePassword(value) {
   return null;
 }
 
+
+// Collapse untrusted display text: strip control characters, fold whitespace, bound
+// the length. Used for BOTH directory-supplied names (display_name, cn) and
+// client-supplied game names — the latter reach notification bodies and, for
+// Telegram, a Markdown message, so a name carrying CR/LF or C1 controls corrupts
+// whatever renders it, and reaches a log line on other paths.
+//
+// React escapes markup, so this is not an XSS control. It is a "one value stays one
+// value" control.
+function sanitizeText(value, maxLength = 200) {
+  if (typeof value !== 'string') return '';
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trim() : cleaned;
+}
+
 module.exports = {
+  sanitizeText,
   RESERVED_USERNAMES, validateUsername, isValidEmailAddress,
   MIN_PASSWORD_LENGTH, validatePassword,
 };

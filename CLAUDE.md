@@ -99,7 +99,10 @@ GameTracker/
 │                                   #   Express router and asserts every route's auth tier.
 │                                   #   Adding a route without recording its tier FAILS CI
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
-├── migrations/                     # Numbered .sql schema migrations
+├── migrations/                     # Numbered .sql schema migrations. 002 adds the
+│                                   #   user_games.status CHECK — its `IS NULL` disjunct
+│                                   #   is mandatory (the column is nullable and a failed
+│                                   #   migration takes the backend down)
 ├── scripts/
 │   └── migrate-sqlite-to-postgres.js   # One-shot data migration (manual, idempotent)
 ├── sent_notifications.json         # Notification deduplication log (gitignored)
@@ -229,7 +232,7 @@ GameTracker/
 | game_name | TEXT | |
 | cover_url | TEXT | Image URL |
 | release_date | TEXT | YYYY-MM-DD |
-| status | TEXT | `wishlist`, `playing`, `done`, `backlog`, `unreleased` |
+| status | TEXT | `wishlist`, `playing`, `done`, `backlog`, `unreleased`. CHECK-constrained since migration 002; the API also allowlists it. Was unvalidated, which is how a `Done` row reached production |
 | steam_app_id | TEXT | For Steam price lookups |
 | last_price | TEXT | Formatted price string (e.g., "₪59.99") |
 | last_price_updated | TEXT | ISO timestamp |

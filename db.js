@@ -39,8 +39,10 @@
 //  9. **Every run/get/all uses a DIFFERENT pooled connection.** A multi-statement
 //     logical operation therefore spans connections and CANNOT be made atomic or
 //     rolled back through this shim -- use withTransaction(). Session-scoped
-//     state (SET, temp tables, advisory locks) is unusable here for the same
-//     reason: the next call will not see it.
+//     state (SET, temp tables, advisory locks) is unusable THROUGH THE SHIM for
+//     the same reason: the next call will not see it. Inside withTransaction()
+//     they are available and one connection is guaranteed -- that is how
+//     backlog_order serialises. Take keys from LOCKS, never a literal.
 // 10. A `statement_timeout` (default 15s) is now in force. A long query aborts
 //     with SQLSTATE 57014 where SQLite would simply have kept going.
 // 11. `err.code` is a 5-character SQLSTATE ('23505', '22P02'), not a string like
@@ -254,6 +256,26 @@ function all(sql, params, cb) {
   query(sql, a.params).then((res) => a.cb(null, res.rows), (err) => a.cb(err));
 }
 
+// Advisory lock namespaces. DATABASE-GLOBAL, so they belong in one place: a magic
+// number chosen inside a service silently collides with the next one, and the
+// collision presents as unexplained latency rather than an error.
+//
+// Only usable inside withTransaction() — see divergence #9. pg_advisory_xact_lock is
+// released when the transaction ends, on COMMIT and on ROLLBACK alike, including the
+// poisoned-client path below.
+//
+// NOTE: statement_timeout (15s) applies to the LOCK WAIT too, so heavy contention
+// aborts with SQLSTATE 57014 rather than hanging. That is the failure mode we want,
+// but it is a 500 to the caller. Also, withTransaction takes its pooled connection
+// BEFORE the lock, so a convoy holds pool slots while it waits.
+const LOCKS = Object.freeze({
+  // Serialises everything that reads-then-writes user_games.backlog_order for one
+  // user: the upsert's position allocation, the up/down swap, and the wholesale
+  // reorder. All three must take it, or the ones that do not deadlock against each
+  // other — measured at 55 deadlocks in 60 rounds of four concurrent writers.
+  BACKLOG_ORDER: 4242,
+});
+
 // Runs `fn` inside a single transaction on one dedicated connection.
 // Used by the shares batch-write and by the migration runner.
 async function withTransaction(fn) {
@@ -330,6 +352,7 @@ async function close() {
 
 module.exports = {
   pool,
+  LOCKS,
   query,
   run,
   get,
