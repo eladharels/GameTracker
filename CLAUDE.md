@@ -82,6 +82,10 @@ GameTracker/
 │                                   #   decides whether a service's message may be shown to the
 │                                   #   caller; a 500 never echoes one. Adapters call
 │                                   #   problem.send(res, err, ...) instead of hand-rolling a ladder
+│   ├── auth.js                     # Personal access tokens: minting, verification, and the
+│   │                               #   scope rule. Scopes only ever NARROW the privilege
+│   │                               #   read from `users` — never grant. Deliberately does
+│   │                               #   NOT contain the interactive LDAP login
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
 │   ├── library.js                  # Game library + backlog ordering + the upsert
 │   ├── catalog.js                  # IGDB/RAWG/TheGamesDB search, normalise, merge.
@@ -116,7 +120,7 @@ GameTracker/
 │                                   #   green. Two of the three clients (Android, the planned
 │                                   #   MCP) are not in this repo and cannot be grepped
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
-├── migrations/                     # Numbered .sql schema migrations. 002 adds the
+├── migrations/                     # Numbered .sql schema migrations. 003 adds api_tokens. 002 adds the
 │                                   #   user_games.status CHECK — its `IS NULL` disjunct
 │                                   #   is mandatory (the column is nullable and a failed
 │                                   #   migration takes the backend down)
@@ -307,6 +311,15 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 
 - **Local auth**: bcrypt-hashed passwords stored in Postgres
 - **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure
+- **Personal access tokens (PATs)**: for scripts and the planned MCP, so nothing has to store the
+  owner's password. Opaque `gt_pat_<base64url>`, SHA-256 hashed in `api_tokens` (never stored in
+  plaintext — a database dump yields no working credentials), revoked by DELETEing one row. Two
+  scopes only, `library` and `admin`. **A scope may only NARROW the privilege read from `users`,
+  never grant it**: a library-scoped token held by an admin is not an admin, and an admin-scoped
+  token held by a non-admin does not become one. Minted by `create-api-token.js`; accepted by v1's
+  `authRequired` alongside JWTs (additive — no route or response shape changed). The login rate
+  limiter lives inside the login route, so token auth never reaches it; that is deliberate, since
+  5 retries from an MCP client would otherwise lock the owner out for 15 minutes.
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
@@ -411,6 +424,7 @@ docker compose -f docker-compose.yaml exec backend node <script> [args]
 | Script | Purpose | `--dry-run` |
 |---|---|---|
 | `create-local-admin.js` | Create a new admin user from the CLI | — |
+| `create-api-token.js` | Mint a personal access token (printed ONCE, on stdout alone) | — |
 | `reset-root-password.js` | Reset the root user's password | — |
 | `update_library_prices.js` | Manually trigger a Steam price update | — |
 | `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token | — |

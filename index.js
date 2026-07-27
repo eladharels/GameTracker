@@ -42,6 +42,7 @@ const libraryService = require('./services/library');
 const catalogService = require('./services/catalog');
 const jobsService = require('./services/jobs');
 const usersService = require('./services/users');
+const authService = require('./services/auth');
 const settingsService = require('./services/settings');
 const notifications = require('./services/notifications');
 const { CODES: SVC } = require('./services/errors');
@@ -1255,9 +1256,42 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
 function authRequired(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  const credential = auth.slice(7);
+
+  // Personal access tokens, ADDITIVE to v1 rather than a change to it: a new
+  // credential type on an existing header, no route and no response shape altered,
+  // so the freeze holds. It is here and not only in v2 because it is what lets a
+  // script or an MCP server stop storing the owner's actual password today.
+  //
+  // Routed on the prefix, never authorized on it — a value shaped like a token is
+  // still verified against the database, and one that is not is treated as a JWT
+  // exactly as before.
+  //
+  // The login rate limiter is untouched by design: it lives inside the login route,
+  // so token auth never reaches it. That matters — 5 retries from an MCP client
+  // would otherwise lock the owner out of their own instance for 15 minutes.
+  if (authService.looksLikePat(credential)) {
+    return authService.verifyToken(credential)
+      .then((identity) => {
+        // One answer for unknown, expired and orphaned. Distinguishing them tells a
+        // prober which of their guesses was once real.
+        if (!identity) return res.status(401).json({ error: 'Invalid token' });
+        // Scope NARROWS the account's privilege and can never widen it, so every
+        // existing route keeps working unchanged: a library-scoped token simply
+        // arrives with can_manage_users false and requirePermission refuses it.
+        req.user = authService.authorize(identity);
+        req.auth = { kind: 'pat', scopes: identity.scopes, tokenId: identity.tokenId };
+        next();
+      })
+      .catch((err) => {
+        console.error('[Auth] Token verification failed:', err.message);
+        res.status(500).json({ error: 'DB error' });
+      });
+  }
+
   let payload;
   try {
-    payload = jwt.verify(auth.slice(7), JWT_SECRET);
+    payload = jwt.verify(credential, JWT_SECRET);
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -1277,6 +1311,10 @@ function authRequired(req, res, next) {
         origin: user.origin || 'local',
         display_name: user.display_name || user.username,
       };
+      // A password login carries no scope restriction — the interactive session is
+      // the account. Recorded so a handler can tell the two credential types apart
+      // without inspecting the header again.
+      req.auth = { kind: 'jwt', scopes: authService.ALL_SCOPES, tokenId: null };
       next();
     });
 }

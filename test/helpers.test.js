@@ -981,6 +981,172 @@ check('no INSERT into users writes a caller-supplied notification target', () =>
   );
 });
 
+// --- services/auth.js: personal access tokens ---------------------------------
+//
+// The scope rule gets the most attention here because it is the only thing standing
+// between a library-scoped MCP token and the admin routes, and because it is a rule
+// that fails SILENTLY in the dangerous direction: a scope that accidentally grants
+// looks exactly like a scope that correctly permits.
+
+const authService = require('../services/auth');
+
+check('a scope can only NARROW privilege, never grant it', () => {
+  const admin = { id: 1, username: 'root', can_manage_users: true, origin: 'local', display_name: 'root' };
+  const plain = { id: 2, username: 'jane', can_manage_users: false, origin: 'local', display_name: 'jane' };
+
+  // An admin account holding a library-only token is NOT an admin for that request.
+  // This is the whole point: it is what makes handing an MCP server a token safe.
+  assert.strictEqual(
+    authService.authorize({ user: admin, scopes: ['library'] }).can_manage_users, false,
+    'a library-scoped token kept its holder\'s admin rights'
+  );
+  // ...and an admin-scoped token held by a NON-admin does not become one. A scope is
+  // a filter over privilege the account already has, not a grant of privilege.
+  assert.strictEqual(
+    authService.authorize({ user: plain, scopes: ['admin'] }).can_manage_users, false,
+    'an admin scope GRANTED admin to an account that does not have it'
+  );
+  // The only combination that authorises.
+  assert.strictEqual(authService.authorize({ user: admin, scopes: ['admin', 'library'] }).can_manage_users, true);
+});
+
+check('authorize() emits the same shape the JWT path does', () => {
+  // Every route reads req.user. If the two credential types produced different
+  // shapes, a route would work under one and break under the other — and the one
+  // that breaks would be the one nobody clicks through by hand.
+  const user = { id: 3, username: 'jane', can_manage_users: false, origin: 'ldap', display_name: 'Jane' };
+  const out = authService.authorize({ user, scopes: ['library'] });
+  assert.deepStrictEqual(Object.keys(out).sort(),
+    ['can_manage_users', 'display_name', 'id', 'origin', 'username']);
+});
+
+check('a malformed scopes column falls back to LEAST privilege', () => {
+  // Read on every authenticated request. A parse failure that defaulted to admin
+  // would turn one corrupt row into privilege escalation.
+  for (const bad of ['', 'not json', '{}', 'null', '[]', '["nonsense"]', '["ADMIN"]']) {
+    assert.deepStrictEqual(authService.parseScopes(bad), ['library'],
+      `parseScopes(${JSON.stringify(bad)}) did not fall back to library-only`);
+  }
+  assert.deepStrictEqual(authService.parseScopes('["admin"]'), ['admin']);
+  // An unknown scope alongside a real one is dropped, not honoured.
+  assert.deepStrictEqual(authService.parseScopes('["admin","root","library"]'), ['admin', 'library']);
+});
+
+check('normaliseScopes refuses an empty result rather than minting a useless token', () => {
+  assert.deepStrictEqual(authService.normaliseScopes(['Admin', ' library ']), ['admin', 'library']);
+  assert.deepStrictEqual(authService.normaliseScopes(undefined), ['library']);
+  for (const empty of [[], ['nonsense'], ['', null]]) {
+    assert.throws(() => authService.normaliseScopes(empty), (err) => err.code === SVC.VALIDATION,
+      `normaliseScopes(${JSON.stringify(empty)}) produced a token that can do nothing`);
+  }
+});
+
+check('looksLikePat ROUTES a credential without authorizing it', () => {
+  assert.strictEqual(authService.looksLikePat('gt_pat_abc'), true);
+  // A JWT has three dot-separated segments and never this prefix.
+  assert.strictEqual(authService.looksLikePat('eyJhbGciOiJIUzI1NiJ9.e30.sig'), false);
+  for (const bad of [null, undefined, 42, {}, '', 'Gt_Pat_abc', ' gt_pat_abc']) {
+    assert.strictEqual(authService.looksLikePat(bad), false, `${JSON.stringify(bad)} was routed to the token verifier`);
+  }
+});
+
+check('the token hash is stable, and is not the token', () => {
+  const token = 'gt_pat_example';
+  const hash = authService.hashToken(token);
+  assert.match(hash, /^[0-9a-f]{64}$/, 'not a SHA-256 hex digest');
+  assert.strictEqual(hash, authService.hashToken(token), 'hashing is not deterministic — no token would ever verify');
+  assert.ok(!hash.includes('example'), 'the plaintext survived into the stored value');
+  assert.notStrictEqual(authService.hashToken('gt_pat_examplf'), hash);
+});
+
+checkAsync('verifyToken answers null identically for unknown, expired and orphaned', async () => {
+  // Distinguishing these confirms to a prober that a guess was once real.
+  const original = dbModule.promises.get;
+  const rows = {
+    unknown: undefined,
+    expired: {
+      id: 1, user_id: 1, scopes: '["library"]', expires_at: '2000-01-01T00:00:00.000Z',
+      last_used_at: null, username: 'jane', can_manage_users: 0, origin: 'local', display_name: 'Jane',
+    },
+  };
+  try {
+    for (const [label, row] of Object.entries(rows)) {
+      dbModule.promises.get = async () => row;
+      assert.strictEqual(await authService.verifyToken('gt_pat_whatever'), null,
+        `an ${label} token did not answer null`);
+    }
+    // A credential that is not PAT-shaped must not even reach the database.
+    let queried = false;
+    dbModule.promises.get = async () => { queried = true; return undefined; };
+    assert.strictEqual(await authService.verifyToken('eyJhbGciOiJIUzI1NiJ9.e30.sig'), null);
+    assert.strictEqual(queried, false, 'a JWT was looked up in the token table');
+  } finally {
+    dbModule.promises.get = original;
+  }
+});
+
+checkAsync('a valid token yields fresh privilege from users, not from the token', async () => {
+  const originalGet = dbModule.promises.get;
+  const originalRun = dbModule.promises.run;
+  dbModule.promises.get = async () => ({
+    id: 9, user_id: 4, scopes: '["admin","library"]', expires_at: null, last_used_at: null,
+    // can_manage_users comes from the JOINed users row — this is the value that was
+    // frozen into the JWT payload before authRequired started re-reading it.
+    username: 'jane', can_manage_users: 1, origin: 'local', display_name: 'Jane',
+  });
+  dbModule.promises.run = async () => ({ changes: 1 });
+  try {
+    const identity = await authService.verifyToken('gt_pat_whatever');
+    assert.ok(identity);
+    assert.deepStrictEqual(identity.scopes, ['admin', 'library']);
+    assert.strictEqual(identity.user.can_manage_users, true);
+    assert.strictEqual(authService.authorize(identity).can_manage_users, true);
+  } finally {
+    dbModule.promises.get = originalGet;
+    dbModule.promises.run = originalRun;
+  }
+});
+
+checkAsync('revocation is scoped to the owner in the WHERE clause', async () => {
+  // Not checked beforehand: an ownership test followed by a delete has a window
+  // between them. Asserting the SQL is the only way to see the difference.
+  const original = dbModule.promises.run;
+  let issued = null;
+  let bound = null;
+  dbModule.promises.run = async (sql, params) => { issued = sql; bound = params; return { changes: 1 }; };
+  try {
+    await authService.revokeToken(5, 7);
+  } finally {
+    dbModule.promises.run = original;
+  }
+  assert.match(issued, /WHERE id = \? AND user_id = \?/, `revoke is not owner-scoped: ${issued}`);
+  assert.deepStrictEqual(bound, [5, 7]);
+});
+
+checkAsync('revoking someone else\'s token is NOT FOUND, never success', async () => {
+  const original = dbModule.promises.run;
+  dbModule.promises.run = async () => ({ changes: 0 });
+  try {
+    await assert.rejects(() => authService.revokeToken(5, 7), (err) => err.code === SVC.NOT_FOUND,
+      'a revoke that deleted nothing reported success — the holder believes a live token is dead');
+  } finally {
+    dbModule.promises.run = original;
+  }
+});
+
+checkAsync('the token listing never returns the hash', async () => {
+  const original = dbModule.promises.all;
+  let issued = null;
+  dbModule.promises.all = async (sql) => { issued = sql; return []; };
+  try {
+    await authService.listTokens(1);
+  } finally {
+    dbModule.promises.all = original;
+  }
+  assert.ok(!/\btoken_hash\b/.test(issued), `token_hash is in the listing query: ${issued}`);
+  assert.ok(!/\*/.test(issued), `the listing is SELECT *, so a new column ships automatically: ${issued}`);
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

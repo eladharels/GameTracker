@@ -246,10 +246,12 @@ pure enough to assert against directly, no database needed.
 
 0. ~~Remove the admin push-credential disclosure from v1.~~ Done.
 1. This document. ← you are here
-2. Auth slice: `migrations/00N_api_tokens.sql`, `services/auth.js` (verification +
-   middleware only), `create-api-token.js`, PAT acceptance in v1's `authRequired`.
-   First code, because it is the one decision that cannot be changed later without
-   breaking every generated client.
+2. ~~Auth slice: `migrations/003_api_tokens.sql`, `services/auth.js` (verification +
+   middleware only), `create-api-token.js`, PAT acceptance in v1's `authRequired`.~~
+   Done. Verified end-to-end against a real Postgres and a booted backend, not only by
+   unit test: an admin account presenting a library-scoped token gets 403 on
+   `/api/users`, demoting the account revokes admin on the very next request, deleting
+   the token 401s it, and deleting the user cascades its tokens away.
 3. The OpenAPI 3.1 document — v2 only, hand-written, ~15 operations.
 4. The drift gate, landed **with the first v2 route**, not after. A spec without the gate
    is a document, not a contract.
