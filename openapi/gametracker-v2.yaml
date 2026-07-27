@@ -74,11 +74,17 @@ info:
     account's own notification targets and share its library with another user. What it
     cannot do is manage users or read server configuration.
 
-    Operations that require `admin` are marked with `x-required-scope: admin`. That
-    extension exists because an OpenAPI `security` scope array is only meaningful for
-    `oauth2`/`openIdConnect` — on an HTTP bearer scheme it is ignored, so declaring
-    scopes there would be decorative. `x-required-scope` is checked in CI against the
-    authorization tier derived from the live Express router.
+    **Every** operation declares its scope with `x-required-scope`, `library` or `admin`.
+    That extension exists because an OpenAPI `security` scope array carries defined
+    semantics only for `oauth2`/`openIdConnect`; on an HTTP bearer scheme 3.1 permits
+    role names there but leaves them "not otherwise defined or exchanged in-band", so
+    declaring scopes that way would be decorative — no generator enforces it, no client
+    honours it. `x-required-scope` is checked in CI against the authorization tier
+    derived from the live Express router.
+
+    The marker is mandatory rather than "present when admin": making `library` the mere
+    absence of a marker would make a FORGOTTEN marker indistinguishable from a
+    deliberate one.
 
     ## Privilege is re-read on every request
 
@@ -391,16 +397,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/AmbiguousGameProblem' }
-        '429':
-          description: |
-            Too many requests. Retry after the interval in `Retry-After`.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema: { type: integer }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '502':
           description: Every catalog provider failed, so "not found" could not be distinguished from "unreachable".
           content:
@@ -570,15 +567,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-        '429':
-          description: Too many requests. Retry after the interval in `Retry-After`.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema: { type: integer }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   # ----------------------------------------------------------------- catalog --
   /catalog/search:
@@ -622,16 +611,7 @@ paths:
                 additionalProperties: false
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '429':
-          description: |
-            Too many requests. Retry after the interval in `Retry-After`.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema: { type: integer }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '502':
           description: Every provider failed. Distinguished from an empty result on purpose.
           content:
@@ -709,16 +689,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/UnknownUsersProblem' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '429':
-          description: |
-            Too many requests. Retry after the interval in `Retry-After`.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema: { type: integer }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
     post:
       tags: [sharing]
       operationId: addOutgoingShare
@@ -747,16 +718,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/UnknownUsersProblem' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '429':
-          description: |
-            Too many requests. Retry after the interval in `Retry-After`.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema: { type: integer }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /shares/outgoing/{username}:
     parameters:
@@ -1020,7 +982,9 @@ paths:
                   description: |
                     `checkReleases` promotes released games and sends due reminders;
                     `updatePrices` re-reads Steam prices; `refreshCrackStatus` re-reads
-                    the DRM cache; `refreshMetadata` re-fetches every library's metadata.
+                    the DRM cache; `refreshMetadata` re-fetches metadata. Started here
+                    they are all `scope: instance`; `POST /library/refresh` starts a
+                    `refreshMetadata` job with `scope: self`.
                   enum: [refreshMetadata, checkReleases, refreshCrackStatus, updatePrices]
               additionalProperties: false
       responses:
@@ -1036,16 +1000,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '429':
-          description: |
-            Too many requests. Retry after the interval in `Retry-After`.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema: { type: integer }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '409':
           description: A job of that kind is already running.
           content:
@@ -1062,7 +1017,21 @@ paths:
       tags: [jobs]
       operationId: getJob
       summary: Job status and result
-      x-required-scope: admin
+      x-required-scope: library
+      description: |
+        Readable by the account that STARTED the job. An instance-wide job (`POST /jobs`)
+        belongs to the administrator who started it; a per-library refresh
+        (`POST /library/refresh`) belongs to its caller.
+
+        Someone else's job id is a `404`, never a `403` — the same precedence rule as
+        everywhere else, and the reason job ids must be unguessable rather than
+        sequential. A 404-vs-403 distinction is only worth having if the id cannot be
+        enumerated.
+
+        `library`-scoped rather than admin because `POST /library/refresh` is, and an
+        operation that hands back a job its own caller cannot poll is not an operation.
+        OWNERSHIP, not scope, is what protects the instance-wide results — which matters
+        because `JobResult.failures[]` names game ids from every user's library.
       responses:
         '200':
           description: The job.
@@ -1070,7 +1039,6 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
 components:
@@ -1119,6 +1087,16 @@ components:
     # external sweep (jobs), and the username-enumeration primitive that the share
     # writes' `unknownUsers` body would otherwise be. v1's only limiter lives inside the
     # login route, and v2 has no login, so without this v2 has none at all.
+    RateLimited:
+      description: Too many requests. Retry after the interval in `Retry-After`.
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
     BadRequest:
       description: The request was malformed or failed validation. `code` says which class of problem; `errors` names the fields.
       content:
@@ -1279,7 +1257,13 @@ components:
           type: [string, 'null']
           description: Formatted in the configured storefront region, e.g. "₪59.99". A display string, not a number — the currency is part of it.
         lastPriceUpdatedAt: { type: [string, 'null'], format: date-time }
-        crackStatus: { type: [string, 'null'], enum: [cracked, uncracked, unknown, null] }
+        crackStatus:
+          # oneOf rather than `type: [string,'null']` + `enum: [..., null]`: the latter is
+          # the shape most likely to emit a literal `NULL = "null"` member in a generated
+          # client. This is the document's only nullable enum.
+          oneOf:
+            - { $ref: '#/components/schemas/CrackStatus' }
+            - { type: 'null' }
         backlogOrder: { type: [integer, 'null'], description: Position in the backlog. Null unless status is `backlog`. }
         addedAt: { type: [string, 'null'], format: date-time }
       additionalProperties: false
@@ -1359,6 +1343,10 @@ components:
         name: { type: string }
         position: { type: integer, minimum: 1 }
       additionalProperties: false
+
+    CrackStatus:
+      type: string
+      enum: [cracked, uncracked, unknown]
 
     CatalogGame:
       type: object
@@ -1557,6 +1545,11 @@ components:
         API keys are deliberately NOT round-trippable: there is no masked form to write
         back, so a read-modify-write cannot destroy them. Set them through
         `SettingsUpdate`, which is write-only for these fields.
+
+        **This schema must never gain a field carrying any part of the key** — not the
+        value, not a prefix, not a suffix. "Let an admin confirm which key is set" is a
+        plausible request that `configured` and `source` already answer; anything more
+        defeats the reason this is state rather than a masked value.
       required: [configured]
       properties:
         configured: { type: boolean }
@@ -1641,59 +1634,75 @@ components:
         Server configuration as WRITTEN. Partial per section: keys absent from a section
         are left alone rather than deleted.
 
-        Secrets are plain strings here. Send `__unchanged__` to keep the stored value —
-        which is exactly what a client that just read `MaskedSettings` will send back.
+        Secrets are plain strings here — send `__unchanged__` to keep the stored value,
+        which is exactly what a client that just read `MaskedSettings` sends back.
+
+        Every field is bounded. The bound belongs on the WRITE schema, which is the one a
+        caller controls; an earlier revision bounded only the read side, which protects
+        nobody. These values land in `settings.json`, rewritten in place.
       properties:
         smtp:
           type: object
           properties:
-            host: { type: string }
-            port: { type: integer }
-            user: { type: string }
-            pass: { type: string, description: Masked on read. }
-            from: { type: string }
+            host: { type: string, maxLength: 500 }
+            port: { type: integer, minimum: 1, maximum: 65535 }
+            user: { type: string, maxLength: 500 }
+            pass: { type: string, maxLength: 500 }
+            from: { type: string, maxLength: 500 }
+            to: { type: string, maxLength: 500, description: Readable on MaskedSettings and writable here — omitting it made it unsettable in v2 at all. }
           additionalProperties: false
         ntfy:
           type: object
           properties:
-            url: { type: string, description: Optional instance-wide default. Each user sets their own server and topic. }
+            url: { type: string, maxLength: 500, description: Optional instance-wide default. Each user sets their own server and topic. }
           additionalProperties: false
         gotify:
           type: object
           properties:
-            url: { type: string }
+            url: { type: string, maxLength: 500 }
           additionalProperties: false
         telegram:
           type: object
           properties:
-            botToken: { type: string, description: Masked on read. }
+            botToken: { type: string, maxLength: 500 }
           additionalProperties: false
         ldap:
           type: object
           properties:
-            url: { type: string }
-            base: { type: string }
-            bindDn: { type: string }
-            bindPass: { type: string, description: Masked on read. }
-            requiredGroup: { type: string }
+            url: { type: string, maxLength: 500 }
+            base: { type: string, maxLength: 500 }
+            bindDn: { type: string, maxLength: 500 }
+            bindPass: { type: string, maxLength: 500 }
+            requiredGroup: { type: string, maxLength: 500 }
           additionalProperties: false
         apikeys:
           type: object
-          description: Override the corresponding environment variables and take effect without a restart.
+          description: |
+            Write-only. Overrides the corresponding environment variable and takes effect
+            without a restart. Never returned — `MaskedSettings` reports only
+            `ApiKeyState`, which is what makes a read-modify-write safe.
+          writeOnly: true
           properties:
-            igdbClientId: { type: string }
-            igdbClientSecret: { type: string, description: Masked on read. Used only to refresh the bearer token. }
-            igdbBearerToken: { type: string, description: Masked on read. Twitch OAuth tokens expire about every 60 days. }
-            rawgApiKey: { type: string, description: Masked on read. }
+            igdbClientId: { type: string, maxLength: 500 }
+            igdbClientSecret: { type: string, maxLength: 500, description: Used only to refresh the bearer token. }
+            igdbBearerToken: { type: string, maxLength: 500, description: Twitch OAuth tokens expire about every 60 days. }
+            rawgApiKey: { type: string, maxLength: 500 }
             thegamesdbApiKey: { type: string, maxLength: 500 }
           additionalProperties: false
       additionalProperties: false
 
     Job:
       type: object
-      required: [id, kind, status]
+      required: [id, kind, status, scope]
       properties:
-        id: { type: string }
+        id: { type: string, description: Unguessable, not sequential — see getJob on why the 404 depends on it. }
+        scope:
+          type: string
+          description: |
+            `self` covers only the starting account's library; `instance` covers every
+            library. Without this the same `kind` cannot express both, and a caller
+            cannot tell which one they are looking at.
+          enum: [self, instance]
         kind: { type: string, enum: [refreshMetadata, checkReleases, refreshCrackStatus, updatePrices] }
         status: { type: string, enum: [queued, running, succeeded, failed] }
         startedAt: { type: [string, 'null'], format: date-time }

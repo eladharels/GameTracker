@@ -144,9 +144,18 @@ anything.
 hardcodes the v1 envelope in one place, so this is a second renderer, not a rewrite.
 `expose` keeps its meaning: a 500 still never echoes a service message.
 
-## D4 — Lists return `{data, meta}`
+## D4 — Lists return `{data}`, plus `meta` where there is something to report
 
-`meta` is where `degraded`, `total` and paging live. This kills the worst v1 shape:
+`meta` is where `degraded`, `total` and paging live — and it is present **only** on the
+lists that have one of those. `listTokens`, `getBacklog`, `replaceOutgoingShares` and
+`listUsers` return `{data}` alone: a `meta: {total}` there tells a client nothing
+`data.length` does not. `listShares` returns `{outgoing, incoming}` because it is two
+lists, not one.
+
+That is an exception to a decision originally written as "lists return `{data, meta}`",
+and it is stated here rather than left as an inconsistency someone later "fixes". All
+nine envelopes are pinned individually in `test/openapi.test.js`, which is what turns
+"inconsistent" into "deliberate, and enforced". This kills the worst v1 shape:
 catalog degradation is currently signalled by an `X-Catalog-Degraded: 1` header
 (`index.js:409`) while the body stays a bare array. Generated clients drop headers, so
 "IGDB is down" and "that game doesn't exist" read identically — precisely the distinction
@@ -333,6 +342,11 @@ pure enough to assert against directly, no database needed.
    is a document, not a contract.
 5. v2 routes in slices — library first (that is what the MCP and the terminal both want),
    admin second. Normalise the shares argument order before the second adapter set exists.
+   Carry into this step, from the spec reviews: split `LibraryGameCreate`'s `oneOf` into
+   named `AddByRef`/`AddByName` branches. Most generators discard a `oneOf` whose branches
+   carry only `required`, so the one-or-the-other rule — exactly what an LLM-driven client
+   gets wrong — vanishes from the generated model. Deferred to here rather than done in the
+   spec because the right shape is only knowable once the generator has actually been run.
 6. **`GET /api/capabilities` on v1** — `{apiVersions, serverVersion, deprecations}`, auth
    tier, NOT on `/api/health`. The one decision with an expiry: it is described as "the
    last change made to v1", and after the freeze it cannot be added. The phone has no way

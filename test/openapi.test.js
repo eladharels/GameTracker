@@ -129,7 +129,7 @@ check('there are no unauthenticated operations', () => {
   }
 });
 
-check('admin operations are marked, and only via x-required-scope', () => {
+check('admin operations are marked via x-required-scope, never via security scopes', () => {
   // D1 addendum #2: an OpenAPI scope array is only meaningful for oauth2/openIdConnect,
   // so declaring scopes in `security` on an http-bearer scheme would be decorative.
   // x-required-scope is the checkable form, and the drift gate will compare it against
@@ -307,7 +307,13 @@ check('request schemas are closed', () => {
 // allowlist is by JSON POINTER, never by name — a name-shaped exemption is what
 // failed last time.
 
-const SECRETISH = /^(password|passwordHash|pass|tokenHash|token_hash|secret|bindPass|botToken|apiKey|clientSecret|hash)$/i;
+// `token` is in here, which is what makes the ALLOWED exemption for the minted secret
+// load-bearing rather than vacuous. It was omitted, so `Me.token` or `Job.token` would
+// have passed while the exemption sat there implying otherwise.
+// `apiKeys` is deliberately NOT here: MaskedSettings.apikeys is a map of ApiKeyState,
+// which carries no key material. What guards that schema is `value` below, plus its
+// own closed shape — the container name is not the risk, a value inside it is.
+const SECRETISH = /^(token|password|passwordHash|pass|tokenHash|token_hash|secret|bindPass|bindPassword|botToken|apiKey|clientSecret|credential|hash|value)$/i;
 
 // DERIVED from services/users.js rather than hand-written, so the two cannot drift:
 // that constant is already the single definition of "a per-user delivery target", and
@@ -328,14 +334,19 @@ const USER_TARGET_NAMES = new Set([
 const TARGET_RENAME = /^(chatId|pushToken|deviceToken|notificationTarget|topic)$/i;
 const isUserTarget = (name) => USER_TARGET_NAMES.has(name) || TARGET_RENAME.test(name);
 
-// Legitimate, and each one is a deliberate decision rather than an oversight:
+// Exemptions are keyed on the (OPERATION, pointer) PAIR, never the pointer alone.
+//
+// Keyed on the pointer, an exemption travels with the schema: pointing `listTokens`
+// at `TokenCreated` published the plaintext secret on a listing, and `$ref`ing
+// `NotificationSettings` from `LibraryGame` republished every user's delivery targets
+// through the SHARED-library read — both with CI green. An exemption is a statement
+// about one operation, so it has to be written as one.
 const ALLOWED = new Set([
   // The minted secret, returned exactly once. This IS the operation's purpose.
-  '#/components/schemas/TokenCreated/allOf/1/properties/token',
+  'createToken #/components/schemas/TokenCreated/allOf/1/properties/token',
 ]);
-// The caller's OWN delivery settings, on their own resource. Readable because it is
-// the caller's own row; the point of the check is that these appear NOWHERE else.
-const SELF_ONLY_TARGETS = '#/components/schemas/NotificationSettings';
+// The one operation allowed to return delivery targets: the caller's own resource.
+const SELF_TARGET_OPERATIONS = new Set(['getMyNotificationSettings', 'updateMyNotificationSettings']);
 
 const deref = (node, seen = new Set()) => {
   if (node && node.$ref && !seen.has(node.$ref)) {
@@ -359,15 +370,28 @@ function* walkProperties(root, pointer, seen = new Set()) {
     yield [`${base}/properties/${name}`, name, sub];
     yield* walkProperties(sub, `${base}/properties/${name}`, seen);
   }
+  for (const [pattern, sub] of Object.entries(node.patternProperties || {})) {
+    yield [`${base}/patternProperties/${pattern}`, pattern, sub];
+  }
   for (const kw of ['allOf', 'oneOf', 'anyOf']) {
-    (node[kw] || []).forEach((branch, i) => {
-      // generators flatten these; a secret hiding in a branch is still shipped
-    });
+    // Generators flatten these; a secret hiding in a branch is still shipped.
     for (let i = 0; i < (node[kw] || []).length; i++) {
       yield* walkProperties(node[kw][i], `${base}/${kw}/${i}`, seen);
     }
   }
-  if (node.items) yield* walkProperties(node.items, `${base}/items`, seen);
+  // Array-form `items`, `prefixItems` and `patternProperties` are all legal in
+  // OpenAPI 3.1 (JSON Schema 2020-12) and were previously not descended at all, so a
+  // secret placed under any of them was invisible to every check below.
+  for (const [kw, node2] of [['items', node.items], ['prefixItems', node.prefixItems]]) {
+    if (Array.isArray(node2)) {
+      for (let i = 0; i < node2.length; i++) yield* walkProperties(node2[i], `${base}/${kw}/${i}`, seen);
+    } else if (node2) {
+      yield* walkProperties(node2, `${base}/${kw}`, seen);
+    }
+  }
+  for (const [name, sub] of Object.entries(node.patternProperties || {})) {
+    yield* walkProperties(sub, `${base}/patternProperties/${name}`, seen);
+  }
   if (node.additionalProperties && typeof node.additionalProperties === 'object') {
     yield* walkProperties(node.additionalProperties, `${base}/additionalProperties`, seen);
   }
@@ -382,6 +406,12 @@ function responseSchemas() {
       for (const [ct, media] of Object.entries(deref(response).content || {})) {
         if (!media.schema) continue;
         out.push([media.schema.$ref || `#/paths/${op.operationId}/${code}/${ct}`, media.schema, op.operationId]);
+      }
+      // Headers are returned to the client too. `startJob` and `refreshMyLibrary`
+      // already carry one, and nothing was walking them.
+      for (const [name, header] of Object.entries(deref(response).headers || {})) {
+        const schema = deref(header)?.schema;
+        if (schema) out.push([`#/paths/${op.operationId}/${code}/headers/${name}`, schema, op.operationId]);
       }
     }
   }
@@ -402,7 +432,7 @@ check('MaskedSecret cannot carry any part of a real secret', () => {
 check('no response anywhere can carry a secret', () => {
   for (const [pointer, schema, operationId] of responseSchemas()) {
     for (const [ptr, name, sub] of walkProperties(schema, pointer)) {
-      if (ALLOWED.has(ptr)) continue;
+      if (ALLOWED.has(`${operationId} ${ptr}`)) continue;
       // Exempt by TYPE, never by name. A field typed MaskedSecret is provably
       // non-secret-carrying (asserted directly above); a name-shaped exemption is
       // what let the previous version of this check be evaded ten times.
@@ -418,27 +448,34 @@ check('notification targets appear ONLY on the caller\'s own resource', () => {
   // every admin. Renaming the field, nesting it, or hanging it off Me instead of User
   // all defeated the previous check.
   for (const [pointer, schema, operationId] of responseSchemas()) {
+    if (SELF_TARGET_OPERATIONS.has(operationId)) continue;
     for (const [ptr, name] of walkProperties(schema, pointer)) {
-      if (ptr.startsWith(SELF_ONLY_TARGETS)) continue;
       assert.ok(!isUserTarget(name),
         `${operationId} can return '${name}' at ${ptr} — notification targets are bearer `
         + 'secrets and belong only on the caller\'s own /me/notifications resource');
     }
   }
+  // ...and the exemption cannot be relocated onto a different operation later.
+  assert.strictEqual(
+    spec.paths['/me/notifications'].get.responses['200'].content['application/json'].schema.$ref,
+    '#/components/schemas/NotificationSettings',
+    'the self-service notification operation no longer returns NotificationSettings, so the '
+    + 'exemption above now covers something else');
 });
 
 check('no REQUEST schema lets one account write another\'s notification target', () => {
   // The write path was the sharper half of the v1 defect and the previous check looked
   // only at responses. services/users.js refuses these; the spec must not offer them.
-  const { USER_OWNED_NOTIFICATION_COLUMNS } = require('../services/users');
-  const camel = USER_OWNED_NOTIFICATION_COLUMNS.map((c) => c.replace(/_(.)/g, (_, ch) => ch.toUpperCase()));
+  // Uses the SAME rename-aware predicate as the response check. It previously matched
+  // only the literal column names, so `UserUpdate.chatId` and `UserCreate.pushToken` —
+  // an admin writing another account's delivery target, which is the sharper half of
+  // the original v1 defect — both passed.
   for (const { op } of operations()) {
     const schema = op.requestBody?.content?.['application/json']?.schema;
     if (!schema) continue;
-    const selfService = op.operationId === 'updateMyNotificationSettings';
+    if (SELF_TARGET_OPERATIONS.has(op.operationId)) continue;
     for (const [ptr, name] of walkProperties(schema, schema.$ref || `#/paths/${op.operationId}/body`)) {
-      if (selfService) continue;
-      assert.ok(!camel.includes(name) && !USER_OWNED_NOTIFICATION_COLUMNS.includes(name),
+      assert.ok(!isUserTarget(name),
         `${op.operationId} accepts '${name}' at ${ptr} — only the owning user may set that`);
     }
   }
@@ -463,7 +500,19 @@ function* walkNodes(root, pointer, seen = new Set()) {
       yield* walkNodes(node[kw][i], `${base}/${kw}/${i}`, seen);
     }
   }
-  if (node.items) yield* walkNodes(node.items, `${base}/items`, seen);
+  // Array-form `items`, `prefixItems` and `patternProperties` are all legal in
+  // OpenAPI 3.1 (JSON Schema 2020-12) and were previously not descended at all, so a
+  // secret placed under any of them was invisible to every check below.
+  for (const [kw, node2] of [['items', node.items], ['prefixItems', node.prefixItems]]) {
+    if (Array.isArray(node2)) {
+      for (let i = 0; i < node2.length; i++) yield* walkNodes(node2[i], `${base}/${kw}/${i}`, seen);
+    } else if (node2) {
+      yield* walkNodes(node2, `${base}/${kw}`, seen);
+    }
+  }
+  for (const [name, sub] of Object.entries(node.patternProperties || {})) {
+    yield* walkNodes(sub, `${base}/patternProperties/${name}`, seen);
+  }
   if (node.additionalProperties && typeof node.additionalProperties === 'object') {
     yield* walkNodes(node.additionalProperties, `${base}/additionalProperties`, seen);
   }
@@ -474,10 +523,20 @@ check('nothing reachable from a response is an open object', () => {
   // a response without anyone deciding to put it there. The job sweeps call five
   // external services and RAWG's key travels as a query parameter, so this is the
   // check standing between an implementer's `err.message` and the wire.
+  // ABSENT means open in JSON Schema, so `=== true` was never the test — a new object
+  // that simply omitted the keyword was unconstrained and passed.
+  // An `allOf` branch validates INDEPENDENTLY, so `additionalProperties: false` inside
+  // one rejects the sibling branch's properties. Those nodes are necessarily open;
+  // everything else must close.
+  const OPEN_BY_DESIGN = /\/allOf\//;
   for (const [pointer, schema, operationId] of responseSchemas()) {
     for (const [ptr, node] of walkNodes(schema, pointer)) {
-      assert.notStrictEqual(node.additionalProperties, true,
-        `${operationId} returns an open object at ${ptr}`);
+      if (OPEN_BY_DESIGN.test(ptr)) continue;   // allOf composition; see Problem's description
+      const isObject = node.type === 'object' || node.properties;
+      if (!isObject) continue;
+      assert.strictEqual(node.additionalProperties, false,
+        `${operationId} returns an object at ${ptr} that does not close additionalProperties `
+        + '(absent means OPEN, which is how a provider error body reaches the wire)');
     }
   }
 });
@@ -514,7 +573,10 @@ check('the admin operation set is PINNED, not merely non-empty', () => {
   const admin = operations().filter(({ op }) => op['x-required-scope'] === 'admin')
     .map(({ op }) => op.operationId).sort();
   assert.deepStrictEqual(admin,
-    ['createUser', 'deleteUser', 'getJob', 'getSettings', 'listUsers', 'startJob', 'updateSettings', 'updateUser'],
+    // getJob is deliberately NOT here: it is library-scoped and protected by OWNERSHIP,
+    // because POST /library/refresh is library-scoped and an operation that returns a
+    // job its own caller cannot poll is not an operation.
+    ['createUser', 'deleteUser', 'getSettings', 'listUsers', 'startJob', 'updateSettings', 'updateUser'],
     'the set of admin-scoped operations changed');
 });
 
@@ -641,6 +703,70 @@ check('the User shape matches the admin projection, field for field', () => {
   const expected = ADMIN_LIST_COLUMNS.split(',').map((c) => c.trim().replace(/_(.)/g, (_, ch) => ch.toUpperCase()));
   assert.deepStrictEqual(Object.keys(spec.components.schemas.User.properties).sort(), expected.sort(),
     'User and services/users.js ADMIN_LIST_COLUMNS disagree');
+});
+
+check('the meta schemas are pinned, not just the envelope keys', () => {
+  // The envelope check pins top-level keys only, so renaming PageMeta.nextCursor to
+  // `next` broke every paging client silently.
+  assert.deepStrictEqual(Object.keys(spec.components.schemas.PageMeta.properties).sort(),
+    ['limit', 'nextCursor', 'total']);
+  assert.deepStrictEqual(Object.keys(spec.components.schemas.SearchMeta.properties).sort(),
+    ['degraded', 'providers', 'total']);
+  assert.deepStrictEqual(Object.keys(spec.components.schemas.ReorderMeta.properties).sort(),
+    ['requested', 'updated']);
+});
+
+check('the bounds that ARE security controls cannot be deleted', () => {
+  // These four were added as controls by a security review and were themselves
+  // ungated — deleting Password.maxLength or widening Username.pattern passed.
+  const S = spec.components.schemas;
+  assert.strictEqual(S.Password.maxLength, 200,
+    'the bcrypt CPU-exhaustion bound is gone');
+  assert.strictEqual(S.Password.minLength, 8);
+  assert.strictEqual(S.Username.maxLength, 64);
+  assert.strictEqual(S.Username.pattern, '^[a-z0-9._-]+$',
+    'the username pattern was widened');
+  for (const opId of ['listLibraryGames', 'getSharedLibrary']) {
+    const found = operations().find((o) => o.op.operationId === opId);
+    // Parameters may sit on the operation OR on the path item — getSharedLibrary's are
+    // on the path item, and looking at only one of the two threw rather than asserting.
+    const params = [...(spec.paths[found.path].parameters || []), ...(found.op.parameters || [])];
+    const cursor = params.find((prm) => prm.name === 'cursor');
+    assert.ok(cursor, `${opId} has no cursor parameter`);
+    assert.strictEqual(cursor.schema.maxLength, 200, `${opId}'s cursor bound is gone`);
+  }
+  // Every writable settings string is bounded — the write side is the one a caller
+  // controls, and an earlier revision bounded only the read side.
+  for (const [section, schema] of Object.entries(S.SettingsUpdate.properties)) {
+    for (const [field, prop] of Object.entries(schema.properties)) {
+      if (prop.type === 'integer') continue;
+      assert.ok(prop.maxLength, `SettingsUpdate.${section}.${field} is unbounded`);
+    }
+  }
+});
+
+check('createToken keeps the 403 the escalation refusal lands on', () => {
+  // The generic 403 check only fires for admin-scoped operations, so deleting this one
+  // passed — and it is where "you may not mint a scope you do not hold" is refused.
+  const { op } = operations().find((o) => o.op.operationId === 'createToken');
+  assert.deepStrictEqual(Object.keys(op.responses).sort(), ['201', '400', '401', '403', '409']);
+});
+
+check('GameStatus is $ref\'d at every usage site, never inlined', () => {
+  // Same class as the gameId fix: an inlined `status: {type: string}` drops the enum
+  // and the client stops helping.
+  // Named explicitly rather than matching every property called `status`: Problem.status
+  // is an HTTP status integer and Job.status is a lifecycle enum, and a check that
+  // cannot tell those apart is a check that gets loosened the first time it fires.
+  for (const name of ['LibraryGame', 'LibraryGameCreate', 'LibraryGameUpdate']) {
+    const prop = spec.components.schemas[name].properties.status;
+    assert.strictEqual(prop.$ref, '#/components/schemas/GameStatus',
+      `${name}.status inlines a game status instead of $ref'ing GameStatus`);
+  }
+  // ...and the filter parameter, which is where a client's typo becomes a 400.
+  const { op } = operations().find((o) => o.op.operationId === 'listLibraryGames');
+  assert.strictEqual(op.parameters.find((prm) => prm.name === 'status').schema.$ref,
+    '#/components/schemas/GameStatus');
 });
 
 check('bounds agree with the constants the services enforce', () => {
