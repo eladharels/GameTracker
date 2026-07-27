@@ -16,7 +16,7 @@
 
 const db = require('../db');
 // Shared promise surface — see db.js. Four services had each written their own.
-const { all, run } = db.promises;
+const { all, get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
 const { sanitizeText } = require('../user-rules');
 
@@ -77,7 +77,6 @@ async function removeGame(userId, gameId) {
 
 // One row from a user's library, or undefined.
 async function findGame(userId, gameId) {
-  const { get } = db.promises;
   return get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [userId, String(gameId)]);
 }
 
@@ -268,7 +267,7 @@ async function upsertGame(userId, fields) {
   // as ABSENT, which routes it to 'unreleased'. Deliberately not a 400: v1 accepted
   // these, and the safe default costs the caller nothing.
   const releaseDate = validReleaseDate(fields.releaseDate);
-  const status = (!releaseDate || isReleaseInFuture(releaseDate)) ? 'unreleased' : requested;
+  const status = isReleased(releaseDate) ? requested : 'unreleased';
 
   return db.withTransaction(async (tx) => {
     const prior = (await tx.query(
@@ -329,19 +328,30 @@ async function upsertGame(userId, fields) {
 }
 
 
-// The status a game should hold, given a release date. ONE rule, shared with the
-// upsert.
+// THE shared primitive: may this date be treated as released?
 //
-// It was open-coded a third and fourth time in the two refresh-metadata paths, with
-// a subtly different shape: they only re-synced status when the date CHANGED, and
-// they promoted 'unreleased' -> 'wishlist' rather than leaving the caller's choice.
-// Both behaviours are preserved by resyncStatus's callers below; what is no longer
-// duplicated is the definition of "is this date in the future".
+// Absent, unparseable and future all answer no. Both write paths in this file depend
+// on it, and this is the part that genuinely IS one rule — an earlier version of the
+// comment below claimed the whole status decision was shared, and it was not: the two
+// disagreed on exactly the null/unparseable case, because only one of them ran the
+// date through validReleaseDate first.
+function isReleased(releaseDate) {
+  const valid = validReleaseDate(releaseDate);
+  return !!valid && !isReleaseInFuture(valid);
+}
+
+// What a REFRESH does to a status when the release date changes. NOT the same rule as
+// the upsert's, deliberately, and the difference is the point:
+//
+//   upsert   — the caller is choosing a status. An unreleasable date overrides that
+//              choice with 'unreleased'; otherwise the choice stands.
+//   refresh  — nobody is choosing anything. A game sitting in 'unreleased' whose date
+//              has arrived is promoted to 'wishlist', mirroring the daily cron. Any
+//              other status is the user's own and is left alone.
+//
+// What they share is isReleased(), which is what "shared rule" should have meant.
 function statusForDate(releaseDate, currentStatus) {
-  if (isReleaseInFuture(releaseDate)) return 'unreleased';
-  // Past or today: a game sitting in 'unreleased' has been released, so promote it.
-  // This mirrors the daily cron's auto-transition. Any other status is the user's
-  // own choice and is left alone.
+  if (!isReleased(releaseDate)) return 'unreleased';
   return currentStatus === 'unreleased' ? 'wishlist' : currentStatus;
 }
 
@@ -356,18 +366,32 @@ async function applyRefreshedMetadata(userId, game, match) {
   const updates = [];
   const params = [];
 
-  if (match.releaseDate !== game.release_date) {
+  // FILL AND CORRECT, NEVER ERASE — the same rule the Steam App ID already had.
+  //
+  // Two things conspired here. mergeResults resolves same-name duplicates by
+  // preferring the entry with NO release date, which is right for a search (show the
+  // unreleased title) and wrong for a refresh. And a provider's date is not validated
+  // by this path, unlike upsertGame's. So a provider returning the same title with a
+  // missing or unparseable date won the merge, and the row's real date was
+  // overwritten with NULL — which for an unreleased game ALSO promoted it to
+  // 'wishlist' and lost its reminder schedule. Reproduced against a live database.
+  //
+  // A date that legitimately CHANGES (a delay) still writes; only the erase is
+  // refused. validReleaseDate is applied so garbage is treated as absent rather than
+  // stored verbatim, matching upsertGame.
+  const nextDate = validReleaseDate(match.releaseDate);
+  if (nextDate && nextDate !== game.release_date) {
     updates.push('release_date = ?');
-    params.push(match.releaseDate);
+    params.push(nextDate);
     // Re-sync status to the NEW date. Only on a date change, matching v1: a refresh
     // that leaves the date alone must not quietly reassign a status the user chose.
-    const next = statusForDate(match.releaseDate, game.status);
+    const next = statusForDate(nextDate, game.status);
     if (next !== game.status) {
       updates.push('status = ?');
       params.push(next);
     }
   }
-  if (match.coverUrl !== game.cover_url) {
+  if (match.coverUrl && match.coverUrl !== game.cover_url) {
     updates.push('cover_url = ?');
     params.push(match.coverUrl);
   }
@@ -389,7 +413,7 @@ async function applyRefreshedMetadata(userId, game, match) {
 module.exports = {
   STATUSES, EVENTS, MAX_GAME_ID, MAX_GAME_NAME,
   isReleaseInFuture, validReleaseDate, decideEvents, upsertGame,
-  statusForDate, applyRefreshedMetadata,
+  isReleased, statusForDate, applyRefreshedMetadata,
   listGamesFor,
   listOwnGames,
   listGamesWithAliases,

@@ -86,7 +86,9 @@ GameTracker/
 │   ├── library.js                  # Game library + backlog ordering + the upsert
 │   ├── catalog.js                  # IGDB/RAWG/TheGamesDB search, normalise, merge.
 │                                   #   Degrades: a provider that is down contributes
-│                                   #   zero results, never an error. NOTHING from a
+│                                   #   zero results, never an error — but reports its
+│                                   #   STATUS, because "0 results" and "down" must not
+│                                   #   read the same to a caller. NOTHING from a
 │                                   #   provider's error body reaches the caller
 │   ├── users.js                    # Admin user management; the lockout safety rules
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.

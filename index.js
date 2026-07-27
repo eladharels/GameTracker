@@ -31,7 +31,8 @@ const {
   attrValues,
   compatTreeAdvice,
 } = require('./ldap-helpers');
-const { escapeIgdbSearch } = require('./igdb-helpers');
+// escapeIgdbSearch is no longer used here: every APIcalypse literal in the server
+// is now built inside services/catalog.js, which is the point of the extraction.
 const { loadSettings, resolveApiKey } = require('./settings-store');
 // Service layer. Route handlers are adapters over these: they do auth and HTTP,
 // the services do the work. Lets /api and the coming /api/v2 be two skins over one
@@ -397,9 +398,14 @@ app.get('/api/games/search', authRequired, async (req, res) => {
     return res.status(400).json({ error: 'Missing search query' });
   }
   try {
-    const { results, counts } = await catalogService.searchAll(query);
+    const { results, counts, providers, degraded } = await catalogService.searchAll(query);
     console.log(`[Search] Query: "${safeForLog(query, 100)}", Results: ${results.length} games `
-      + `(IGDB: ${counts.igdb}, RAWG: ${counts.rawg}, TheGamesDB: ${counts.thegamesdb})`);
+      + `(IGDB: ${counts.igdb}/${providers.igdb}, RAWG: ${counts.rawg}/${providers.rawg}, `
+      + `TheGamesDB: ${counts.thegamesdb}/${providers.thegamesdb})`);
+    // Still a bare array: v1's shape, and the SPA does `Array.isArray(res.data) ? ... : []`.
+    // The partial-results signal goes in a header so it can be added without breaking
+    // that, and so /api/v2 can put it in the envelope where it belongs.
+    if (degraded) res.set('X-Catalog-Degraded', '1');
     res.json(results);
   } catch (error) {
     // searchAll degrades rather than rejecting — every provider has its own catch —
@@ -410,77 +416,57 @@ app.get('/api/games/search', authRequired, async (req, res) => {
   }
 });
 
-// Test endpoint for IGDB connectivity
+// Test endpoint for IGDB connectivity.
+//
+// Goes through catalogService.searchIgdb rather than calling axios itself. It used to
+// be a fifth copy of the provider call, and it had drifted in three ways that this
+// slice had just fixed everywhere else: no timeout, an unguarded
+// `new Date(ts * 1000).toISOString()` that throws on an out-of-range value, and — the
+// one that mattered — it returned `error.response.data`, the raw IGDB error body, to
+// the caller. Admin-only, so the disclosure is to someone who can already read the
+// keys in Settings; but it contradicted the policy stated at the top of
+// services/catalog.js sixty lines above it.
 app.get('/api/test/igdb', authRequired, requirePermission('can_manage_users'), async (req, res) => {
   const testQuery = req.query.q || 'Mario';
-  // Escape quotes/backslashes so the query can't break out of the IGDB search literal.
-  const safeTestQuery = escapeIgdbSearch(testQuery);
   const hasClientId = !!resolveApiKey('IGDB_CLIENT_ID');
   const hasBearerToken = !!resolveApiKey('IGDB_BEARER_TOKEN');
-  
   const testInfo = {
     credentials: {
       clientId: hasClientId ? 'SET' : 'MISSING',
       bearerToken: hasBearerToken ? 'SET' : 'MISSING',
-      bothPresent: hasClientId && hasBearerToken
+      bothPresent: hasClientId && hasBearerToken,
     },
-    testQuery: testQuery
+    testQuery,
   };
-  
+
   if (!hasClientId || !hasBearerToken) {
-    return res.status(400).json({
-      error: 'IGDB credentials missing',
-      ...testInfo
-    });
+    return res.status(400).json({ error: 'IGDB credentials missing', ...testInfo });
   }
-  
-  try {
-    const response = await axios.post(
-      'https://api.igdb.com/v4/games',
-      `search "${safeTestQuery}"; fields id,name,first_release_date,cover.image_id; limit 5;`,
-      {
-        headers: {
-          'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
-          'Authorization': `Bearer ${resolveApiKey('IGDB_BEARER_TOKEN')}`,
-          'Accept': 'application/json',
-        },
-      }
-    );
-    
-    const games = response.data || [];
-    res.json({
-      success: true,
-      ...testInfo,
-      results: {
-        count: games.length,
-        games: games.map(g => ({
-          id: g.id,
-          name: g.name,
-          releaseDate: g.first_release_date ? new Date(g.first_release_date * 1000).toISOString().split('T')[0] : null,
-          hasCover: !!g.cover?.image_id
-        }))
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
+
+  const { status, results } = await catalogService.searchIgdb(testQuery, 5);
+  if (status !== 'ok') {
+    // The reason is in the server log, sanitised by catalog's own egress filter.
+    return res.status(502).json({
       success: false,
       ...testInfo,
-      error: {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data
-      }
+      error: 'IGDB request failed — see the server log for the status and message.',
     });
   }
+  res.json({
+    success: true,
+    ...testInfo,
+    results: {
+      count: results.length,
+      games: results.map((g) => ({
+        id: g.id,
+        name: g.name,
+        releaseDate: g.releaseDate,
+        hasCover: !!g.coverUrl,
+      })),
+    },
+  });
 });
 
-// --- CrackWatch cache (Option B: cached crack status) ---
-// Ephemeral — see CACHE_DIR above.
-const CRACKWATCH_CACHE_FILE = path.join(CACHE_DIR, 'crackwatch-cache.json');
-const CRACKWATCH_RATE_MS = 1200; // 1.2s between requests to respect API limit
-
-/** Normalize game title for matching: lowercase, trim, collapse spaces, remove most punctuation */
 function normalizeTitleForCrackWatch(str) {
   if (!str || typeof str !== 'string') return '';
   return str
@@ -1158,14 +1144,19 @@ app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired
       // would burst hundreds of outbound requests and earn a rate-limit.
       for (const game of userGames) {
         try {
-          const { results: candidates } = await catalogService.searchAll(game.game_name,
+          const lookup = await catalogService.searchAll(game.game_name,
             { limit: catalogService.LIMIT_REFRESH });
-          const match = catalogService.findExactMatch(candidates, game.game_name);
+          const match = catalogService.findExactMatch(lookup.results, game.game_name);
           if (!match) {
-            results.errors.push({ gameName: game.game_name, gameId: game.game_id,
-              error: 'Game not found in API search results' });
+            // "Not found" and "we could not look it up" are different sentences, and
+            // a user acts on them differently. During a provider outage every game in
+            // the library would otherwise be reported as not existing in any database.
+            const why = lookup.degraded
+              ? 'Lookup unavailable — a game database did not respond'
+              : 'Game not found in API search results';
+            results.errors.push({ gameName: game.game_name, gameId: game.game_id, error: why });
             results.details.push({ gameName: game.game_name, gameId: game.game_id,
-              changes: [], error: 'Not found' });
+              changes: [], error: lookup.degraded ? 'Lookup unavailable' : 'Not found' });
             continue;
           }
           const applied = await libraryService.applyRefreshedMetadata(user.id, game, match);
@@ -1214,15 +1205,18 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
       if (!game) return res.status(404).json({ error: 'Game not found in user library' });
 
       const results = { total: 1, updated: 0, errors: [], details: [] };
-      const { results: candidates } = await catalogService.searchAll(game.game_name,
+      const lookup = await catalogService.searchAll(game.game_name,
         { limit: catalogService.LIMIT_REFRESH });
-      const match = catalogService.findExactMatch(candidates, game.game_name);
+      const match = catalogService.findExactMatch(lookup.results, game.game_name);
 
       if (!match) {
+        // See the bulk route: an outage must not read as "this game does not exist".
         results.errors.push({ gameName: game.game_name, gameId: game.game_id,
-          error: 'Game not found in API search results' });
+          error: lookup.degraded
+            ? 'Lookup unavailable — a game database did not respond'
+            : 'Game not found in API search results' });
         results.details.push({ gameName: game.game_name, gameId: game.game_id,
-          changes: [], error: 'Not found' });
+          changes: [], error: lookup.degraded ? 'Lookup unavailable' : 'Not found' });
       } else {
         const applied = await libraryService.applyRefreshedMetadata(user.id, game, match);
         if (applied.updated) results.updated++;

@@ -13,8 +13,14 @@
 //
 // NOTHING FROM A PROVIDER REACHES THE CALLER. Their error bodies carry endpoint
 // paths, quota state and occasionally the failing key. This module logs the detail
-// and returns nothing but counts — see services/problem.js for the same rule applied
-// to service errors generally.
+// and returns a STATUS per provider — 'ok' | 'skipped' | 'failed' — never a message.
+// See services/problem.js for the same rule applied to service errors generally.
+//
+// The status matters, and a count would not have done. A count of 0 cannot tell
+// "this provider had no results for that title" from "this provider is down", and
+// the refresh path turns that distinction into a sentence a user acts on: during an
+// outage it would otherwise report every game in the library as "not found in API
+// search results", which reads as "these games no longer exist anywhere".
 
 const axios = require('axios');
 const { resolveApiKey } = require('../settings-store');
@@ -57,7 +63,7 @@ async function searchIgdb(query, limit) {
       clientId: clientId ? 'SET' : 'MISSING',
       bearerToken: bearerToken ? 'SET' : 'MISSING',
     });
-    return [];
+    return { status: 'skipped', results: [] };
   }
   // escapeIgdbSearch is the ONLY way to put a value inside an APIcalypse
   // `search "..."` literal — see igdb-helpers.js. A bare quote or trailing
@@ -77,7 +83,7 @@ async function searchIgdb(query, limit) {
       }
     );
     const games = response.data || [];
-    return games.map((game) => {
+    const rows = games.map((game) => {
       let steamAppId = null;
       if (Array.isArray(game.external_games)) {
         // category 1 is Steam in IGDB's external_games taxonomy.
@@ -94,10 +100,11 @@ async function searchIgdb(query, limit) {
         source: 'igdb',
         steamAppId,
       };
-    });
+    }).filter((game) => game.name);   // see mergeResults: a nameless row rejects the search
+    return { status: 'ok', results: rows };
   } catch (err) {
-    logProviderError('IGDB', err, { credentials: 'SET' });
-    return [];
+    logProviderError('IGDB', err);
+    return { status: 'failed', results: [] };
   }
 }
 
@@ -119,20 +126,26 @@ function igdbDate(seconds) {
 
 async function searchRawg(query, limit) {
   const key = resolveApiKey('RAWG_API_KEY');
-  if (!key) return [];
+  if (!key) return { status: 'skipped', results: [] };
   try {
     const response = await axios.get('https://api.rawg.io/api/games', {
       ...REQUEST,
       params: { key, search: query, page_size: limit },
     });
-    const games = response.data.results || [];
+    // slice() BEFORE the detail fan-out. page_size is a request, not a guarantee:
+    // a provider that ignores it (or is compromised) hands back an arbitrary number
+    // of results and each one costs a detail request. Measured with a stub returning
+    // 500 results: 500 concurrent outbound requests. IGDB is bounded by its `limit`
+    // clause and TheGamesDB already sliced; RAWG was the one taking the provider's
+    // word for it.
+    const games = (response.data.results || []).slice(0, limit);
     // N+1, preserved from v1: RAWG only exposes store links on the DETAIL endpoint,
     // so finding a Steam App ID costs one extra request per result — up to 21 per
     // search. They run concurrently and each is individually bounded and individually
     // catchable, so the worst case is TIMEOUT_MS rather than 20x it. Dropping the
     // detail fetch would silently stop resolving Steam prices for RAWG-sourced games;
     // any fix belongs in a caching layer, not here.
-    return Promise.all(games.map(async (game) => ({
+    const rows = await Promise.all(games.map(async (game) => ({
       id: 'rawg_' + game.id,
       name: game.name,
       releaseDate: game.released,
@@ -140,9 +153,10 @@ async function searchRawg(query, limit) {
       source: 'rawg',
       steamAppId: await rawgSteamAppId(game.id, key),
     })));
+    return { status: 'ok', results: rows.filter((game) => game.name) };
   } catch (err) {
     logProviderError('RAWG', err);
-    return [];
+    return { status: 'failed', results: [] };
   }
 }
 
@@ -167,14 +181,14 @@ async function rawgSteamAppId(gameId, key) {
 
 async function searchTheGamesDb(query, limit) {
   const key = resolveApiKey('THEGAMESDB_API_KEY');
-  if (!key) return [];   // optional provider
+  if (!key) return { status: 'skipped', results: [] };   // optional provider
   try {
     const response = await axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
       ...REQUEST,
       params: { apikey: key, name: query },
     });
     const data = response.data;
-    if (!data?.data?.games) return [];
+    if (!data?.data?.games) return { status: 'ok', results: [] };
     const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
     const baseUrl = data.include?.base_url?.image_base
       || data.data?.base_url?.image_base
@@ -182,7 +196,7 @@ async function searchTheGamesDb(query, limit) {
     // NOT data.include.boxart.data — the map is keyed directly on include.boxart.
     const boxartById = data.include?.boxart || {};
 
-    return games.slice(0, limit).map((game) => ({
+    const rows = games.slice(0, limit).map((game) => ({
       id: 'thegamesdb_' + game.id,
       name: game.game_title || game.game_name || '',
       releaseDate: parseLooseDate(game.release_date),
@@ -192,9 +206,10 @@ async function searchTheGamesDb(query, limit) {
       // in from an IGDB or RAWG result for the same title.
       steamAppId: null,
     })).filter((game) => game.name);
+    return { status: 'ok', results: rows };
   } catch (err) {
     logProviderError('TheGamesDB', err);
-    return [];
+    return { status: 'failed', results: [] };
   }
 }
 
@@ -223,7 +238,11 @@ function parseLooseDate(value) {
 // coercion. Cover art and Steam App IDs are cosmetic enough to borrow; a date is not.
 function mergeResults(igdb, rawg, thegamesdb) {
   const all = [...igdb, ...rawg, ...thegamesdb];
-  const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+  // String(x ?? '') rather than x.toLowerCase(): this runs AFTER Promise.all, so
+  // it is outside every provider's catch, and one nameless row would reject the
+  // whole search — breaking the never-rejects contract stated above. The providers
+  // now filter these out; this is the belt to that pair of braces.
+  const sameName = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
 
   const filled = all.map((game) => {
     let out = game;
@@ -243,7 +262,7 @@ function mergeResults(igdb, rawg, thegamesdb) {
   // entry is the more useful answer when a title appears both ways.
   const byName = new Map();
   for (const game of filled) {
-    const key = game.name.toLowerCase();
+    const key = String(game.name ?? '').toLowerCase();
     if (!byName.has(key)) byName.set(key, []);
     byName.get(key).push(game);
   }
@@ -255,17 +274,23 @@ function mergeResults(igdb, rawg, thegamesdb) {
 // Returns { results, counts } — counts feed the one log line the routes emit, and
 // tell a caller which providers actually answered without exposing why they didn't.
 async function searchAll(query, { limit = LIMIT_SEARCH } = {}) {
+  const empty = { igdb: 'skipped', rawg: 'skipped', thegamesdb: 'skipped' };
   const term = String(query ?? '').trim();
-  if (!term) return { results: [], counts: { igdb: 0, rawg: 0, thegamesdb: 0 } };
+  if (!term) return { results: [], providers: empty, counts: { igdb: 0, rawg: 0, thegamesdb: 0 }, degraded: false };
 
   const [igdb, rawg, thegamesdb] = await Promise.all([
     searchIgdb(term, limit),
     searchRawg(term, limit),
     searchTheGamesDb(term, limit),
   ]);
+  const providers = { igdb: igdb.status, rawg: rawg.status, thegamesdb: thegamesdb.status };
   return {
-    results: mergeResults(igdb, rawg, thegamesdb),
-    counts: { igdb: igdb.length, rawg: rawg.length, thegamesdb: thegamesdb.length },
+    results: mergeResults(igdb.results, rawg.results, thegamesdb.results),
+    providers,
+    counts: { igdb: igdb.results.length, rawg: rawg.results.length, thegamesdb: thegamesdb.results.length },
+    // `degraded` is the one bit a caller usually wants: at least one provider that
+    // should have answered did not, so "no results" is not evidence of absence.
+    degraded: Object.values(providers).includes('failed'),
   };
 }
 
@@ -274,7 +299,8 @@ async function searchAll(query, { limit = LIMIT_SEARCH } = {}) {
 // with a different game's date and cover.
 function findExactMatch(results, name) {
   const target = String(name ?? '').toLowerCase();
-  return results.find((g) => g.name.toLowerCase() === target) || null;
+  if (!target) return null;
+  return results.find((g) => String(g.name ?? '').toLowerCase() === target) || null;
 }
 
 module.exports = {

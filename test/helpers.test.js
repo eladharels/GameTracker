@@ -718,6 +718,21 @@ check('a status the user chose is left alone once released', () => {
   }
 });
 
+console.log('library.isReleased — the rule the two write paths actually share:');
+check('absent, unparseable and future all mean "not released"', () => {
+  // This is C1: statusForDate used to skip validReleaseDate, so it and upsertGame
+  // disagreed on exactly these inputs — one said unreleased, the other wishlist.
+  const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+  for (const bad of [null, undefined, '', 'not-a-date', '2024-13-99', 42]) {
+    assert.strictEqual(libraryService.isReleased(bad), false, `${JSON.stringify(bad)} read as released`);
+    assert.strictEqual(libraryService.statusForDate(bad, 'unreleased'), 'unreleased',
+      `${JSON.stringify(bad)} promoted a game with no usable date`);
+  }
+  assert.strictEqual(libraryService.isReleased(iso(-1)), true);
+  assert.strictEqual(libraryService.isReleased(iso(0)), true, 'today must count as released');
+  assert.strictEqual(libraryService.isReleased(iso(30)), false);
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {
