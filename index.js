@@ -467,6 +467,19 @@ app.get('/api/test/igdb', authRequired, requirePermission('can_manage_users'), a
   });
 });
 
+// --- CrackWatch cache (Option B: cached crack status) ---
+// Ephemeral — see CACHE_DIR above.
+//
+// These two were deleted by accident in the catalog slice (89e2458): that commit
+// replaced the /api/test/igdb route using this function's name as its end boundary
+// and swallowed the block in between. Every reference to both sits inside a
+// try/catch, so nothing crashed and nothing looked wrong — the DRM cache silently
+// stopped loading at boot, stopped saving, and refreshCrackWatchCache() broke out of
+// its pagination loop after page 0, behind a warning that reads like a missing file.
+const CRACKWATCH_CACHE_FILE = path.join(CACHE_DIR, 'crackwatch-cache.json');
+const CRACKWATCH_RATE_MS = 1200; // 1.2s between requests to respect API limit
+
+/** Normalize game title for matching: lowercase, trim, collapse spaces, remove most punctuation */
 function normalizeTitleForCrackWatch(str) {
   if (!str || typeof str !== 'string') return '';
   return str
