@@ -1795,6 +1795,11 @@ app.get('/api/users', authRequired, requirePermission('can_manage_users'), (req,
 app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
   const id = parseRouteId(req.params.id);
   if (id === null) return res.status(404).json({ error: 'User not found' });
+  // ntfy_topic and gotify_token are still forwarded even though an admin may no
+  // longer write them: the service REFUSES them with a 400, and it can only do that
+  // if it can see they were sent. Dropping them here would restore the silent-ignore
+  // this fix exists to remove. An absent key destructures to undefined, which the
+  // service treats as "not sent" — so the SPA is unaffected.
   const { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library } = req.body;
 
   usersService.update(id, { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library }, req.user.id)

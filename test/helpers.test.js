@@ -735,6 +735,46 @@ check('absent, unparseable and future all mean "not released"', () => {
   assert.strictEqual(libraryService.isReleased(iso(30)), false);
 });
 
+// --- services/users.js: push credentials are not an administrative field ------
+//
+// Both halves of the exposure, asserted from the two places it could come back:
+// the SELECT projection and the update path. Neither needs a database — the
+// projection is a string, and the refusal is thrown before any query is issued.
+
+const usersService = require('../services/users');
+
+check('admin user list does not expose per-user push credentials', () => {
+  for (const column of usersService.PUSH_CREDENTIAL_COLUMNS) {
+    assert.ok(
+      !usersService.ADMIN_LIST_COLUMNS.includes(column),
+      `${column} is back in ADMIN_LIST_COLUMNS — GET /api/users would hand every `
+      + `admin a bearer secret for every user's notification channel`
+    );
+  }
+  // The projection must stay an allowlist. `SELECT *` here would ship `password`.
+  assert.ok(!usersService.ADMIN_LIST_COLUMNS.includes('*'), 'admin list must not be SELECT *');
+  assert.ok(!usersService.ADMIN_LIST_COLUMNS.includes('password'), 'admin list must never include password');
+});
+
+checkAsync('an admin cannot write another user\'s push credentials', async () => {
+  for (const column of usersService.PUSH_CREDENTIAL_COLUMNS) {
+    await assert.rejects(
+      // actingUserId deliberately differs from id: this is an admin editing someone
+      // else, the case that repointed another user's notifications.
+      () => usersService.update(7, { [column]: 'attacker-controlled' }, 1),
+      (err) => err.code === SVC.VALIDATION && String(err.message).includes(column),
+      `update() accepted ${column} — an admin can repoint another user's notifications`
+    );
+  }
+  // Refused, not merely ignored: a silent drop would return {success:true} and tell
+  // the caller it had set something it had not.
+  await assert.rejects(
+    () => usersService.update(7, { email: 'a@b.c', gotify_token: 'x' }, 1),
+    (err) => err.code === SVC.VALIDATION,
+    'a credential smuggled alongside a legitimate field must still be refused'
+  );
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

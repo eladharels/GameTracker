@@ -17,14 +17,28 @@ const { serviceError, CODES } = require('./errors');
 const { isValidEmailAddress, validatePassword } = require('../user-rules');
 
 
-// Columns the admin list exposes.
+// Per-user PUSH CREDENTIALS — bearer secrets, not profile fields.
 //
-// NOTE for v2: this includes ntfy_topic and gotify_token, which are per-user PUSH
-// CREDENTIALS. An administrator does not need them to administer an account, and
-// they are returned to every admin for every user. v1's shape is preserved here;
-// v2 must drop them.
+// A Gotify application token lets the holder post notifications to that user's
+// devices; an ntfy topic is a bearer secret in the same way, since anyone who knows
+// the topic can publish to it. The user sets both themselves on My Account.
+//
+// `GET /api/users` returned both, for EVERY user, to EVERY admin — and
+// `PUT /api/users:id` let an admin overwrite them, silently repointing another
+// user's notifications at a channel the admin controls. Neither had a consumer: the
+// SPA touches these only on the My Account profile page, which reads the CALLER'S
+// OWN row through a different route, and the admin panel only ever sends
+// `{password}` or `{can_manage_users}` (frontend/src/App.jsx:416,649).
+//
+// Naming them once, and asserting the projection and the update path against this
+// list in test/helpers.test.js, is what stops them being reinstated by someone
+// adding "the rest of the columns" back to the SELECT.
+const PUSH_CREDENTIAL_COLUMNS = Object.freeze(['ntfy_topic', 'gotify_token']);
+
+// Columns the admin list exposes. Deliberately not `SELECT *`: `password` is in that
+// table too, and an allowlist fails closed when a column is added.
 const ADMIN_LIST_COLUMNS =
-  'id, username, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library';
+  'id, username, can_manage_users, email, created_at, origin, display_name, shares_library';
 
 async function listAll() {
   return all(`SELECT ${ADMIN_LIST_COLUMNS} FROM users ORDER BY id ASC`, []);
@@ -42,6 +56,20 @@ async function findById(id) {
 async function update(id, fields, actingUserId) {
   const updates = [];
   const params = [];
+
+  // Refused, not silently dropped. An admin tool that thinks it just set a user's
+  // Gotify token and got `{success:true}` back has been told something false; a 400
+  // naming the field is the only answer that leaves the caller correctly informed.
+  // Checked before any other work so it cannot be reached past a partial update.
+  for (const column of PUSH_CREDENTIAL_COLUMNS) {
+    if (typeof fields[column] !== 'undefined') {
+      throw serviceError(
+        CODES.VALIDATION,
+        `${column} is a per-user notification credential and can only be set by that user, on My Account.`,
+        { field: column }
+      );
+    }
+  }
 
   if (typeof fields.can_manage_users !== 'undefined') {
     if (!fields.can_manage_users && String(actingUserId) === String(id)) {
@@ -61,8 +89,6 @@ async function update(id, fields, actingUserId) {
     updates.push('email = ?');
     params.push(cleanEmail);
   }
-  if (typeof fields.ntfy_topic !== 'undefined') { updates.push('ntfy_topic = ?'); params.push(fields.ntfy_topic); }
-  if (typeof fields.gotify_token !== 'undefined') { updates.push('gotify_token = ?'); params.push(fields.gotify_token); }
   if (typeof fields.shares_library !== 'undefined') {
     updates.push('shares_library = ?');
     params.push(fields.shares_library ? 1 : 0);
@@ -120,4 +146,4 @@ async function remove(id, actingUserId) {
   return { removed: ctx.changes, username: row.username };
 }
 
-module.exports = { listAll, findById, update, remove, ADMIN_LIST_COLUMNS };
+module.exports = { listAll, findById, update, remove, ADMIN_LIST_COLUMNS, PUSH_CREDENTIAL_COLUMNS };
