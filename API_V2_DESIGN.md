@@ -263,7 +263,7 @@ to build it.
 |---|---|---|
 | `listGamesFor` has no `ORDER BY`; pagination over it is unsound | `services/library.js` | D8 |
 | No cursor implementation anywhere; needs `(sort, order, status, lastKey, lastId)` and a `(key NULLS LAST, id)` total order | `services/library.js` | D8 |
-| **`user_games` has no `added_at` column** — `LibraryGame.addedAt` and `sort=addedAt` need a MIGRATION, not a service change | schema | D8 |
+| ~~**`user_games` has no `added_at` column**~~ — done, `migrations/004`. Nullable and deliberately not backfilled: nothing in the table records when an existing row was added, and a migration-time value would be false for every one of them and indistinguishable afterwards from a true one. Set on insert, absent from the upsert's DO UPDATE list so a status change does not reset it | schema | D8 |
 | No catalog fetch-by-id. `searchAll` searches by query string only, so the `gameId` branch of add-a-game has no name, cover or date to store — and `upsertGame` requires a name | `services/catalog.js` | D9 |
 | Status derived from the request's date rather than the stored row | `services/library.js` upsert | D7 |
 | `removeGame` computes `removed` and the adapter discards it | `services/library.js` | D6 |

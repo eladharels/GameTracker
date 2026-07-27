@@ -322,8 +322,12 @@ async function upsertGame(userId, fields) {
     }
 
     await tx.query(
-      `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id, backlog_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id, backlog_order, added_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       -- added_at is ABSENT from the DO UPDATE list on purpose: re-saving a game
+       -- must not reset when it was added. The upsert is how a status change is
+       -- written, so overwriting it here would make every row's added_at mean "last
+       -- touched", which is a different fact under the same name.
        ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status,
          -- COALESCE, not a bare overwrite: the frontend's status-change call omits
          -- steamAppId, which bound as NULL and WIPED the stored Steam App ID every
@@ -333,7 +337,7 @@ async function upsertGame(userId, fields) {
          steam_app_id=COALESCE(excluded.steam_app_id, user_games.steam_app_id),
          backlog_order=excluded.backlog_order`,
       [userId, gameId, gameName, fields.coverUrl || null, releaseDate, status,
-       fields.steamAppId || null, backlogOrder]
+       fields.steamAppId || null, backlogOrder, new Date().toISOString()]
     );
 
     return { status, requested, coerced: status !== requested, events, created: !prior };
