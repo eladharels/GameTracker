@@ -95,10 +95,13 @@ writing the spec, because two of the three determine what the spec can honestly 
 
 2. **Scopes are NOT expressible per-operation, so the spec does not pretend they are.**
    This turned out to be a property of OpenAPI rather than of this codebase: the scope
-   array in a `security` requirement is only meaningful for `oauth2` and
-   `openIdConnect`. For `type: http, scheme: bearer` it is ignored, so writing
-   `security: [{bearerAuth: [admin]}]` would be decorative — a claim no tool checks and
-   no client honours.
+   array in a `security` requirement carries defined semantics only for `oauth2` and
+   `openIdConnect`. For other schemes 3.1 permits role names there but leaves them "not
+   otherwise defined or exchanged in-band" — so `security: [{bearerAuth: [admin]}]` on an
+   http-bearer scheme is *permitted but semantically undefined*: no generator emits
+   enforcement, no client honours it, no validator checks it. Decorative in effect rather
+   than strictly ignored — and either way not something a drift gate can compare against
+   `tierOf()`.
 
    Instead each operation carries **`x-required-scope`**, which maps one-to-one onto the
    admin/non-admin boundary the router actually derives from `requirePermission`. That
@@ -116,7 +119,9 @@ writing the spec, because two of the three determine what the spec can honestly 
    outright. *(Dissent recorded: the Architect's point that the name is permanent once
    the MCP ships is correct, and this is the cheapest it will ever be to change. If a
    third scope is ever added the set stops reading as a binary and this should be
-   revisited then — that is the trigger.)*
+   revisited then — that is the trigger.)* It also fires if a scope ever gains a
+   **read-only** variant: `library` misread as read-only is likelier than `library`
+   misread as library-only, and the spec already spends a paragraph denying it.
 
 ## D2 — `gameId` is an opaque string, forever
 
@@ -239,14 +244,36 @@ after the freeze it cannot be added.
 
 Listed explicitly so the spec is not quietly written down to what the services already do.
 
+This list failed once already, in the direction OPPOSITE to its stated purpose: the
+spec was written *up*, past what the services can do, and the appendix did not grow with
+it. Reviewing the spec against `services/` found eleven more. Anything the spec promises
+that no service implements belongs here the moment it is written, not when someone tries
+to build it.
+
 | Gap | Service | For |
 |---|---|---|
-| `listGamesFor` has no `ORDER BY`; pagination over it is unsound | `services/library.js:36` | D8 |
+| `listGamesFor` has no `ORDER BY`; pagination over it is unsound | `services/library.js` | D8 |
+| No cursor implementation anywhere; needs `(sort, order, status, lastKey, lastId)` and a `(key NULLS LAST, id)` total order | `services/library.js` | D8 |
+| **`user_games` has no `added_at` column** — `LibraryGame.addedAt` and `sort=addedAt` need a MIGRATION, not a service change | schema | D8 |
+| No catalog fetch-by-id. `searchAll` searches by query string only, so the `gameId` branch of add-a-game has no name, cover or date to store — and `upsertGame` requires a name | `services/catalog.js` | D9 |
 | Status derived from the request's date rather than the stored row | `services/library.js` upsert | D7 |
 | `removeGame` computes `removed` and the adapter discards it | `services/library.js` | D6 |
-| Backlog boundary no-op returns `moved:false`, discarded | `services/library.js` | D6 |
+| No jobs subsystem at all: no store, no ids, no lifecycle, no single-flight (the 409 needs state that does not exist). Two of the four kinds are inline in `index.js`, not functions | `services/jobs.js` | D11 |
+| `listBacklog` selects `id, game_id, backlog_order` — no name, so `BacklogEntry.name` cannot be served | `services/library.js` | D8 |
+| No single-share add and no single-outgoing-remove; `replaceOutgoing` is the only outgoing writer | `services/shares.js` | D12 |
+| `Share` is unserviceable: `listOutgoing` returns bare usernames, `listIncoming` returns no display name | `services/shares.js` | D12 |
+| `readForRole` cannot return `apikeys` — `SECTIONS` deliberately excludes it. Resolved in the spec by reporting API keys as STATE (`ApiKeyState`) rather than masked values, which is also what makes a read-modify-write safe | `services/settings.js` | D13 |
+| Settings field names are snake_case in storage and camelCase on the wire; needs a bidirectional mapper | `services/settings.js` | D13 |
+| **`createToken` has no scope floor.** It accepts any scope from any caller, so a `library`-scoped token can mint an `admin` one and the entire scope system collapses. Must take the minting credential's effective scopes and intersect | `services/auth.js` | D1 |
 | `readSharedLibrary(owner, viewer)` and `revokeIncoming(to, from)` take two usernames in **opposite** orders, adjacent in the file | `services/shares.js` | D12 |
 | ~~No PAT table, no token verification path~~ — done | `services/auth.js` | D1 |
+
+Two decisions the spec makes that are NOT gaps, recorded so they are not rediscovered as
+bugs: v2 drops the single-step backlog up/down move (`PUT /library/backlog` replaces it,
+because a set operation cannot leave duplicate positions), and
+`PATCH /library/games/{gameId}` deliberately does not accept `backlogOrder` — writing one
+row's absolute position reintroduces the duplicate positions that make reordering a
+permanent no-op.
 
 The shares argument-order item fails closed today — swapping them inverts the grant
 direction but only matters if a reciprocal share exists — so it is a footgun rather than a
@@ -300,16 +327,27 @@ pure enough to assert against directly, no database needed.
    `/api/users`, demoting the account revokes admin on the very next request, deleting
    the token 401s it, and deleting the user cascades its tokens away.
 3. ~~The OpenAPI 3.1 document — v2 only, hand-written.~~ `openapi/gametracker-v2.yaml`,
-   26 operations. It is the SOURCE for the routes, not a description of them: no v2
+   **28 operations**. It is the SOURCE for the routes, not a description of them: no v2
    route exists yet, so every operation in it is a specification to be implemented.
 4. The drift gate, landed **with the first v2 route**, not after. A spec without the gate
    is a document, not a contract.
 5. v2 routes in slices — library first (that is what the MCP and the terminal both want),
    admin second. Normalise the shares argument order before the second adapter set exists.
-6. The docs site: point Redoc or Scalar at the spec, emit one static file, serve it from
+6. **`GET /api/capabilities` on v1** — `{apiVersions, serverVersion, deprecations}`, auth
+   tier, NOT on `/api/health`. The one decision with an expiry: it is described as "the
+   last change made to v1", and after the freeze it cannot be added. The phone has no way
+   to discover v2 exists. It had no build-order slot at all until that was noticed.
+7. The docs site: point Redoc or Scalar at the spec, emit one static file, serve it from
    the existing nginx. It must be **vendored** — `frontend/nginx.conf` sets
-   `script-src 'self'`, so a CDN-loaded viewer will not run.
-7. The MCP: a thin wrapper over the generated client, ~10 tools, no domain logic. Tool
+   `script-src 'self'`, so a CDN-loaded viewer will not run. Two further CSP snags: a
+   Redoc build that spawns its search worker from a `blob:` URL is blocked by
+   `worker-src 'self'`, and Scalar's API client defaults to `proxy.scalar.com`, blocked by
+   `connect-src 'self'` (disable it — a same-origin `/api/v2` needs no proxy). Prefer
+   **Scalar**: it is 3.1-native, while Redoc 2.x does not render JSON-Schema `examples:`.
+   Test the real bundle against the live CSP; do not relax the CSP to suit the viewer.
+   Decide deliberately whether the docs are served unauthenticated — they describe the
+   admin surface and embed the token-minting runbook.
+8. The MCP: a thin wrapper over the generated client, ~10 tools, no domain logic. Tool
    descriptions, disambiguation prompting, within-session caching of search results so
    "add the second one" works, and confirm-before-destroy all live here — not in the API.
 

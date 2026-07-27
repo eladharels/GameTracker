@@ -159,7 +159,7 @@ GameTracker/
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
 ├── openapi/
-│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 26 operations. It is the
+│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 28 operations. It is the
 │                                   #   SOURCE for the v2 routes, not a description of them —
 │                                   #   no v2 route exists yet. Validated by test/openapi.test.js.
 │                                   #   NO spec for v1: a faithful one would generate a client
