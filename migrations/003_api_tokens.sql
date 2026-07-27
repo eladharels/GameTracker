@@ -26,9 +26,20 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   -- cascade for the same reason.
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
 
-  -- Operator-facing label ("laptop cli", "mcp"). The only way to tell two tokens
-  -- apart in a revocation list, since the secret itself is never shown again.
+  -- Operator-facing label ("laptop cli", "mcp"). UNIQUE per user (constraint below)
+  -- because two tokens both called `mcp` in a revocation list, with nothing else to
+  -- tell them apart, is a mis-revocation waiting to happen.
   name         TEXT NOT NULL,
+
+  -- Last 4 characters of the token, for display. The ONLY column here that cannot be
+  -- added later: the plaintext is gone after minting and the hash is one-way, so a
+  -- hint column introduced tomorrow is NULL forever for every token minted today.
+  --
+  -- 4 base64url characters is 24 bits of a 256-bit secret, leaving ~232. That is not
+  -- a meaningful reduction, and it is the same convention GitHub and Stripe use for
+  -- the same reason: an operator staring at a revocation list needs to match the
+  -- token in their config file against the row they are about to delete.
+  hint         TEXT,
 
   -- SHA-256 hex of the token, never the token. UNIQUE because it is the lookup key
   -- on every authenticated request, and the unique index is what makes that lookup
@@ -47,7 +58,15 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   -- "the MCP cannot create users or read API keys".
   --
   -- Scopes may only ever NARROW what the account can do — see services/auth.js.
-  scopes       TEXT NOT NULL DEFAULT '["library"]',
+  --
+  -- The stored form is CANONICAL: normaliseScopes sorts before serialising, so there
+  -- are exactly three legal values and a CHECK can enumerate them. Migration 002 set
+  -- the precedent that an enum belongs in the DATA and not only in one function, and
+  -- omitting it here purely because the column happens to hold JSON would read as an
+  -- oversight. parseScopes still defends in the application and falls back to least
+  -- privilege; this is the layer that survives the next service that forgets.
+  scopes       TEXT NOT NULL DEFAULT '["library"]'
+               CHECK (scopes IN ('["library"]', '["admin"]', '["admin","library"]')),
 
   created_at   TEXT NOT NULL,
 
@@ -57,7 +76,11 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 
   -- NULL means no expiry. Deliberate: the point of this table is that revocation is
   -- a DELETE, so an expiry is an optional extra rather than the safety mechanism.
-  expires_at   TEXT
+  expires_at   TEXT,
+
+  -- See `name` above: the label is the only human-readable discriminator, so it has
+  -- to actually discriminate.
+  CONSTRAINT api_tokens_user_name_uniq UNIQUE (user_id, name)
 );
 
 -- Listing and revoking a user's tokens, and the cascade on user deletion.

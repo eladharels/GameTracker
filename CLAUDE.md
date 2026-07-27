@@ -195,6 +195,24 @@ GameTracker/
 > in the inventory, on a tier that changed, and on any unauthenticated route outside the
 > two-item allowlist (`GET /api/health`, `POST /api/auth/login`).
 >
+> **Call `db.promises.*` through the module when the SQL TEXT is itself the safety property.**
+> `users.js#listAll` (the column allowlist), `library.js#listOwnGames` (the five-column
+> projection) and all of `services/auth.js` (owner-scoping in the `WHERE`, `token_hash` absent
+> from the listing) do this so a test can stub `db.promises.get/run/all` and assert the
+> statement that was actually issued. Asserting an exported constant instead proved nothing:
+> rewriting `listAll` to `SELECT *` would have shipped every credential and the bcrypt hash
+> with the suite green.
+>
+> **The trap:** a DESTRUCTURED binding is not interceptable. `library.js`, `shares.js`,
+> `notifications.js` and `jobs.js` capture `get`/`run`/`all` at module load, so a test that
+> stubs `db.promises.get` expecting to observe one of those gets a **silent false pass** — the
+> stub is installed, never called, and the assertion runs against seeded data. This already
+> happened once: the first auth tests hit the real database (`ENOTFOUND db`) because
+> `services/auth.js` destructured.
+>
+> New services use the module form throughout; destructuring is the legacy shape. Don't
+> convert files wholesale — where no test asserts the SQL it buys nothing.
+
 > **A change to a v1 response shape must be reflected in `test/api-contract.test.js`, and is
 > almost certainly wrong.** That file pins the shapes clients bind to — the library row's
 > duplicated `steamAppId`/`crackStatus` aliases, the five-column `/api/user/me/games`

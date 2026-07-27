@@ -2,6 +2,14 @@
  * Mint a personal access token for an existing user.
  *
  *   node create-api-token.js <username> <token-name> [scopes] [--expires-in-days N]
+ *   node create-api-token.js <username> --list
+ *   node create-api-token.js <username> --revoke <token-id>
+ *
+ * REVOCATION IS THE POINT of this design — a token is looked up rather than
+ * self-describing precisely so that deleting one row kills it, without rotating
+ * JWT_SECRET and signing out the web app and the phone as well. So it needs a way to
+ * be done that is not "shell in and hand-write SQL": the first version of this script
+ * only minted, which left the entire justification for the table unexercisable.
  *
  * `scopes` is a comma-separated subset of: library, admin. Defaults to `library`.
  * Grant `admin` only to something that genuinely needs to manage users or read API
@@ -40,30 +48,44 @@ if (flagIndex !== -1) {
   argv.splice(flagIndex, 2);
 }
 
+const wantsList = argv.includes('--list');
+const revokeIndex = argv.indexOf('--revoke');
+const revokeId = revokeIndex === -1 ? null : Number(argv[revokeIndex + 1]);
+
 const username = (argv[0] || '').trim().toLowerCase();
 const name = (argv[1] || '').trim();
 const scopes = (argv[2] || 'library').split(',').map((s) => s.trim()).filter(Boolean);
 
 function usage(message) {
   console.error(`[ERROR] ${message}`);
-  console.error('Usage: node create-api-token.js <username> <token-name> [scopes] [--expires-in-days N]');
+  console.error('Usage:');
+  console.error('  node create-api-token.js <username> <token-name> [scopes] [--expires-in-days N]');
+  console.error('  node create-api-token.js <username> --list');
+  console.error('  node create-api-token.js <username> --revoke <token-id>');
   console.error(`Scopes: ${authService.ALL_SCOPES.join(', ')}  (default: library)`);
   process.exit(1);
 }
 
-if (!username || !name) usage('username and token-name are required.');
-if (expiresInDays !== null && (!Number.isFinite(expiresInDays) || expiresInDays <= 0)) {
-  usage('--expires-in-days must be a positive number.');
+if (!username) usage('a username is required.');
+if (revokeIndex !== -1 && (!Number.isInteger(revokeId) || revokeId <= 0)) {
+  usage('--revoke needs a numeric token id (see --list).');
+}
+if (!wantsList && revokeIndex === -1 && !name) usage('a token-name is required when minting.');
+// Upper-bounded, not just positive. `--expires-in-days 1e15` is finite and greater
+// than zero, and then `new Date(...).toISOString()` throws an uncaught RangeError —
+// no token minted and nothing leaked, but the operator gets a stack trace where a
+// usage message belongs. Ten years is well past any real answer.
+const MAX_EXPIRY_DAYS = 3650;
+if (expiresInDays !== null
+    && (!Number.isFinite(expiresInDays) || expiresInDays <= 0 || expiresInDays > MAX_EXPIRY_DAYS)) {
+  usage(`--expires-in-days must be a number between 1 and ${MAX_EXPIRY_DAYS}.`);
 }
 
-// Named so an unknown scope is a REFUSAL rather than a token that silently has less
-// power than the operator believes. createToken drops unrecognised names, which is
-// right for a stored value being re-read but wrong for a human typing it once.
-for (const scope of scopes) {
-  if (!authService.ALL_SCOPES.includes(scope)) {
-    usage(`unknown scope '${scope}'. Valid scopes: ${authService.ALL_SCOPES.join(', ')}`);
-  }
-}
+// The refusal for an unknown scope lives in the SERVICE (normaliseScopes strict
+// mode), not here. It used to be a loop in this file, which meant the coming
+// Settings -> API Tokens route would have had to remember to reimplement it or
+// silently mint weaker tokens than the operator selected — two callers, one rule,
+// one copy each.
 
 const expiresAt = expiresInDays === null
   ? null
@@ -78,11 +100,37 @@ const expiresAt = expiresInDays === null
     return;
   }
 
+  if (wantsList) {
+    const tokens = await authService.listTokens(user.id);
+    if (tokens.length === 0) {
+      console.error(`[OK] ${user.username} has no API tokens.`);
+      return;
+    }
+    console.error(`[OK] API tokens for ${user.username}:`);
+    for (const t of tokens) {
+      console.error(`  #${t.id}  ${t.name}  (…${t.hint || '????'})  [${t.scopes.join(', ')}]`
+        + `  created ${t.created_at}  last used ${t.last_used_at || 'never'}`
+        + `  expires ${t.expires_at || 'never'}`);
+    }
+    console.error('');
+    console.error(`Revoke with: node create-api-token.js ${user.username} --revoke <id>`);
+    return;
+  }
+
+  if (revokeIndex !== -1) {
+    // Scoped to this user inside the DELETE, so naming another account's token id
+    // removes nothing and says so, rather than silently succeeding.
+    await authService.revokeToken(revokeId, user.id);
+    console.error(`[OK] Token #${revokeId} revoked. It stops working on its next request.`);
+    return;
+  }
+
   const result = await authService.createToken({
     userId: user.id, name, scopes, expiresAt,
   });
 
   console.error(`[OK] Token '${result.name}' created for ${user.username}.`);
+  console.error(`     Ends in: …${result.hint}   (shown in --list, so you can match this token to its row)`);
   console.error(`     Scopes:  ${result.scopes.join(', ')}`);
   console.error(`     Expires: ${result.expiresAt || 'never (revoke by deleting it)'}`);
   console.error('');

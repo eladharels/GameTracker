@@ -77,6 +77,27 @@ bake in `can_manage_users`/`origin`/`display_name`, and nothing authorizes off t
 must not put them there. The two sites collapse to one `issueToken` seam when auth is
 extracted.
 
+### D1 addendum — three things to settle before the first v2 route
+
+Found while implementing D1; none of them were in the original decision.
+
+1. **There is no token-only middleware.** What landed is `authRequired`, which accepts
+   both credential types. If v2 mounts it, `securitySchemes` will describe a token-only
+   API while the router also accepts a 12-hour JWT — the published claim and the
+   implementation disagreeing on day one, in the one place the drift gate cannot see.
+   Either add a named `patRequired` (and give `tierOf()` a vocabulary for it) or amend
+   this decision to say v2 accepts both.
+2. **The drift gate cannot verify per-operation scopes.** Scope is enforced by
+   collapsing into `can_manage_users`, not per route, so the router has no ground truth
+   for `library` — only the admin tier is derivable. Either the spec omits scopes from
+   per-operation `security`, or the Enforcement section's claim needs narrowing. Fix the
+   doc rather than discover this while writing the gate.
+3. **`library` oversells its own narrowing.** It means *every non-admin capability*,
+   which includes changing the account's own notification targets and sharing its
+   library. D1's stated boundary — the MCP cannot create users or read API keys — is
+   honoured exactly, but the NAME goes on the wire and into the generated client.
+   Renaming it is free today and permanent once the MCP ships.
+
 ## D2 — `gameId` is an opaque string, forever
 
 One `GameRef` schema shared by search results, library rows and path parameters:
@@ -205,7 +226,7 @@ Listed explicitly so the spec is not quietly written down to what the services a
 | `removeGame` computes `removed` and the adapter discards it | `services/library.js` | D6 |
 | Backlog boundary no-op returns `moved:false`, discarded | `services/library.js` | D6 |
 | `readSharedLibrary(owner, viewer)` and `revokeIncoming(to, from)` take two usernames in **opposite** orders, adjacent in the file | `services/shares.js` | D12 |
-| No PAT table, no token verification path | new `services/auth.js` | D1 |
+| ~~No PAT table, no token verification path~~ — done | `services/auth.js` | D1 |
 
 The shares argument-order item fails closed today — swapping them inverts the grant
 direction but only matters if a reciprocal share exists — so it is a footgun rather than a
@@ -246,8 +267,10 @@ pure enough to assert against directly, no database needed.
 
 0. ~~Remove the admin push-credential disclosure from v1.~~ Done.
 1. This document. ← you are here
-2. ~~Auth slice: `migrations/003_api_tokens.sql`, `services/auth.js` (verification +
-   middleware only), `create-api-token.js`, PAT acceptance in v1's `authRequired`.~~
+2. ~~Auth slice: `migrations/003_api_tokens.sql`, `services/auth.js` (verification
+   only — the middleware itself is inline in `index.js`, because CLAUDE.md forbids
+   `req`/`res` in `services/`), `create-api-token.js`, PAT acceptance in v1's
+   `authRequired`, and mint/list/revoke on the CLI.~~
    Done. Verified end-to-end against a real Postgres and a booted backend, not only by
    unit test: an admin account presenting a library-scoped token gets 403 on
    `/api/users`, demoting the account revokes admin on the very next request, deleting

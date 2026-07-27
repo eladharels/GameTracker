@@ -174,6 +174,52 @@ everything, so the backend needs no published port at all:
 - **Login throttling**: 5 failed attempts per IP *and* per account → 15-minute lockout.
 - Every `/api/user/:username/*` route requires authentication **and** ownership (self, or an admin).
 
+### Personal access tokens
+
+For scripts, the terminal, and anything non-interactive — so nothing has to store your
+password. A token is an ordinary bearer credential on the same header a browser session uses.
+
+```bash
+docker compose -f docker-compose.yaml exec backend \
+  node create-api-token.js <username> "laptop cli" library
+
+curl -H "Authorization: Bearer gt_pat_..." https://your-host/api/user/me/games
+```
+
+**The token is printed once and cannot be recovered.** Only its SHA-256 hash is stored, so a
+database dump yields no working credentials — and neither the API nor the script can show it
+to you again. Lost it? Revoke and mint another. It goes to stdout alone, so
+`... > token.txt` captures exactly the secret and nothing else.
+
+**Scopes are `library` and `admin`, and they only ever NARROW what the account can already
+do.** A `library`-scoped token held by an administrator is *not* an administrator — it gets
+403 on every admin route. An `admin`-scoped token held by a non-admin does not become one; a
+scope filters privilege, it never grants it. Grant `admin` only to something that genuinely
+needs to manage users or read API keys — an MCP server tending your library does not.
+
+> `library` is a slight misnomer worth knowing about: it means *everything that is not
+> admin*, not "read-only" and not "only the library". A `library` token can still change its
+> own account's notification settings and share its library with another user. What it
+> cannot do is manage users or read server configuration and API keys.
+
+**Revoking is deleting the row**, which is the whole reason tokens are looked up rather than
+self-describing: unlike a session JWT, revoking one does not mean rotating `JWT_SECRET` and
+signing out the web app and the phone as well.
+
+```bash
+node create-api-token.js <username> --list
+node create-api-token.js <username> --revoke <token-id>
+```
+
+Privilege is re-read from the database on every request, so demoting or deleting an account
+takes effect on its tokens immediately, and deleting a user removes their tokens with it.
+`--expires-in-days N` adds an optional expiry, but the safety mechanism is revocation, not
+expiry.
+
+Password login and its 12-hour JWT are unchanged, and the login rate limiter does not apply
+to token authentication — five retries from a script would otherwise lock you out of your own
+instance for 15 minutes.
+
 See [`SECURITY_HARDENING_2026-07.md`](SECURITY_HARDENING_2026-07.md) for the full endpoint
 authentication matrix, threat history and operational runbook.
 
@@ -182,7 +228,8 @@ authentication matrix, threat history and operational runbook.
 ## API
 
 All routes are under `/api`. Everything except `GET /api/health` and `POST /api/auth/login` requires an
-`Authorization: Bearer <token>` header.
+`Authorization: Bearer <token>` header — either a 12-hour session JWT from `POST /api/auth/login`,
+or a personal access token (see above).
 
 | Route | Auth | Purpose |
 |---|---|---|
@@ -222,6 +269,7 @@ Unknown `/api/*` paths return a JSON 404.
 | Script | Purpose |
 |---|---|
 | `create-local-admin.js` | Create a local admin from the CLI |
+| `create-api-token.js` | Mint / list / revoke personal access tokens |
 | `reset-root-password.js` | Reset the `root` password |
 | `run_notifications.js` | Run the release-notification check manually (mirrors the 08:00 job) |
 | `update_library_prices.js` | Trigger a Steam price update |

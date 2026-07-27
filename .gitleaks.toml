@@ -108,3 +108,18 @@ regexes = [
   '''<optional>''',
   '''smtp\.example\.com''',
 ]
+
+[[rules]]
+id = "gametracker-personal-access-token"
+description = "GameTracker personal access token (gt_pat_...)"
+# The `gt_pat_` prefix exists SO THAT this rule can exist. services/auth.js
+# justifies the prefix as what lets a scanner match a leaked token in a commit
+# before it is used -- a claim that was false until this rule was added, which is
+# exactly the kind of control that reads as present because a comment says so.
+#
+# createToken emits 32 CSPRNG bytes as base64url, which is 43 characters. The
+# {40,} bound matches every real token while leaving the short illustrative
+# literals in test/helpers.test.js (gt_pat_abc, gt_pat_whatever) alone -- those
+# are not credentials and must not fail the build.
+regex = '''gt_pat_[A-Za-z0-9_-]{40,}'''
+tags = ["token", "gametracker", "pat"]

@@ -1041,6 +1041,53 @@ check('normaliseScopes refuses an empty result rather than minting a useless tok
   }
 });
 
+check('strict mode REFUSES an unknown scope; lenient mode drops it', () => {
+  // Both answers are right in their own place. Re-reading a stored row: drop, so a
+  // name that is no longer a scope stops granting. Accepting one a human just typed:
+  // refuse, because silently minting a weaker token than they asked for is found out
+  // at the worst possible moment. The rule lives in the service so the CLI and the
+  // coming Settings route cannot each carry their own copy.
+  assert.deepStrictEqual(authService.normaliseScopes(['admin', 'nonsense']), ['admin']);
+  assert.throws(() => authService.normaliseScopes(['admin', 'nonsense'], { strict: true }),
+    (err) => err.code === SVC.VALIDATION && /nonsense/.test(err.message),
+    'strict mode accepted an unknown scope');
+});
+
+check('stored scopes are CANONICAL, so the schema CHECK can enumerate them', () => {
+  // migrations/003 constrains the column to exactly three values. Unsorted output
+  // would produce '["library","admin"]' and the INSERT would fail the constraint —
+  // a fatal migration-era error surfacing at mint time.
+  assert.deepStrictEqual(authService.normaliseScopes(['library', 'admin']), ['admin', 'library']);
+  assert.deepStrictEqual(authService.normaliseScopes(['admin', 'library']), ['admin', 'library']);
+  const legal = new Set(['["library"]', '["admin"]', '["admin","library"]']);
+  for (const input of [['library'], ['admin'], ['admin', 'library'], ['library', 'admin']]) {
+    const stored = JSON.stringify(authService.normaliseScopes(input));
+    assert.ok(legal.has(stored), `${stored} is not one of the three values the CHECK allows`);
+  }
+});
+
+check('an expiry in the past is refused rather than minted dead', () => {
+  // Unreachable from the CLI, whose flag is a positive number of days. A UI date
+  // picker reaches it, and a token that can never authenticate reporting success is
+  // worse than a refusal.
+  assert.rejects(
+    () => authService.createToken({ userId: 1, name: 'x', scopes: ['library'], expiresAt: '2000-01-01T00:00:00Z' }),
+    (err) => err.code === SVC.VALIDATION);
+});
+
+checkAsync('the token listing returns PARSED scopes, not the raw column', async () => {
+  // It returned '["library"]' where every caller expects ['library']. Invisible while
+  // nothing called it — which is exactly why unused code needs its shape pinned.
+  const original = dbModule.promises.all;
+  dbModule.promises.all = async () => [{ id: 1, name: 'cli', hint: 'abcd', scopes: '["admin","library"]', created_at: 'x', last_used_at: null, expires_at: null }];
+  try {
+    const [row] = await authService.listTokens(1);
+    assert.deepStrictEqual(row.scopes, ['admin', 'library'], 'scopes came back as a raw JSON string');
+  } finally {
+    dbModule.promises.all = original;
+  }
+});
+
 check('looksLikePat ROUTES a credential without authorizing it', () => {
   assert.strictEqual(authService.looksLikePat('gt_pat_abc'), true);
   // A JWT has three dot-separated segments and never this prefix.
@@ -1082,6 +1129,30 @@ checkAsync('verifyToken answers null identically for unknown, expired and orphan
     assert.strictEqual(queried, false, 'a JWT was looked up in the token table');
   } finally {
     dbModule.promises.get = original;
+  }
+});
+
+checkAsync('an UNPARSEABLE expiry is treated as expired, not as absent', async () => {
+  // The dangerous half of this is that the naive check passes: Date.parse of junk is
+  // NaN and `NaN <= Date.now()` is false, so a corrupt expires_at reads as "never
+  // expires". parseScopes fails closed on the same class of input on the same row.
+  const originalGet = dbModule.promises.get;
+  const originalRun = dbModule.promises.run;
+  dbModule.promises.run = async () => ({ changes: 1 });
+  try {
+    for (const junk of ['not-a-date', '', '0000-00-00', 'null', 'Infinity']) {
+      dbModule.promises.get = async () => ({
+        id: 1, user_id: 1, scopes: '["admin"]', expires_at: junk, last_used_at: null,
+        username: 'jane', can_manage_users: 1, origin: 'local', display_name: 'Jane',
+      });
+      const result = await authService.verifyToken('gt_pat_whatever');
+      // '' is falsy and therefore genuinely "no expiry set" — that one may verify.
+      if (junk === '') { assert.ok(result, 'an empty expiry should mean no expiry'); continue; }
+      assert.strictEqual(result, null, `expires_at ${JSON.stringify(junk)} was honoured as never-expiring`);
+    }
+  } finally {
+    dbModule.promises.get = originalGet;
+    dbModule.promises.run = originalRun;
   }
 });
 

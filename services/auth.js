@@ -50,13 +50,34 @@ const hashToken = (token) => crypto.createHash('sha256').update(String(token), '
 // looks like a PAT is still verified; a value that does not is treated as a JWT.
 const looksLikePat = (credential) => typeof credential === 'string' && credential.startsWith(TOKEN_PREFIX);
 
-// Unknown scope names are dropped rather than rejected, and an empty result is an
-// error: a token with no scopes would authenticate while being unable to do
-// anything, which reads to the holder as a broken server rather than a bad request.
-function normaliseScopes(requested) {
+// An empty result is an error: a token with no scopes would authenticate while being
+// unable to do anything, which reads to its holder as a broken server rather than as
+// a bad request.
+//
+// `strict` decides what an UNRECOGNISED name means, and both answers are right in
+// their own place. Re-reading a stored row: drop it, because a value that is no
+// longer a scope must not keep granting anything. Accepting one a human just typed:
+// refuse, because silently minting a weaker token than the operator asked for is how
+// they discover the mistake at the worst possible moment.
+//
+// The option lives HERE and not in the caller because the CLI already implemented
+// this refusal itself, and the coming Settings -> API Tokens route would have had to
+// remember to reimplement it — two callers, one rule, one copy each. That is the
+// drift this project keeps paying for.
+//
+// SORTED, so the stored form is canonical and migrations/003 can CHECK it.
+function normaliseScopes(requested, { strict = false } = {}) {
   const list = Array.isArray(requested) ? requested : [SCOPES.LIBRARY];
-  const kept = [...new Set(list.map((s) => String(s).trim().toLowerCase()))]
-    .filter((s) => ALL_SCOPES.includes(s));
+  const cleaned = [...new Set(list.map((s) => String(s).trim().toLowerCase()))];
+  if (strict) {
+    for (const scope of cleaned) {
+      if (!ALL_SCOPES.includes(scope)) {
+        throw serviceError(CODES.VALIDATION,
+          `unknown scope '${scope}'. Valid scopes: ${ALL_SCOPES.join(', ')}`, { field: 'scopes' });
+      }
+    }
+  }
+  const kept = cleaned.filter((s) => ALL_SCOPES.includes(s)).sort();
   if (kept.length === 0) {
     throw serviceError(CODES.VALIDATION,
       `scopes must include at least one of: ${ALL_SCOPES.join(', ')}`, { field: 'scopes' });
@@ -87,10 +108,19 @@ async function createToken({ userId, name, scopes, expiresAt = null }) {
   if (!cleanName) {
     throw serviceError(CODES.VALIDATION, 'a token name is required', { field: 'name' });
   }
-  const kept = normaliseScopes(scopes);
+  const kept = normaliseScopes(scopes, { strict: true });
 
-  if (expiresAt !== null && Number.isNaN(Date.parse(expiresAt))) {
-    throw serviceError(CODES.VALIDATION, 'expiresAt must be an ISO timestamp, or null', { field: 'expiresAt' });
+  if (expiresAt !== null) {
+    const parsed = Date.parse(expiresAt);
+    if (Number.isNaN(parsed)) {
+      throw serviceError(CODES.VALIDATION, 'expiresAt must be an ISO timestamp, or null', { field: 'expiresAt' });
+    }
+    // A token that has already expired can never authenticate. The CLI cannot reach
+    // this (its flag is a positive number of days) but a UI date picker can, and
+    // minting a dead credential that reports success is worse than refusing.
+    if (parsed <= Date.now()) {
+      throw serviceError(CODES.VALIDATION, 'expiresAt is in the past', { field: 'expiresAt' });
+    }
   }
 
   const owner = await db.promises.get('SELECT id FROM users WHERE id = ?', [userId]);
@@ -101,13 +131,30 @@ async function createToken({ userId, name, scopes, expiresAt = null }) {
   const secret = crypto.randomBytes(TOKEN_BYTES).toString('base64url');
   const token = TOKEN_PREFIX + secret;
 
-  const ctx = await db.promises.run(
-    `INSERT INTO api_tokens (user_id, name, token_hash, scopes, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
-    [userId, cleanName, hashToken(token), JSON.stringify(kept), new Date().toISOString(), expiresAt]
-  );
+  const hint = secret.slice(-4);
+  let ctx;
+  try {
+    ctx = await db.promises.run(
+      `INSERT INTO api_tokens (user_id, name, hint, token_hash, scopes, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      [userId, cleanName, hint, hashToken(token), JSON.stringify(kept), new Date().toISOString(), expiresAt]
+    );
+  } catch (err) {
+    // SQLSTATE, not a message substring — see db.js divergence #11, where matching on
+    // the text 'UNIQUE' was a SQLite-ism that silently stopped working under Postgres.
+    //
+    // Translated rather than propagated so no caller has to render a raw constraint
+    // name. The CLI merely looks unpolished doing that; the coming Settings route
+    // would be echoing database internals to a browser.
+    if (err && err.code === '23505') {
+      throw serviceError(CODES.CONFLICT,
+        `you already have a token named '${cleanName}' — names must be unique so a `
+        + 'revocation list is unambiguous', { field: 'name' });
+    }
+    throw err;
+  }
 
-  return { id: ctx.lastID, token, name: cleanName, scopes: kept, expiresAt };
+  return { id: ctx.lastID, token, hint, name: cleanName, scopes: kept, expiresAt };
 }
 
 // Verify a presented token and return the identity AND the privilege it may use.
@@ -128,14 +175,29 @@ async function verifyToken(presented) {
   );
   if (!row) return null;
 
-  // Expiry is optional, so this only rejects when a date was actually set.
-  if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) return null;
+  // Expiry is optional, so this only rejects when a date was actually set — but an
+  // UNPARSEABLE date is treated as expired, not as absent.
+  //
+  // `Date.parse('whatever')` is NaN and `NaN <= Date.now()` is false, so the obvious
+  // one-liner silently reads a corrupt expiry as "never expires". That is the
+  // opposite of how parseScopes handles the same class of input twenty lines above,
+  // and the inconsistency is the bug: two columns on one row, one failing closed and
+  // one failing open. Not reachable through createToken, which validates the value —
+  // it becomes reachable the moment the planned Settings -> API Tokens route writes
+  // expires_at without going through it.
+  if (row.expires_at) {
+    const expiresAt = Date.parse(row.expires_at);
+    if (Number.isNaN(expiresAt) || expiresAt <= Date.now()) return null;
+  }
 
   await touch(row.id, row.last_used_at);
 
   return {
     tokenId: row.id,
     scopes: parseScopes(row.scopes),
+    // Returned because /api/v2/me is specified to report token expiry (D10); reading
+    // the column for the check above and then dropping it would force a second query.
+    expiresAt: row.expires_at || null,
     user: {
       id: row.user_id,
       username: row.username,
@@ -151,16 +213,27 @@ async function verifyToken(presented) {
 // last_used_at is advisory, but a write per request is not: it would turn every
 // read into a read-write and put a row update on the hot path.
 //
-// Throttled in SQL rather than by read-then-write, so concurrent requests cannot
-// race, and AWAITED rather than fired and forgotten — per db.js divergence #9 a
-// query still waiting for a pooled connection is abandoned WITHOUT its callback
-// running when the pool drains, so fire-and-forget writes are silently lost.
+// The JS check below skips the round trip in the common case; the WHERE clause is
+// what makes the throttle actually hold. An earlier version had only the JS check
+// and a comment claiming it was "throttled in SQL so concurrent requests cannot
+// race" — it was read-then-write against the value from the preceding SELECT, and
+// concurrent requests raced. The race was harmless, but a comment asserting the
+// opposite of its code is worse than no comment in a codebase where the rationale
+// lives in the comments.
+//
+// AWAITED rather than fired and forgotten: per db.js divergence #9 a query still
+// waiting for a pooled connection is abandoned WITHOUT its callback running when the
+// pool drains, so fire-and-forget writes are silently lost.
 const TOUCH_INTERVAL_MS = 60 * 1000;
 async function touch(tokenId, lastUsedAt) {
   const now = Date.now();
   if (lastUsedAt && now - Date.parse(lastUsedAt) < TOUCH_INTERVAL_MS) return;
+  const cutoff = new Date(now - TOUCH_INTERVAL_MS).toISOString();
   try {
-    await db.promises.run('UPDATE api_tokens SET last_used_at = ? WHERE id = ?', [new Date(now).toISOString(), tokenId]);
+    await db.promises.run(
+      'UPDATE api_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)',
+      [new Date(now).toISOString(), tokenId, cutoff]
+    );
   } catch (err) {
     // A failed bookkeeping write must never fail the request it was bookkeeping for.
     console.error('[Auth] Could not record token use:', err.message);
@@ -184,11 +257,15 @@ function authorize(identity) {
 async function listTokens(userId) {
   // token_hash is deliberately absent. It is not the secret, but it is the lookup
   // key, and a listing endpoint is not a reason to move it any closer to a response.
-  return db.promises.all(
-    `SELECT id, name, scopes, created_at, last_used_at, expires_at
+  const rows = await db.promises.all(
+    `SELECT id, name, hint, scopes, created_at, last_used_at, expires_at
        FROM api_tokens WHERE user_id = ? ORDER BY id ASC`,
     [userId]
   );
+  // PARSED. Returning the raw column handed every caller '["library"]' where it
+  // expected ['library'] — invisible while nothing called this, and a bug the v2
+  // mapper would have inherited as the shape it was written against.
+  return rows.map((row) => ({ ...row, scopes: parseScopes(row.scopes) }));
 }
 
 // Scoped to the owner: `user_id = ?` is in the WHERE clause, not checked beforehand,
