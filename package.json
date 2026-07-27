@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "test": "node test/helpers.test.js && node test/api-surface.test.js",
+    "test": "node test/helpers.test.js && node test/api-surface.test.js && node test/api-contract.test.js",
     "lint": "eslint ."
   },
   "keywords": [],

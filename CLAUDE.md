@@ -106,9 +106,15 @@ GameTracker/
 │   ├── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
 │   │                               #   `npm test`; runs in CI. NO database/directory/network
 │   │                               #   tests here — those belong in the smoke test
-│   └── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
-│                                   #   Express router and asserts every route's auth tier.
-│                                   #   Adding a route without recording its tier FAILS CI
+│   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
+│   │                               #   Express router and asserts every route's auth tier.
+│   │                               #   Adding a route without recording its tier FAILS CI
+│   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
+│                                   #   routes exist; this proves what they still RETURN.
+│                                   #   Without it "frozen" is only an intention: a service
+│                                   #   can rename a field and every client breaks with CI
+│                                   #   green. Two of the three clients (Android, the planned
+│                                   #   MCP) are not in this repo and cannot be grepped
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
 ├── migrations/                     # Numbered .sql schema migrations. 002 adds the
 │                                   #   user_games.status CHECK — its `IS NULL` disjunct
@@ -185,6 +191,18 @@ GameTracker/
 > in the inventory, on a tier that changed, and on any unauthenticated route outside the
 > two-item allowlist (`GET /api/health`, `POST /api/auth/login`).
 >
+> **A change to a v1 response shape must be reflected in `test/api-contract.test.js`, and is
+> almost certainly wrong.** That file pins the shapes clients bind to — the library row's
+> duplicated `steamAppId`/`crackStatus` aliases, the five-column `/api/user/me/games`
+> projection, the source-prefixed string `game_id`, and the `{error: string}` envelope. The
+> aliases in particular look like redundancy and exist only because clients read both
+> spellings; deleting them is a one-line "cleanup" that breaks the Android app silently.
+> Key sets are asserted for EXACT equality, so an added field fails too — that is deliberate,
+> since an accidentally-added field leaks whatever it holds.
+>
+> It cannot see the Express adapters: a service can honour every shape while a handler wraps
+> it in something else. Proving the wire format needs the smoke-test stage.
+
 > This exists because authorization here has repeatedly been decided by omission: a route under
 > `/api/admin/` that is not admin-gated, two different ownership rules on the same path prefix,
 > debug endpoints shipped to production. A missing middleware looks exactly like a route nobody
@@ -450,7 +468,7 @@ deploy  (needs: ALL 7 upstream jobs)
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
 | ESLint | `frontend-quality` | Any lint error |
 | Vite build | `frontend-quality` | Build failure |
-| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js` or `test/api-surface.test.js` |
+| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/api-surface.test.js` or `test/api-contract.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
 | Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
 

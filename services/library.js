@@ -41,8 +41,14 @@ async function listGamesFor(username) {
 }
 
 // Trimmed projection for the authenticated user's own library, by user id.
+//
+// This is a DIFFERENT resource from listGamesWithAliases despite both being "my
+// library": five columns, ordered, and deliberately without steam_app_id,
+// backlog_order, crack_status or last_price. `db.promises.all` so the contract test
+// can observe the projection — a client that switches between the two endpoints
+// silently loses fields, which is worth pinning rather than rediscovering.
 async function listOwnGames(userId) {
-  return all(
+  return db.promises.all(
     `SELECT game_id, game_name, cover_url, release_date, status
        FROM user_games
       WHERE user_id = ?
@@ -51,18 +57,25 @@ async function listOwnGames(userId) {
   );
 }
 
-// Full rows for a user id, plus the two camelCase aliases the current API emits
-// alongside their snake_case originals.
+// v1's published library-row shape: the raw row plus two camelCase aliases emitted
+// ALONGSIDE their snake_case originals, not instead of them.
 //
-// The duplication is intentional here and ONLY here: it is v1's published shape and
-// the SPA reads both spellings. v2 emits camelCase once, from a single mapper.
-async function listGamesWithAliases(userId) {
-  const rows = await all('SELECT * FROM user_games WHERE user_id = ?', [userId]);
-  return rows.map((row) => ({
+// The duplication is intentional here and ONLY here — the SPA reads both spellings,
+// and the Android client is a build this repo does not control. Extracted as a pure
+// function so test/api-contract.test.js can pin it without a database: this is the
+// single most likely thing for someone to "tidy up", and doing so breaks every v1
+// client while CI stays green. v2 emits camelCase once, from a single mapper.
+function withAliases(row) {
+  return {
     ...row,
     steamAppId: row.steam_app_id || null,
     crackStatus: row.crack_status || null,
-  }));
+  };
+}
+
+async function listGamesWithAliases(userId) {
+  const rows = await all('SELECT * FROM user_games WHERE user_id = ?', [userId]);
+  return rows.map(withAliases);
 }
 
 // Remove one game. `removed` reports whether a row actually went; v1 reports success
@@ -455,6 +468,7 @@ module.exports = {
   daysUntilRelease, promoteReleased,
   listGamesFor,
   listOwnGames,
+  withAliases,
   listGamesWithAliases,
   findGame,
   removeGame,
