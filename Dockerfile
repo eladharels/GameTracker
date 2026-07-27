@@ -30,8 +30,15 @@ COPY package*.json ./
 # /usr/local/lib/node_modules/npm — Trivy scans those and they carry CVEs that app-level
 # `overrides` cannot touch. The app runs `node index.js` and never needs npm at runtime,
 # so remove npm (and its npm cache) after installing. This also shrinks the image.
+#
+# `apt-get purge -y linux-libc-dev` USED to be here and has been removed. That package
+# was never installed on purpose — it arrived as a dependency of `g++`, and the purge
+# existed to strip the kernel headers the compiler dragged in. With the toolchain gone
+# nothing pulls it, so the purge failed the build outright:
+#     E: Unable to locate package linux-libc-dev
+# apt treats purging an absent package as an error, not a no-op. `|| true` would have
+# hidden it; deleting the line removes a step that no longer has anything to do.
 RUN npm ci --omit=dev && \
-    apt-get purge -y linux-libc-dev && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/* && \
     npm cache clean --force && \
