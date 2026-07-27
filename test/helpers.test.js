@@ -1132,6 +1132,58 @@ checkAsync('verifyToken answers null identically for unknown, expired and orphan
   }
 });
 
+checkAsync('a credential cannot mint a token holding a scope it lacks', async () => {
+  // The escape hatch out of the whole scope system if it is missing: the
+  // library-scoped token handed to the MCP mints itself an admin token and is an
+  // administrator one call later. authorize() narrows the PRESENTED credential; it
+  // says nothing about the scopes of one being created.
+  const originalGet = dbModule.promises.get;
+  const originalRun = dbModule.promises.run;
+  dbModule.promises.get = async () => ({ id: 1, can_manage_users: 1 });
+  dbModule.promises.run = async () => ({ changes: 1, lastID: 1 });
+  try {
+    await assert.rejects(
+      () => authService.createToken({
+        userId: 1, name: 'escalate', scopes: ['admin'], grantedScopes: ['library'],
+      }),
+      (err) => err.code === SVC.FORBIDDEN,
+      'a library-scoped credential minted an admin-scoped token');
+    // The same request from a credential that DOES hold admin is fine.
+    const ok = await authService.createToken({
+      userId: 1, name: 'fine', scopes: ['admin'], grantedScopes: ['admin', 'library'],
+    });
+    assert.deepStrictEqual(ok.scopes, ['admin']);
+    // null means "operator at a shell", which is above the API by construction.
+    const cli = await authService.createToken({ userId: 1, name: 'cli', scopes: ['admin'] });
+    assert.deepStrictEqual(cli.scopes, ['admin']);
+  } finally {
+    dbModule.promises.get = originalGet;
+    dbModule.promises.run = originalRun;
+  }
+});
+
+checkAsync('an admin-scoped token is refused for a non-admin account', async () => {
+  // Not an escalation — authorize() narrows it away on every request — but a
+  // credential that silently does less than its minter believes. Same reasoning as
+  // refusing an already-expired expiry: minting something inert and reporting success
+  // is worse than saying no.
+  const originalGet = dbModule.promises.get;
+  const originalRun = dbModule.promises.run;
+  dbModule.promises.get = async () => ({ id: 2, can_manage_users: 0 });
+  dbModule.promises.run = async () => ({ changes: 1, lastID: 2 });
+  try {
+    await assert.rejects(
+      () => authService.createToken({ userId: 2, name: 'inert', scopes: ['admin'] }),
+      (err) => err.code === SVC.VALIDATION);
+    // library-scoped on the same account is of course fine.
+    const ok = await authService.createToken({ userId: 2, name: 'ok', scopes: ['library'] });
+    assert.deepStrictEqual(ok.scopes, ['library']);
+  } finally {
+    dbModule.promises.get = originalGet;
+    dbModule.promises.run = originalRun;
+  }
+});
+
 checkAsync('an UNPARSEABLE expiry is treated as expired, not as absent', async () => {
   // The dangerous half of this is that the naive check passes: Date.parse of junk is
   // NaN and `NaN <= Date.now()` is false, so a corrupt expires_at reads as "never

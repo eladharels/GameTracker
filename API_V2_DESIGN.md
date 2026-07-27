@@ -273,7 +273,7 @@ to build it.
 | `Share` is unserviceable: `listOutgoing` returns bare usernames, `listIncoming` returns no display name | `services/shares.js` | D12 |
 | `readForRole` cannot return `apikeys` — `SECTIONS` deliberately excludes it. Resolved in the spec by reporting API keys as STATE (`ApiKeyState`) rather than masked values, which is also what makes a read-modify-write safe | `services/settings.js` | D13 |
 | Settings field names are snake_case in storage and camelCase on the wire; needs a bidirectional mapper | `services/settings.js` | D13 |
-| **`createToken` has no scope floor.** It accepts any scope from any caller, so a `library`-scoped token can mint an `admin` one and the entire scope system collapses. Must take the minting credential's effective scopes and intersect | `services/auth.js` | D1 |
+| ~~**`createToken` has no scope floor**~~ — done. Takes `grantedScopes` (the minting credential's effective set) and refuses any scope it does not hold; also refuses `admin` for an account without administrator permission, which would mint an inert credential. `null` means an operator at a shell — a v2 adapter passing null would be asserting the request came from the host | `services/auth.js` | D1 |
 | `readSharedLibrary(owner, viewer)` and `revokeIncoming(to, from)` take two usernames in **opposite** orders, adjacent in the file | `services/shares.js` | D12 |
 | ~~No PAT table, no token verification path~~ — done | `services/auth.js` | D1 |
 

@@ -125,6 +125,10 @@ const expiresAt = expiresInDays === null
     return;
   }
 
+  // grantedScopes is deliberately omitted (null): this script requires a shell on the
+  // host, which is already strictly above the API. A v2 adapter must NOT do this — it
+  // has to pass the presenting credential's effective scopes, or the scope floor is
+  // not a floor.
   const result = await authService.createToken({
     userId: user.id, name, scopes, expiresAt,
   });

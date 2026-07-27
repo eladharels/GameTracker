@@ -103,7 +103,22 @@ function parseScopes(raw) {
 // Mint a token. The plaintext is returned EXACTLY ONCE and is not recoverable
 // afterwards — only its hash is stored, which is the property that makes a leaked
 // database dump not a set of working credentials.
-async function createToken({ userId, name, scopes, expiresAt = null }) {
+// `grantedScopes` is the EFFECTIVE scope set of the credential doing the minting, and
+// a token may not carry a scope its minter does not hold. Without it this function is
+// an escape hatch out of the entire scope system: the library-scoped token handed to
+// the MCP — the least-trusted consumer in this design — mints itself an admin token
+// and is an administrator one call later, and `authorize()`'s narrowing becomes a
+// speed bump rather than a boundary.
+//
+// Not reachable today: nothing but create-api-token.js calls this, and that needs a
+// shell on the host, which is already above the API. It becomes live the moment
+// `POST /api/v2/tokens` exists, which is why it is closed BEFORE that route rather
+// than alongside it.
+//
+// `null` means "no presenting credential" — an operator at a shell. That is not a
+// loophole for the API to use: an adapter passing null would be asserting the request
+// came from the host, and there is no v2 route that may.
+async function createToken({ userId, name, scopes, expiresAt = null, grantedScopes = null }) {
   const cleanName = sanitizeText(name, MAX_NAME_LENGTH);
   if (!cleanName) {
     throw serviceError(CODES.VALIDATION, 'a token name is required', { field: 'name' });
@@ -123,8 +138,31 @@ async function createToken({ userId, name, scopes, expiresAt = null }) {
     }
   }
 
-  const owner = await db.promises.get('SELECT id FROM users WHERE id = ?', [userId]);
+  if (grantedScopes !== null) {
+    const held = new Set(grantedScopes);
+    for (const scope of kept) {
+      if (!held.has(scope)) {
+        throw serviceError(CODES.FORBIDDEN,
+          `this credential does not hold the '${scope}' scope, so it cannot mint a token that does`,
+          { field: 'scopes' });
+      }
+    }
+  }
+
+  const owner = await db.promises.get(
+    'SELECT id, can_manage_users FROM users WHERE id = ?', [userId]);
   if (!owner) throw serviceError(CODES.NOT_FOUND, 'User not found');
+
+  // An admin-scoped token on an account with no administrator permission is not a
+  // privilege escalation — authorize() narrows it away on every request — but it IS a
+  // credential that silently does less than whoever minted it believes. Refusing is
+  // the same reasoning as refusing an already-expired expiry: minting something
+  // inert and reporting success is worse than saying no.
+  if (kept.includes(SCOPES.ADMIN) && !owner.can_manage_users) {
+    throw serviceError(CODES.VALIDATION,
+      'that account is not an administrator, so an admin-scoped token would grant it '
+      + 'nothing — scopes narrow privilege, they never add it', { field: 'scopes' });
+  }
 
   // base64url so the token is safe in a header, a URL and a shell argument without
   // quoting — the places an operator will actually paste it.
