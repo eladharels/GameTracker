@@ -107,6 +107,20 @@ regexes = [
   '''<strong_random_secret>''',
   '''<optional>''',
   '''smtp\.example\.com''',
+
+  # A run of literal x's after the gt_pat_ prefix. The v2 OpenAPI document briefly
+  # carried a 43-character placeholder -- deliberately realistic, and therefore an
+  # exact match for the gametracker-personal-access-token rule below. The spec was
+  # corrected to a short example, but `gitleaks detect` scans git HISTORY with
+  # fetch-depth: 0, so the commit that introduced it keeps failing secret-scan
+  # forever, and secret-scan gates deploy.
+  #
+  # Allowlisted as a REGEX and not as a path or a commit SHA, deliberately. A path
+  # entry for openapi/ would blind the scanner to a real token pasted into the spec,
+  # which is the one file most likely to grow an example credential; a commit SHA
+  # exempts every finding in that commit. This matches only a literal xxxx… run,
+  # which no CSPRNG-generated base64url token will ever be.
+  '''gt_pat_x{20,}''',
 ]
 
 [[rules]]
