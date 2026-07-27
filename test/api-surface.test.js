@@ -41,15 +41,26 @@ const { app, parseRouteId } = require('../index.js');
 // It failed silently in the safe-looking direction, which is the single failure mode
 // this file exists to eliminate. /api/v2 will be mounted as a router, so this must
 // keep working.
-function liveRoutes(stack = (app.router || app._router).stack, prefix = '', inherited = []) {
+function liveRoutes(stack = (app.router || app._router).stack, prefix = '', inherited = [], isRouter = false) {
   const out = [];
+  // Grows AS THE WALK PASSES each `.use()` layer, never collected up front.
+  //
+  // The first version of this collected every `.use()` in a mounted router and
+  // credited it to every route in that router. That is fail-OPEN, and a review proved
+  // it against this codebase: a route registered ABOVE `router.use(patRequired)` is
+  // served with no authentication at all, and the walker reported it as tier 'pat'.
+  // Every downstream assertion then passed — including the one titled "ONLY the
+  // allowlisted routes are unauthenticated" — while the live server answered an
+  // anonymous caller. Express matches layers in stack order, so middleware registered
+  // after a route never runs for it, and this now models that.
+  const running = [...inherited];
   for (const layer of stack) {
     if (layer.route) {
       // Handles first, then derive everything from them. Deriving names and perms
       // separately is how the first rewrite of this function silently reported all
       // 13 admin routes as merely 'auth': `typeof handler === 'function'`, not
       // 'object', so the permission tag was never read.
-      const handles = [...inherited, ...layer.route.stack.map((s) => s.handle)];
+      const handles = [...running, ...layer.route.stack.map((s) => s.handle)];
       const names = handles.map((h) => h.name || 'anon');
       const perms = handles.map((h) => h.requiredPermission).filter(Boolean);
       const selfOnly = handles.some((h) => h.isSelfOnly === true);
@@ -58,34 +69,43 @@ function liveRoutes(stack = (app.router || app._router).stack, prefix = '', inhe
       }
       continue;
     }
-    // A mounted router: recurse, carrying the mount path, any middleware applied at
-    // the mount point (so `app.use('/x', authRequired, router)` counts), AND the
-    // router's OWN `.use()` middleware.
+    // A mounted router: recurse, carrying the mount path and whatever middleware is
+    // in force AT THIS POINT in the stack (so `app.use('/x', authRequired, router)`
+    // counts, and so does a router-level `.use()` already passed).
+    if (layer.handle && Array.isArray(layer.handle.stack)) {
+      out.push(...liveRoutes(layer.handle.stack, prefix + mountPath(layer), running, true));
+      continue;
+    }
+    // Router-level `.use()`. Credited ONLY inside a mounted router, ONLY when it is
+    // path-less, and only from here onward.
     //
-    // That last part is not a refinement — without it this walker reported all four
-    // /api/v2 routes as tier 'public'. `v2Router.use(patRequired)` is a separate layer
-    // in the router's stack, NOT part of any route's own handler chain, so a router
-    // that authenticates every route through one `.use()` looked identical to one that
-    // authenticates nothing. It failed CLOSED (the unauthenticated-route allowlist
-    // fired) rather than open, which is the right direction — but it would have forced
-    // whoever hit it to either repeat the middleware on every route or loosen the
-    // assertion, and both are worse than reading the stack correctly.
-    if (layer.handle && Array.isArray(layer.handle.stack)) {   // mounted router
-      const routerMiddleware = layer.handle.stack
-        .filter((l) => !l.route && typeof l.handle === 'function' && !Array.isArray(l.handle.stack))
-        .map((l) => l.handle);
-      out.push(...liveRoutes(
-        layer.handle.stack,
-        prefix + mountPath(layer),
-        [...inherited, ...routerMiddleware]
-      ));
-    } else if (layer.handle && typeof layer.handle === 'function' && layer.regexp
-               && layer.regexp.source === '^\\/?(?=\\/|$)') {
-      // App-level middleware applied to every route (cors, json, headers). Not
-      // inherited into the per-route chain on purpose — these are not auth.
+    // Path-scoped `.use('/admin', mw)` runs for a subset of routes; attributing it to
+    // all of them is the same false-authenticated report in a quieter form. App-level
+    // middleware (cors, express.json, the security headers) is still never inherited —
+    // `isRouter` is false at the top level — because those are not authorization.
+    if (isRouter && layer.handle && typeof layer.handle === 'function'
+        && !Array.isArray(layer.handle.stack) && layer.handle.length < 4
+        && mountedAtRoot(layer)) {
+      running.push(layer.handle);
     }
   }
   return out;
+}
+
+// Does this `.use()` layer apply to every path in its router?
+//
+// Returns FALSE when it cannot tell, so an unrecognised mount shape degrades the route
+// to 'public' and trips the unauthenticated-route allowlist — the same fail-closed
+// convention mountPath uses with '<UNKNOWN-MOUNT>'. Guessing "probably global" here
+// would reintroduce exactly the fail-open this function was just fixed for.
+function mountedAtRoot(layer) {
+  const match = Array.isArray(layer.matchers) ? layer.matchers[0] : null;
+  if (typeof match === 'function') {
+    try { return !!match('/'); } catch { return false; }
+  }
+  // Express 4 shape, kept so this does not silently break on a downgrade.
+  if (layer.regexp && layer.regexp.source === '^\\/?(?=\\/|$)') return true;
+  return false;
 }
 
 // Resolve a mounted router's prefix.
@@ -362,6 +382,45 @@ check('every v2 route is token-authenticated, never merely authenticated', () =>
     assert.ok(tier === 'pat' || tier.startsWith('pat-admin:'),
       `${route.key} has tier '${tier}' — every /api/v2 route must go through patRequired`);
   }
+});
+
+check('v2 auth refusals are 401, and carry WWW-Authenticate', () => {
+  // Not visible to this file's router walk — it compares tiers, not status codes — and
+  // no unit test exercises the middleware. Asserted from source because the deviation
+  // it guards (403 where the published contract says 401) shipped once already, and
+  // nothing anywhere else would notice it coming back.
+  const source = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
+  const fn = source.slice(source.indexOf('function patRequired'), source.indexOf('function requirePermission'));
+  assert.ok(fn.includes('SVC.UNAUTHENTICATED'),
+    'patRequired no longer answers 401 — 403 is what an insufficient SCOPE returns, and '
+    + 'collapsing the two leaves a client unable to tell re-authenticate from stop-retrying');
+  assert.ok(!fn.includes('SVC.FORBIDDEN'), 'patRequired answers FORBIDDEN somewhere');
+  assert.ok(fn.includes('WWW_AUTHENTICATE'), 'the 401 no longer carries WWW-Authenticate (RFC 9110)');
+});
+
+check('the walker credits router middleware by STACK POSITION, not membership', () => {
+  // This function is what every other authorization assertion in this file rests on,
+  // so it gets a test of its own. An earlier version credited a router's `.use()` to
+  // every route in it, which reported a genuinely open route as authenticated and
+  // made the whole file pass over an anonymous-access hole.
+  const express = require('express');
+  const r = express.Router();
+  r.get('/before', (req, res) => res.end());          // registered ABOVE the guard
+  r.use(function patRequired(req, res, next) { next(); });
+  r.get('/after', (req, res) => res.end());
+  r.use('/scoped', function alsoGuard(req, res, next) { next(); });
+  r.get('/unscoped', (req, res) => res.end());        // /scoped must NOT count here
+  const probe = express();
+  probe.use('/api/v2', r);
+
+  const tiers = new Map(
+    liveRoutes((probe.router || probe._router).stack).map((x) => [x.key, tierOf(x)]));
+  assert.strictEqual(tiers.get('GET /api/v2/before'), 'public',
+    'a route registered ABOVE the guard was reported as authenticated — the middleware '
+    + 'never runs for it, because Express matches layers in stack order');
+  assert.strictEqual(tiers.get('GET /api/v2/after'), 'pat');
+  assert.strictEqual(tiers.get('GET /api/v2/unscoped'), 'pat',
+    'a PATH-SCOPED .use() must neither add nor remove a tier for routes outside its path');
 });
 
 check('parseRouteId rejects everything that is not a plain integer', () => {

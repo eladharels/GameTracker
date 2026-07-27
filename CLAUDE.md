@@ -100,6 +100,8 @@ GameTracker/
 │                                   #   caller; a 500 never echoes one. Adapters call
 │                                   #   problem.send(res, err, ...) instead of hand-rolling a ladder
 │   ├── v2.js                       # The /api/v2 WIRE FORMAT: the problem+json renderer and
+│   │                               #   (like problem.js, and for the same reason, this one
+│   │                               #   file DOES take a `res` — it is a renderer, not logic)
 │   │                               #   the camelCase mapper. Reuses problem.js's code table
 │   │                               #   INCLUDING its `expose` column — a message v1 withholds
 │   │                               #   is withheld here too, in a format whose `detail` field
@@ -230,9 +232,12 @@ GameTracker/
 > missing `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Postgres removes the race,
 > but the swallowing was the real defect. Do not reintroduce a "log and continue" migration path.
 
-> **`/api/v2` routes go on `v2Router` and are PAT-only.** `patRequired` is applied with
-> `v2Router.use()`, so a new v2 route cannot be added unauthenticated by forgetting a word,
-> and it refuses a session JWT deliberately: a JWT carries no scope, so accepting one would
+> **`/api/v2` routes go on `v2Router`, BELOW the `v2Router.use(patRequired)` line, and are
+> PAT-only.** "Below" is load-bearing: Express matches layers in stack order, so a route
+> registered above that line runs with no authentication at all. `test/api-surface.test.js`
+> models this — it credits middleware by stack position, and an earlier version that
+> credited it by router membership reported such a route as authenticated. It refuses a
+> session JWT deliberately: a JWT carries no scope, so accepting one would
 > make the admin boundary bypassable by logging in with a password. `tierOf()` reports these
 > as `pat`, a distinct tier from `auth` — folding them together would hide exactly that.
 >

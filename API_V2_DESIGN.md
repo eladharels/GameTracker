@@ -278,6 +278,10 @@ to build it.
 | `readSharedLibrary(owner, viewer)` and `revokeIncoming(to, from)` take two usernames in **opposite** orders, adjacent in the file | `services/shares.js` | D12 |
 | ~~No PAT table, no token verification path~~ — done | `services/auth.js` | D1 |
 
+| `upsertGame`'s `ON CONFLICT DO UPDATE` sets only status, steam_app_id and backlog_order — so the spec's "re-adding a game already in the library updates it" is only partly true for name, cover and release date | `services/library.js` | D9 |
+| No rate limiting on v2 at all. v1's limiter lives inside the login route and v2 has no login, so v2 inherits NOTHING. Not a contract gap today (the five operations the spec rate-limits are unbuilt) but it must be answered BEFORE the catalog and jobs operations land, not with them | new | D4/D11 |
+| The drift gate compares paths and tiers, never response BODIES — and nothing compares emitted status codes to documented ones either. That gap let the 401/403 deviation exist. Belongs in the smoke stage, ideally validating each response against the operation's schema with ajv rather than hand-written key lists | `smoke-test` | — |
+
 Two decisions the spec makes that are NOT gaps, recorded so they are not rediscovered as
 bugs: v2 drops the single-step backlog up/down move (`PUT /library/backlog` replaces it,
 because a set operation cannot leave duplicate positions), and

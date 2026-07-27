@@ -671,8 +671,11 @@ check('the Problem code enum matches errors.js in BOTH directions', () => {
   const { CODES } = require('../services/errors');
   const published = new Set(spec.components.schemas.Problem.properties.code.enum);
   const implemented = new Set(Object.values(CODES));
-  // Codes the spec may publish ahead of implementation — each one a written decision.
-  const PLANNED = new Set(['rate_limited', 'provider_unavailable', 'settings_unreadable', 'internal']);
+  // IMPORTED, not restated. This list existed here as a literal AND in services/v2.js,
+  // with nothing keeping them in step — add a code to one and the other silently
+  // renders it as a 500. That is the "second copy of the truth" pattern CLAUDE.md
+  // names as this project's recurring failure, reintroduced in the commit citing it.
+  const PLANNED = new Set(Object.keys(require('../services/v2').PLANNED_CODES));
   for (const code of implemented) {
     assert.ok(published.has(code), `services/errors.js emits '${code}' but the spec omits it`);
   }
@@ -733,7 +736,7 @@ check('the bounds that ARE security controls cannot be deleted', () => {
     const params = [...(spec.paths[found.path].parameters || []), ...(found.op.parameters || [])];
     const cursor = params.find((prm) => prm.name === 'cursor');
     assert.ok(cursor, `${opId} has no cursor parameter`);
-    assert.strictEqual(cursor.schema.maxLength, 200, `${opId}'s cursor bound is gone`);
+    assert.strictEqual(cursor.schema.maxLength, 1024, `${opId}'s cursor bound is gone`);
   }
   // Every writable settings string is bounded — the write side is the one a caller
   // controls, and an earlier revision bounded only the read side.

@@ -57,8 +57,18 @@ function toProblem(err, { fallbackStatus = 500 } = {}) {
     code: err.code,
   };
   if (spec.expose && err.message) body.detail = String(err.message).slice(0, 500);
-  if (Array.isArray(err.details?.errors)) body.errors = err.details.errors;
-  else if (err.details?.field) body.errors = [{ field: err.details.field, message: spec.expose ? String(err.message) : spec.title }];
+  // Normalised and expose-gated. Copying the array verbatim bypassed the `expose`
+  // column that the line below correctly honours — a pre-built leak for the first
+  // service to attach field errors to a withheld code, and a shape the spec's
+  // `errors` items (required field+message, no extras) would not permit.
+  if (Array.isArray(err.details?.errors)) {
+    body.errors = err.details.errors.map((e) => ({
+      field: String(e?.field ?? ''),
+      message: spec.expose ? String(e?.message ?? spec.title) : spec.title,
+    }));
+  } else if (err.details?.field) {
+    body.errors = [{ field: err.details.field, message: spec.expose ? String(err.message) : spec.title }];
+  }
   return { status: spec.status, body };
 }
 
@@ -66,12 +76,20 @@ function toProblem(err, { fallbackStatus = 500 } = {}) {
 // library upsert does work AFTER the response is sent, so a throw can land here with
 // the headers long gone, and writing again would crash the process rather than the
 // request.
-function send(res, err, { log } = {}) {
+function send(res, err, { log, headers } = {}) {
   const mapped = toProblem(err);
   if (log) console.error(log, err?.message || err);
   if (res.headersSent) return;
+  // RFC 9110 §15.5.2 requires WWW-Authenticate on a 401, and it is the only in-band
+  // signal of which scheme this API accepts.
+  if (headers) res.set(headers);
   res.status(mapped.status).type('application/problem+json').json(mapped.body);
 }
+
+// Sent with every 401 so a client learns the accepted scheme from the refusal itself.
+const WWW_AUTHENTICATE = Object.freeze({
+  'WWW-Authenticate': 'Bearer realm="gametracker", error="invalid_token"',
+});
 
 // --- shapes ------------------------------------------------------------------
 
@@ -116,4 +134,4 @@ function me(user, auth) {
   };
 }
 
-module.exports = { toProblem, send, libraryGame, me, PLANNED_CODES };
+module.exports = { toProblem, send, libraryGame, me, PLANNED_CODES, WWW_AUTHENTICATE };

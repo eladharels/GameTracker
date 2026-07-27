@@ -342,7 +342,13 @@ paths:
             is a `400`. It is **never trusted as an authorization input** — the underlying
             query is scoped to the caller regardless of what the cursor contains. "Opaque"
             is a request to the client, not a control.
-          schema: { type: string, maxLength: 200 }
+
+            `maxLength` is 1024, not a tighter bound: the cursor embeds the sort key it
+            resumes from, so sorting by name carries the game name verbatim and a title
+            of ~84 characters already exceeds 200. A generated client with request
+            validation would refuse to send back the cursor this server had just issued.
+            The bound exists only to cap what gets parsed.
+          schema: { type: string, maxLength: 1024 }
       responses:
         '200':
           description: A page of library games.
@@ -762,7 +768,7 @@ paths:
       - name: cursor
         in: query
         description: See `listLibraryGames` — same cursor rules, same total ordering.
-        schema: { type: string, maxLength: 200 }
+        schema: { type: string, maxLength: 1024 }
     get:
       tags: [sharing]
       operationId: getSharedLibrary
@@ -1066,7 +1072,15 @@ components:
       description: |
         Missing, unknown, expired, or belonging to a deleted account — all answered
         identically on purpose, so the response is not an oracle for which guess was
-        once a real token.
+        once a real token. `code` is `unauthenticated`.
+
+        Distinct from `403`, which means the credential is valid but lacks the scope.
+        Collapsing the two would leave a client unable to tell "re-authenticate" from
+        "stop retrying" without parsing English, which `Problem` tells it never to do.
+      headers:
+        WWW-Authenticate:
+          description: RFC 9110 §15.5.2 — the scheme this API accepts.
+          schema: { type: string }
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1157,12 +1171,16 @@ components:
           description: |
             The machine-readable class. v1 had no equivalent, so a client could not tell
             a validation failure from an unknown user without matching on English.
-          enum: [validation, forbidden, not_found, unknown_users, not_shared, not_in_backlog, conflict, rate_limited, provider_unavailable, settings_unreadable, internal]
+          enum: [validation, unauthenticated, forbidden, not_found, unknown_users, not_shared, not_in_backlog, conflict, rate_limited, provider_unavailable, settings_unreadable, internal]
           x-expose:
             # Must agree with PROBLEMS[code].expose in services/problem.js for every code
             # that exists there; the CI gate asserts it. The four codes with no v1
             # counterpart are false, which is the safe direction for a new code.
             validation: true
+            # The refusal text says which credential type is accepted; it reveals
+            # nothing about whether a token was once real. All five failure modes
+            # (missing, malformed, unknown, expired, orphaned) share one message.
+            unauthenticated: true
             forbidden: true
             not_found: false
             unknown_users: true

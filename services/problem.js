@@ -30,6 +30,7 @@ const PROBLEMS = Object.freeze({
   [CODES.UNKNOWN_USERS]:  Object.freeze({ status: 400, title: 'Unknown user',         expose: true }),
   [CODES.FORBIDDEN]:      Object.freeze({ status: 403, title: 'Forbidden',            expose: true }),
   [CODES.NOT_SHARED]:     Object.freeze({ status: 403, title: 'Not shared with you.', expose: false }),
+  [CODES.UNAUTHENTICATED]: Object.freeze({ status: 401, title: 'Unauthorized',         expose: true }),
   [CODES.NOT_FOUND]:      Object.freeze({ status: 404, title: 'Not found',            expose: false }),
   [CODES.NOT_IN_BACKLOG]: Object.freeze({ status: 404, title: 'Game not in backlog',  expose: false }),
   [CODES.CONFLICT]:       Object.freeze({ status: 409, title: 'Conflict',             expose: true }),

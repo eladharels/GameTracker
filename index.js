@@ -1395,12 +1395,18 @@ function patRequired(req, res, next) {
   const auth = req.headers.authorization;
   const credential = auth && auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!authService.looksLikePat(credential)) {
-    return v2.send(res, { code: SVC.FORBIDDEN, message: 'this API accepts personal access tokens only' });
+    return v2.send(res, { code: SVC.UNAUTHENTICATED, message: 'this API accepts personal access tokens only' },
+      { headers: v2.WWW_AUTHENTICATE });
   }
   return authService.verifyToken(credential)
     .then((identity) => {
       if (!identity) {
-        return v2.send(res, { code: SVC.FORBIDDEN, message: 'invalid or expired token' });
+        // 401, not 403, and undifferentiated across missing/unknown/expired/orphaned.
+        // 403 is what an insufficient SCOPE returns; conflating the two leaves a client
+        // unable to tell "re-authenticate" from "stop retrying" except by reading
+        // English out of `detail`, which Problem tells it never to do.
+        return v2.send(res, { code: SVC.UNAUTHENTICATED, message: 'invalid or expired token' },
+          { headers: v2.WWW_AUTHENTICATE });
       }
       req.user = authService.authorize(identity);
       req.auth = {
@@ -1414,16 +1420,12 @@ function patRequired(req, res, next) {
     .catch((err) => v2.send(res, err, { log: '[v2] Token verification failed:' }));
 }
 
-// The v2 analogue of requirePermission, and NAMED for the same reason. Scope has
-// already narrowed can_manage_users by the time this runs, so a library-scoped token
-// held by an administrator is refused here without this function knowing scopes exist.
-function requireAdminScope(req, res, next) {
-  if (!req.user || !req.user.can_manage_users) {
-    return v2.send(res, { code: SVC.FORBIDDEN, message: 'this operation requires the admin scope' });
-  }
-  return next();
-}
-requireAdminScope.requiredPermission = 'can_manage_users';
+// NOTE: the v2 admin guard (`requireAdminScope`) is deliberately NOT here yet.
+// API_V2_DESIGN.md D1 addendum #1 states the rule — middleware guarding nothing is
+// the unused-code problem a previous review already raised — and the first version of
+// this slice broke it by defining the guard with no route to apply it to. It lands
+// with the first admin operation, together with the `pat-admin:` tier and the
+// x-required-scope comparison it is the only thing that exercises.
 
 function requirePermission(permission) {
   // NAMED, and tagged with the permission it enforces. Both matter: the Express
@@ -2044,6 +2046,21 @@ v2Router.delete('/library/games/:gameId', (req, res) => {
       res.status(204).end();
     })
     .catch((err) => v2.send(res, err, { log: '[v2] game delete failed:' }));
+});
+
+// An unknown /api/v2 path, answered in v2's format. Without this the app-level
+// terminal handler replies `{"error":"Not found"}` as application/json — the v1
+// envelope, on a surface whose entire contract says problem+json, so a generated
+// client's problem parser fails on the one response it is most likely to meet.
+v2Router.use((req, res) => {
+  v2.send(res, { code: SVC.NOT_FOUND, message: 'no such endpoint' });
+});
+
+// Same reasoning for anything thrown past a v2 handler. Four arguments: Express
+// identifies an error handler by arity, so `next` must stay even though it is unused.
+// eslint-disable-next-line no-unused-vars
+v2Router.use((err, req, res, next) => {
+  v2.send(res, err, { log: '[v2] unhandled:' });
 });
 
 app.use('/api/v2', v2Router);

@@ -39,6 +39,14 @@ class ServiceError extends Error {
 // The codes in use. Exported as a frozen object so a typo is a TypeError at the
 // throw site rather than an error that silently maps to a 500.
 const CODES = Object.freeze({
+  // 401. Added for v2: the taxonomy had NO code mapping to 401, so patRequired was
+  // forced to answer 403 for a missing or expired credential — and 403 is what an
+  // insufficient SCOPE returns, so "re-authenticate" and "stop retrying" became
+  // distinguishable only by English prose in `detail`, which Problem tells clients
+  // never to branch on. For an agent holding a long-lived token, expiry is the one
+  // failure it is guaranteed to hit, and misreading it as a permission problem is a
+  // retry loop. v1 never needed this: it hand-writes 401 in authRequired.
+  UNAUTHENTICATED: 'unauthenticated',
   NOT_FOUND: 'not_found',
   FORBIDDEN: 'forbidden',
   VALIDATION: 'validation',

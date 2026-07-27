@@ -518,6 +518,17 @@ function decodeCursor(raw, expected) {
   // resume from a position that means something different in the new ordering, and the
   // caller would get a page that is neither the old sequence nor the new one — silently.
   // This is the first thing a client hits when it changes sort while paging.
+  // TYPE-validated, not just shape-validated. `lastId` is compared against an INTEGER
+  // column: a forged cursor carrying a string produces SQLSTATE 22P02 and a 500, where
+  // the spec promises a 400. This is db.js divergence #5 — the same class parseRouteId
+  // exists to prevent for route params, and the cursor was the one integer comparison
+  // in this file without such a guard.
+  if (!Number.isSafeInteger(state.lastId)) {
+    throw serviceError(CODES.VALIDATION, 'cursor is not a cursor this server issued', { field: 'cursor' });
+  }
+  if (state.lastKey !== null && typeof state.lastKey !== 'string' && typeof state.lastKey !== 'number') {
+    throw serviceError(CODES.VALIDATION, 'cursor is not a cursor this server issued', { field: 'cursor' });
+  }
   for (const key of ['sort', 'order', 'status']) {
     if (String(state[key] ?? '') !== String(expected[key] ?? '')) {
       throw serviceError(CODES.VALIDATION,
@@ -530,9 +541,13 @@ function decodeCursor(raw, expected) {
 }
 
 async function listPage(userId, opts = {}) {
-  const sort = opts.sort ?? 'name';
-  const order = (opts.order ?? 'asc').toLowerCase();
-  const status = opts.status ?? null;
+  // A repeated query parameter (?order=asc&order=desc) arrives as an ARRAY. Taking the
+  // first element turns what was a TypeError and a 500 into ordinary validation, which
+  // then answers 400 like every other bad input.
+  const one = (v) => (Array.isArray(v) ? v[0] : v);
+  const sort = one(opts.sort) ?? 'name';
+  const order = String(one(opts.order) ?? 'asc').toLowerCase();
+  const status = one(opts.status) ?? null;
 
   if (!SORTS.includes(sort)) {
     throw serviceError(CODES.VALIDATION, `sort must be one of: ${SORTS.join(', ')}`, { field: 'sort' });
@@ -551,13 +566,28 @@ async function listPage(userId, opts = {}) {
       "sort=backlogOrder is only meaningful with status=backlog", { field: 'sort' });
   }
 
-  const limit = Math.min(Math.max(Number(opts.limit) || DEFAULT_PAGE, 1), MAX_PAGE);
+  // Refused rather than silently coerced: `?limit=abc` becoming 50 tells the caller
+  // their request was understood when it was not.
+  const rawLimit = one(opts.limit);
+  if (rawLimit !== undefined && rawLimit !== null && rawLimit !== ''
+      && !/^\d+$/.test(String(rawLimit))) {
+    throw serviceError(CODES.VALIDATION, 'limit must be a positive integer', { field: 'limit' });
+  }
+  const limit = Math.min(Math.max(Number(rawLimit) || DEFAULT_PAGE, 1), MAX_PAGE);
   const column = SORT_COLUMNS[sort];               // allowlisted above, never raw input
   const direction = order === 'asc' ? 'ASC' : 'DESC';
 
   const where = ['user_id = ?'];
   const params = [userId];
   if (status) { where.push('status = ?'); params.push(status); }
+
+  // The FILTER is what `total` counts. Captured before the cursor clause is appended:
+  // sharing one `where` between the count and the page made `total` shrink on every
+  // page — it reported rows REMAINING while the spec promises "rows matching the
+  // filter, ignoring paging" and a client renders "12 of 340" from it. Correct on
+  // page 1, wrong from page 2, which is the shape of defect that survives a demo.
+  const filterWhere = [...where];
+  const filterParams = [...params];
 
   if (opts.cursor) {
     const state = decodeCursor(opts.cursor, { sort, order, status });
@@ -576,17 +606,18 @@ async function listPage(userId, opts = {}) {
   }
 
   const whereSql = where.join(' AND ');
-  // `total` ignores paging, so a client can show "12 of 340" on the first page. It is
-  // a second count per page; at this scale that is the right trade, and the spec
-  // states it as a promise rather than leaving it optional.
+  // Counted against the FILTER, never the cursor-narrowed set. A second count per page;
+  // at this scale that is the right trade, and the spec states it as a promise rather
+  // than leaving it optional.
   const totalRow = await db.promises.get(
-    `SELECT COUNT(*)::int AS total FROM user_games WHERE ${whereSql}`, params);
+    `SELECT COUNT(*)::int AS total FROM user_games WHERE ${filterWhere.join(' AND ')}`,
+    filterParams);
 
   // One extra row decides whether another page exists, without a second query.
   const rows = await db.promises.all(
     `SELECT * FROM user_games
       WHERE ${whereSql}
-      ORDER BY (${column} IS NULL) ASC, ${column} ${direction}, id ASC
+      ORDER BY ${column} ${direction} NULLS LAST, id ASC
       LIMIT ?`,
     [...params, limit + 1]
   );

@@ -1270,6 +1270,82 @@ checkAsync('the token listing never returns the hash', async () => {
   assert.ok(!/\*/.test(issued), `the listing is SELECT *, so a new column ships automatically: ${issued}`);
 });
 
+// --- services/library.js: the v2 page ------------------------------------------
+
+checkAsync('meta.total counts the FILTER, never the cursor-narrowed set', async () => {
+  // The count and the page shared one WHERE, so `total` reported rows REMAINING from
+  // page 2 onward while the spec promises "rows matching the filter, ignoring paging"
+  // and a client renders "12 of 340" from it. Correct on page 1, wrong after — the
+  // shape of defect that survives a demo.
+  const libraryService = require('../services/library');
+  const originalGet = dbModule.promises.get;
+  const originalAll = dbModule.promises.all;
+  let countSql = null;
+  let pageSql = null;
+  dbModule.promises.get = async (sql) => { countSql = sql; return { total: 42 }; };
+  dbModule.promises.all = async (sql) => { pageSql = sql; return []; };
+  try {
+    const cursor = libraryService.encodeCursor(
+      { sort: 'name', order: 'asc', status: null, lastKey: 'M', lastId: 7 });
+    await libraryService.listPage(1, { sort: 'name', cursor });
+  } finally {
+    dbModule.promises.get = originalGet;
+    dbModule.promises.all = originalAll;
+  }
+  assert.ok(!/game_name >/.test(countSql),
+    `the COUNT carries the cursor predicate, so total shrinks per page: ${countSql}`);
+  assert.ok(/game_name >/.test(pageSql), `the page query lost its cursor predicate: ${pageSql}`);
+  // ...and the ordering stays total, with NULLS LAST stated rather than defaulted.
+  assert.ok(/NULLS LAST/.test(pageSql), `ordering no longer says NULLS LAST: ${pageSql}`);
+  assert.ok(/id ASC/.test(pageSql), `the id tiebreaker is gone — keyset paging needs a TOTAL order: ${pageSql}`);
+});
+
+checkAsync('a forged cursor is a 400, never a database type error', async () => {
+  // lastId is compared against an INTEGER column: a string produces SQLSTATE 22P02 and
+  // a 500 where the spec promises 400. db.js divergence #5 — the class parseRouteId
+  // exists to prevent for route params, and the cursor was the one integer comparison
+  // without such a guard. Each of these must throw BEFORE any query is issued.
+  const libraryService = require('../services/library');
+  const originalGet = dbModule.promises.get;
+  const originalAll = dbModule.promises.all;
+  let queried = false;
+  dbModule.promises.get = async () => { queried = true; return { total: 0 }; };
+  dbModule.promises.all = async () => { queried = true; return []; };
+  try {
+    const forge = (state) => Buffer.from(JSON.stringify(state), 'utf8').toString('base64url');
+    const base = { sort: 'name', order: 'asc', status: null };
+    for (const bad of [
+      { ...base, lastKey: 'M', lastId: 'abc' },
+      { ...base, lastKey: 'M', lastId: 1.5 },
+      { ...base, lastKey: {}, lastId: 1 },
+      { ...base, lastKey: ['a'], lastId: 1 },
+    ]) {
+      await assert.rejects(
+        () => libraryService.listPage(1, { sort: 'name', cursor: forge(bad) }),
+        (err) => err.code === SVC.VALIDATION,
+        `a cursor with lastId=${JSON.stringify(bad.lastId)} lastKey=${JSON.stringify(bad.lastKey)} was accepted`);
+    }
+    await assert.rejects(() => libraryService.listPage(1, { limit: 'abc' }),
+      (err) => err.code === SVC.VALIDATION, 'limit=abc was silently coerced instead of refused');
+    assert.strictEqual(queried, false, 'a malformed request reached the database');
+  } finally {
+    dbModule.promises.get = originalGet;
+    dbModule.promises.all = originalAll;
+  }
+});
+
+check('the taxonomy has a 401 code, distinct from 403', () => {
+  // There was NO code mapping to 401, so v2's auth middleware was forced to answer 403
+  // — the same code an insufficient SCOPE returns. A client then cannot tell
+  // "re-authenticate" from "stop retrying" except by reading English out of `detail`,
+  // which Problem explicitly tells it never to branch on. For an agent holding a
+  // long-lived token, expiry is the one failure it is guaranteed to hit.
+  const { PROBLEMS } = require('../services/problem');
+  assert.strictEqual(PROBLEMS[SVC.UNAUTHENTICATED].status, 401);
+  assert.strictEqual(PROBLEMS[SVC.FORBIDDEN].status, 403);
+  assert.notStrictEqual(SVC.UNAUTHENTICATED, SVC.FORBIDDEN);
+});
+
 // --- services/v2.js: the wire format ------------------------------------------
 
 const v2svc = require('../services/v2');
