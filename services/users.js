@@ -48,6 +48,19 @@ const USER_OWNED_NOTIFICATION_COLUMNS = Object.freeze([
   'ntfy_url', 'ntfy_topic', 'gotify_url', 'gotify_token', 'telegram_chat_id',
 ]);
 
+// The complete set of `users` columns an administrator may write through this
+// service. Exported so the test can assert an EXHAUSTIVE partition of the table:
+// every column is either admin-writable, user-owned, or neither — and a new column
+// belongs to none of them until someone says which, so it fails CI rather than
+// defaulting to admin-writable by omission.
+//
+// This replaced a regex that guessed at channel-sounding names. `pushover_user`,
+// `matrix_room` and `signal_number` all slipped through it, because a vocabulary
+// tripwire only catches the vendors it was written knowing about.
+const ADMIN_WRITABLE_COLUMNS = Object.freeze([
+  'password', 'can_manage_users', 'email', 'shares_library',
+]);
+
 // Columns the admin list exposes. Deliberately not `SELECT *`: `password` is in that
 // table too, and an allowlist fails closed when a column is added.
 const ADMIN_LIST_COLUMNS =
@@ -103,14 +116,36 @@ async function update(id, fields, actingUserId) {
 
   assertNotUserOwned(fields);
 
-  if (typeof fields.can_manage_users !== 'undefined') {
+  // The asymmetry below is deliberate and both halves fail closed:
+  //
+  //   * the GUARD above reads through the prototype chain, so an INHERITED
+  //     gotify_token is still seen and still refused;
+  //   * every WRITE below reads OWN properties only, so an inherited value is
+  //     never written.
+  //
+  // Own-only matters because the route now passes req.body straight through. The
+  // old route built a fresh object literal, which gave all six fields own
+  // `undefined` values that shadowed the prototype — that accidentally immunised
+  // these reads, and passing the raw body removed the accident without replacing
+  // it. A body that never mentions can_manage_users could then pick it up from
+  // Object.prototype and grant admin on an arbitrary account.
+  //
+  // Not reachable today: only express.json() is mounted, and JSON.parse creates
+  // __proto__ as an own DATA property rather than invoking the setter, so there is
+  // no pollution gadget in this app. This is the load-bearing assumption a future
+  // deep-merge would quietly break, which is exactly why it is enforced here rather
+  // than relied upon. `{...fields}` does NOT fix it — the spread result still
+  // inherits from Object.prototype.
+  const sent = (key) => Object.hasOwn(Object(fields), key);
+
+  if (sent('can_manage_users')) {
     if (!fields.can_manage_users && String(actingUserId) === String(id)) {
       throw serviceError(CODES.VALIDATION, 'You cannot remove your own admin permission.', { field: 'can_manage_users' });
     }
     updates.push('can_manage_users = ?');
     params.push(fields.can_manage_users ? 1 : 0);
   }
-  if (typeof fields.email !== 'undefined') {
+  if (sent('email')) {
     const cleanEmail = String(fields.email).trim();
     // Validated at the write site, not only at the send sink: an address smuggling
     // a comma turns notifications into an authenticated relay from this
@@ -121,7 +156,7 @@ async function update(id, fields, actingUserId) {
     updates.push('email = ?');
     params.push(cleanEmail);
   }
-  if (typeof fields.shares_library !== 'undefined') {
+  if (sent('shares_library')) {
     updates.push('shares_library = ?');
     params.push(fields.shares_library ? 1 : 0);
   }
@@ -129,7 +164,7 @@ async function update(id, fields, actingUserId) {
   // Enforced HERE, not in the adapter, because it must hold for v2 too. Extracting
   // this service dropped both checks: an admin could set any password to "a", and a
   // non-string password was silently ignored while the call still reported success.
-  const wantsPassword = typeof fields.password !== 'undefined' && fields.password !== null && fields.password !== '';
+  const wantsPassword = sent('password') && fields.password !== null && fields.password !== '';
   if (wantsPassword) {
     const problem = validatePassword(fields.password);
     if (problem) throw serviceError(CODES.VALIDATION, problem, { field: 'password' });
@@ -191,4 +226,5 @@ async function remove(id, actingUserId) {
 module.exports = {
   listAll, findById, update, remove,
   assertNotUserOwned, ADMIN_LIST_COLUMNS, USER_OWNED_NOTIFICATION_COLUMNS,
+  ADMIN_WRITABLE_COLUMNS,
 };

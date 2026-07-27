@@ -45,10 +45,17 @@ that page can see them — but nothing announces the change.
               change removes only the ability to do it to SOMEONE ELSE.
 
 REMEDIATION for any admin client (this is the realistic break):
-  A naive read-modify-write — GET /api/users, edit one field, PUT the whole user
-  object back — now fails with 400 on EVERY field, not just these five. Send only
-  the fields you intend to change. The web SPA already does this: its admin panel
-  only ever sends {password} or {can_manage_users}, verified at
+  A read-modify-write against the UPDATED server is fine: GET /api/users no longer
+  returns the five fields, so PUTting the returned object straight back contains
+  only the eight safe columns and does not 400.
+
+  It breaks when the object did not come from this server's current response — a
+  client holding a cached user object, one reconstructed from its own model, or a
+  form that posts every field it knows about. Those now 400 on the first of the
+  five they include.
+
+  Send only the fields you intend to change. The web SPA already does this: its
+  admin panel only ever sends {password} or {can_manage_users}, verified at
   frontend/src/App.jsx:416 and :649.
 
   If the Android admin screen displays a user's ntfy topic or Gotify token, those

@@ -95,8 +95,11 @@ async function main() {
     db.run(
       // RETURNING id is REQUIRED for this.lastID under the Postgres shim -- SQLite
       // handed it back for free, Postgres does not. See db.js divergence #2.
-      `INSERT INTO users (username, password, can_manage_users, email, ntfy_topic, created_at, origin, display_name, shares_library)
-       VALUES (?, ?, 1, '', '', ?, 'local', ?, 0)
+      // No notification columns: they are the user's own, set by them on My Account,
+      // and this script wrote ntfy_topic as a hardcoded '' only because the column
+      // was in the list. Leaving them NULL reads as "not configured" everywhere.
+      `INSERT INTO users (username, password, can_manage_users, email, created_at, origin, display_name, shares_library)
+       VALUES (?, ?, 1, '', ?, 'local', ?, 0)
        RETURNING id`,
       [username, hash, now, displayName || username],
       function (err) {

@@ -1820,9 +1820,15 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
   // Safe because update()'s write path is structurally an allowlist: it appends only
   // hardcoded `column = ?` literals for the four fields an admin may set, so nothing
   // caller-controlled can reach the SQL string regardless of what the body contains.
-  // A prototype-polluted body fails CLOSED — an inherited `gotify_token` is still
-  // visible to the guard, which refuses it.
-  usersService.update(id, req.body, req.user.id)
+  // A prototype-polluted body fails CLOSED in both directions: the guard reads
+  // through the prototype chain so an inherited `gotify_token` is still refused,
+  // while every write reads own-properties only so an inherited value is never
+  // written. See services/users.js#update.
+  //
+  // `|| {}` because express.json() leaves req.body undefined on an unmatched
+  // Content-Type; without it the service threw a TypeError, which is not a
+  // ServiceError, so the caller got a misleading 500 "DB error" instead of a 400.
+  usersService.update(id, req.body || {}, req.user.id)
     .then(() => res.json({ success: true }))
     .catch((err) => {
       problem.send(res, err, { log: '[Users] Update failed:', messages: { [SVC.NOT_FOUND]: 'User not found' } });

@@ -767,12 +767,24 @@ checkAsync('the admin list query itself excludes every user-owned channel', asyn
   }
 
   assert.ok(issued, 'listAll issued no query at all');
+  const projection = issued.replace(/^\s*SELECT\s+/i, '').split(/\s+FROM\s+/i)[0];
+
+  // `*` needs the token set: `u.*` is not a bare star but still selects everything.
   const columns = listedColumns(issued);
-  assert.ok(!columns.has('*'), `admin list is SELECT * — it would ship the password hash: ${issued}`);
-  assert.ok(!columns.has('password'), `password is in the admin list query: ${issued}`);
+  for (const token of columns) {
+    assert.ok(!token.endsWith('*'), `admin list selects everything (${token}) — it would ship the password hash: ${issued}`);
+  }
+  // Everything else needs a WORD BOUNDARY, which strictly dominates both a substring
+  // match and the token set. Tokenising alone accepted `users.ntfy_topic` and
+  // `ntfy_topic AS topic`, because neither is equal to the bare column name; plain
+  // substring matching wrongly rejected `last_password_change`. `_` is a word
+  // character, so \b solves both: it matches the qualified and aliased forms and does
+  // NOT match ntfy_topic_hash.
+  const selects = (column) => new RegExp(`\\b${column}\\b`).test(projection);
+  assert.ok(!selects('password'), `password is in the admin list query: ${issued}`);
   for (const column of usersService.USER_OWNED_NOTIFICATION_COLUMNS) {
     assert.ok(
-      !columns.has(column),
+      !selects(column),
       `${column} is in the query GET /api/users actually runs — every admin would `
       + `receive every user's notification target`
     );
@@ -850,6 +862,25 @@ checkAsync('prototype pollution cannot smuggle a notification target past the gu
   } finally {
     delete Object.prototype.gotify_token;
   }
+
+  // The other direction, and the one passing req.body wholesale actually broke. The
+  // old route built a fresh object literal, so every writable field was an OWN
+  // property — undefined when unsent — which shadowed the prototype and immunised
+  // these reads by accident. Removing that literal removed the accident: an inherited
+  // can_manage_users would have been WRITTEN, granting admin on an arbitrary account
+  // from a body that never named the field.
+  Object.prototype.can_manage_users = 1;
+  const original = dbModule.promises.run;
+  let issued = null;
+  dbModule.promises.run = async (sql) => { issued = sql; return { changes: 1 }; };
+  try {
+    await usersService.update(7, { email: 'a@b.c' }, 1);
+  } finally {
+    dbModule.promises.run = original;
+    delete Object.prototype.can_manage_users;
+  }
+  assert.strictEqual(issued, 'UPDATE users SET email = ? WHERE id = ?',
+    `an INHERITED can_manage_users was written: ${issued}`);
 });
 
 check('every channel column in the schema is classified as user-owned', () => {
@@ -883,24 +914,37 @@ check('every channel column in the schema is classified as user-owned', () => {
   }
   assert.ok(columns.includes('gotify_token'), `column parse failed: ${columns.join(',')}`);
 
-  // Vocabulary-based, and therefore only as good as the vocabulary: this catches a
-  // column NAMED like the channels we already know. `matrix_room_id` would slip
-  // through. It is a tripwire for the likely case, not a proof, and the comment says
-  // so rather than letting the commit message overstate it.
-  const channelish =
-    /(ntfy|gotify|telegram|discord|slack|matrix|pushover|apprise|webhook)|_(url|token|topic|secret|key|chat_id|room_id)$/;
+  // An EXHAUSTIVE PARTITION, not a name-guessing regex.
+  //
+  // The regex this replaced matched channel-sounding vocabulary, so it only ever
+  // caught the vendors it was written knowing about: pushover_user, matrix_room and
+  // signal_number all slipped through, and `apprise_urls` slipped through on the
+  // plural. Partitioning inverts it — EVERY column must be classified, whatever it
+  // is called, so a new one fails here until someone decides which bucket it is in.
+  // That is the property the commit message claimed and the regex only approximated.
   const owned = new Set(usersService.USER_OWNED_NOTIFICATION_COLUMNS);
-  for (const column of columns.filter((c) => channelish.test(c))) {
-    assert.ok(
-      owned.has(column),
-      `users.${column} addresses a notification channel but is not in `
-      + `USER_OWNED_NOTIFICATION_COLUMNS — an admin could write it on another user's `
-      + `account and silently redirect their notifications`
-    );
+  const adminWritable = new Set(usersService.ADMIN_WRITABLE_COLUMNS);
+
+  // Neither admin-writable nor a delivery target: server-managed identity, and the
+  // user's own reminder schedule, which the admin API has never accepted.
+  const NEITHER = new Set([
+    'id', 'username', 'can_create_users', 'created_at', 'origin', 'display_name',
+    'notification_days',
+  ]);
+
+  for (const column of columns) {
+    const buckets = [owned.has(column), adminWritable.has(column), NEITHER.has(column)]
+      .filter(Boolean).length;
+    assert.strictEqual(buckets, 1,
+      `users.${column} is in ${buckets} of the three classifications. Every column must be `
+      + `in exactly one: USER_OWNED_NOTIFICATION_COLUMNS (refused with a 400), `
+      + `ADMIN_WRITABLE_COLUMNS (an admin may set it), or the NEITHER list in this test. `
+      + `A new column is unclassified until someone chooses — deciding by omission is how `
+      + `an admin ends up able to write something nobody meant them to.`);
   }
-  // Every name in the list must be a real column, or the guard protects nothing.
-  for (const column of owned) {
-    assert.ok(columns.includes(column), `USER_OWNED_NOTIFICATION_COLUMNS names users.${column}, which does not exist`);
+  // And the reverse: a listed name that is not a real column protects nothing.
+  for (const column of [...owned, ...adminWritable, ...NEITHER]) {
+    assert.ok(columns.includes(column), `users.${column} is classified but does not exist in any migration`);
   }
 });
 
@@ -909,14 +953,25 @@ check('no INSERT into users writes a caller-supplied notification target', () =>
   // root-seed INSERT at index.js:171, which never carried these columns — so the
   // assertion passed while the create route happily wrote a caller's gotify_token.
   // A vacuous assertion is worse than none: it reports the rule as covered.
-  const source = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
-  const inserts = [...source.matchAll(/INSERT INTO users \([^)]*\)/g)].map((m) => m[0]);
-  assert.ok(inserts.length >= 3, `expected every user INSERT to be found, saw ${inserts.length}`);
-  for (const statement of inserts) {
+  // Every file that inserts a user, not just index.js. The test name says "no INSERT
+  // into users", and it was scoped to one file while create-local-admin.js still
+  // listed ntfy_topic in its column list — a hardcoded '' and host-shell-only, so no
+  // live risk, but an assertion narrower than its own name is how the next one gets
+  // missed.
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const files = fs.readdirSync(root).filter((f) => f.endsWith('.js'));
+  const inserts = files.flatMap((f) =>
+    [...fs.readFileSync(path.join(root, f), 'utf8').matchAll(/INSERT INTO users \([^)]*\)/g)]
+      .map((m) => ({ file: f, sql: m[0] })));
+  assert.ok(inserts.length >= 4, `expected every user INSERT to be found, saw ${inserts.length}`);
+  for (const { file, sql: statement } of inserts) {
     for (const column of usersService.USER_OWNED_NOTIFICATION_COLUMNS) {
-      assert.ok(!statement.includes(column), `${column} is back in a user INSERT: ${statement}`);
+      assert.ok(!statement.includes(column), `${column} is back in a user INSERT in ${file}: ${statement}`);
     }
   }
+  const source = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
   // The create route must still run the guard; there is no other path that refuses a
   // credential planted at provisioning time.
   assert.ok(
