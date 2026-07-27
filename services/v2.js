@@ -134,4 +134,53 @@ function me(user, auth) {
   };
 }
 
-module.exports = { toProblem, send, libraryGame, me, PLANNED_CODES, WWW_AUTHENTICATE };
+// A token, NEVER its secret. `hint` is the last four characters, which is what lets an
+// operator match the token in a config file against the row they are about to revoke —
+// the plaintext is gone after minting and the hash is one-way.
+function token(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    hint: row.hint ?? null,
+    scopes: row.scopes,
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at ?? null,
+    expiresAt: row.expires_at ?? null,
+  };
+}
+
+// The ONLY response that ever carries the plaintext, and only at the moment of
+// minting. Kept as a separate mapper so `token()` cannot grow the field by accident:
+// the listing and the creation response are different shapes on purpose.
+function tokenCreated(result) {
+  return {
+    id: result.id,
+    name: result.name,
+    hint: result.hint ?? null,
+    scopes: result.scopes,
+    createdAt: result.createdAt ?? new Date().toISOString(),
+    lastUsedAt: null,
+    expiresAt: result.expiresAt ?? null,
+    token: result.token,
+  };
+}
+
+// The caller's OWN delivery targets. These are bearer secrets — a Gotify application
+// token lets the holder post to that user's devices — and they are returned here ONLY
+// because this is the caller's own row. They appear on no other response in the API.
+function notificationSettings(row) {
+  return {
+    email: row.email ?? null,
+    ntfyUrl: row.ntfy_url ?? null,
+    ntfyTopic: row.ntfy_topic ?? null,
+    gotifyUrl: row.gotify_url ?? null,
+    gotifyToken: row.gotify_token ?? null,
+    telegramChatId: row.telegram_chat_id ?? null,
+    notificationDays: row.notification_days,
+  };
+}
+
+module.exports = {
+  toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings,
+  PLANNED_CODES, WWW_AUTHENTICATE,
+};

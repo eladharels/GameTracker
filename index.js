@@ -2009,6 +2009,56 @@ v2Router.get('/me', (req, res) => {
   res.json(v2.me(req.user, req.auth));
 });
 
+// GET /api/v2/tokens — this account's tokens. The secret is never returned.
+v2Router.get('/tokens', (req, res) => {
+  authService.listTokens(req.user.id)
+    .then((rows) => res.json({ data: rows.map(v2.token) }))
+    .catch((err) => v2.send(res, err, { log: '[v2] token list failed:' }));
+});
+
+// POST /api/v2/tokens — mint one. The secret is in this response and nowhere else.
+//
+// `grantedScopes` is the PRESENTING credential's effective scope set, so a token can
+// never mint one carrying a scope it does not itself hold. Without that this operation
+// is an escape hatch out of the whole scope system: the library-scoped token handed to
+// the MCP would mint itself an admin token and be an administrator one call later.
+v2Router.post('/tokens', (req, res) => {
+  const body = req.body || {};
+  authService.createToken({
+    userId: req.user.id,
+    name: body.name,
+    scopes: body.scopes,
+    expiresAt: body.expiresAt ?? null,
+    grantedScopes: req.auth.scopes,
+  })
+    .then((result) => res.status(201).json(v2.tokenCreated(result)))
+    .catch((err) => v2.send(res, err, { log: '[v2] token create failed:' }));
+});
+
+// DELETE /api/v2/tokens/:tokenId — revocation is the whole point of the design.
+// Owner-scoped inside the DELETE, so another account's id removes nothing and says so.
+v2Router.delete('/tokens/:tokenId', (req, res) => {
+  const id = parseRouteId(req.params.tokenId);
+  if (id === null) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such token' });
+  authService.revokeToken(id, req.user.id)
+    .then(() => res.status(204).end())
+    .catch((err) => v2.send(res, err, { log: '[v2] token revoke failed:' }));
+});
+
+// GET /api/v2/me/notifications — the caller's own delivery targets.
+v2Router.get('/me/notifications', (req, res) => {
+  usersService.readNotificationSettings(req.user.id)
+    .then((row) => res.json(v2.notificationSettings(row)))
+    .catch((err) => v2.send(res, err, { log: '[v2] notification read failed:' }));
+});
+
+// PATCH /api/v2/me/notifications — partial; absent keys are left alone.
+v2Router.patch('/me/notifications', (req, res) => {
+  usersService.updateNotificationSettings(req.user.id, req.body || {})
+    .then((row) => res.json(v2.notificationSettings(row)))
+    .catch((err) => v2.send(res, err, { log: '[v2] notification write failed:' }));
+});
+
 // GET /api/v2/library/games — filtered, sorted, paged SERVER-SIDE.
 v2Router.get('/library/games', (req, res) => {
   libraryService.listPage(req.user.id, {

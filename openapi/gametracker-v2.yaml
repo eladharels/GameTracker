@@ -151,6 +151,7 @@ paths:
     get:
       tags: [identity]
       operationId: getMyNotificationSettings
+      x-implemented: true
       x-required-scope: library
       summary: Where this account's notifications go
       description: |
@@ -171,6 +172,7 @@ paths:
     patch:
       tags: [identity]
       operationId: updateMyNotificationSettings
+      x-implemented: true
       x-required-scope: library
       summary: Change where this account's notifications go
       description: |
@@ -196,6 +198,7 @@ paths:
     get:
       tags: [tokens]
       operationId: listTokens
+      x-implemented: true
       x-required-scope: library
       summary: List this account's tokens
       description: |
@@ -219,6 +222,7 @@ paths:
     post:
       tags: [tokens]
       operationId: createToken
+      x-implemented: true
       x-required-scope: library
       summary: Mint a token
       description: |
@@ -275,6 +279,7 @@ paths:
     delete:
       tags: [tokens]
       operationId: revokeToken
+      x-implemented: true
       x-required-scope: library
       summary: Revoke a token
       description: |

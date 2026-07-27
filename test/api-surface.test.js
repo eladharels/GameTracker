@@ -238,6 +238,11 @@ const EXPECTED_V2 = {
   'GET /api/v2/library/games': 'pat',
   'GET /api/v2/library/games/:gameId': 'pat',
   'DELETE /api/v2/library/games/:gameId': 'pat',
+  'GET /api/v2/tokens': 'pat',
+  'POST /api/v2/tokens': 'pat',
+  'DELETE /api/v2/tokens/:tokenId': 'pat',
+  'GET /api/v2/me/notifications': 'pat',
+  'PATCH /api/v2/me/notifications': 'pat',
 };
 
 // separately and by hand. A route reaching 'public' without being on this list is a

@@ -16,7 +16,7 @@ const db = require('../db');
 // so a test can observe the SQL it issues. See listAll.
 const { get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
-const { isValidEmailAddress, validatePassword } = require('../user-rules');
+const { isValidEmailAddress, validatePassword, sanitizeText } = require('../user-rules');
 
 
 // Where a user's notifications GO. The user's own setting, on My Account — never an
@@ -223,8 +223,98 @@ async function remove(id, actingUserId) {
   return { removed: ctx.changes, username: row.username };
 }
 
+// --- the caller's OWN notification settings -----------------------------------
+//
+// The other half of USER_OWNED_NOTIFICATION_COLUMNS. `update()` REFUSES these because
+// it is the administrative surface; this is the surface that owns them, and it only
+// ever reads and writes the caller's own row — there is no user parameter an adapter
+// could pass wrongly.
+//
+// Extracted from the v1 route rather than reimplemented for v2. The email rule is
+// load-bearing and was learned the hard way: Nodemailer treats a comma-separated `to`
+// as a recipient LIST, so an unvalidated address here let one account fan
+// notifications out to arbitrary third parties from this deployment's own
+// SPF/DKIM-aligned domain. Two skins, one rule.
+const NOTIFICATION_DAYS_DEFAULT = Object.freeze([0, 7, 30]);
+const MAX_NOTIFICATION_DAY = 365;
+
+// http(s) only, or empty to clear. The cloud instance-metadata blocklist is applied at
+// the SEND sink, not here, because that also covers values written before this check
+// existed — do not move it and delete it there.
+const isServerUrl = (u) => u === '' || /^https?:\/\/\S+$/i.test(u);
+
+function parseNotificationDays(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [...NOTIFICATION_DAYS_DEFAULT];
+  } catch {
+    return [...NOTIFICATION_DAYS_DEFAULT];
+  }
+}
+
+async function readNotificationSettings(userId) {
+  const row = await db.promises.get(
+    `SELECT email, ntfy_url, ntfy_topic, gotify_url, gotify_token, telegram_chat_id, notification_days
+       FROM users WHERE id = ?`,
+    [userId]
+  );
+  if (!row) throw serviceError(CODES.NOT_FOUND, 'User not found');
+  return { ...row, notification_days: parseNotificationDays(row.notification_days) };
+}
+
+async function updateNotificationSettings(userId, fields) {
+  const updates = [];
+  const params = [];
+  // Own-property only, for the same reason update() uses it: the adapter passes the
+  // request body straight through, and an inherited value must never be written.
+  const has = (key) => Object.hasOwn(Object(fields), key);
+
+  if (has('email')) {
+    const clean = fields.email === null ? '' : String(fields.email).trim();
+    if (clean !== '' && !isValidEmailAddress(clean)) {
+      throw serviceError(CODES.VALIDATION, 'email must be a single valid address, or empty', { field: 'email' });
+    }
+    updates.push('email = ?'); params.push(clean);
+  }
+  for (const [key, column] of [['ntfyUrl', 'ntfy_url'], ['gotifyUrl', 'gotify_url']]) {
+    if (!has(key)) continue;
+    const clean = fields[key] === null ? '' : String(fields[key]).trim();
+    if (!isServerUrl(clean)) {
+      throw serviceError(CODES.VALIDATION, `${key} must be an http(s) URL, or empty to clear`, { field: key });
+    }
+    updates.push(`${column} = ?`); params.push(clean);
+  }
+  for (const [key, column] of [['ntfyTopic', 'ntfy_topic'], ['gotifyToken', 'gotify_token'],
+    ['telegramChatId', 'telegram_chat_id']]) {
+    if (!has(key)) continue;
+    updates.push(`${column} = ?`);
+    params.push(fields[key] === null ? '' : sanitizeText(fields[key], 200));
+  }
+  if (has('notificationDays')) {
+    const days = fields.notificationDays;
+    const valid = Array.isArray(days) && days.length > 0
+      && days.every((d) => Number.isInteger(d) && d >= 0 && d <= MAX_NOTIFICATION_DAY);
+    if (!valid) {
+      throw serviceError(CODES.VALIDATION,
+        `notificationDays must be a non-empty array of integers between 0 and ${MAX_NOTIFICATION_DAY}`,
+        { field: 'notificationDays' });
+    }
+    // De-duplicated and sorted: the release sweep matches `days.includes(diff)`, so a
+    // repeated value is silently meaningless and an unsorted one reads badly back.
+    updates.push('notification_days = ?');
+    params.push(JSON.stringify([...new Set(days)].sort((a, b) => a - b)));
+  }
+
+  if (updates.length === 0) throw serviceError(CODES.VALIDATION, 'no settings to update');
+  params.push(userId);
+  const ctx = await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+  if (ctx.changes === 0) throw serviceError(CODES.NOT_FOUND, 'User not found');
+  return readNotificationSettings(userId);
+}
+
 module.exports = {
   listAll, findById, update, remove,
   assertNotUserOwned, ADMIN_LIST_COLUMNS, USER_OWNED_NOTIFICATION_COLUMNS,
   ADMIN_WRITABLE_COLUMNS,
+  readNotificationSettings, updateNotificationSettings, NOTIFICATION_DAYS_DEFAULT,
 };
