@@ -92,7 +92,7 @@ GameTracker/
 │                                   #   reports a DEGRADED load — writers must refuse then
 ├── services/                       # The service layer. Route handlers are thin adapters:
 │   │                               #   they do auth and HTTP, services do the work, so /api
-│   │                               #   and the coming /api/v2 stay two skins over ONE
+│   │                               #   and /api/v2 stay two skins over ONE
 │   │                               #   implementation. No req/res or status codes in here
 │   ├── errors.js                   # ServiceError + the frozen CODES taxonomy adapters map
 │   ├── problem.js                  # The ONE code -> {status, title, expose} table. `expose`
@@ -120,10 +120,17 @@ GameTracker/
 │                                   #   provider's error body reaches the caller
 │   ├── users.js                    # Admin user management; the lockout safety rules
 │   ├── jobs.js                     # The scheduled work as CALLABLE functions: the release
-│                                   #   sweep and the weekly Steam price sync. index.js
-│                                   #   schedules them, the admin routes and
-│                                   #   run_notifications.js call the same ones — the sweep
-│                                   #   previously existed in FOUR copies that had drifted
+│   │                               #   sweep, the weekly Steam price sync, and the metadata
+│   │                               #   refresh (the fifth copy of that one, and the last that
+│   │                               #   lived in a route). index.js schedules them, the admin
+│   │                               #   routes and run_notifications.js call the same ones —
+│   │                               #   the sweep previously existed in FOUR copies that had
+│   │                               #   drifted. runJob() maps the four v2 `kind`s onto them
+│   ├── job-runner.js               # The v2 job STORE: accept work, run it off the request,
+│                                   #   hand back an unguessable id to poll. In memory, one
+│                                   #   process — a restart loses jobs and a poll for one that
+│                                   #   is gone is the same 404 as another account's. Knows
+│                                   #   nothing about what a job does; jobs.js owns that
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
 │                                   #   dispatch() is the ONE service that never throws — four
 │                                   #   independent outcomes, advisory result. See services/errors.js
@@ -141,9 +148,10 @@ GameTracker/
 │   │                               #   every operation is authenticated and documents its
 │   │                               #   401, errors are problem+json, and the enums MATCH
 │   │                               #   the services (Problem.code vs errors.js CODES,
-│   │                               #   GameStatus vs library.STATUSES, scopes vs auth.js).
-│   │                               #   It cannot yet compare paths to the router — no v2
-│   │                               #   route exists; that gate lands WITH the first one
+│   │                               #   GameStatus vs library.STATUSES, scopes vs auth.js,
+│   │                               #   FailureReason/Job.* vs job-runner.js and jobs.js).
+│   │                               #   The path-to-router comparison lives in
+│   │                               #   api-surface.test.js, which walks the live stack
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
 │                                   #   routes exist; this proves what they still RETURN.
 │                                   #   Without it "frozen" is only an intention: a service
@@ -185,9 +193,12 @@ GameTracker/
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
 ├── openapi/
-│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 28 operations. It is the
-│                                   #   SOURCE for the v2 routes, not a description of them —
-│                                   #   no v2 route exists yet. Validated by test/openapi.test.js.
+│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 28 operations, ALL of them
+│                                   #   now live (`x-implemented: true`). It is the SOURCE for
+│                                   #   the routes, not a description of them: the drift gate in
+│                                   #   api-surface.test.js fails if an operation is marked
+│                                   #   implemented without a route, OR a v2 route exists that is
+│                                   #   not such an operation. Validated by test/openapi.test.js.
 │                                   #   NO spec for v1: a faithful one would generate a client
 │                                   #   carrying three naming conventions, {success:true} as
 │                                   #   every mutation's return type and a degradation flag in
@@ -243,7 +254,23 @@ GameTracker/
 >
 > The spec is the SOURCE: an operation marked `x-implemented: true` in
 > `openapi/gametracker-v2.yaml` must exist on the router, and every v2 route must be such an
-> operation. Both directions are enforced.
+> operation. Both directions are enforced. All 28 are now implemented, so the practical
+> effect is that a NEW v2 route requires a spec change first.
+>
+> **`requireAdminScope` is repeated per admin route, never applied with a path-scoped
+> `v2Router.use('/users', ...)`.** Both work at runtime; only one is visible to the gate,
+> which credits a `.use()` to a route only when it is mounted at the router root —
+> deliberately, because attributing a path-scoped middleware to every route in a router is
+> exactly the fail-open reporting that gate was once fixed for. It reads
+> `req.user.can_manage_users`, which `authService.authorize()` has ALREADY narrowed by the
+> token's scopes: an admin ACCOUNT presenting a library-scoped token is not an admin here.
+> Re-deriving that from `req.auth.scopes` would be a second copy of the scope rule.
+>
+> **The v2 adapters own no rules.** Where one calls two services in sequence
+> (`POST /library/games` resolves then stores; `PATCH /settings` writes two stores) the
+> DECISIONS live in the services — `catalog.resolveGame`, `library.addResolvedGame` — and the
+> adapter only sequences them. A `?? 'wishlist'` in the handler is the shape of the mistake:
+> it would silently demote a game already in the library on every re-add.
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
 > router and asserts the authorization tier of all 42 routes — public / auth / owner-or-admin /
@@ -399,7 +426,7 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 - **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns
   `{serverVersion, apiVersions[], deprecations[]}`. The LAST route addable to v1 — after the
   freeze there is no way to tell a client that anything beyond `/api` exists, and the Android
-  app is not a build this repo can update. v2 reports `planned` until `V2_MOUNTED` flips.
+  app is not a build this repo can update. v2 reports `available` (`V2_MOUNTED`).
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.
@@ -479,6 +506,12 @@ NODE_ENV=production
 | Daily at 4:00 AM | Refresh the CrackWatch DRM-status cache for all games |
 | Daily at 8:00 AM | Check released games; update status `unreleased → wishlist`; send release reminders on each user's own `notification_days` schedule (default 0/7/30) |
 | Every Monday at 3:00 AM | Fetch current Steam prices for all library games with a Steam App ID |
+
+> The same three sweeps — plus the metadata refresh — are startable on demand through
+> `POST /api/v2/jobs`, which runs them via `services/jobs.js#runJob`, the SAME functions the
+> cron schedules. That is the whole point of jobs.js: "run it now" and "run it at 08:00"
+> cannot drift, because there is nothing to drift from. They return 202 and a job to poll —
+> these walk every library against three providers and inline they outlast any reverse proxy.
 
 ---
 

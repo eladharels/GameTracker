@@ -227,9 +227,26 @@ authentication matrix, threat history and operational runbook.
 
 ## API
 
+There are two: **`/api`**, which the web and Android apps use and which is frozen, and
+**`/api/v2`**, a token-only redesign specified by `openapi/gametracker-v2.yaml`.
+
+`GET /api/capabilities` reports which exist, so a client can discover v2 without being
+told about it out of band:
+
+```json
+{"serverVersion":"...","apiVersions":[{"version":"v1","status":"stable"},
+                                      {"version":"v2","status":"available"}]}
+```
+
+### /api (v1) — frozen
+
 All routes are under `/api`. Everything except `GET /api/health` and `POST /api/auth/login` requires an
 `Authorization: Bearer <token>` header — either a 12-hour session JWT from `POST /api/auth/login`,
 or a personal access token (see above).
+
+Frozen means the shapes below do not change. `test/api-contract.test.js` pins them, including
+duplicated field spellings that look like redundancy and are not — two of the three clients are
+not in this repository and cannot be grepped.
 
 | Route | Auth | Purpose |
 |---|---|---|
@@ -252,6 +269,47 @@ or a personal access token (see above).
 
 Unknown `/api/*` paths return a JSON 404.
 
+### /api/v2 — the one to write new clients against
+
+**`openapi/gametracker-v2.yaml` is the contract**, and it is the source rather than a
+description: every operation in it is live, and CI fails if a route exists that the document
+does not describe, or the reverse. Point a generator at it rather than reading the table below.
+
+What differs from v1, and why:
+
+| | v1 | v2 |
+|---|---|---|
+| Credential | session JWT **or** PAT | **PAT only** — a JWT carries no scope, so accepting one would make the admin boundary reachable by logging in with a password |
+| Errors | `{"error":"some english"}` | RFC 9457 `application/problem+json` with a stable `code` to branch on |
+| Field names | three naming conventions | camelCase, once |
+| Listing a library | the whole thing, every time | keyset pagination with an opaque cursor |
+| Mutations | `{"success":true}` | the resource, or `204` |
+| Deleting something absent | `{"success":true}` | `404` |
+| Search during an outage | `[]` plus a header you probably dropped | `meta.degraded`, and `502` when nobody answered |
+| Long sweeps | run inline until the proxy gives up | `202` and a job to poll |
+| Adding a game | search, pick client-side, post the id | post a **name**; ambiguity is a `409` listing the candidates |
+
+Scopes: a PAT is minted `library` or `admin`. A scope only ever **narrows** the privilege on the
+account — a library-scoped token held by an administrator is not an administrator.
+
+| Group | Routes |
+|---|---|
+| identity | `GET /api/v2/me`, `GET`/`PATCH /me/notifications` |
+| tokens | `GET`/`POST /tokens`, `DELETE /tokens/{id}` |
+| library | `GET`/`POST /library/games`, `GET`/`PATCH`/`DELETE /library/games/{gameId}`, `GET`/`PUT /library/backlog`, `POST /library/refresh` |
+| catalog | `GET /catalog/search` |
+| sharing | `GET /shares`, `PUT`/`POST /shares/outgoing`, `DELETE /shares/outgoing/{username}`, `GET /shares/incoming/{username}/games` |
+| admin | `GET`/`POST /users`, `PATCH`/`DELETE /users/{id}`, `GET`/`PATCH /settings`, `POST /jobs` |
+| jobs | `GET /jobs/{jobId}` |
+
+Two rules worth knowing before you write a client:
+
+- **A shared library is the one place an administrator gets no bypass.** It is a consent
+  relationship between two accounts, not a resource the server owns.
+- **A job is readable only by the account that started it**, and someone else's id is a `404`
+  rather than a `403`. Ids are 24 random bytes for exactly that reason. Jobs live in memory, so
+  a restart loses them — re-run the work, it is idempotent.
+
 ---
 
 ## Scheduled jobs
@@ -261,6 +319,11 @@ Unknown `/api/*` paths return a JSON 404.
 | Daily 04:00 | Refresh the CrackWatch DRM-status cache |
 | Daily 08:00 | Flip released games `unreleased` → `wishlist`; send release reminders |
 | Mondays 03:00 | Refresh Steam prices for all library games with a Steam App ID |
+
+All three are startable on demand through `POST /api/v2/jobs` (admin scope), which calls the
+same functions the cron does — `{"kind":"checkReleases"|"updatePrices"|"refreshCrackStatus"|"refreshMetadata"}`.
+One job of a kind runs at a time. A user can refresh their own library with
+`POST /api/v2/library/refresh`, which needs no admin scope and touches nobody else's games.
 
 ---
 
