@@ -1,0 +1,1262 @@
+# This document is the SOURCE for the /api/v2 routes, not a description of them.
+# No v2 route exists yet: every operation here is a specification to be implemented,
+# and the drift gate in test/api-surface.test.js will fail on any mismatch once the
+# first one lands. See API_V2_DESIGN.md for the decisions behind each choice.
+
+openapi: 3.1.0
+
+info:
+  title: GameTracker API
+  version: 2.0.0
+  summary: Self-hosted game library — v2
+  description: |
+    The second-generation GameTracker API. Designed for the owner's own scripts and for
+    an MCP server, not as a public API.
+
+    **v1 (`/api`) is frozen and permanently supported.** It is not deprecated and emits no
+    `Sunset` header: the Android companion app is a build this project does not control.
+    v2 is a redesign, not a migration deadline. v1 remains documented in `README.md`.
+
+    ## What is different from v1, and why
+
+    Each of these fixes something that made v1 hard or unsafe to drive programmatically.
+    v1's shapes are preserved in v1 and corrected only here.
+
+    * **Errors are RFC 9457 `application/problem+json`** and carry a stable machine
+      `code`. v1 returned `{"error": "some text"}`, so a client could only branch by
+      string-matching a human message.
+    * **Lists return `{data, meta}`.** v1 signalled a degraded catalog search in an
+      `X-Catalog-Degraded` header while the body stayed a bare array; generated clients
+      drop headers, so "a provider is down" and "no such game" read identically. That
+      distinction now lives in `meta.degraded`, in the body.
+    * **camelCase everywhere, once.** v1 emitted snake_case *plus* duplicated
+      `steamAppId`/`crackStatus` aliases, and search used a third convention again.
+    * **Mutations are falsifiable.** v1 returned `{"success": true}` from a `DELETE` that
+      matched no row and from a reorder that moved nothing. Combined with opaque game
+      ids, a typo was a silent no-op reported as success — the worst possible shape for
+      an LLM-driven client. Here a `DELETE` that matched nothing is a `404`.
+    * **Status is derived from the STORED release date.** In v1 the status was computed
+      from the `releaseDate` in the request body, so omitting it for an already-released
+      game silently rewrote the row to `unreleased` and made the next correct write
+      announce a six-year-old game as newly released, to every notification channel.
+    * **Long operations are jobs**, not requests that a reverse proxy kills at minute two.
+
+    ## Authentication
+
+    v2 accepts **personal access tokens only**. There is no login endpoint — minting the
+    first credential cannot itself require a credential, so tokens are created with
+    `create-api-token.js` inside the backend container:
+
+    ```
+    docker compose -f docker-compose.yaml exec backend \
+      node create-api-token.js <username> "mcp" library
+    ```
+
+    Send it as `Authorization: Bearer gt_pat_...`.
+
+    A 12-hour session JWT from v1's `POST /api/auth/login` is **not** accepted here. That
+    is deliberate rather than tidiness: a JWT carries no scope, so honouring one would
+    make the admin boundary below bypassable by logging in with a password.
+
+    ## Scopes
+
+    Two, and a scope may only ever **narrow** the privilege the account already has —
+    it can never grant. An `admin`-scoped token held by a non-admin is not an admin; a
+    `library`-scoped token held by an administrator is not one either, for that request.
+
+    | Scope | Grants |
+    |---|---|
+    | `library` | Everything that is not administration: the caller's own library, backlog, catalog search, sharing, notification settings, and their own tokens. |
+    | `admin` | Additionally: user management and server settings, including API keys. |
+
+    `library` is a slightly narrow name for "everything that is not admin" — it is not
+    read-only, and it is not restricted to the library. A `library` token can change the
+    account's own notification targets and share its library with another user. What it
+    cannot do is manage users or read server configuration.
+
+    Operations that require `admin` are marked with `x-required-scope: admin`. That
+    extension exists because an OpenAPI `security` scope array is only meaningful for
+    `oauth2`/`openIdConnect` — on an HTTP bearer scheme it is ignored, so declaring
+    scopes there would be decorative. `x-required-scope` is checked in CI against the
+    authorization tier derived from the live Express router.
+
+    ## Privilege is re-read on every request
+
+    Nothing is cached in the credential. Demoting or deleting an account takes effect on
+    that account's tokens on their very next call, and deleting a user removes their
+    tokens with it. Revocation is deleting one row — which is the whole reason tokens are
+    looked up rather than self-describing.
+  contact:
+    name: GameTracker
+    url: https://github.com/eladharels/GameTracker
+  license:
+    name: MIT
+
+servers:
+  - url: /api/v2
+    description: Same origin as the SPA — the frontend nginx proxies /api to the backend.
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: identity
+    description: Who this credential is, and what it may do.
+  - name: tokens
+    description: Personal access tokens. A caller may only ever see and revoke their own.
+  - name: library
+    description: The caller's game library and backlog ordering.
+  - name: catalog
+    description: Search across IGDB, RAWG and TheGamesDB.
+  - name: sharing
+    description: Read-only sharing of a library with named users.
+  - name: admin
+    description: User management and server settings. Requires the `admin` scope.
+  - name: jobs
+    description: Long-running work, accepted with 202 and polled.
+
+paths:
+
+  # ---------------------------------------------------------------- identity --
+  /me:
+    get:
+      tags: [identity]
+      operationId: getMe
+      summary: Identity and effective privilege for this credential
+      description: |
+        One call to orient a client: who the token belongs to, what it may actually do
+        *after* scope narrowing, and when it expires. `canManageUsers` is the effective
+        value — an administrator using a `library`-scoped token sees `false`.
+      responses:
+        '200':
+          description: The authenticated identity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------------------ tokens --
+  /tokens:
+    get:
+      tags: [tokens]
+      operationId: listTokens
+      summary: List this account's tokens
+      description: |
+        The secret is never returned — only `hint`, the last four characters, which is
+        what lets an operator match a token in a config file against the row they are
+        about to revoke.
+      responses:
+        '200':
+          description: This account's tokens, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Token' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [tokens]
+      operationId: createToken
+      summary: Mint a token
+      description: |
+        **The secret is returned exactly once, in this response, and is not recoverable.**
+        Only its SHA-256 hash is stored, so neither this API nor the database can produce
+        it again.
+
+        A token may not mint a token with more scopes than the account has — the same
+        narrowing rule applies here as anywhere else.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenCreate' }
+      responses:
+        '201':
+          description: Created. Contains the only copy of the secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: This account already has a token with that name. Names are unique per user so a revocation list is unambiguous.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /tokens/{tokenId}:
+    parameters:
+      - name: tokenId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    delete:
+      tags: [tokens]
+      operationId: revokeToken
+      summary: Revoke a token
+      description: |
+        Takes effect on that token's next request. Scoped to the caller's own tokens: an
+        id belonging to another account is a `404`, never a silent success.
+      responses:
+        '204':
+          description: Revoked.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ----------------------------------------------------------------- library --
+  /library/games:
+    get:
+      tags: [library]
+      operationId: listLibraryGames
+      summary: The caller's library
+      description: |
+        Filtered, sorted and paginated **server-side**. "What is in my backlog, in order"
+        must not mean shipping an entire library through a model's context window.
+
+        Results are always explicitly ordered. v1's equivalent had no `ORDER BY` at all,
+        which is invisible while every read is unpaginated and produces duplicated and
+        missing rows the moment one is paged.
+      parameters:
+        - name: status
+          in: query
+          description: Return only games in this status.
+          schema: { $ref: '#/components/schemas/GameStatus' }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, releaseDate, backlogOrder, addedAt]
+            default: name
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc], default: asc }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          description: Opaque cursor from `meta.nextCursor`. Do not construct one.
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of library games.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/LibraryGame' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+                additionalProperties: false
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [library]
+      operationId: addLibraryGame
+      summary: Add a game, by id or by name
+      description: |
+        Accepts **either** a resolved `gameId` **or** a `name`.
+
+        Given a name, the server runs the same catalog search and exact-match rule the
+        rest of the application uses. On a unique exact match it creates the game and
+        returns it. Otherwise it returns **409 with the candidates** — it never guesses.
+        That collapses search-then-add into one call and makes ambiguity a refusal rather
+        than a wrong write.
+
+        The match rule lives on the server, not in the client, so a script, the MCP and
+        the web app all get the same answer to "which search result is this game".
+
+        Idempotent by `gameId`: re-adding a game already in the library updates it rather
+        than failing, which is what makes a retried tool call safe.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LibraryGameCreate' }
+      responses:
+        '200':
+          description: The game was already in the library and has been updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryGame' }
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryGame' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: |
+            The name did not resolve to exactly one game. `candidates` holds what was
+            found; resolve it client-side and retry with a `gameId`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/AmbiguousGameProblem' }
+        '502':
+          description: Every catalog provider failed, so "not found" could not be distinguished from "unreachable".
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /library/games/{gameId}:
+    parameters:
+      - name: gameId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/GameRef' }
+    get:
+      tags: [library]
+      operationId: getLibraryGame
+      summary: One game from the caller's library
+      description: |
+        v1 had no per-game read outside a route literally named `/api/debug/`, so reading
+        one game meant fetching the entire library.
+      responses:
+        '200':
+          description: The game.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryGame' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [library]
+      operationId: updateLibraryGame
+      summary: Update a game's status or metadata
+      description: |
+        Partial. Only the fields present in the body are written.
+
+        **Status is re-derived from the STORED release date**, never from a date in this
+        request. This is the fix for v1's worst trap: there, sending a status without a
+        `releaseDate` for an already-released game wrote the row as `unreleased` while
+        keeping the stored date, and the next correct write then announced the game as
+        newly released to every notification channel. The web app never tripped it
+        because it always resent the date; a script is exactly the client that would not.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LibraryGameUpdate' }
+      responses:
+        '200':
+          description: The updated game.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryGame' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [library]
+      operationId: removeLibraryGame
+      summary: Remove a game from the library
+      description: |
+        A `404` when no such game is in the library. v1 answered `{"success": true}`
+        either way, so a mistyped id was a silent no-op reported as a success.
+      responses:
+        '204':
+          description: Removed.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /library/backlog:
+    get:
+      tags: [library]
+      operationId: getBacklog
+      summary: The backlog, in display order
+      responses:
+        '200':
+          description: Backlog entries in order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/BacklogEntry' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [library]
+      operationId: replaceBacklogOrder
+      summary: Replace the backlog order
+      description: |
+        Bulk by design — ordering genuinely is a set operation, and applying it as a
+        sequence of moves would leave a half-ordered list on any failure. Applied in one
+        transaction under an advisory lock, so concurrent reorders serialise instead of
+        deadlocking.
+
+        Ids not in the caller's library match nothing and are ignored; `meta.updated`
+        reports how many rows actually moved, so a caller can notice.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order]
+              properties:
+                order:
+                  type: array
+                  description: Game ids in the desired order, first to last.
+                  items: { $ref: '#/components/schemas/GameRef' }
+                  maxItems: 1000
+              additionalProperties: false
+      responses:
+        '200':
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/BacklogEntry' }
+                  meta:
+                    type: object
+                    required: [updated, requested]
+                    properties:
+                      updated: { type: integer, description: Rows that actually moved. }
+                      requested: { type: integer, description: Ids supplied. }
+                    additionalProperties: false
+                additionalProperties: false
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ----------------------------------------------------------------- catalog --
+  /catalog/search:
+    get:
+      tags: [catalog]
+      operationId: searchCatalog
+      summary: Search IGDB, RAWG and TheGamesDB
+      description: |
+        Providers are queried concurrently and the results merged and de-duplicated. A
+        provider that is unavailable contributes zero results rather than failing the
+        search — but it **reports that it is down**, in `meta`.
+
+        That distinction is the point. If "IGDB is unreachable" and "no such game" read
+        the same, a client — an LLM-driven one especially — will confidently report that
+        a game does not exist during an outage. Check `meta.degraded` before concluding
+        anything from an empty `data`.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 20, default: 20 }
+      responses:
+        '200':
+          description: |
+            Merged results. May be empty with `meta.degraded: true`, which means "we could
+            not ask everyone", not "there is no such game".
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/CatalogGame' }
+                  meta: { $ref: '#/components/schemas/SearchMeta' }
+                additionalProperties: false
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502':
+          description: Every provider failed. Distinguished from an empty result on purpose.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ----------------------------------------------------------------- sharing --
+  /shares:
+    get:
+      tags: [sharing]
+      operationId: listShares
+      summary: Who this account shares with, and who shares with it
+      responses:
+        '200':
+          description: Both directions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [outgoing, incoming]
+                properties:
+                  outgoing:
+                    type: array
+                    description: Accounts this library is shared WITH.
+                    items: { $ref: '#/components/schemas/Share' }
+                  incoming:
+                    type: array
+                    description: Accounts that share THEIR library with this one.
+                    items: { $ref: '#/components/schemas/Share' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /shares/outgoing:
+    put:
+      tags: [sharing]
+      operationId: replaceOutgoingShares
+      summary: Replace the whole outgoing share list
+      description: |
+        Replaces. Anyone not named here loses access.
+
+        v1 spelled this `POST` while giving it replace semantics, so an agent "adding a
+        share" by posting one name silently revoked every other one. `PUT` says what it
+        does; use `POST` to add a single user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [usernames]
+              properties:
+                usernames:
+                  type: array
+                  items: { type: string }
+                  maxItems: 200
+              additionalProperties: false
+      responses:
+        '200':
+          description: The resulting outgoing list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Share' }
+                additionalProperties: false
+        '400':
+          description: One or more usernames do not exist. None of the change is applied.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/UnknownUsersProblem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [sharing]
+      operationId: addOutgoingShare
+      summary: Share with one more user
+      description: Additive. Sharing with someone already on the list is a no-op, not an error.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+              additionalProperties: false
+      responses:
+        '201':
+          description: Shared.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Share' }
+        '400':
+          description: No such user.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/UnknownUsersProblem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /shares/outgoing/{username}:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [sharing]
+      operationId: removeOutgoingShare
+      summary: Stop sharing with one user
+      responses:
+        '204':
+          description: Revoked.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /shares/incoming/{username}/games:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        description: The account whose library is being read.
+        schema: { type: string }
+    get:
+      tags: [sharing]
+      operationId: getSharedLibrary
+      summary: Read a library shared with this account
+      description: |
+        Read-only, and only if that account currently shares with the caller. Revoking a
+        share takes effect immediately.
+
+        Administrators get no bypass here — this is the one place in the API where being
+        an admin does not grant access, because a shared library is a consent
+        relationship between two users rather than a resource the server owns.
+      responses:
+        '200':
+          description: That account's library.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/LibraryGame' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: That account does not share with you. Deliberately indistinguishable in body from a library that does not exist.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ------------------------------------------------------------------- admin --
+  /users:
+    get:
+      tags: [admin]
+      operationId: listUsers
+      summary: All accounts
+      x-required-scope: admin
+      description: |
+        Deliberately excludes every per-user notification target — ntfy topic, Gotify
+        token, Telegram chat id and the two server URLs. Those are bearer secrets that
+        address a user's devices; no administrative function needs them, and v1 returned
+        two of them for every user to every admin until that was fixed.
+      responses:
+        '200':
+          description: All accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [admin]
+      operationId: createUser
+      summary: Create an account
+      x-required-scope: admin
+      description: |
+        Cannot set another user's notification targets — those are the user's own, set by
+        them. Sending one is a `400`, not a silent drop: an admin tool told the write
+        succeeded when it did not has been told something false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: That username is taken, or is reserved.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    patch:
+      tags: [admin]
+      operationId: updateUser
+      summary: Update an account
+      x-required-scope: admin
+      description: |
+        Partial. Refuses to remove the caller's own administrator permission — an
+        instance that locks itself out has no way back in short of a shell on the host.
+        Notification targets are refused here for the same reason as on create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        '200':
+          description: The updated account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [admin]
+      operationId: deleteUser
+      summary: Delete an account
+      x-required-scope: admin
+      description: |
+        Refuses self-deletion and refuses to delete the seeded `root` account. The
+        account's shares and API tokens go with it.
+      responses:
+        '204':
+          description: Deleted.
+        '400':
+          description: Refused — you cannot delete your own account, or `root`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /settings:
+    get:
+      tags: [admin]
+      operationId: getSettings
+      summary: Server configuration
+      x-required-scope: admin
+      description: |
+        Secrets are **masked**, never returned in full, even to an administrator.
+
+        A non-admin gets `403`. v1 returned `{}` with a `200`, which for a browser was
+        harmless and for a programmatic client is a correctness hole: `{}` cannot be
+        told apart from "this server has no SMTP configured", so an agent reasoning over
+        the response will confidently state something false about the system.
+      responses:
+        '200':
+          description: Configuration, with secrets masked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Settings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    patch:
+      tags: [admin]
+      operationId: updateSettings
+      summary: Update server configuration
+      x-required-scope: admin
+      description: |
+        Partial, per section: keys absent from a section are left alone rather than
+        deleted, so a client that read a masked value and wrote it back does not
+        overwrite the real secret with asterisks.
+
+        Refused outright if the settings file could not be read — writing a merge on top
+        of a failed load would erase every credential on the instance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Settings' }
+      responses:
+        '200':
+          description: The updated configuration, masked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Settings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503':
+          description: Settings could not be read; the write is refused rather than risking erasing credentials.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # -------------------------------------------------------------------- jobs --
+  /jobs:
+    post:
+      tags: [jobs]
+      operationId: startJob
+      summary: Start a long-running operation
+      x-required-scope: admin
+      description: |
+        Accepted, not performed. These walk every game in every library against up to
+        three external providers; run inline they take minutes and any reverse proxy
+        kills the request first. Poll the returned job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind:
+                  type: string
+                  enum: [refreshMetadata, checkReleases, refreshCrackStatus, updatePrices]
+              additionalProperties: false
+      responses:
+        '202':
+          description: Accepted. Poll `GET /jobs/{jobId}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+          headers:
+            Location:
+              description: The job resource to poll.
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: A job of that kind is already running.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /jobs/{jobId}:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: Job status and result
+      x-required-scope: admin
+      responses:
+        '200':
+          description: The job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: gt_pat_<base64url>
+      description: |
+        A personal access token from `create-api-token.js`. v1 session JWTs are not
+        accepted by v2 — a JWT carries no scope, so honouring one would make the admin
+        boundary bypassable by logging in with a password.
+
+  responses:
+    Unauthorized:
+      description: |
+        Missing, unknown, expired, or belonging to a deleted account — all answered
+        identically on purpose, so the response is not an oracle for which guess was
+        once a real token.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Authenticated, but this credential may not do that — usually a `library`-scoped token on an admin operation.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: No such resource, or not one this credential may see. The two are not distinguished.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    BadRequest:
+      description: The request was malformed or failed validation. `code` says which class of problem; `errors` names the fields.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+
+    Problem:
+      type: object
+      description: |
+        RFC 9457 `application/problem+json`.
+
+        Branch on **`code`**, never on `title` or `detail` — those are human text and may
+        be reworded. `code` is a closed, stable set.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: A stable identifier for the problem class.
+          examples: ['/problems/validation']
+        title: { type: string, description: Short human summary. Do not parse. }
+        status: { type: integer, description: Repeats the HTTP status. }
+        detail: { type: string, description: Human explanation of this occurrence. Absent when nothing safe can be said. }
+        code:
+          type: string
+          description: |
+            The machine-readable class. v1 had no equivalent, so a client could not tell
+            a validation failure from an unknown user without matching on English.
+          enum: [validation, forbidden, not_found, unknown_users, not_shared, not_in_backlog, conflict, provider_unavailable, internal]
+        errors:
+          type: array
+          description: Field-level detail, when the problem is field-level.
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+            additionalProperties: false
+      additionalProperties: true
+
+    AmbiguousGameProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [candidates]
+          properties:
+            candidates:
+              type: array
+              description: What the name matched. Pick one and retry with its `gameId`.
+              items: { $ref: '#/components/schemas/CatalogGame' }
+
+    UnknownUsersProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [unknownUsers]
+          properties:
+            unknownUsers:
+              type: array
+              description: The names that did not resolve. Nothing was changed.
+              items: { type: string }
+
+    GameRef:
+      type: string
+      description: |
+        A source-prefixed game id, e.g. `igdb_12345`.
+
+        **Always a string, never a number.** The same numeric id exists at more than one
+        provider, so the prefix is what keeps them apart. The underlying column was once
+        *declared* `INTEGER` while storing these strings, which worked only because
+        SQLite is permissive; a client that coerces this corrupts ids in transit.
+      pattern: '^(igdb|rawg|thegamesdb)_[A-Za-z0-9_-]+$'
+      maxLength: 200
+      examples: ['igdb_12345', 'rawg_3498']
+
+    GameStatus:
+      type: string
+      description: |
+        `unreleased` is assigned by the server from the release date and moves to
+        `wishlist` automatically once the game is out; the other four are the user's.
+      enum: [wishlist, playing, done, backlog, unreleased]
+
+    LibraryGame:
+      type: object
+      description: A game in someone's library. camelCase throughout, one spelling per field.
+      required: [gameId, name, status]
+      properties:
+        gameId: { $ref: '#/components/schemas/GameRef' }
+        name: { type: string }
+        coverUrl: { type: [string, 'null'], format: uri }
+        releaseDate:
+          type: [string, 'null']
+          format: date
+          description: YYYY-MM-DD. Null when the source gives no usable date.
+        status: { $ref: '#/components/schemas/GameStatus' }
+        steamAppId: { type: [string, 'null'] }
+        lastPrice:
+          type: [string, 'null']
+          description: Formatted in the configured storefront region, e.g. "₪59.99". A display string, not a number — the currency is part of it.
+        lastPriceUpdatedAt: { type: [string, 'null'], format: date-time }
+        crackStatus: { type: [string, 'null'], enum: [cracked, uncracked, unknown, null] }
+        backlogOrder: { type: [integer, 'null'], description: Position in the backlog. Null unless status is `backlog`. }
+        addedAt: { type: [string, 'null'], format: date-time }
+      additionalProperties: false
+
+    LibraryGameCreate:
+      type: object
+      description: Supply `gameId` OR `name`, not both.
+      properties:
+        gameId: { $ref: '#/components/schemas/GameRef' }
+        name: { type: string, minLength: 1, maxLength: 400, description: Resolved server-side; ambiguity is a 409, never a guess. }
+        status: { $ref: '#/components/schemas/GameStatus' }
+      oneOf:
+        - required: [gameId]
+        - required: [name]
+      additionalProperties: false
+
+    LibraryGameUpdate:
+      type: object
+      description: |
+        Partial. Note there is no `releaseDate`: status is re-derived from the stored
+        date, and accepting one here would reintroduce v1's trap.
+      properties:
+        status: { $ref: '#/components/schemas/GameStatus' }
+        backlogOrder: { type: integer, minimum: 1 }
+      minProperties: 1
+      additionalProperties: false
+
+    BacklogEntry:
+      type: object
+      required: [gameId, position]
+      properties:
+        gameId: { $ref: '#/components/schemas/GameRef' }
+        name: { type: string }
+        position: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    CatalogGame:
+      type: object
+      description: A search result. `id` is what you post back to add the game.
+      required: [id, name, source]
+      properties:
+        id: { $ref: '#/components/schemas/GameRef' }
+        name: { type: string }
+        releaseDate: { type: [string, 'null'], format: date }
+        coverUrl: { type: [string, 'null'], format: uri }
+        source: { type: string, enum: [igdb, rawg, thegamesdb] }
+        steamAppId: { type: [string, 'null'] }
+      additionalProperties: false
+
+    ProviderStatus:
+      type: object
+      required: [name, status]
+      properties:
+        name: { type: string, enum: [igdb, rawg, thegamesdb] }
+        status:
+          type: string
+          description: |
+            `ok` answered; `skipped` is not configured (no API key); `failed` was asked
+            and did not answer. `skipped` and `failed` mean very different things
+            operationally and are not merged.
+          enum: [ok, skipped, failed]
+        count: { type: integer, description: Results this provider contributed before de-duplication. }
+      additionalProperties: false
+
+    SearchMeta:
+      type: object
+      required: [degraded, providers]
+      properties:
+        degraded:
+          type: boolean
+          description: |
+            True when at least one provider failed. **An empty `data` with `degraded:
+            true` does not mean the game does not exist** — it means the question could
+            not be fully asked.
+        providers:
+          type: array
+          items: { $ref: '#/components/schemas/ProviderStatus' }
+        total: { type: integer, description: Results returned after merge and de-duplication. }
+      additionalProperties: false
+
+    PageMeta:
+      type: object
+      required: [total]
+      properties:
+        total: { type: integer, description: Rows matching the filter, ignoring paging. }
+        limit: { type: integer }
+        nextCursor:
+          type: [string, 'null']
+          description: Pass back as `cursor` for the next page. Null on the last page. Opaque — do not construct or parse one.
+      additionalProperties: false
+
+    Me:
+      type: object
+      required: [id, username, canManageUsers, scopes]
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        displayName: { type: string }
+        origin: { type: string, enum: [local, ldap], description: Where the account authenticates. LDAP accounts have no local password. }
+        canManageUsers:
+          type: boolean
+          description: |
+            **Effective**, after scope narrowing — not the account's raw privilege. An
+            administrator using a `library`-scoped token sees `false` here, and that is
+            the correct answer for what this credential can do.
+        scopes:
+          type: array
+          items: { type: string, enum: [library, admin] }
+        tokenExpiresAt: { type: [string, 'null'], format: date-time, description: Null when the token has no expiry. Revocation, not expiry, is the safety mechanism. }
+      additionalProperties: false
+
+    Token:
+      type: object
+      required: [id, name, scopes, createdAt]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        hint: { type: [string, 'null'], description: Last four characters of the secret, so a token in a config file can be matched to its row. }
+        scopes:
+          type: array
+          items: { type: string, enum: [library, admin] }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: [string, 'null'], format: date-time, description: Advisory, and updated at most once a minute. }
+        expiresAt: { type: [string, 'null'], format: date-time }
+      additionalProperties: false
+
+    TokenCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60, description: Unique per account, so a revocation list is unambiguous. }
+        scopes:
+          type: array
+          items: { type: string, enum: [library, admin] }
+          default: [library]
+          description: An unknown scope is refused, not silently dropped.
+        expiresAt: { type: [string, 'null'], format: date-time, description: Must be in the future. Omit for no expiry. }
+      additionalProperties: false
+
+    TokenCreated:
+      allOf:
+        - $ref: '#/components/schemas/Token'
+        - type: object
+          required: [token]
+          properties:
+            token:
+              type: string
+              description: |
+                **The only copy.** Store it now; it is hashed on arrival and cannot be
+                shown again by this API or recovered from the database.
+              examples: ['gt_pat_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx']
+
+    Share:
+      type: object
+      required: [username]
+      properties:
+        username: { type: string }
+        displayName: { type: string }
+        sharedAt: { type: [string, 'null'], format: date-time }
+      additionalProperties: false
+
+    User:
+      type: object
+      description: |
+        No notification targets, by design — see `listUsers`. No password field in any
+        direction of any response.
+      required: [id, username, canManageUsers]
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        displayName: { type: [string, 'null'] }
+        email: { type: [string, 'null'], format: email }
+        canManageUsers: { type: boolean }
+        origin: { type: string, enum: [local, ldap] }
+        sharesLibrary: { type: boolean }
+        createdAt: { type: [string, 'null'], format: date-time }
+      additionalProperties: false
+
+    UserCreate:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1 }
+        password: { type: string, minLength: 8 }
+        email: { type: string, format: email }
+        canManageUsers: { type: boolean, default: false }
+        sharesLibrary: { type: boolean, default: false }
+      additionalProperties: false
+
+    UserUpdate:
+      type: object
+      properties:
+        password: { type: string, minLength: 8 }
+        email: { type: [string, 'null'], format: email }
+        canManageUsers: { type: boolean }
+        sharesLibrary: { type: boolean }
+      minProperties: 1
+      additionalProperties: false
+
+    Settings:
+      type: object
+      description: |
+        Server configuration. Secret values are masked on read; writing a masked value
+        back leaves the stored secret untouched.
+      properties:
+        smtp:
+          type: object
+          properties:
+            host: { type: string }
+            port: { type: integer }
+            user: { type: string }
+            pass: { type: string, description: Masked on read. }
+            from: { type: string }
+          additionalProperties: false
+        ntfy:
+          type: object
+          properties:
+            url: { type: string, description: Optional instance-wide default. Each user sets their own server and topic. }
+          additionalProperties: false
+        gotify:
+          type: object
+          properties:
+            url: { type: string }
+          additionalProperties: false
+        telegram:
+          type: object
+          properties:
+            botToken: { type: string, description: Masked on read. }
+          additionalProperties: false
+        ldap:
+          type: object
+          properties:
+            url: { type: string }
+            base: { type: string }
+            bindDn: { type: string }
+            bindPass: { type: string, description: Masked on read. }
+            requiredGroup: { type: string }
+          additionalProperties: false
+        apikeys:
+          type: object
+          description: Override the corresponding environment variables and take effect without a restart.
+          properties:
+            igdbClientId: { type: string }
+            igdbClientSecret: { type: string, description: Masked on read. Used only to refresh the bearer token. }
+            igdbBearerToken: { type: string, description: Masked on read. Twitch OAuth tokens expire about every 60 days. }
+            rawgApiKey: { type: string, description: Masked on read. }
+            thegamesdbApiKey: { type: string, description: Masked on read. }
+          additionalProperties: false
+      additionalProperties: false
+
+    Job:
+      type: object
+      required: [id, kind, status]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [refreshMetadata, checkReleases, refreshCrackStatus, updatePrices] }
+        status: { type: string, enum: [queued, running, succeeded, failed] }
+        startedAt: { type: [string, 'null'], format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        result:
+          type: [object, 'null']
+          description: |
+            Present once finished. Shape depends on `kind`, and always reports per-item
+            failures rather than only a total — a sweep where every item failed and one
+            where every item succeeded must not look the same.
+          additionalProperties: true
+        error: { type: [string, 'null'], description: Present when the job failed as a whole, as opposed to individual items failing. }
+      additionalProperties: false

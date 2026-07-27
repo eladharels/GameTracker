@@ -113,6 +113,13 @@ GameTracker/
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
+│   ├── openapi.test.js             # Validates openapi/gametracker-v2.yaml: refs resolve,
+│   │                               #   every operation is authenticated and documents its
+│   │                               #   401, errors are problem+json, and the enums MATCH
+│   │                               #   the services (Problem.code vs errors.js CODES,
+│   │                               #   GameStatus vs library.STATUSES, scopes vs auth.js).
+│   │                               #   It cannot yet compare paths to the router — no v2
+│   │                               #   route exists; that gate lands WITH the first one
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
 │                                   #   routes exist; this proves what they still RETURN.
 │                                   #   Without it "frozen" is only an intention: a service
@@ -151,6 +158,16 @@ GameTracker/
 │   ├── eslint.config.js
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
+├── openapi/
+│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 26 operations. It is the
+│                                   #   SOURCE for the v2 routes, not a description of them —
+│                                   #   no v2 route exists yet. Validated by test/openapi.test.js.
+│                                   #   NO spec for v1: a faithful one would generate a client
+│                                   #   carrying three naming conventions, {success:true} as
+│                                   #   every mutation's return type and a degradation flag in
+│                                   #   a header — worse than none. See API_V2_DESIGN.md
+├── API_V2_DESIGN.md                # The 14 contract decisions the spec implements, each with
+│                                   #   the v1 defect it corrects. Read BEFORE editing the spec
 ├── [Docs]:
 │   ├── README.md                   # Setup, API reference, operations
 │   ├── SECURITY_HARDENING_2026-07.md  # Threat history + operational runbook (authoritative)
@@ -500,7 +517,7 @@ deploy  (needs: ALL 7 upstream jobs)
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
 | ESLint | `frontend-quality` | Any lint error |
 | Vite build | `frontend-quality` | Build failure |
-| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/api-surface.test.js` or `test/api-contract.test.js` |
+| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
 | Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
 

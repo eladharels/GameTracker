@@ -77,26 +77,46 @@ bake in `can_manage_users`/`origin`/`display_name`, and nothing authorizes off t
 must not put them there. The two sites collapse to one `issueToken` seam when auth is
 extracted.
 
-### D1 addendum — three things to settle before the first v2 route
+### D1 addendum — the three blockers, now decided
 
-Found while implementing D1; none of them were in the original decision.
+Found while implementing D1 and absent from the original decision. Settled before
+writing the spec, because two of the three determine what the spec can honestly say.
 
-1. **There is no token-only middleware.** What landed is `authRequired`, which accepts
-   both credential types. If v2 mounts it, `securitySchemes` will describe a token-only
-   API while the router also accepts a 12-hour JWT — the published claim and the
-   implementation disagreeing on day one, in the one place the drift gate cannot see.
-   Either add a named `patRequired` (and give `tierOf()` a vocabulary for it) or amend
-   this decision to say v2 accepts both.
-2. **The drift gate cannot verify per-operation scopes.** Scope is enforced by
-   collapsing into `can_manage_users`, not per route, so the router has no ground truth
-   for `library` — only the admin tier is derivable. Either the spec omits scopes from
-   per-operation `security`, or the Enforcement section's claim needs narrowing. Fix the
-   doc rather than discover this while writing the gate.
-3. **`library` oversells its own narrowing.** It means *every non-admin capability*,
-   which includes changing the account's own notification targets and sharing its
-   library. D1's stated boundary — the MCP cannot create users or read API keys — is
-   honoured exactly, but the NAME goes on the wire and into the generated client.
-   Renaming it is free today and permanent once the MCP ships.
+1. **v2 is PAT-only, enforced by a `patRequired` middleware.** `authRequired` accepts
+   both credential types; mounting it on v2 would publish a token-only API that also
+   accepts a 12-hour JWT. The deciding argument is not tidiness — **a JWT carries no
+   scope**, so `authorize()` gives it the account's full privilege. If v2 declares an
+   admin boundary and also accepts JWTs, that boundary is bypassable by logging in.
+   `patRequired` lands **with the first v2 route**, not before: middleware guarding
+   nothing is the same unused-code problem the auth review already raised once.
+   `tierOf()` in `test/api-surface.test.js` needs a vocabulary entry for it at the same
+   time — it currently resolves an unknown middleware name to `public`, which fails
+   closed (the allowlist assertion fires) but for the wrong reason.
+
+2. **Scopes are NOT expressible per-operation, so the spec does not pretend they are.**
+   This turned out to be a property of OpenAPI rather than of this codebase: the scope
+   array in a `security` requirement is only meaningful for `oauth2` and
+   `openIdConnect`. For `type: http, scheme: bearer` it is ignored, so writing
+   `security: [{bearerAuth: [admin]}]` would be decorative — a claim no tool checks and
+   no client honours.
+
+   Instead each operation carries **`x-required-scope`**, which maps one-to-one onto the
+   admin/non-admin boundary the router actually derives from `requirePermission`. That
+   makes it genuinely checkable: the drift gate can assert `x-required-scope: admin` iff
+   `tierOf(route) === 'admin:can_manage_users'`. The Enforcement section's claim is
+   narrowed accordingly — the gate proves the ADMIN boundary, and there is nothing
+   finer-grained to prove.
+
+3. **`library` keeps its name; the meaning is documented instead.** It does mean
+   "every non-admin capability" rather than "the library", and that name goes into every
+   generated client. Weighed against renaming: the scopes are a two-value set where the
+   real distinction a reader needs is *admin or not*, and `library` vs `admin` carries
+   that. Renaming now costs a data migration against a CHECK constraint and live rows on
+   a schema that deployed hours ago, for a nuance the README and this spec both state
+   outright. *(Dissent recorded: the Architect's point that the name is permanent once
+   the MCP ships is correct, and this is the cheapest it will ever be to change. If a
+   third scope is ever added the set stops reading as a binary and this should be
+   revisited then — that is the trigger.)*
 
 ## D2 — `gameId` is an opaque string, forever
 
@@ -244,10 +264,14 @@ release sweep, two ownership rules on one path prefix).
 
 **What the gate catches:** a route on the router that is not in the spec; a spec
 path/method that does not exist on the router — which for an MCP means an agent calling a
-404 and hallucinating around it; and a spec `security:` declaration that disagrees with
-the router-derived tier. That last one is not the existing test done twice: the existing
-test proves the router's tier matches the recorded table, this proves the *published
-claim* matches the router. Different lie, same ground truth.
+404 and hallucinating around it; and an operation whose **`x-required-scope`** disagrees
+with the router-derived tier. That last one is not the existing test done twice: the
+existing test proves the router's tier matches the recorded table, this proves the
+*published claim* matches the router. Different lie, same ground truth.
+
+Note the narrowing from D1 addendum #2: the gate proves the **admin boundary only**,
+because that is the only distinction the router encodes. It cannot prove anything about
+`library`, which is defined as the absence of admin rather than as a set of permissions.
 
 **What it cannot catch, and nobody should claim otherwise:** response body conformance.
 The spec can say `200` returns `{data: [...]}` while the handler returns
@@ -275,7 +299,9 @@ pure enough to assert against directly, no database needed.
    unit test: an admin account presenting a library-scoped token gets 403 on
    `/api/users`, demoting the account revokes admin on the very next request, deleting
    the token 401s it, and deleting the user cascades its tokens away.
-3. The OpenAPI 3.1 document — v2 only, hand-written, ~15 operations.
+3. ~~The OpenAPI 3.1 document — v2 only, hand-written.~~ `openapi/gametracker-v2.yaml`,
+   26 operations. It is the SOURCE for the routes, not a description of them: no v2
+   route exists yet, so every operation in it is a specification to be implemented.
 4. The drift gate, landed **with the first v2 route**, not after. A spec without the gate
    is a document, not a contract.
 5. v2 routes in slices — library first (that is what the MCP and the terminal both want),
