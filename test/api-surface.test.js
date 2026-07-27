@@ -246,6 +246,8 @@ const EXPECTED_V2 = {
   'PATCH /api/v2/library/games/:gameId': 'pat',
   'GET /api/v2/library/backlog': 'pat',
   'PUT /api/v2/library/backlog': 'pat',
+  'GET /api/v2/catalog/search': 'pat',
+  'POST /api/v2/library/games': 'pat',
 };
 
 // separately and by hand. A route reaching 'public' without being on this list is a

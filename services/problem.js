@@ -34,6 +34,10 @@ const PROBLEMS = Object.freeze({
   [CODES.NOT_FOUND]:      Object.freeze({ status: 404, title: 'Not found',            expose: false }),
   [CODES.NOT_IN_BACKLOG]: Object.freeze({ status: 404, title: 'Game not in backlog',  expose: false }),
   [CODES.CONFLICT]:       Object.freeze({ status: 409, title: 'Conflict',             expose: true }),
+  // expose:false is the whole reason this code exists rather than a bare 500: the
+  // message would otherwise carry which provider failed and how, which is exactly the
+  // upstream detail the header of this file says never leaves the server.
+  [CODES.PROVIDER_UNAVAILABLE]: Object.freeze({ status: 502, title: 'Upstream provider unavailable', expose: false }),
 });
 
 // What the response WOULD be. Returns null when the error is not a ServiceError we

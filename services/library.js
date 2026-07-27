@@ -692,6 +692,47 @@ async function setStatus(userId, gameId, status) {
   return { game: updated, coerced: resolved !== requested };
 }
 
+// v2's add, given a game the catalog has already resolved.
+//
+// The ONE rule it adds over upsertGame: `status` is OPTIONAL here, and omitting it on
+// a game ALREADY IN THE LIBRARY leaves its status alone. Without that, "add Halo" from
+// an agent that does not track what is already there silently demotes a game the user
+// is playing back to wishlist — and reports 200, so nothing surfaces it. Only a game
+// that is genuinely new takes the default.
+//
+// It lives here rather than in the adapter because it is a rule about what storing a
+// game means, and the adapters are two skins over one implementation. It also returns
+// the stored row, so the adapter does not have to know that upsertGame reports the
+// outcome while the row has to be read back.
+const DEFAULT_NEW_STATUS = 'wishlist';
+
+// `deps` is a TEST SEAM (see services/catalog.js#search for the same pattern and the
+// same reason): findGame and upsertGame are called directly from inside this module,
+// so a test that stubs db.promises observes nothing — the documented false-pass trap.
+// The rule below is one branch, and one branch nothing can reach is one that decays.
+async function addResolvedGame(userId, game, requestedStatus, deps = {}) {
+  const read = deps.findGame || findGame;
+  const write = deps.upsertGame || upsertGame;
+  let status = requestedStatus;
+  if (status === undefined || status === null || status === '') {
+    const prior = await read(userId, game.id);
+    status = prior ? prior.status : DEFAULT_NEW_STATUS;
+  }
+  const result = await write(userId, {
+    gameId: game.id,
+    gameName: game.name,
+    coverUrl: game.coverUrl,
+    releaseDate: game.releaseDate,
+    status,
+    steamAppId: game.steamAppId,
+  });
+  // Read back rather than reconstruct: the stored row carries columns the caller never
+  // sent (crack_status, last_price, added_at) and the status upsertGame may have
+  // coerced. Building the response from the request is how a client learns a value the
+  // database does not hold.
+  return { ...result, game: await read(userId, game.id) };
+}
+
 // AT THE END OF THE FILE, deliberately. This block used to sit above the v2
 // pagination helpers, which put every name it referenced in the temporal dead zone —
 // `require('./library')` threw ReferenceError before any caller ran. Keeping exports
@@ -711,4 +752,5 @@ module.exports = {
   moveBacklogItem,
   reorderBacklog,
   listPage, SORTS, MAX_PAGE, DEFAULT_PAGE, encodeCursor, setStatus,
+  addResolvedGame, DEFAULT_NEW_STATUS,
 };

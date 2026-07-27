@@ -453,6 +453,267 @@ function withTransports(behaviour, fn) {
 const asyncChecks = [];
 const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
 
+// --- catalog: the v2 resolution layer ---------------------------------------
+//
+// Every check below drives the REAL function with a stubbed provider layer, through
+// the `deps` seam the service exposes for exactly this. Asserting the exported
+// constants instead would prove nothing: the rules being tested — a total outage is
+// not an empty result, an ambiguous name is a refusal — live in control flow.
+{
+  const catalogSvc = require('../services/catalog');
+  const codeOf = async (fn) => {
+    try { await fn(); } catch (err) { return err.code; }
+    return null;
+  };
+  const detailsOf = async (fn) => {
+    try { await fn(); } catch (err) { return err.details; }
+    return null;
+  };
+  const providerResult = (providers, results = []) => ({
+    results,
+    providers,
+    counts: { igdb: 0, rawg: 0, thegamesdb: 0 },
+    degraded: Object.values(providers).includes('failed'),
+  });
+
+  console.log('catalog.igdbByIdQuery (the id lands in a WHERE clause, not a string literal):');
+  check('a non-numeric IGDB id NEVER reaches the query text', () => {
+    // The exact shape the GameRef pattern permits and APIcalypse would execute.
+    for (const hostile of ['1;fields *', '1 | id', '*', '1-1', 'abc', '1;', '', ' 1']) {
+      assert.strictEqual(catalogSvc.igdbByIdQuery(hostile), null,
+        `igdbByIdQuery built a query for ${JSON.stringify(hostile)}`);
+    }
+  });
+  check('a numeric id builds exactly one bounded where clause', () => {
+    const q = catalogSvc.igdbByIdQuery('12345');
+    assert.strictEqual(q, 'where id = 12345; fields id,name,first_release_date,'
+      + 'cover.image_id,external_games.category,external_games.uid; limit 1;');
+    // The field list is SHARED with the search path — a by-id row that asked for
+    // fewer columns would normalise the missing ones to null and silently store a
+    // game with no cover.
+    assert.ok(q.includes('external_games.uid'), 'the by-id lookup asks for fewer fields than search');
+  });
+
+  console.log('catalog.parseGameRef:');
+  check('parseGameRef accepts the three sources and refuses everything else', () => {
+    assert.deepStrictEqual(catalogSvc.parseGameRef('igdb_12345'),
+      { ref: 'igdb_12345', source: 'igdb', id: '12345' });
+    assert.strictEqual(catalogSvc.parseGameRef('rawg_3498').source, 'rawg');
+    assert.strictEqual(catalogSvc.parseGameRef('thegamesdb_1').source, 'thegamesdb');
+    for (const bad of ['12345', 'steam_1', 'igdb_', 'igdb_a b', 'igdb_' + 'x'.repeat(300),
+      null, undefined, {}, 'IGDB_1']) {
+      assert.strictEqual(catalogSvc.parseGameRef(bad), null, `accepted ${JSON.stringify(bad)}`);
+    }
+  });
+
+  console.log('catalog.boundedLimit (a limit multiplies OUTBOUND provider traffic):');
+  check('the limit is clamped, and junk is a 400 rather than a silent default', () => {
+    assert.strictEqual(catalogSvc.boundedLimit(undefined), catalogSvc.LIMIT_SEARCH);
+    assert.strictEqual(catalogSvc.boundedLimit(''), catalogSvc.LIMIT_SEARCH);
+    assert.strictEqual(catalogSvc.boundedLimit(5), 5);
+    assert.strictEqual(catalogSvc.boundedLimit('5'), 5);
+    for (const bad of [0, -1, 21, 1000, 1.5, 'abc', NaN]) {
+      assert.throws(() => catalogSvc.boundedLimit(bad), /between 1 and 20/,
+        `boundedLimit accepted ${bad}`);
+    }
+  });
+
+  console.log('catalog.search ("nobody answered" must not read as "no such game"):');
+  checkAsync('every provider failing is a 502, not an empty result', async () => {
+    const code = await codeOf(() => catalogSvc.search('halo', {}, {
+      searchAll: async () => providerResult({ igdb: 'failed', rawg: 'failed', thegamesdb: 'failed' }),
+    }));
+    assert.strictEqual(code, 'provider_unavailable');
+  });
+  checkAsync('one provider answering is enough — the other two skipped is a configuration', async () => {
+    // An instance running on IGDB alone is supported, and an empty result from it is a
+    // real answer. If `skipped` counted as a failure this would be a 502.
+    const out = await catalogSvc.search('halo', {}, {
+      searchAll: async () => providerResult({ igdb: 'ok', rawg: 'skipped', thegamesdb: 'skipped' }),
+    });
+    assert.deepStrictEqual(out.results, []);
+    assert.strictEqual(out.degraded, false);
+  });
+  checkAsync('NOBODY configured is a 502, not an empty result forever', async () => {
+    // The deployment this catches: no API keys at all. Every provider reports
+    // `skipped`, nothing failed — so an "every provider failed" test passes it through
+    // and the instance answers 200 with [] to every search ever made, which reads as
+    // "that game does not exist" to every client including the MCP.
+    assert.strictEqual(await codeOf(() => catalogSvc.search('halo', {}, {
+      searchAll: async () => providerResult({ igdb: 'skipped', rawg: 'skipped', thegamesdb: 'skipped' }),
+    })), 'provider_unavailable');
+    // ...and the mixed case, which is neither all-failed nor all-skipped.
+    assert.strictEqual(await codeOf(() => catalogSvc.search('halo', {}, {
+      searchAll: async () => providerResult({ igdb: 'failed', rawg: 'skipped', thegamesdb: 'skipped' }),
+    })), 'provider_unavailable');
+  });
+  checkAsync('one provider failing degrades, it does not fail', async () => {
+    const out = await catalogSvc.search('halo', {}, {
+      searchAll: async () => providerResult(
+        { igdb: 'ok', rawg: 'failed', thegamesdb: 'skipped' },
+        [{ id: 'igdb_1', name: 'Halo', source: 'igdb' }]),
+    });
+    assert.strictEqual(out.degraded, true);
+    assert.strictEqual(out.results.length, 1);
+  });
+  checkAsync('an empty or oversized query is refused before any provider is asked', async () => {
+    let asked = 0;
+    const deps = { searchAll: async () => { asked++; return providerResult({}); } };
+    for (const bad of ['', '   ', null, undefined, 'x'.repeat(201)]) {
+      assert.strictEqual(await codeOf(() => catalogSvc.search(bad, {}, deps)), 'validation',
+        `search accepted ${JSON.stringify(String(bad).slice(0, 12))}`);
+    }
+    assert.strictEqual(asked, 0, 'a rejected query still reached the providers');
+  });
+
+  console.log('catalog.resolveGame (ambiguity is a REFUSAL, never a guess):');
+  checkAsync('an exact case-insensitive match resolves', async () => {
+    const game = await catalogSvc.resolveGame({ name: 'HALO' }, {
+      search: async () => providerResult({ igdb: 'ok' },
+        [{ id: 'igdb_1', name: 'Halo', source: 'igdb' }, { id: 'igdb_2', name: 'Halo 2', source: 'igdb' }]),
+    });
+    assert.strictEqual(game.id, 'igdb_1');
+  });
+  checkAsync('a name that matches nothing exactly is a 409 CARRYING the candidates', async () => {
+    const results = [{ id: 'igdb_2', name: 'Halo 2', source: 'igdb' },
+      { id: 'igdb_3', name: 'Halo 3', source: 'igdb' }];
+    const run = () => catalogSvc.resolveGame({ name: 'halo' }, {
+      search: async () => providerResult({ igdb: 'ok' }, results),
+    });
+    assert.strictEqual(await codeOf(run), 'conflict');
+    // The candidates are what makes the refusal actionable — a 409 with nothing in it
+    // leaves an agent with no next move but to guess, which is what this prevents.
+    assert.deepStrictEqual((await detailsOf(run)).candidates.map((c) => c.id), ['igdb_2', 'igdb_3']);
+  });
+  checkAsync('nothing found at all is the SAME refusal, not a 404', async () => {
+    assert.strictEqual(await codeOf(() => catalogSvc.resolveGame({ name: 'zzz' }, {
+      search: async () => providerResult({ igdb: 'ok' }, []),
+    })), 'conflict');
+  });
+  checkAsync('supplying both gameId and name is refused, not silently ranked', async () => {
+    let asked = 0;
+    const deps = { search: async () => { asked++; return providerResult({}); },
+      fetchById: async () => { asked++; return { status: 'ok', game: null }; } };
+    assert.strictEqual(await codeOf(() => catalogSvc.resolveGame({ gameId: 'igdb_1', name: 'Halo' }, deps)), 'validation');
+    assert.strictEqual(await codeOf(() => catalogSvc.resolveGame({}, deps)), 'validation');
+    assert.strictEqual(asked, 0, 'a rejected request still reached a provider');
+  });
+  checkAsync('a provider that could not be asked is a 502, never "no such game"', async () => {
+    // The whole point: 'failed' and 'skipped' must not degrade into the 400 that says
+    // the id is wrong. An agent retries a 502 and gives up on a 400.
+    for (const status of ['failed', 'skipped']) {
+      assert.strictEqual(await codeOf(() => catalogSvc.resolveGame({ gameId: 'igdb_1' }, {
+        fetchById: async () => ({ status, game: null }),
+      })), 'provider_unavailable', `status '${status}' did not map to provider_unavailable`);
+    }
+    // ...and an answered "there is no such game" IS a 400.
+    assert.strictEqual(await codeOf(() => catalogSvc.resolveGame({ gameId: 'igdb_1' }, {
+      fetchById: async () => ({ status: 'ok', game: null }),
+    })), 'validation');
+  });
+}
+
+// v2svc is declared further down this file; required locally so these checks can
+// sit beside the catalog ones they belong with.
+const v2map = require('../services/v2');
+
+console.log('library.addResolvedGame (an omitted status must not DEMOTE a stored game):');
+{
+  const lib = require('../services/library');
+  const halo = { id: 'igdb_1', name: 'Halo', releaseDate: '2001-11-15', coverUrl: null, steamAppId: null };
+  const withPrior = (prior) => {
+    const written = [];
+    return {
+      written,
+      deps: {
+        findGame: async () => prior,
+        upsertGame: async (userId, fields) => { written.push(fields); return { created: !prior, events: [] }; },
+      },
+    };
+  };
+  checkAsync('a game already in the library keeps its status when none is sent', async () => {
+    // The failure this prevents: an agent told "add Halo" — with no idea it is already
+    // there — silently moves a game the user is PLAYING back to wishlist, and the 200
+    // gives nobody a reason to look.
+    const { written, deps } = withPrior({ status: 'playing', game_id: 'igdb_1' });
+    await lib.addResolvedGame(1, halo, undefined, deps);
+    assert.strictEqual(written[0].status, 'playing');
+  });
+  checkAsync('a genuinely new game takes the default', async () => {
+    const { written, deps } = withPrior(null);
+    await lib.addResolvedGame(1, halo, undefined, deps);
+    assert.strictEqual(written[0].status, lib.DEFAULT_NEW_STATUS);
+    assert.strictEqual(lib.DEFAULT_NEW_STATUS, 'wishlist');
+  });
+  checkAsync('an EXPLICIT status still wins, including a demotion', async () => {
+    const { written, deps } = withPrior({ status: 'playing', game_id: 'igdb_1' });
+    await lib.addResolvedGame(1, halo, 'wishlist', deps);
+    assert.strictEqual(written[0].status, 'wishlist');
+  });
+  checkAsync('an empty-string status is treated as absent, not as junk', async () => {
+    // '' reaches here from a client that sends every field whether or not it has one.
+    // Passing it through would be a 400 on a request that meant "leave it alone".
+    const { written, deps } = withPrior({ status: 'done', game_id: 'igdb_1' });
+    await lib.addResolvedGame(1, halo, '', deps);
+    assert.strictEqual(written[0].status, 'done');
+  });
+}
+
+console.log('v2 problem extensions (the ONLY two members allowed past the mapper):');
+check('candidates are RE-SHAPED, never spread from err.details', () => {
+  const { body } = v2map.toProblem({
+    code: 'conflict',
+    message: 'ambiguous',
+    details: {
+      candidates: [{ id: 'igdb_1', name: 'Halo', source: 'igdb', internalNote: 'secret', rating: 9 }],
+      // Anything else a service attaches for its own use must NOT appear: this body
+      // is already on its way to the caller, and a spread would publish it.
+      debugSql: 'SELECT 1',
+      apiKey: 'sk-live-xyz',
+    },
+  });
+  assert.deepStrictEqual(Object.keys(body.candidates[0]).sort(),
+    ['coverUrl', 'id', 'name', 'releaseDate', 'source', 'steamAppId']);
+  assert.ok(!('debugSql' in body), 'an undocumented detail reached the problem body');
+  assert.ok(!('apiKey' in body), 'an undocumented detail reached the problem body');
+  assert.ok(!JSON.stringify(body).includes('sk-live-xyz'));
+  assert.ok(!JSON.stringify(body).includes('internalNote'));
+});
+check('unknownUsers are echoed as strings, and nothing else rides along', () => {
+  const { body } = v2map.toProblem({
+    code: 'unknown_users',
+    message: 'no',
+    details: { unknownUsers: ['ghost', 42], hint: 'try harder' },
+  });
+  assert.deepStrictEqual(body.unknownUsers, ['ghost', '42']);
+  assert.ok(!('hint' in body));
+});
+check('a problem WITHOUT those details grows neither key', () => {
+  const { body } = v2map.toProblem({ code: 'not_found', message: 'x' });
+  assert.ok(!('candidates' in body) && !('unknownUsers' in body));
+});
+
+console.log('v2.searchMeta (provider status as a LIST, so a new provider is not breaking):');
+check('searchMeta reports every provider with its own status and count', () => {
+  const meta = v2map.searchMeta({
+    results: [1, 2, 3],
+    providers: { igdb: 'ok', rawg: 'failed', thegamesdb: 'skipped' },
+    counts: { igdb: 3, rawg: 0 },
+    degraded: true,
+  });
+  assert.deepStrictEqual(Object.keys(meta).sort(), ['degraded', 'providers', 'total']);
+  assert.strictEqual(meta.degraded, true);
+  // total is AFTER de-duplication; the per-provider counts are before it.
+  assert.strictEqual(meta.total, 3);
+  assert.deepStrictEqual(meta.providers, [
+    { name: 'igdb', status: 'ok', count: 3 },
+    { name: 'rawg', status: 'failed', count: 0 },
+    // A missing count is 0, not undefined — undefined disappears from the JSON and
+    // the client sees the key removed rather than "none".
+    { name: 'thegamesdb', status: 'skipped', count: 0 },
+  ]);
+});
+
 console.log('dispatch (THE contract: one channel down must not silence the rest):');
 checkAsync('a failing channel does not stop the other three', () => withTransports({ sendEmail: 'fail' }, async (calls) => {
   const r = await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' });

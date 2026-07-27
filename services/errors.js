@@ -54,6 +54,12 @@ const CODES = Object.freeze({
   NOT_SHARED: 'not_shared',
   NOT_IN_BACKLOG: 'not_in_backlog',
   CONFLICT: 'conflict',
+  // 502. Every catalog provider that could have answered failed. NOT the same as an
+  // empty result and deliberately not merged with one: a caller reading `[]` during a
+  // total outage concludes the game does not exist, and an agent then acts on that.
+  // Promoted here from the spec's "planned" set when services/catalog.js#search
+  // started emitting it.
+  PROVIDER_UNAVAILABLE: 'provider_unavailable',
 });
 
 const serviceError = (code, message, details) => new ServiceError(code, message, details);

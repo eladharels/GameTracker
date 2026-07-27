@@ -2148,6 +2148,56 @@ v2Router.put('/library/backlog', (req, res) => {
     .catch((err) => v2.send(res, err, { log: '[v2] reorder failed:' }));
 });
 
+// GET /api/v2/catalog/search — the merged provider search, with the outage signal in
+// the envelope instead of a header.
+//
+// v1 returns a BARE ARRAY and puts the degradation flag in X-Catalog-Degraded, because
+// the SPA does `Array.isArray(res.data) ? res.data : []` and an envelope would have
+// broken it. A header is the wrong place for a fact a client must branch on — generated
+// clients drop them, and an LLM reading the body sees an ordinary empty list. Here it
+// is `meta.degraded`, alongside per-provider statuses, and a TOTAL outage is a 502
+// rather than an empty array (services/catalog.js#search).
+v2Router.get('/catalog/search', (req, res) => {
+  catalogService.search(req.query.q, { limit: req.query.limit })
+    .then((result) => res.json({
+      data: result.results.map(v2.catalogGame),
+      meta: v2.searchMeta(result),
+    }))
+    .catch((err) => v2.send(res, err, { log: '[v2] catalog search failed:' }));
+});
+
+// POST /api/v2/library/games — add by id, or by name.
+//
+// TWO service calls and no rules of its own: catalog decides WHICH game, library
+// decides what storing it means. The name path collapses search-then-add into one
+// call, and an ambiguous name is a 409 carrying the candidates rather than a guess.
+v2Router.post('/library/games', (req, res) => {
+  const body = req.body || {};
+  catalogService.resolveGame({ gameId: body.gameId, name: body.name })
+    // `status` is passed through UNDEFAULTED. The default — and the rule that omitting
+    // it must not demote a game already in the library — belongs to the service; a
+    // `?? 'wishlist'` here would silently override the stored status on every re-add.
+    .then((game) => libraryService.addResolvedGame(req.user.id, game, body.status)
+      .then((result) => {
+        // 201 vs 200 is the ONLY signal that a retried call did not create a second
+        // entry. Idempotent by gameId is what makes an agent's retry safe; saying so
+        // is what stops it reporting the game as newly added twice.
+        res.status(result.created ? 201 : 200).json(v2.libraryGame(result.game));
+
+        // AFTER the response, chained, terminally caught — the same three properties
+        // the v1 adapter needs and for the same reasons (see POST
+        // /api/user/:username/games). A user's own ntfy box being unreachable must not
+        // fail, or delay, adding a game.
+        result.events.reduce(
+          (prev, event) => prev.then(() => notifyEvent(
+            event, { gameName: game.name, coverUrl: game.coverUrl },
+            req.user.username, result.status)),
+          Promise.resolve(),
+        ).catch((e) => console.error('[v2] notification dispatch failed:', e?.message || e));
+      }))
+    .catch((err) => v2.send(res, err, { log: '[v2] add game failed:' }));
+});
+
 // ─── EVERY v2 ROUTE MUST BE REGISTERED ABOVE THIS LINE ───────────────────────
 //
 // Express matches layers in stack order, so the catch-all below answers anything

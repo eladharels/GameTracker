@@ -21,7 +21,6 @@ const CODE_INTERNAL = 'internal';
 // produce them. test/openapi.test.js keeps this list and the spec's enum in step.
 const PLANNED_CODES = Object.freeze({
   rate_limited: { status: 429, title: 'Too many requests', expose: false },
-  provider_unavailable: { status: 502, title: 'Upstream provider unavailable', expose: false },
   settings_unreadable: { status: 409, title: 'Settings could not be read', expose: false },
   internal: { status: 500, title: 'Internal error', expose: false },
 });
@@ -68,6 +67,20 @@ function toProblem(err, { fallbackStatus = 500 } = {}) {
     }));
   } else if (err.details?.field) {
     body.errors = [{ field: err.details.field, message: spec.expose ? String(err.message) : spec.title }];
+  }
+  // The two problem EXTENSIONS the spec defines, each read explicitly and re-shaped —
+  // never `{...err.details}`. A spread would publish whatever a service happened to
+  // attach for its own use, on a body that is already going out to the caller, and the
+  // spec's two extension schemas (AmbiguousGameProblem, UnknownUsersProblem) would
+  // silently gain undocumented members. Adding a third extension has to be a code
+  // change here, which is where it gets reviewed.
+  if (Array.isArray(err.details?.candidates)) {
+    body.candidates = err.details.candidates.map(catalogGame);
+  }
+  if (Array.isArray(err.details?.unknownUsers)) {
+    // Names the CALLER sent back to the caller — no lookup, so this is not a
+    // membership oracle; see the shares adapter, which is careful to keep it that way.
+    body.unknownUsers = err.details.unknownUsers.map((u) => String(u));
   }
   return { status: spec.status, body };
 }
@@ -194,7 +207,42 @@ function backlogEntry(row, index) {
   };
 }
 
+// A search result. Same six fields v1 emits, already camelCase — services/catalog.js
+// normalises every provider into this shape — so this mapper exists to PIN it rather
+// than to translate: a provider row reaching the wire unmapped is how an undocumented
+// field ships, and CatalogGame is `additionalProperties: false`.
+function catalogGame(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    releaseDate: row.releaseDate ?? null,
+    coverUrl: row.coverUrl ?? null,
+    source: row.source,
+    steamAppId: row.steamAppId ?? null,
+  };
+}
+
+// Provider status as an ARRAY of objects, not the service's keyed map. A map keyed by
+// provider name makes every new provider a breaking change to the response's shape;
+// a list of {name, status, count} does not. `skipped` and `failed` stay distinct —
+// "not configured" and "did not answer" are different operational facts.
+function searchMeta(result) {
+  const providers = Object.keys(result.providers || {}).map((name) => ({
+    name,
+    status: result.providers[name],
+    count: result.counts?.[name] ?? 0,
+  }));
+  return {
+    degraded: !!result.degraded,
+    providers,
+    // AFTER merge and de-duplication, which is what `data` holds — the per-provider
+    // counts above are before it, and the two genuinely differ.
+    total: (result.results || []).length,
+  };
+}
+
 module.exports = {
   toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings, backlogEntry,
+  catalogGame, searchMeta,
   PLANNED_CODES, WWW_AUTHENTICATE,
 };

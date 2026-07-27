@@ -373,6 +373,7 @@ paths:
     post:
       tags: [library]
       operationId: addLibraryGame
+      x-implemented: true
       x-required-scope: library
       summary: Add a game, by id or by name
       description: |
@@ -416,7 +417,7 @@ paths:
               schema: { $ref: '#/components/schemas/AmbiguousGameProblem' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '502':
-          description: Every catalog provider failed, so "not found" could not be distinguished from "unreachable".
+          description: No catalog provider answered, so "not found" could not be distinguished from "unreachable".
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -596,6 +597,7 @@ paths:
     get:
       tags: [catalog]
       operationId: searchCatalog
+      x-implemented: true
       x-required-scope: library
       summary: Search IGDB, RAWG and TheGamesDB
       description: |
@@ -635,7 +637,11 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '502':
-          description: Every provider failed. Distinguished from an empty result on purpose.
+          description: |
+            **No provider answered** — every one either failed or is not configured on
+            this instance. Distinguished from an empty result on purpose: `[]` means
+            "asked, nobody had it", and only a provider that actually answered can
+            establish that.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1308,7 +1314,21 @@ components:
       properties:
         gameId: { $ref: '#/components/schemas/GameRef' }
         name: { type: string, minLength: 1, maxLength: 400, description: Resolved server-side; ambiguity is a 409, never a guess. }
-        status: { $ref: '#/components/schemas/GameStatus' }
+        status:
+          # $ref with siblings: legal in OpenAPI 3.1 (JSON Schema 2020-12) and
+          # deliberate — an allOf wrapper would hide the enum from a generator, which is
+          # exactly what test/openapi.test.js forbids.
+          $ref: '#/components/schemas/GameStatus'
+          default: wishlist
+          description: |
+            Optional. A game that is already in the library KEEPS its current status
+            when this is omitted — re-adding a game you are playing does not demote it
+            back to `wishlist`, which is the failure mode for a client that does not
+            track what it has already added. Only a genuinely new game takes the
+            default, `wishlist`: the neutral landing place, and the one status that
+            allocates no backlog position.
+
+            A future-dated game is stored as `unreleased` whatever is asked for here.
       oneOf:
         - required: [gameId]
         - required: [name]
