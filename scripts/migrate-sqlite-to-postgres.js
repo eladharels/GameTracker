@@ -29,6 +29,11 @@
 
 const fs = require('fs');
 const path = require('path');
+// sqlite3 is a devDependency, NOT a runtime one: the migration below is a one-shot
+// that has already been run, and keeping it in `dependencies` meant every production
+// image build installed python3/make/g++ and compiled it from source. This script
+// therefore does not run inside the deployed container — use a dev checkout with a
+// full `npm install`.
 const sqlite3 = require('sqlite3');
 const db = require('../db');
 

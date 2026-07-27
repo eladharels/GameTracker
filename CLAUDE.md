@@ -12,7 +12,9 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Runtime**: Node.js 18
 - **Framework**: Express.js 5.x
 - **Database**: PostgreSQL 16 (`pg` driver, promise-based; `db.js` exposes a node-sqlite3-shaped
-  callback shim so the legacy call sites in `index.js` did not have to be rewritten)
+  callback shim so the legacy call sites in `index.js` did not have to be rewritten).
+  The `sqlite3` package itself is a **devDependency** — only the one-shot migration script
+  uses it, and keeping it out of the image removes the whole build toolchain
 - **Authentication**: JWT (jsonwebtoken) + bcryptjs for local auth, ldapjs for LDAP/Active Directory
 - **Email**: Nodemailer (SMTP)
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
@@ -35,7 +37,22 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
 - **Persistent volumes**: `gametracker-pgdata` (named volume, Postgres data), settings.json, sent_notifications.json
 
-> **Dockerfile layer order (critical):** The backend `Dockerfile` must install system build tools (`python3`, `make`, `g++`, `sqlite3`) **before** running `npm ci --omit=dev`. The `sqlite3` package has no prebuilt NAPI binary for the `node:18-slim` image and compiles from source via `node-gyp`, which requires Python3. Wrong order → build failure.
+> **The backend image has NO build toolchain, and must not regain one.** It used to install
+> `python3 make g++ sqlite3` because the `sqlite3` npm package has no prebuilt NAPI binary for
+> `node:18-slim` and compiled from source via `node-gyp` — which made the layer order
+> load-bearing and was documented here as critical.
+>
+> `sqlite3` is now a **devDependency**. The Postgres migration is finished and the only file
+> that still requires it is `scripts/migrate-sqlite-to-postgres.js`, a one-shot that has
+> already been run, so `npm ci --omit=dev` never sees it. Verified: the production install
+> resolves 135 packages and **zero** `.node` binaries.
+>
+> This matters beyond tidiness — the toolchain was hundreds of megabytes fetched on every
+> build, and a build failed with `You don't have enough free space in /var/cache/apt/archives/`
+> on the self-hosted runner. Adding a native dependency reinstates all of it.
+>
+> `curl` stays: `docker-compose.test.yml`'s backend healthcheck is
+> `curl -sf http://localhost:3000/api/health`.
 >
 > Dependencies install with `npm ci` (not `npm install`) so the image matches `package-lock.json` exactly.
 
@@ -132,7 +149,9 @@ GameTracker/
 │                                   #   is mandatory (the column is nullable and a failed
 │                                   #   migration takes the backend down)
 ├── scripts/
-│   └── migrate-sqlite-to-postgres.js   # One-shot data migration (manual, idempotent)
+│   └── migrate-sqlite-to-postgres.js   # One-shot data migration (manual, idempotent).
+│                                   #   Requires the `sqlite3` devDependency, so it does NOT
+│                                   #   run inside the production image — use a dev checkout
 ├── sent_notifications.json         # Notification deduplication log (gitignored)
 ├── crackwatch-cache.json           # Cached DRM status (gitignored)
 ├── system-status-cache.json        # Last-OK timestamps per service (gitignored)

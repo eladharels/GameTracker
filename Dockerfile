@@ -1,10 +1,22 @@
 FROM node:18-slim
 WORKDIR /app
-# Upgrade all OS packages to patch CVEs (gpgv, libgnutls30, libpam, perl-base, etc.)
-# then install build tools needed to compile sqlite3 from source.
+# Upgrade all OS packages to patch CVEs (gpgv, libgnutls30, libpam, perl-base, etc.).
+#
+# NO BUILD TOOLCHAIN. This used to install `sqlite3 python3 make g++` because the
+# `sqlite3` npm package has no prebuilt NAPI binary for node:18-slim and compiled from
+# source via node-gyp — which is also why the layer order was load-bearing enough to be
+# documented in CLAUDE.md.
+#
+# It is no longer a runtime dependency. The migration to Postgres is done, and the only
+# file that still requires it is scripts/migrate-sqlite-to-postgres.js, a one-shot that
+# has already been run. It now lives in devDependencies, so `npm ci --omit=dev` below
+# never sees it and nothing in this image needs a compiler.
+#
+# `curl` stays: docker-compose.test.yml's backend healthcheck is
+# `curl -sf http://localhost:3000/api/health`.
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends sqlite3 python3 make g++ curl && \
+    apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 # Use npm@10 for a reliable install on Node 18 (npm@11 dropped Node 18 support).
 # npm is removed again in the install step below, so it never reaches the runtime image.
