@@ -1177,119 +1177,45 @@ app.post('/api/settings', authRequired, express.json(), (req, res) => {
   }
 });
 
-// Date-only future check for release dates. 'YYYY-MM-DD' parses as UTC midnight,
-// so compare date-only on both sides — matching the daily cron (search "[CRON]")
-// so a game "releasing today" counts as released, not unreleased.
-function isReleaseInFuture(dateStr) {
-  if (!dateStr) return false;
-  const d = new Date(dateStr); d.setHours(0, 0, 0, 0);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  return d > today;
-}
+// Date-only future check — one definition, in services/library.js, because the
+// upsert's status coercion and the search results' "unreleased" labelling must agree
+// about what "releasing today" means. Two copies would disagree by a day at midnight.
+const { isReleaseInFuture } = libraryService;
 
 // --- Add/update a game status for a user (with notification) ---
-app.post('/api/user/:username/games', authRequired, ownershipRequired, async (req, res) => {
-  const { username } = req.params;
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  let { gameId, gameName, coverUrl, releaseDate, status, steamAppId } = req.body;
-  
-  // Add debug logging
-  console.log(`[DEBUG] Status update request for user ${normalizedUsername}:`, {
-    gameId,
-    gameName,
-    status,
-    releaseDate,
-    steamAppId,
-    originalUsername: username,
-    normalizedUsername: normalizedUsername
-  });
-  
-  if (!gameId || !gameName || !status) {
-    console.log(`[DEBUG] Missing required fields:`, { gameId, gameName, status });
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-  // Force 'unreleased' when there is no release date OR the date is still in the
-  // future — a future-dated game must never be stored as a released status.
-  if (!releaseDate || isReleaseInFuture(releaseDate)) {
-    console.log(`[DEBUG] No/future release date (${releaseDate || 'none'}), setting status to 'unreleased'`);
-    status = 'unreleased';
-  }
-  withExistingUser(res, normalizedUsername, async (user) => {
-    console.log(`[DEBUG] User resolved:`, { userId: user.id, username: user.username });
-    
-    db.get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, row) => {
-      if (err) {
-        console.log(`[DEBUG] Error checking existing game:`, err);
-        return res.status(500).json({ error: 'DB error' });
-      }
-      
-      let eventType = 'add';
-      if (row) {
-        console.log(`[DEBUG] Existing game found:`, { 
-          currentStatus: row.status, 
-          newStatus: status, 
-          gameId: row.game_id,
-          gameName: row.game_name 
-        });
-        if (row.status !== status) eventType = 'status';
-        if (row.status === 'unreleased' && status !== 'unreleased' && releaseDate && !isReleaseInFuture(releaseDate)) {
-          await notifyEvent('release', { gameName, coverUrl }, normalizedUsername, status);
-        }
-      } else {
-        console.log(`[DEBUG] New game being added`);
-      }
-      
-      // Determine backlog_order
-      const wasInBacklog = row && row.status === 'backlog';
-      const isGoingToBacklog = status === 'backlog';
-      let backlogOrder = null;
-      if (isGoingToBacklog) {
-        if (wasInBacklog) {
-          backlogOrder = row.backlog_order;
-        } else {
-          const maxRow = await new Promise((resolve, reject) => {
-            // The alias MUST stay double-quoted. Postgres folds unquoted
-            // identifiers to lower case, so `as maxOrder` returns a `maxorder`
-            // property, `r.maxOrder` reads undefined, and every new backlog item
-            // silently gets order 1 -- which also makes the up/down reorder a
-            // permanent no-op because every row shares the same value.
-            db.get('SELECT MAX(backlog_order) AS "maxOrder" FROM user_games WHERE user_id = ?', [user.id], (err, r) => {
-              if (err) reject(err); else resolve(r);
-            });
-          });
-          backlogOrder = (maxRow && maxRow.maxOrder != null ? maxRow.maxOrder : 0) + 1;
-        }
-      }
+app.post('/api/user/:username/games', authRequired, ownershipRequired, (req, res) => {
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
+  const { gameId, gameName, coverUrl, releaseDate, status, steamAppId } = req.body;
 
-      db.run(
-        `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id, backlog_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status,
-           -- COALESCE, not a bare overwrite: the frontend's status-change call omits
-           -- steamAppId, which bound as NULL and WIPED the stored Steam App ID every
-           -- time a game moved between statuses. Prices then silently stopped
-           -- resolving until backfill_steam_app_ids.js was run -- which is why that
-           -- script kept finding work to do. Omitted now means unchanged.
-           steam_app_id=COALESCE(excluded.steam_app_id, user_games.steam_app_id),
-           backlog_order=excluded.backlog_order
-         RETURNING id`,
-        [user.id, gameId, gameName, coverUrl, releaseDate, status, steamAppId, backlogOrder],
-        async function (err) {
-          if (err) {
-            console.log(`[DEBUG] Error updating game:`, err);
-            return res.status(500).json({ error: 'DB error' });
-          }
+  withExistingUser(res, normalizedUsername, (user) => {
+    libraryService.upsertGame(user.id, { gameId, gameName, coverUrl, releaseDate, status, steamAppId })
+      .then((result) => {
+        // `status` and `coerced` are additive: v1 answered a bare {success:true}, so
+        // a client that asked for 'playing' on a future-dated game was told it had
+        // worked and only found out by refetching. Existing clients ignore the extra
+        // fields; the SPA can use them without another round trip.
+        res.json({ success: true, status: result.status, coerced: result.coerced });
 
-          // Add debug logging after update
-          console.log(`[DEBUG] Status updated successfully for user ${normalizedUsername}, game ${gameId} to status: ${status}`);
-          console.log(`[DEBUG] Rows affected: ${this.changes}, Last ID: ${this.lastID}`);
-
-          await notifyEvent(eventType, { gameName, coverUrl }, normalizedUsername, status);
-          res.json({ success: true });
+        // AFTER the response, and after the write — both deliberate.
+        //
+        // Before: one notifyEvent ran BEFORE the INSERT (announcing a state change
+        // that had not been persisted and might still fail), a second ran after it
+        // but before res.json. Four channels of third-party latency therefore sat in
+        // front of the user's button click, and the ntfy/Gotify URLs are per-user
+        // settings — so anyone could point their own at a blackhole and make their
+        // own request hang. A notification must not be able to fail adding a game;
+        // it must not be able to delay it either.
+        //
+        // The terminal .catch() is mandatory: after res.json a rejection has nowhere
+        // to go. notifyEvent already swallows, which is the one place that earns its
+        // keep, but relying on that silently would be the kind of assumption this
+        // codebase keeps paying for.
+        for (const event of result.events) {
+          notifyEvent(event, { gameName, coverUrl }, normalizedUsername, result.status)
+            .catch((err) => console.error('[Library] Notification dispatch failed:', err.message));
         }
-      );
-    });
+      })
+      .catch((err) => problem.send(res, err, { log: '[Library] Upsert failed:' }));
   });
 });
 

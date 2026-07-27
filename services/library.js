@@ -135,7 +135,126 @@ async function reorderBacklog(userId, order) {
   return { updated, requested: order.length };
 }
 
+
+// The five statuses a game may hold. Nothing validated this before, so `status` was
+// stored verbatim: production carries a row with 'Done' where every read and every
+// filter expects 'done', which is invisible to the SPA's own controls and can only
+// be fixed by hand in SQL. The frontend has always sent exactly these (STATUSES in
+// App.jsx, plus 'unreleased' which the server assigns).
+const STATUSES = Object.freeze(['wishlist', 'playing', 'done', 'backlog', 'unreleased']);
+
+// Date-only comparison. 'YYYY-MM-DD' parses as UTC midnight, so both sides are
+// flattened to local midnight — a game releasing TODAY counts as released, matching
+// the daily cron.
+function isReleaseInFuture(dateStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr); d.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return d > today;
+}
+
+// Add a game, or update the one already there.
+//
+// Returns what HAPPENED, not just success: the status actually stored, whether that
+// differs from the one asked for, and which notification events the caller should
+// dispatch. The adapter needs all three and previously had to re-derive them.
+//
+// THE COERCION IS REPORTED, not silent. A game with no release date, or one dated in
+// the future, is forced to 'unreleased' — correct, because a future-dated game must
+// never sit in a released status. But v1 answered a plain {success:true}, so a client
+// that asked for 'playing' was told it succeeded and had to refetch to discover it
+// had not. `coerced` says so.
+//
+// TRANSACTIONAL, for backlog_order. The old code read MAX(backlog_order) and then
+// INSERTed on two different pooled connections (db.js divergence #9), so two
+// concurrent adds could read the same maximum and both claim it — a duplicate
+// position that makes the up/down reorder a no-op between the pair.
+async function upsertGame(userId, fields) {
+  const gameId = fields.gameId == null ? '' : String(fields.gameId);
+  const gameName = fields.gameName == null ? '' : String(fields.gameName);
+  if (!gameId || !gameName || !fields.status) {
+    throw serviceError(CODES.VALIDATION, 'gameId, gameName and status are required');
+  }
+  if (!STATUSES.includes(fields.status)) {
+    throw serviceError(CODES.VALIDATION,
+      `status must be one of: ${STATUSES.join(', ')}`, { field: 'status' });
+  }
+
+  const releaseDate = fields.releaseDate || null;
+  const requested = fields.status;
+  const status = (!releaseDate || isReleaseInFuture(releaseDate)) ? 'unreleased' : requested;
+
+  return db.withTransaction(async (tx) => {
+    const prior = (await tx.query(
+      'SELECT status, backlog_order FROM user_games WHERE user_id = ? AND game_id = ?',
+      [userId, gameId]
+    )).rows[0];
+
+    // v1's event rules, preserved exactly.
+    //
+    // NOTE for v2: re-saving a row with an UNCHANGED status still emits 'add', so
+    // the user is told a game was added to a library it was already in. Left as-is
+    // here because changing it changes how many notifications people receive, which
+    // is not a refactor's call to make.
+    const events = [];
+    if (prior && prior.status === 'unreleased' && status !== 'unreleased'
+        && releaseDate && !isReleaseInFuture(releaseDate)) {
+      events.push('release');
+    }
+    events.push(prior && prior.status !== status ? 'status' : 'add');
+
+    let backlogOrder = null;
+    if (status === 'backlog') {
+      if (prior && prior.status === 'backlog') {
+        backlogOrder = prior.backlog_order;
+      } else {
+        // Serialise position allocation FOR THIS USER only. A transaction alone is
+        // not enough: Postgres defaults to READ COMMITTED, so concurrent
+        // transactions each read the same MAX before any of them commits and all
+        // claim the same position. Measured — five concurrent adds produced the
+        // positions 1,2,2,2,3, and duplicates make the up/down reorder a permanent
+        // no-op between the tied rows. (v1 was strictly worse: the read and the
+        // write were not even in one transaction.)
+        //
+        // Advisory rather than a row lock, because the thing being contended is the
+        // NEXT position, and there is no row to lock for a value that does not exist
+        // yet. Held to the end of this transaction and scoped by user_id, so two
+        // different users never wait on each other. 4242 is an arbitrary namespace
+        // that keeps this lock distinct from any other advisory lock.
+        await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [4242, userId]);
+        // The alias MUST stay double-quoted. Postgres folds unquoted identifiers to
+        // lower case, so `AS maxOrder` returns a `maxorder` property, `.maxOrder`
+        // reads undefined, and every new backlog item silently gets order 1 — which
+        // also makes the up/down reorder a permanent no-op, since every row shares
+        // the same value.
+        const maxRow = (await tx.query(
+          'SELECT MAX(backlog_order) AS "maxOrder" FROM user_games WHERE user_id = ?', [userId]
+        )).rows[0];
+        backlogOrder = (maxRow && maxRow.maxOrder != null ? Number(maxRow.maxOrder) : 0) + 1;
+      }
+    }
+
+    await tx.query(
+      `INSERT INTO user_games (user_id, game_id, game_name, cover_url, release_date, status, steam_app_id, backlog_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status,
+         -- COALESCE, not a bare overwrite: the frontend's status-change call omits
+         -- steamAppId, which bound as NULL and WIPED the stored Steam App ID every
+         -- time a game moved between statuses. Prices then silently stopped
+         -- resolving until backfill_steam_app_ids.js was run -- which is why that
+         -- script kept finding work to do. Omitted now means unchanged.
+         steam_app_id=COALESCE(excluded.steam_app_id, user_games.steam_app_id),
+         backlog_order=excluded.backlog_order`,
+      [userId, gameId, gameName, fields.coverUrl || null, releaseDate, status,
+       fields.steamAppId || null, backlogOrder]
+    );
+
+    return { status, requested, coerced: status !== requested, events, created: !prior };
+  });
+}
+
 module.exports = {
+  STATUSES, isReleaseInFuture, upsertGame,
   listGamesFor,
   listOwnGames,
   listGamesWithAliases,
