@@ -347,7 +347,11 @@ pure enough to assert against directly, no database needed.
    carry only `required`, so the one-or-the-other rule — exactly what an LLM-driven client
    gets wrong — vanishes from the generated model. Deferred to here rather than done in the
    spec because the right shape is only knowable once the generator has actually been run.
-6. **`GET /api/capabilities` on v1** — `{apiVersions, serverVersion, deprecations}`, auth
+6. ~~**`GET /api/capabilities` on v1**~~ Done — auth-tier, returning
+   `{serverVersion, apiVersions[], deprecations[]}`. v2 advertises itself as `planned`
+   until `V2_MOUNTED` flips in the same commit that mounts the router, so the endpoint
+   can never announce a surface that answers 404. Original note:
+   **`GET /api/capabilities` on v1** — `{apiVersions, serverVersion, deprecations}`, auth
    tier, NOT on `/api/health`. The one decision with an expiry: it is described as "the
    last change made to v1", and after the freeze it cannot be added. The phone has no way
    to discover v2 exists. It had no build-order slot at all until that was noticed.

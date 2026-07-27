@@ -357,6 +357,10 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   5 retries from an MCP client would otherwise lock the owner out for 15 minutes.
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
+- **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns
+  `{serverVersion, apiVersions[], deprecations[]}`. The LAST route addable to v1 — after the
+  freeze there is no way to tell a client that anything beyond `/api` exists, and the Android
+  app is not a build this repo can update. v2 reports `planned` until `V2_MOUNTED` flips.
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.

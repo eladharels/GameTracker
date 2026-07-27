@@ -273,6 +273,16 @@ function getOrCreateUser(username, cb, opts = {}) {
 // stay open. That means it must also stay boring: it used to return the user count,
 // the root account's id and username, and the raw DB error message to anyone who
 // asked. Operational detail belongs in the admin-only /api/system-status.
+// Read once at boot from package.json — the same value the image is built from.
+// Not from an env var: a version a deployer can set independently of the code is a
+// version that will eventually lie about what is running.
+const SERVER_VERSION = require('./package.json').version;
+
+// Flipped by the commit that mounts the v2 router, in the same diff. Kept as one
+// named constant so "is v2 live" has exactly one answer, rather than a route
+// advertising availability that the router does not back.
+const V2_MOUNTED = false;
+
 app.get('/api/health', (req, res) => {
   db.get('SELECT 1', [], (err) => {
     if (err) {
@@ -280,6 +290,53 @@ app.get('/api/health', (req, res) => {
       return res.status(500).json({ status: 'error' });
     }
     res.json({ status: 'ok' });
+  });
+});
+
+// Version discovery. THE LAST CHANGE MADE TO v1 — after the freeze it cannot be
+// added, and then no client can ever learn that anything beyond /api exists.
+//
+// The Android companion app is a build this repository does not control and has no
+// way to discover /api/v2. Nor does an operator's script, or the planned MCP. Every
+// one of them would otherwise have to hardcode a version and be redeployed to learn
+// it was wrong.
+//
+// NOT on /api/health. That endpoint is the container healthcheck and the CI deploy
+// gate; it answers `{status}` and nothing else, and it is one of only two
+// unauthenticated routes in the entire API. Version and deployment detail belong
+// behind a credential — this tells a caller which API surfaces exist and which are
+// frozen, which is exactly the kind of reconnaissance an unauthenticated endpoint
+// should not hand out for free.
+//
+// `deprecations` is deliberately present and deliberately empty. v1 is frozen and
+// PERMANENTLY SUPPORTED, not deprecated-then-sunset: the phone is not a build this
+// project can update on its own schedule. The key exists so a client can learn to
+// read it now, while there is nothing there to read.
+app.get('/api/capabilities', authRequired, (req, res) => {
+  res.json({
+    serverVersion: SERVER_VERSION,
+    apiVersions: [
+      {
+        version: 'v1',
+        basePath: '/api',
+        status: 'frozen',
+        // Frozen means: no new routes, no changed response shapes. It does NOT mean
+        // unmaintained, and it does not mean a security defect stays put — the admin
+        // user endpoints stopped returning other users' notification credentials
+        // while frozen. See PRODUCTION_CHANGELOG.txt.
+        description: 'Stable and permanently supported. No sunset date.',
+      },
+      {
+        version: 'v2',
+        basePath: '/api/v2',
+        // Advertised only once it is actually mounted. Announcing a surface that
+        // does not answer is worse than announcing nothing: a client would route to
+        // it and get a 404 it has no way to interpret.
+        status: V2_MOUNTED ? 'available' : 'planned',
+        description: 'Token-authenticated redesign. See openapi/gametracker-v2.yaml.',
+      },
+    ],
+    deprecations: [],
   });
 });
 

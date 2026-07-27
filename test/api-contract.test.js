@@ -153,6 +153,30 @@ check('the published result cap is 20', () => {
   assert.strictEqual(catalog.LIMIT_REFRESH, 10);
 });
 
+console.log('capabilities (GET /api/capabilities):');
+
+check('the discovery document keeps its published shape', () => {
+  // Read by clients this repo cannot grep — the Android app and any operator script.
+  // It is also the LAST route addable to v1, so if its shape drifts there is no
+  // second discovery endpoint to correct it from.
+  //
+  // Asserted from index.js source rather than by calling the handler: the payload is
+  // static and the route needs an Express request. The smoke stage exercises the wire
+  // format; this pins the fields.
+  const source = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
+  const route = source.slice(source.indexOf("app.get('/api/capabilities'"));
+  const body = route.slice(0, route.indexOf('});'));
+  for (const field of ['serverVersion', 'apiVersions', 'deprecations', 'basePath', 'status']) {
+    assert.ok(body.includes(field), `/api/capabilities no longer returns '${field}'`);
+  }
+  // v2 must not advertise itself as available while nothing serves it: a client would
+  // route to a 404 it has no way to interpret.
+  assert.ok(/V2_MOUNTED \? 'available' : 'planned'/.test(body),
+    'v2 availability is no longer gated on the router actually being mounted');
+  assert.ok(!body.includes("status: 'deprecated'"),
+    'v1 is frozen and permanently supported, not deprecated — the phone is not ours to sunset');
+});
+
 console.log('error envelope:');
 
 check('an exposed error is {error: <message>} and nothing else', () => {

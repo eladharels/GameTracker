@@ -122,6 +122,10 @@ const EXPECTED = {
 
   // --- authenticated ---
   'GET /api/all-users': 'auth',
+  // Version discovery. Authenticated on purpose: /api/health is the only endpoint
+  // that answers without a credential, and which API surfaces exist is not something
+  // to hand an anonymous caller.
+  'GET /api/capabilities': 'auth',
   'GET /api/crack-status/cache-info': 'auth',
   'GET /api/game-price/:steamAppId': 'auth',
   'GET /api/games/search': 'auth',
