@@ -157,6 +157,19 @@ async function priceableGames() {
   );
 }
 
+// A formatted price is a short string like "₪59.99". Bounded and type-checked
+// because it is third-party text going into a column the SPA renders: a 2 MiB
+// `final_formatted` was written verbatim, and a non-string was coerced, so
+// `{"evil":"<img src=x onerror=1>"}` landed in last_price as "[object Object]"
+// while the run reported success. React escapes it, so this was never XSS — it is
+// unbounded external text in a user-visible column, which is enough.
+const MAX_PRICE_LEN = 64;
+function priceString(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = sanitizeText(value, MAX_PRICE_LEN);
+  return trimmed || null;
+}
+
 async function updatePrices({ region = 'il' } = {}) {
   const report = { checked: 0, updated: 0, withoutPrice: 0, errors: 0 };
   const games = await priceableGames();
@@ -169,7 +182,7 @@ async function updatePrices({ region = 'il' } = {}) {
         maxRedirects: 0,
       });
       const data = response.data?.[game.steam_app_id];
-      const price = data?.success && data?.data?.price_overview?.final_formatted;
+      const price = priceString(data?.success && data?.data?.price_overview?.final_formatted);
       if (!price) { report.withoutPrice++; continue; }
       // AWAITED. v1 fired this through the callback shim without waiting, which
       // db.js divergence #9 says can be abandoned without its callback ever running —

@@ -5,6 +5,29 @@ Purpose: Record of changes promoted from GameTracker-stg to this production app.
 When you apply an entry from STAGING_CHANGELOG.txt to production, add it here
 with the date applied.
 
+================================================================================
+  2026-07-27 — API CHANGE affecting GameTracker-mobile (Android)
+================================================================================
+POST /api/admin/check-releases changed response shape when the release sweep was
+extracted into services/jobs.js. The web SPA does not call this endpoint at all
+(grepped), but the Android client talks to the same REST API, so this is recorded
+here rather than only in a commit message.
+
+  REMOVED : results.totalUsers
+  ADDED   : errors[]  — [{ username, gameName?, error }], fixed strings only
+  CHANGED : notificationsSent[] now lists release REMINDERS, not the release
+            notifications sent for games promoted in the same run. A promote-only
+            run therefore returns notificationsSent: [] where it previously
+            listed the promoted games.
+  UNCHANGED: success, message, updatedGames[]
+
+Why: the sweep existed in four copies (this route, the 08:00 cron,
+run_notifications.js, and the reminder logic inside the cron) which had drifted —
+most importantly, this route did NOT lowercase the username in its UPDATE, so for
+any non-lowercase caller it matched no rows and still reported the game as
+updated. All four now call one function.
+
+
 --------------------------------------------------------------------------------
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
