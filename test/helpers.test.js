@@ -443,7 +443,7 @@ function withTransports(behaviour, fn) {
     notifications.transports[name] = async () => {
       calls.push(name);
       if (behaviour[name] === 'fail') throw new Error(`boom ${name}`);
-      if (behaviour[name] === 'skip') return 'declined for a reason';
+      if (behaviour[name] === 'skip') return { code: 'test_skip', message: 'declined for a reason' };
       return true;   // a transport returns true ONLY when it actually delivered
     };
   }
@@ -491,8 +491,9 @@ checkAsync('`only` restricts delivery; every channel still appears in the result
   // v1's shape — the admin Diagnostics panel renders a row per channel
   // unconditionally, so a missing key would render as a red "✗ Failed".
   assert.deepStrictEqual(Object.keys(r).sort(), ['email', 'gotify', 'ntfy', 'telegram']);
-  assert.deepStrictEqual(r.gotify, { sent: false, error: null });
-  assert.deepStrictEqual(r.telegram, { sent: false, error: null });
+  // `code` is null too: not-attempted is distinct from every failure reason.
+  assert.deepStrictEqual(r.gotify, { sent: false, code: null, error: null });
+  assert.deepStrictEqual(r.telegram, { sent: false, code: null, error: null });
 }));
 checkAsync('dispatch never throws, even on a malformed channels argument', () => withTransports({}, async () => {
   // services/errors.js tells adapters they may rely on this absolutely. It must not
@@ -513,6 +514,7 @@ checkAsync('a transport that DECLINED is not reported as sent', () => withTransp
   const r = await notifications.dispatch(ALL_CHANNELS, { subject: 's', text: 't', title: 'T', message: 'm' });
   assert.strictEqual(r.email.sent, false, 'a declined delivery was reported as sent');
   assert.strictEqual(r.email.error, 'declined for a reason');
+  assert.strictEqual(r.email.code, 'test_skip', 'the structured code was lost');
   assert.strictEqual(r.ntfy.sent, true);
 }));
 checkAsync('undefined `only` means every channel — what the SPA default sends', () => withTransports({}, async (calls) => {

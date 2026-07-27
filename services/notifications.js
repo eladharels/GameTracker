@@ -31,7 +31,7 @@ const db = require('../db');
 // Shared promise surface — see db.js. Four services had each written their own.
 const { get, run } = db.promises;
 const { loadSettings } = require('../settings-store');
-const { isValidEmailAddress } = require('../user-rules');
+const { isValidEmailAddress, sanitizeText } = require('../user-rules');
 const { getLdapEmail } = require('../directory');
 
 
@@ -104,11 +104,41 @@ function isBlockedNotificationHost(url) {
 // scanner for the server's internal network. Collapse every network-level outcome
 // into one indistinguishable message; the detail still goes to the server log where
 // the operator (and only the operator) can see it.
+// The one delivery failure we DO name, because it is our own refusal rather than a
+// remote outcome — the user pointed their notification server at an instance-metadata
+// endpoint. Carries a code so nothing has to match on the sentence: the literal used
+// to appear four times, which is exactly the undeclared cross-module string match the
+// service layer exists to remove.
+const BLOCKED_HOST_MESSAGE = 'Notification server host is not permitted';
+function blockedHostError() {
+  const err = new Error(BLOCKED_HOST_MESSAGE);
+  err.notifyCode = NOTIFY_CODES.BLOCKED_HOST;
+  return err;
+}
+
 function sanitizeDeliveryError(err, channel) {
   console.error(`[Notify] ${channel} delivery failed:`, err?.message || err);
-  if (err?.message === 'Notification server host is not permitted') return err.message;
+  if (err?.notifyCode === NOTIFY_CODES.BLOCKED_HOST) return err.message;
   return 'Delivery failed. Check the server URL and credentials in My Account, then try again.';
 }
+
+// Why a channel did not deliver. STRUCTURED, because these cross the API boundary:
+// the admin Diagnostics panel renders `message`, but an MCP or mobile client needs to
+// branch on something stable, and free-text English composed in a service ("...set it
+// in My Account") is meaningless to a non-SPA consumer.
+//
+// A transport returns `true` when it actually delivered, or one of these. It used to
+// return `true | string`, which made `if (await sendNtfy(...))` look correct while
+// being true for every failure message — a trap one line from the correct code.
+const NOTIFY_CODES = Object.freeze({
+  NOT_CONFIGURED: 'not_configured',     // the server has no SMTP host / bot token
+  NO_DESTINATION: 'no_destination',     // this user has no address / topic / chat id
+  INVALID_RECIPIENT: 'invalid_recipient',
+  BLOCKED_HOST: 'blocked_host',
+  DELIVERY_FAILED: 'delivery_failed',
+});
+
+const skip = (code, message) => ({ code, message });
 
 // --- Transports -----------------------------------------------------------
 
@@ -116,19 +146,19 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
   const { smtp } = loadSettings();
   if (!smtp.host || !smtp.port || !smtp.from) {
     console.log('[Email] SMTP settings incomplete:', { host: smtp.host, port: smtp.port, from: smtp.from });
-    return 'SMTP is not configured on this server.';
+    return skip(NOTIFY_CODES.NOT_CONFIGURED, 'SMTP is not configured on this server.');
   }
 
   const finalRecipient = toOverride;
   if (!finalRecipient) {
     console.log('[Email] No recipient email found, skipping email send');
-    return 'No recipient address for this account.';
+    return skip(NOTIFY_CODES.NO_DESTINATION, 'No recipient address for this account.');
   }
   // Last line of defence, at the sink. Even if a bad address reaches users.email
   // through a path that skipped validation, nodemailer never sees a recipient list.
   if (!isValidEmailAddress(finalRecipient)) {
     console.error('[Email] Refusing to send: recipient is not a single valid address.');
-    return 'The stored address is not a single valid address.';
+    return skip(NOTIFY_CODES.INVALID_RECIPIENT, 'The stored address is not a single valid address.');
   }
 
   const options = {
@@ -181,11 +211,9 @@ async function sendEmail(subject, text, toOverride, coverUrl) {
 async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
   // Prefer the user's own ntfy server; fall back to the optional global default.
   const url = (serverUrl && serverUrl.trim()) || loadSettings().ntfy?.url;
-  if (!url) return 'No ntfy server URL — set one in My Account, or ask an admin for a default.';
-  if (!topic) return 'No ntfy topic.';
-  if (isBlockedNotificationHost(url)) {
-    throw new Error('Notification server host is not permitted');
-  }
+  if (!url) return skip(NOTIFY_CODES.NOT_CONFIGURED, 'No ntfy server URL — set one in My Account, or ask an admin for a default.');
+  if (!topic) return skip(NOTIFY_CODES.NO_DESTINATION, 'No ntfy topic.');
+  if (isBlockedNotificationHost(url)) throw blockedHostError();
   const headers = { Title: title };
   if (isSafeImageUrl(attachUrl)) headers.Attach = attachUrl;
   // encodeURIComponent: `topic` is unvalidated user input, so interpolating it raw
@@ -203,11 +231,9 @@ async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
 async function sendGotify(title, message, token, priority = 5, imageUrl, serverUrl) {
   // Prefer the user's own Gotify server; fall back to the optional global default.
   const url = (serverUrl && serverUrl.trim()) || loadSettings().gotify?.url;
-  if (!url) return 'No Gotify server URL — set one in My Account, or ask an admin for a default.';
-  if (!token) return 'No Gotify token.';
-  if (isBlockedNotificationHost(url)) {
-    throw new Error('Notification server host is not permitted');
-  }
+  if (!url) return skip(NOTIFY_CODES.NOT_CONFIGURED, 'No Gotify server URL — set one in My Account, or ask an admin for a default.');
+  if (!token) return skip(NOTIFY_CODES.NO_DESTINATION, 'No Gotify token.');
+  if (isBlockedNotificationHost(url)) throw blockedHostError();
   const body = { title, message, priority };
   if (isSafeImageUrl(imageUrl)) {
     body.extras = { 'client::notification': { bigImageUrl: imageUrl } };
@@ -225,8 +251,8 @@ async function sendGotify(title, message, token, priority = 5, imageUrl, serverU
 async function sendTelegram(title, message, chatId, photoUrl) {
   const { telegram } = loadSettings();
   const botToken = telegram?.bot_token;
-  if (!botToken) return 'No Telegram bot token configured on this server.';
-  if (!chatId) return 'No Telegram chat ID.';
+  if (!botToken) return skip(NOTIFY_CODES.NOT_CONFIGURED, 'No Telegram bot token configured on this server.');
+  if (!chatId) return skip(NOTIFY_CODES.NO_DESTINATION, 'No Telegram chat ID.');
   const text = `*${title}*\n${message}`;
   // Parity with sendNtfy/sendGotify: a hung api.telegram.org must not hold the
   // request open indefinitely.
@@ -378,7 +404,9 @@ async function dispatch(channels, payload, { only } = {}) {
   // back {sent:false, error:null}, meaning "not attempted". v1's shape, and the
   // admin Diagnostics panel renders a row per channel unconditionally.
   const results = {};
-  for (const key of CHANNEL_KEYS) results[key] = { sent: false, error: null };
+  // `code` is the stable field; `error` is the sentence a human reads. v1 had only
+  // the sentence, and the admin panel renders it, so both ship.
+  for (const key of CHANNEL_KEYS) results[key] = { sent: false, code: null, error: null };
 
   const wanted = only ? CHANNELS.filter((c) => only.includes(c.key)) : CHANNELS;
 
@@ -397,6 +425,7 @@ async function dispatch(channels, payload, { only } = {}) {
       // which is the reserved "not attempted" sentinel and renders as a bare
       // "✗ Failed" in the admin panel.)
       if (!channel.configured(channels)) {
+        results[channel.key].code = NOTIFY_CODES.NO_DESTINATION;
         results[channel.key].error = channel.missing;
         return;
       }
@@ -408,9 +437,14 @@ async function dispatch(channels, payload, { only } = {}) {
       // four green rows in Diagnostics, and the operator repairing a bad directory
       // address got "sent" as confirmation while nothing had left the building.
       const outcome = await channel.send(channels, payload);
-      if (outcome === true) results[channel.key].sent = true;
-      else results[channel.key].error = typeof outcome === 'string' ? outcome : 'Not delivered.';
+      if (outcome === true) {
+        results[channel.key].sent = true;
+      } else {
+        results[channel.key].code = outcome?.code || NOTIFY_CODES.DELIVERY_FAILED;
+        results[channel.key].error = outcome?.message || 'Not delivered.';
+      }
     } catch (err) {
+      results[channel.key].code = err?.notifyCode || NOTIFY_CODES.DELIVERY_FAILED;
       results[channel.key].error = sanitizeDeliveryError(err, channel.key);
     }
   }));
@@ -426,6 +460,95 @@ async function dispatchToUsername(username, payload, opts = {}) {
   return dispatch(channels, payload, opts);
 }
 
+
+// --- Composers -------------------------------------------------------------
+//
+// These lived in index.js and were the last notification code there. They also had
+// DIFFERENT error policies — one caught and returned {}, the other let a database
+// error reject — which is the N-sites-N-policies drift this whole service exists to
+// remove, recreated at N=2. Both are non-throwing now, for the same reason dispatch()
+// is: a notification is a side effect, and it must not be able to fail the thing it
+// is reporting on.
+//
+// They key on library.EVENTS rather than redeclaring the strings. The vocabulary
+// belongs to the thing that produces the facts.
+const { EVENTS } = require('./library');
+
+function libraryEventMessage(event, game, username, status) {
+  const name = game.gameName;
+  switch (event) {
+    case EVENTS.STATUS_CHANGED:
+      return {
+        subject: `Game status changed: ${name}`,
+        title: 'Game Status Changed',
+        text: `User ${username} changed status of "${name}" to ${status}.`,
+      };
+    case EVENTS.RELEASED:
+      return {
+        subject: `Game released: ${name}`,
+        title: 'Game Released',
+        text: `"${name}" has been released!`,
+      };
+    case EVENTS.ADDED:
+    default:
+      return {
+        subject: `Game added: ${name}`,
+        title: 'Game Added',
+        text: `User ${username} added "${name}" to their library.`,
+      };
+  }
+}
+
+// Deliver a library event. NEVER REJECTS — see above.
+async function notifyLibraryEvent(event, game, username, status) {
+  const name = username ? String(username).toLowerCase() : '';
+  const { subject, title, text } = libraryEventMessage(event, game, name, status);
+  try {
+    const results = await dispatchToUsername(name, {
+      subject, text, title, message: text, coverUrl: game.coverUrl || null,
+    });
+    logOutcomes('Notify Event', name, results);
+    return results;
+  } catch (err) {
+    console.error(`[Notify Event] Could not dispatch for ${safeName(name)}:`, err.message);
+    return {};
+  }
+}
+
+// Deliver a release reminder. NEVER REJECTS.
+async function notifyReleaseReminder(username, game, days) {
+  const name = username ? String(username).toLowerCase() : '';
+  const when = days === 0 ? 'today' : `in ${days} days`;
+  const subject = `Reminder: "${game.game_name}" releases ${when}!`;
+  const text = `The game "${game.game_name}" you are following releases ${when} (${game.release_date}).`;
+  try {
+    const results = await dispatchToUsername(name, {
+      subject, text, title: 'Game Release Reminder', message: text,
+      coverUrl: game.cover_url || null,
+    });
+    logOutcomes('Release Reminder', name, results);
+    return results;
+  } catch (err) {
+    console.error(`[Release Reminder] Could not dispatch for ${safeName(name)}:`, err.message);
+    return {};
+  }
+}
+
+// Did anything actually go out? The cron's retry decision depends on this, so it is
+// defined once rather than re-derived at each caller.
+const anyDelivered = (results) => Object.values(results || {}).some((r) => r.sent);
+
+// Usernames are attacker-influenced enough to matter in a log line; sanitizeText is
+// the same collapse index.js's safeForLog applies.
+const safeName = (v) => sanitizeText(v, 64);
+
+function logOutcomes(tag, username, results) {
+  for (const [channel, r] of Object.entries(results)) {
+    if (r.sent) console.log(`[${tag}] ${channel} sent for ${safeName(username)}`);
+    else if (r.error) console.log(`[${tag}] ${channel} not sent for ${safeName(username)}: ${r.error}`);
+  }
+}
+
 module.exports = {
   // transports
   sendEmail, sendNtfy, sendGotify, sendTelegram,
@@ -439,6 +562,7 @@ module.exports = {
   escapeHtml, isSafeImageUrl, isBlockedNotificationHost, sanitizeDeliveryError,
   ALLOWED_IMAGE_HOSTS, METADATA_HOSTS,
   // recipients + fan-out
-  CHANNEL_COLUMNS, CHANNELS, CHANNEL_KEYS,
+  NOTIFY_CODES, CHANNEL_COLUMNS, CHANNELS, CHANNEL_KEYS,
+  notifyLibraryEvent, notifyReleaseReminder, anyDelivered, libraryEventMessage,
   channelsForUsername, channelsForId, resolveEmail, dispatch, dispatchToUsername,
 };

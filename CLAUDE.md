@@ -18,7 +18,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~3400 lines — Express server; the service layer under `services/`
+- **Entry point**: `index.js` (~2400 lines — Express server; the service layer under `services/`
   is progressively taking the logic out of it)
 
 ### Frontend
@@ -91,6 +91,11 @@ GameTracker/
 │                                   #   read the same to a caller. NOTHING from a
 │                                   #   provider's error body reaches the caller
 │   ├── users.js                    # Admin user management; the lockout safety rules
+│   ├── jobs.js                     # The scheduled work as CALLABLE functions: the release
+│                                   #   sweep and the weekly Steam price sync. index.js
+│                                   #   schedules them, the admin routes and
+│                                   #   run_notifications.js call the same ones — the sweep
+│                                   #   previously existed in FOUR copies that had drifted
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
 │                                   #   dispatch() is the ONE service that never throws — four
 │                                   #   independent outcomes, advisory result. See services/errors.js
@@ -446,6 +451,7 @@ deploy  (needs: ALL 7 upstream jobs)
 | ESLint | `frontend-quality` | Any lint error |
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js` or `test/api-surface.test.js` |
+| ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
 | Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
 
 ### Container Hardening

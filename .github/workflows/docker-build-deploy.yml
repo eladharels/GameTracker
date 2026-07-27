@@ -133,6 +133,15 @@ jobs:
       - name: Run backend unit tests
         run: npm test
 
+      # `no-undef` above all. A refactor once deleted two `const` declarations whose
+      # every reference sat inside a try/catch, so the DRM cache silently stopped
+      # working for a whole deploy cycle with nothing failing. Static analysis catches
+      # that class before merge; a runtime guard cannot. devDependencies never enter
+      # the image (the Dockerfile runs `npm ci --omit=dev`), so this changes neither
+      # the Trivy scan surface nor the image size.
+      - name: Lint backend
+        run: npm run lint
+
       - name: Install frontend dependencies
         working-directory: ./frontend
         run: npm ci

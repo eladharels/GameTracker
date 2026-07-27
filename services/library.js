@@ -410,10 +410,49 @@ async function applyRefreshedMetadata(userId, game, match) {
   return { updated: true, changes: updates.map((u) => u.split(' = ')[0]) };
 }
 
+
+// Whole days until a game releases: 0 today, negative once out, null when there is
+// no date we can reason about.
+//
+// The crons each did `new Date(game.release_date)` bare, with no guard. An
+// unparseable date yields NaN, so `diffDays <= 0` is false and
+// `notifDays.includes(NaN)` is false — the row is silently skipped forever, with a
+// log line reporting `diffDays: NaN`. Routed through validReleaseDate so the whole
+// codebase agrees on which dates are usable.
+function daysUntilRelease(releaseDate) {
+  const valid = validReleaseDate(releaseDate);
+  if (!valid) return null;
+  const d = new Date(valid); d.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.ceil((d - today) / 86400000);
+}
+
+// Promote a released game out of 'unreleased'.
+//
+// ONE definition of this write. It existed twice — the daily cron and
+// POST /api/admin/check-releases — with the same SQL and DIFFERENT arguments: the
+// cron lowercased the username, the admin route passed it through raw. Usernames are
+// stored lowercase, so the admin copy matched nothing whenever a caller used any
+// other casing, and did so silently: `changes` was never checked, so the route
+// reported the game as updated either way.
+//
+// Returns whether a row actually moved, so a caller can stop claiming it did.
+async function promoteReleased(username, gameId) {
+  const ctx = await run(
+    `UPDATE user_games SET status = 'wishlist'
+      WHERE user_id = (SELECT id FROM users WHERE username = ?)
+        AND game_id = ?
+        AND status = 'unreleased'`,
+    [norm(username), String(gameId)]
+  );
+  return { promoted: ctx.changes > 0 };
+}
+
 module.exports = {
   STATUSES, EVENTS, MAX_GAME_ID, MAX_GAME_NAME,
   isReleaseInFuture, validReleaseDate, decideEvents, upsertGame,
   isReleased, statusForDate, applyRefreshedMetadata,
+  daysUntilRelease, promoteReleased,
   listGamesFor,
   listOwnGames,
   listGamesWithAliases,

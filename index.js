@@ -40,6 +40,7 @@ const { loadSettings, resolveApiKey } = require('./settings-store');
 const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
 const catalogService = require('./services/catalog');
+const jobsService = require('./services/jobs');
 const usersService = require('./services/users');
 const settingsService = require('./services/settings');
 const notifications = require('./services/notifications');
@@ -470,12 +471,11 @@ app.get('/api/test/igdb', authRequired, requirePermission('can_manage_users'), a
 // --- CrackWatch cache (Option B: cached crack status) ---
 // Ephemeral — see CACHE_DIR above.
 //
-// These two were deleted by accident in the catalog slice (89e2458): that commit
-// replaced the /api/test/igdb route using this function's name as its end boundary
-// and swallowed the block in between. Every reference to both sits inside a
-// try/catch, so nothing crashed and nothing looked wrong — the DRM cache silently
-// stopped loading at boot, stopped saving, and refreshCrackWatchCache() broke out of
-// its pagination loop after page 0, behind a warning that reads like a missing file.
+// These two constants were deleted by accident in the catalog slice: that commit
+// replaced the /api/test/igdb route using this function name as its end boundary,
+// and swallowed the block in between. Every reference sits inside a try/catch, so
+// nothing crashed — the cache silently stopped loading and saving, and the refresh
+// broke out of its pagination loop after page 0.
 const CRACKWATCH_CACHE_FILE = path.join(CACHE_DIR, 'crackwatch-cache.json');
 const CRACKWATCH_RATE_MS = 1200; // 1.2s between requests to respect API limit
 
@@ -502,6 +502,25 @@ let crackWatchCache = Object.create(null);
 const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 const isUnsafeKey = (k) => UNSAFE_KEYS.includes(String(k));
 
+// A ReferenceError from our own code is a bug, not a runtime condition, and a catch
+// that means "this network call might fail" should not absorb it — that is how a
+// deleted `const CRACKWATCH_CACHE_FILE` degraded silently for a whole deploy cycle.
+//
+// NARROW, and deliberately so. An earlier version of this also rethrew SyntaxError
+// and TypeError, which was WORSE than the bug it was written for: both cache loaders
+// below JSON.parse a mutable file at MODULE SCOPE, and JSON.parse throws SyntaxError
+// on a truncated file — which markNotificationSent can produce, since it rewrites
+// sent_notifications.json with a bare writeFileSync on every reminder. A container
+// kill mid-write would then have made the backend AND every operator script
+// unbootable, including the ones you would use to diagnose it. Reconstructible caches
+// must keep degrading.
+//
+// The real prevention for the original defect is static: `no-undef` catches all four
+// references before merge, on every path, whether or not it executes.
+function rethrowIfReferenceError(err) {
+  if (err instanceof ReferenceError) throw err;
+}
+
 function loadCrackWatchCacheFromFile() {
   try {
     if (fs.existsSync(CRACKWATCH_CACHE_FILE)) {
@@ -522,6 +541,8 @@ function loadCrackWatchCacheFromFile() {
       console.log('[CrackWatch] Loaded cache from file,', Object.keys(crackWatchCache).length, 'titles');
     }
   } catch (err) {
+    // No rethrow here: this JSON.parses a mutable file at module scope, so a
+    // truncated cache must degrade to empty, not stop the process booting.
     console.warn('[CrackWatch] Could not load cache file:', err.message);
   }
 }
@@ -531,6 +552,7 @@ function saveCrackWatchCacheToFile() {
     fs.writeFileSync(CRACKWATCH_CACHE_FILE, JSON.stringify(crackWatchCache, null, 0), 'utf8');
     console.log('[CrackWatch] Saved cache to file,', Object.keys(crackWatchCache).length, 'titles');
   } catch (err) {
+    rethrowIfReferenceError(err);
     console.warn('[CrackWatch] Could not save cache file:', err.message);
   }
 }
@@ -576,6 +598,7 @@ async function refreshCrackWatchCache() {
       page++;
       await delay(CRACKWATCH_RATE_MS);
     } catch (err) {
+      rethrowIfReferenceError(err);
       console.warn('[CrackWatch] Refresh error at page', page, err.message || err, err.response?.status);
       break;
     }
@@ -894,47 +917,11 @@ function safeForLog(value, maxLength = 200) {
 // Compose and deliver a library event. Delivery itself — which channels the user has,
 // resolving their address through the directory, and never letting one channel's
 // failure stop another — is services/notifications.js.
-async function notifyEvent(type, game, username, status) {
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  const coverUrl = game.coverUrl || null;
-  let subject, text, title, message;
-  if (type === 'add') {
-    subject = `Game added: ${game.gameName}`;
-    text = `User ${normalizedUsername} added "${game.gameName}" to their library.`;
-    title = 'Game Added';
-    message = text;
-  } else if (type === 'status') {
-    subject = `Game status changed: ${game.gameName}`;
-    text = `User ${normalizedUsername} changed status of "${game.gameName}" to ${status}.`;
-    title = 'Game Status Changed';
-    message = text;
-  } else if (type === 'release') {
-    subject = `Game released: ${game.gameName}`;
-    text = `"${game.gameName}" has been released!`;
-    title = 'Game Released';
-    message = text;
-  }
-
-  // NEVER REJECTS. dispatch() does not throw, but the channel lookup behind it reads
-  // the database and can — and every caller here awaits this BEFORE res.json(), so a
-  // pool blip would leave the request hanging with no response at all. A notification
-  // is a side effect of adding a game; it must not be able to fail adding a game.
-  let results = {};
-  try {
-    results = await notifications.dispatchToUsername(
-      normalizedUsername,
-      { subject, text, title, message, coverUrl },
-    );
-  } catch (err) {
-    console.error(`[Notify Event] Could not dispatch for user ${safeForLog(normalizedUsername, 64)}:`, err.message);
-    return {};
-  }
-  for (const [channel, r] of Object.entries(results)) {
-    if (r.sent) console.log(`[Notify Event] ${channel} sent for user ${safeForLog(normalizedUsername, 64)}`);
-    else if (r.error) console.log(`[Notify Event] ${channel} not sent for user ${safeForLog(normalizedUsername, 64)}: ${r.error}`);
-  }
-  return results;
-}
+// Kept as a name because the upsert adapter reads well with it. The composing and
+// the delivery both live in services/notifications.js now; index.js has no
+// notification code left.
+const notifyEvent = (type, game, username, status) =>
+  notifications.notifyLibraryEvent(type, game, username, status);
 
 // --- Settings API ---
 // Secret masking, the __unchanged__ sentinel and the section merge now live in
@@ -2256,6 +2243,9 @@ if (fs.existsSync(SENT_NOTIFICATIONS_FILE)) {
       sentNotifications[user] = userEntry;
     }
   } catch (err) {
+    // No rethrow: same reason as the CrackWatch loader. This file is rewritten on
+    // every reminder, so a truncated one is a live possibility, and it is
+    // reconstructible — losing it re-sends at worst.
     console.warn('[Notifications] Could not read sent_notifications.json:', err.message);
     sentNotifications = Object.create(null);
   }
@@ -2269,134 +2259,33 @@ function markNotificationSent(username, gameId, type) {
   sentNotifications[normalizedUsername][gameId][type] = new Date().toISOString();
   fs.writeFileSync(SENT_NOTIFICATIONS_FILE, JSON.stringify(sentNotifications, null, 2));
 }
+// The reminder dedup log, as the pair services/jobs.js takes. Injected rather than
+// required, because this is file-backed state owned by the server process — a service
+// that wrote sent_notifications.json would make every test and every operator script
+// touch it.
+const dedupe = {
+  wasSent: (username, gameId, type) => !!wasNotificationSent(username, gameId, type),
+  markSent: (username, gameId, type) => markNotificationSent(username, gameId, type),
+};
+
 function wasNotificationSent(username, gameId, type) {
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
   if (isUnsafeKey(normalizedUsername) || isUnsafeKey(gameId) || isUnsafeKey(type)) return false;
   return sentNotifications[normalizedUsername] && sentNotifications[normalizedUsername][gameId] && sentNotifications[normalizedUsername][gameId][type];
 }
-function getAllUsers(cb) {
-  db.all('SELECT username FROM users', [], (err, rows) => {
-    if (err) return cb(err);
-    cb(null, rows.map(r => r.username));
-  });
-}
-// Callback-shaped shim over libraryService.listGamesFor, kept because the cron
-// sweep and run_notifications.js call it this way. The QUERY lives in the service
-// so there is exactly one definition of "this user's games" — two copies of it is
-// precisely the drift the service layer exists to prevent.
-function getUserGames(username, cb) {
-  libraryService.listGamesFor(username).then((rows) => cb(null, rows), (err) => cb(err));
-}
-// Compose and deliver a release reminder. Delivery is services/notifications.js.
-//
-// It used to await sendEmail OUTSIDE a try/catch while wrapping the other three, so
-// an SMTP failure rejected before ntfy, Gotify or Telegram were attempted — one
-// broken channel silenced all four, for every user, every day. dispatch() cannot do
-// that: each channel is independently caught.
-async function sendReleaseReminder(username, game, days) {
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  const when = days === 0 ? 'today' : `in ${days} days`;
-  const subject = `Reminder: "${game.game_name}" releases ${when}!`;
-  const text = `The game "${game.game_name}" you are following releases ${when} (${game.release_date}).`;
-
-  const results = await notifications.dispatchToUsername(
-    normalizedUsername,
-    { subject, text, title: 'Game Release Reminder', message: text, coverUrl: game.cover_url || null },
-  );
-  for (const [channel, r] of Object.entries(results)) {
-    if (r.sent) console.log(`[Release Reminder] ${channel} sent for user ${safeForLog(normalizedUsername, 64)}`);
-    else if (r.error) console.log(`[Release Reminder] ${channel} not sent for user ${safeForLog(normalizedUsername, 64)}: ${r.error}`);
-  }
-  return results;
-}
-
+// getAllUsers/getUserGames are gone: they existed only so the four copies of the
+// release sweep could enumerate. services/jobs.js does its own enumeration, with one
+// query instead of three round trips per user.
 console.log('About to schedule cron job');
 scheduleWhenServer('0 8 * * *', () => {
-  console.log('[CRON] Running scheduled notification check...');
-  getAllUsers((err, users) => {
-    if (err) return console.error('Error fetching users for notifications:', err);
-    users.forEach(username => {
-      // Load user's notification day preferences
-      db.get('SELECT notification_days FROM users WHERE username = ?', [username.toLowerCase()], (err, userRow) => {
-        let notifDays = [0, 7, 30]; // default matches legacy behaviour
-        if (!err && userRow && userRow.notification_days) {
-          try { notifDays = JSON.parse(userRow.notification_days); } catch {}
-        }
-        getUserGames(username, (err, games) => {
-          if (err) return;
-          let found = false;
-          games.forEach(game => {
-            if (game.status === 'unreleased' && game.release_date) {
-              const releaseDate = new Date(game.release_date);
-              const today = new Date();
-              today.setHours(0,0,0,0);
-              releaseDate.setHours(0,0,0,0);
-              const diffDays = Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24));
-              console.log(`[CRON] User: ${username}, Game: ${game.game_name}, Release: ${game.release_date}, diffDays: ${diffDays}, notifDays: ${JSON.stringify(notifDays)}`);
-
-              // Check if game has been released (diffDays <= 0)
-              if (diffDays <= 0) {
-                console.log(`[CRON] Game "${game.game_name}" has been released! Updating status from unreleased to wishlist for user ${username}`);
-                db.run(
-                  'UPDATE user_games SET status = ? WHERE user_id = (SELECT id FROM users WHERE username = ?) AND game_id = ?',
-                  ['wishlist', username.toLowerCase(), game.game_id],
-                  function(err) {
-                    if (err) {
-                      console.error(`[CRON] Failed to update status for game ${game.game_name} (user: ${username}):`, err);
-                    } else {
-                      console.log(`[CRON] Successfully updated status for game ${game.game_name} (user: ${username}) from unreleased to wishlist`);
-                      // No .catch(): notifyEvent cannot reject, and logs each
-                      // channel's outcome itself.
-                      notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist');
-                    }
-                  }
-                );
-                found = true;
-              } else {
-                // Check if this diffDays value matches any of the user's configured reminder days
-                if (notifDays.includes(diffDays)) {
-                  const type = `${diffDays}days`;
-                  if (!wasNotificationSent(username, game.game_id, type)) {
-                    console.log(`[CRON] Sending ${type} reminder to ${username} for game ${game.game_name}`);
-                    sendReleaseReminder(username, game, diffDays).then((results) => {
-                      // Mark it sent only if a channel ACTUALLY delivered. Before the
-                      // fan-out was extracted, an SMTP failure rejected the whole
-                      // function, so the mark was skipped and the reminder retried the
-                      // next day. dispatch() no longer rejects for a channel failure —
-                      // which is the point — so the retry decision has to be made here
-                      // instead, from the result, or a total outage would be recorded
-                      // as delivered and never retried.
-                      const delivered = Object.values(results || {}).some((r) => r.sent);
-                      if (delivered) {
-                        markNotificationSent(username, game.game_id, type);
-                        console.log(`Sent ${type} release reminder to ${safeForLog(username, 64)} for game ${safeForLog(game.game_name, 80)}`);
-                      } else {
-                        // NOT "will retry": diffDays decrements daily and is matched
-                        // against the user's notification_days, so a failed 30-day
-                        // reminder is not re-attempted at 30 days — it is dropped, and
-                        // the next threshold (7, then 0) is the next chance. Still
-                        // better than recording an undelivered reminder as sent.
-                        console.warn(`[CRON] No channel delivered the ${type} reminder to ${safeForLog(username, 64)} for game ${safeForLog(game.game_name, 80)} — not marking it sent`);
-                      }
-                    }).catch(err => {
-                      console.error(`Failed to send ${type} reminder to ${safeForLog(username, 64)} for game ${safeForLog(game.game_name, 80)}:`, err.message);
-                    });
-                    found = true;
-                  } else {
-                    console.log(`[CRON] Notification already sent for ${username}, game ${game.game_name}, type ${type}`);
-                  }
-                }
-              }
-            }
-          });
-          if (!found) {
-            console.log(`[CRON] No matching unreleased games for user ${username}`);
-          }
-        });
-      });
-    });
-  });
+  console.log('[CRON] Running scheduled release check...');
+  jobsService.checkReleases({ dedupe })
+    .then((r) => console.log('[CRON] Release check complete:', {
+      usersChecked: r.usersChecked, promoted: r.promoted.length,
+      remindersSent: r.remindersSent.length, errors: r.errors.length,
+    }))
+    .catch((err) => console.error('[CRON] Release check failed:', err.message));
 });
 
 // --- Per-user Library Sharing (persistent) ---
@@ -2463,70 +2352,20 @@ app.get('/api/user/:username/share', authRequired, selfOnly('You can only view y
 // Manual trigger for release status updates (for testing)
 app.post('/api/admin/check-releases', authRequired, requirePermission('can_manage_users'), (req, res) => {
   console.log('[MANUAL API] Running release status check...');
-  let updatedGames = [];
-  let notificationsSent = [];
-  
-  getAllUsers((err, users) => {
-    if (err) return res.status(500).json({ error: 'Failed to fetch users' });
-    
-    let processedUsers = 0;
-    users.forEach(username => {
-      getUserGames(username, (err, games) => {
-        if (err) return;
-        games.forEach(game => {
-          if (game.status === 'unreleased' && game.release_date) {
-            const releaseDate = new Date(game.release_date);
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            releaseDate.setHours(0,0,0,0);
-            const diffDays = Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24));
-            
-            // Check if game has been released (diffDays <= 0)
-            if (diffDays <= 0) {
-              console.log(`[MANUAL API] Game "${game.game_name}" has been released! Updating status for user ${username}`);
-              
-              // Update the game status from unreleased to wishlist
-              db.run(
-                'UPDATE user_games SET status = ? WHERE user_id = (SELECT id FROM users WHERE username = ?) AND game_id = ?',
-                ['wishlist', username, game.game_id],
-                function(err) {
-                  if (err) {
-                    console.error(`[MANUAL API] Failed to update status for game ${game.game_name} (user: ${username}):`, err);
-                  } else {
-                    console.log(`[MANUAL API] Successfully updated status for game ${game.game_name} (user: ${username})`);
-                    updatedGames.push({ username, gameName: game.game_name, gameId: game.game_id });
-                    
-                    // Send release notification
-                    // No .catch(): notifyEvent cannot reject (see its definition).
-                    // Report only what a channel ACTUALLY delivered — the .then() runs
-                    // unconditionally now, so pushing here regardless would report a
-                    // notification nobody received. Same rule as the cron reminder.
-                    notifyEvent('release', { gameName: game.game_name, coverUrl: game.cover_url }, username, 'wishlist')
-                      .then((results) => {
-                        if (Object.values(results || {}).some((r) => r.sent)) {
-                          notificationsSent.push({ username, gameName: game.game_name });
-                        }
-                      });
-                  }
-                }
-              );
-            }
-          }
-        });
-        
-        processedUsers++;
-        if (processedUsers === users.length) {
-          res.json({ 
-            success: true, 
-            message: 'Release status check completed',
-            updatedGames,
-            notificationsSent,
-            totalUsers: users.length
-          });
-        }
-      });
-    });
-  });
+  // The SAME function the 08:00 cron runs. These were two copies of the sweep with
+  // two differences, one of them a bug: the cron lowercased the username in its
+  // UPDATE and this route did not, so for any non-lowercase caller it matched no rows
+  // and still reported the game as updated.
+  jobsService.checkReleases({ dedupe })
+    .then((report) => res.json({
+      success: true,
+      message: `Release check completed. ${report.promoted.length} games updated.`,
+      updatedGames: report.promoted,
+      notificationsSent: report.remindersSent,
+      errors: report.errors,
+    }))
+    .catch((err) => problem.send(res, err, { log: '[MANUAL API] Release check failed:',
+      fallback: 'Failed to check releases' }));
 });
 
 // --- Terminal handlers (must be registered after every route) ---
@@ -2555,48 +2394,14 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // --- Scheduled Weekly Price Update for User Libraries ---
-scheduleWhenServer('0 3 * * 1', async () => { // Every Monday at 3:00 AM
+scheduleWhenServer('0 3 * * 1', () => {   // Every Monday at 3:00 AM
   console.log('[CRON] Starting weekly Steam price update for all user libraries...');
-  // `<> ''` as well as NOT NULL, matching update_library_prices.js: an empty
-  // steam_app_id can never resolve to a price, and `appids=` makes Steam answer 200
-  // with an empty body, which reads in the log like a game that simply has no price.
-  db.all("SELECT * FROM user_games WHERE steam_app_id IS NOT NULL AND steam_app_id <> '' ORDER BY id", [], async (err, games) => {
-    if (err) {
-      console.error('[CRON] Failed to fetch user games for price update:', err);
-      return;
-    }
-    for (const game of games) {
-      try {
-        const response = await axios.get('https://store.steampowered.com/api/appdetails', {
-          params: {
-            appids: game.steam_app_id,
-            cc: 'il',
-            l: 'en',
-          },
-        });
-        const data = response.data[game.steam_app_id];
-        if (data && data.success && data.data && data.data.price_overview) {
-          const price = data.data.price_overview.final_formatted;
-          db.run('UPDATE user_games SET last_price = ?, last_price_updated = ? WHERE id = ?', [
-            price,
-            new Date().toISOString(),
-            game.id
-          ], (err) => {
-            if (err) {
-              console.error(`[CRON] Failed to update price for game_id ${game.game_id} (user_game id ${game.id}):`, err);
-            } else {
-              console.log(`[CRON] Updated price for game_id ${game.game_id} (user_game id ${game.id}): ${price}`);
-            }
-          });
-        } else {
-          console.log(`[CRON] No price found for Steam app_id ${game.steam_app_id} (game_id ${game.game_id})`);
-        }
-      } catch (err) {
-        console.error(`[CRON] Error fetching price for Steam app_id ${game.steam_app_id} (game_id ${game.game_id}):`, err.message);
-      }
-    }
-    console.log('[CRON] Weekly Steam price update complete.');
-  });
+  // STEAM_REGION passed through: the cron used to hardcode 'il' while
+  // update_library_prices.js honoured the variable, so the two produced prices in
+  // different currencies for the same library.
+  jobsService.updatePrices({ region: process.env.STEAM_REGION || 'il' })
+    .then((r) => console.log('[CRON] Weekly Steam price update complete:', r))
+    .catch((err) => console.error('[CRON] Price update failed:', err.message));
 });
 
 // Only bind a port when run directly (`node index.js`). The utility scripts
@@ -2623,14 +2428,12 @@ if (isServerProcess) {
 }
 
 // Export functions for manual scripts
+// Exported for the operator scripts. `dedupe` is what run_notifications.js needs to
+// run the SAME release sweep the cron runs — it used to reimplement the sweep, which
+// its own header admitted had already drifted twice.
 module.exports = {
   app,
   db,
   parseRouteId,
-  getAllUsers,
-  getUserGames,
-  wasNotificationSent,
-  markNotificationSent,
-  sendReleaseReminder,
-  notifyEvent
+  dedupe,
 };

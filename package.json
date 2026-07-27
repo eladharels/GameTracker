@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "test": "node test/helpers.test.js && node test/api-surface.test.js"
+    "test": "node test/helpers.test.js && node test/api-surface.test.js",
+    "lint": "eslint ."
   },
   "keywords": [],
   "author": "",
@@ -37,5 +38,10 @@
     "qs": ">=6.15.3",
     "body-parser": ">=2.3.0",
     "ip-address": ">=10.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.8.0"
   }
 }
