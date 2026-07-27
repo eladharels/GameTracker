@@ -642,6 +642,82 @@ check('STATUSES is the documented five, frozen', () => {
   assert.ok(Object.isFrozen(libraryService.STATUSES));
 });
 
+// services/catalog.js — the pure parts. The provider calls need a network and live
+// in the differential harness; the merge rules and normalisers do not, and they are
+// where the subtle defects are.
+const catalog = require('../services/catalog');
+
+console.log('catalog.igdbDate (v1 threw RangeError and lost the whole provider):');
+check('an out-of-range timestamp yields null instead of throwing', () => {
+  // v1: new Date(ts * 1000).toISOString() — a RangeError here escaped the .map,
+  // rejected the provider promise, and cost EVERY result rather than one date.
+  assert.throws(() => new Date(1e18 * 1000).toISOString(), RangeError);
+  assert.strictEqual(catalog.igdbDate(1e18), null);
+  assert.strictEqual(catalog.igdbDate(1234567890), '2009-02-13');
+});
+check('falsy means "no date" — including 0, which is not a release date', () => {
+  for (const v of [null, undefined, 0, '', false]) assert.strictEqual(catalog.igdbDate(v), null);
+});
+
+console.log('catalog.mergeResults:');
+check('a missing cover and Steam App ID are borrowed from a same-named result', () => {
+  const igdb = [{ name: 'Half-Life', releaseDate: '1998-11-19', coverUrl: 'i.png', steamAppId: '70' }];
+  const rawg = [{ name: 'half-life', releaseDate: '1998-11-19', coverUrl: null, steamAppId: null }];
+  const merged = catalog.mergeResults(igdb, rawg, []);
+  assert.strictEqual(merged.length, 1, 'same-named results were not deduped');
+  assert.strictEqual(merged[0].coverUrl, 'i.png');
+  assert.strictEqual(merged[0].steamAppId, '70');
+});
+check('a release date is NEVER borrowed across a same-name pair', () => {
+  // Two genuinely different games share the name "Judas". Borrowing the date would
+  // give the unreleased one a 2017 release — and that date drives the
+  // unreleased/released status coercion, so a wrong date rewrites a user's status.
+  const igdb = [{ name: 'Judas', releaseDate: '2017-01-01', coverUrl: 'a.png', steamAppId: null }];
+  const rawg = [{ name: 'Judas', releaseDate: null, coverUrl: null, steamAppId: null }];
+  const merged = catalog.mergeResults(igdb, rawg, []);
+  assert.strictEqual(merged.length, 1);
+  assert.strictEqual(merged[0].releaseDate, null, 'a date was borrowed by name');
+  assert.strictEqual(merged[0].coverUrl, 'a.png', 'the cover should still be borrowed');
+});
+check('dedupe prefers the entry with no release date', () => {
+  const a = { name: 'X', releaseDate: '2020-01-01', coverUrl: null, steamAppId: null };
+  const b = { name: 'x', releaseDate: null, coverUrl: null, steamAppId: null };
+  assert.strictEqual(catalog.mergeResults([a], [b], [])[0].releaseDate, null);
+});
+
+console.log('catalog.findExactMatch (a fuzzy match here rewrites the user\'s game):');
+check('case-insensitive, but a near miss is not a match', () => {
+  const rs = [{ name: 'Half-Life 2' }, { name: 'Portal' }];
+  assert.strictEqual(catalog.findExactMatch(rs, 'half-life 2').name, 'Half-Life 2');
+  assert.strictEqual(catalog.findExactMatch(rs, 'Half-Life'), null, 'a prefix matched');
+  assert.strictEqual(catalog.findExactMatch(rs, 'Portal 2'), null);
+  assert.strictEqual(catalog.findExactMatch([], 'x'), null);
+});
+
+console.log('catalog.theGamesDbCover:');
+check('front boxart wins, then first, then a bare object', () => {
+  const base = 'https://cdn/';
+  assert.strictEqual(catalog.theGamesDbCover([{ side: 'back', filename: 'b.png' }, { side: 'front', filename: 'f.png' }], base), base + 'f.png');
+  assert.strictEqual(catalog.theGamesDbCover([{ side: 'back', filename: 'b.png' }], base), base + 'b.png');
+  assert.strictEqual(catalog.theGamesDbCover({ filename: 's.png' }, base), base + 's.png');
+  assert.strictEqual(catalog.theGamesDbCover(undefined, base), null);
+  assert.strictEqual(catalog.theGamesDbCover([], base), null);
+});
+
+console.log('library.statusForDate (one rule, shared by upsert and refresh):');
+check('a future date locks unreleased; a past date promotes it', () => {
+  const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+  assert.strictEqual(libraryService.statusForDate(iso(30), 'playing'), 'unreleased');
+  assert.strictEqual(libraryService.statusForDate(iso(-30), 'unreleased'), 'wishlist');
+  assert.strictEqual(libraryService.statusForDate(iso(0), 'unreleased'), 'wishlist');
+});
+check('a status the user chose is left alone once released', () => {
+  const past = '1998-11-19';
+  for (const s of ['playing', 'done', 'backlog', 'wishlist']) {
+    assert.strictEqual(libraryService.statusForDate(past, s), s, `${s} was reassigned`);
+  }
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

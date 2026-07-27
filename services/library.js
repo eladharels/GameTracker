@@ -75,6 +75,12 @@ async function removeGame(userId, gameId) {
   return { removed: ctx.changes };
 }
 
+// One row from a user's library, or undefined.
+async function findGame(userId, gameId) {
+  const { get } = db.promises;
+  return get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [userId, String(gameId)]);
+}
+
 // The backlog, in display order.
 async function listBacklog(userId) {
   return all(
@@ -322,12 +328,72 @@ async function upsertGame(userId, fields) {
   });
 }
 
+
+// The status a game should hold, given a release date. ONE rule, shared with the
+// upsert.
+//
+// It was open-coded a third and fourth time in the two refresh-metadata paths, with
+// a subtly different shape: they only re-synced status when the date CHANGED, and
+// they promoted 'unreleased' -> 'wishlist' rather than leaving the caller's choice.
+// Both behaviours are preserved by resyncStatus's callers below; what is no longer
+// duplicated is the definition of "is this date in the future".
+function statusForDate(releaseDate, currentStatus) {
+  if (isReleaseInFuture(releaseDate)) return 'unreleased';
+  // Past or today: a game sitting in 'unreleased' has been released, so promote it.
+  // This mirrors the daily cron's auto-transition. Any other status is the user's
+  // own choice and is left alone.
+  return currentStatus === 'unreleased' ? 'wishlist' : currentStatus;
+}
+
+// Apply a catalog match to an existing library row.
+//
+// Only fields that actually differ are written, and `changes` names them — v1 built
+// exactly this list to report back to the SPA, so it is the response, not debugging.
+//
+// Returns { updated:false, changes: [] } when the match brings nothing new, which the
+// bulk path reports as "checked, unchanged" rather than as an error.
+async function applyRefreshedMetadata(userId, game, match) {
+  const updates = [];
+  const params = [];
+
+  if (match.releaseDate !== game.release_date) {
+    updates.push('release_date = ?');
+    params.push(match.releaseDate);
+    // Re-sync status to the NEW date. Only on a date change, matching v1: a refresh
+    // that leaves the date alone must not quietly reassign a status the user chose.
+    const next = statusForDate(match.releaseDate, game.status);
+    if (next !== game.status) {
+      updates.push('status = ?');
+      params.push(next);
+    }
+  }
+  if (match.coverUrl !== game.cover_url) {
+    updates.push('cover_url = ?');
+    params.push(match.coverUrl);
+  }
+  // Only FILLS a missing Steam App ID; never overwrites one. A stored id may have
+  // been corrected by hand or by the backfill script, and the providers disagree
+  // with each other often enough that overwriting would flap.
+  if (match.steamAppId && !game.steam_app_id) {
+    updates.push('steam_app_id = ?');
+    params.push(match.steamAppId);
+  }
+
+  if (updates.length === 0) return { updated: false, changes: [] };
+
+  params.push(userId, String(game.game_id));
+  await run(`UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`, params);
+  return { updated: true, changes: updates.map((u) => u.split(' = ')[0]) };
+}
+
 module.exports = {
   STATUSES, EVENTS, MAX_GAME_ID, MAX_GAME_NAME,
   isReleaseInFuture, validReleaseDate, decideEvents, upsertGame,
+  statusForDate, applyRefreshedMetadata,
   listGamesFor,
   listOwnGames,
   listGamesWithAliases,
+  findGame,
   removeGame,
   listBacklog,
   moveBacklogItem,

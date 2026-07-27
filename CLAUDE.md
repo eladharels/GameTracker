@@ -83,7 +83,11 @@ GameTracker/
 │                                   #   caller; a 500 never echoes one. Adapters call
 │                                   #   problem.send(res, err, ...) instead of hand-rolling a ladder
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
-│   ├── library.js                  # Game library + backlog ordering
+│   ├── library.js                  # Game library + backlog ordering + the upsert
+│   ├── catalog.js                  # IGDB/RAWG/TheGamesDB search, normalise, merge.
+│                                   #   Degrades: a provider that is down contributes
+│                                   #   zero results, never an error. NOTHING from a
+│                                   #   provider's error body reaches the caller
 │   ├── users.js                    # Admin user management; the lockout safety rules
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
 │                                   #   dispatch() is the ONE service that never throws — four

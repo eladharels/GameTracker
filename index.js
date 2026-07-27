@@ -38,6 +38,7 @@ const { loadSettings, resolveApiKey } = require('./settings-store');
 // implementation instead of two implementations that drift.
 const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
+const catalogService = require('./services/catalog');
 const usersService = require('./services/users');
 const settingsService = require('./services/settings');
 const notifications = require('./services/notifications');
@@ -395,224 +396,17 @@ app.get('/api/games/search', authRequired, async (req, res) => {
   if (!query) {
     return res.status(400).json({ error: 'Missing search query' });
   }
-  // Escape double-quotes so a crafted query can't break out of the IGDB
-  // APIcalypse `search "..."` string literal (query injection into the IGDB call).
-  const safeQuery = escapeIgdbSearch(query);
   try {
-    // IGDB request
-    const hasIgdbCredentials = resolveApiKey('IGDB_CLIENT_ID') && resolveApiKey('IGDB_BEARER_TOKEN');
-    if (!hasIgdbCredentials) {
-      console.warn('[IGDB] Missing credentials - IGDB_CLIENT_ID or IGDB_BEARER_TOKEN not set');
-    }
-    
-    // Verify credentials are loaded before making the API call
-    const clientId = resolveApiKey('IGDB_CLIENT_ID');
-    const bearerToken = resolveApiKey('IGDB_BEARER_TOKEN');
-    
-    if (!clientId || !bearerToken) {
-      console.error('[IGDB] Credentials check failed:', {
-        clientId: clientId ? 'SET' : 'MISSING',
-        bearerToken: bearerToken ? 'SET' : 'MISSING'
-      });
-    }
-    
-    const igdbPromise = axios.post(
-      'https://api.igdb.com/v4/games',
-      `search "${safeQuery}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 20;`,
-      {
-        headers: {
-          'Client-ID': clientId,
-          'Authorization': `Bearer ${bearerToken}`,
-          'Accept': 'application/json',
-        },
-      }
-    ).then(async response => {
-      const games = response.data || [];
-      console.log(`[IGDB] Query: "${query}", Found ${games.length} games`);
-      // For each game, fetch external_games for Steam (category 1)
-      return games.map(game => {
-        let steamAppId = null;
-        if (Array.isArray(game.external_games)) {
-          const steamExternal = game.external_games.find(ext => ext.category === 1 && ext.uid);
-          if (steamExternal) {
-            steamAppId = steamExternal.uid;
-          }
-        }
-        return {
-          id: 'igdb_' + game.id,
-          name: game.name,
-          releaseDate: game.first_release_date
-            ? new Date(game.first_release_date * 1000).toISOString().split('T')[0]
-            : null,
-          coverUrl: game.cover?.image_id
-            ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${game.cover.image_id}.jpg`
-            : null,
-          source: 'igdb',
-          steamAppId,
-        };
-      });
-    }).catch((err) => {
-      console.error('[IGDB Search Error]', {
-        message: err.message,
-        status: err.response?.status,
-        statusText: err.response?.statusText,
-        data: err.response?.data,
-        hasCredentials: hasIgdbCredentials,
-        clientId: resolveApiKey('IGDB_CLIENT_ID') ? 'SET' : 'MISSING',
-        bearerToken: resolveApiKey('IGDB_BEARER_TOKEN') ? 'SET' : 'MISSING'
-      });
-      return [];
-    });
-
-    // RAWG request
-    const rawgPromise = axios.get(
-      'https://api.rawg.io/api/games',
-      {
-        params: {
-          key: resolveApiKey('RAWG_API_KEY'),
-          search: query,
-          page_size: 20,
-        }
-      }
-    ).then(async response => {
-      const games = response.data.results || [];
-      // For each game, fetch detailed info to get Steam App ID
-      const detailedGames = await Promise.all(games.map(async (game) => {
-        let steamAppId = null;
-        try {
-          const detailRes = await axios.get(`https://api.rawg.io/api/games/${game.id}`, {
-            params: { key: resolveApiKey('RAWG_API_KEY') }
-          });
-          const stores = detailRes.data.stores || [];
-          const steamStore = stores.find(s => s.store && s.store.id === 1 && s.url_en);
-          if (steamStore && steamStore.url_en) {
-            // Extract App ID from the Steam URL
-            const match = steamStore.url_en.match(/\/app\/(\d+)/);
-            if (match) {
-              steamAppId = match[1];
-            }
-          }
-        } catch (e) {
-          // Ignore errors, just no steamAppId
-        }
-        return {
-          id: 'rawg_' + game.id,
-          name: game.name,
-          releaseDate: game.released,
-          coverUrl: game.background_image,
-          source: 'rawg',
-          steamAppId,
-        };
-      }));
-      return detailedGames;
-    }).catch((err) => {
-      console.error('[RAWG Search Error]', err.response?.data || err.message);
-      return [];
-    });
-
-    // TheGamesDB request (optional - only if API key is configured)
-    const thegamesdbPromise = resolveApiKey('THEGAMESDB_API_KEY')
-      ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
-          params: {
-            apikey: resolveApiKey('THEGAMESDB_API_KEY'),
-            name: query,
-          }
-        }).then(async response => {
-          const data = response.data;
-          if (!data || !data.data || !data.data.games) {
-            return [];
-          }
-          const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
-          const baseUrl = data.include?.base_url?.image_base || data.data?.base_url?.image_base || 'https://cdn.thegamesdb.net/images/';
-          
-          return games.slice(0, 20).map(game => {
-            // Find cover/boxart image
-            let coverUrl = null;
-            if (data.include && data.include.boxart) {
-              const gameBoxart = data.include.boxart[game.id];
-              if (gameBoxart && Array.isArray(gameBoxart)) {
-                const frontCover = gameBoxart.find(img => img.side === 'front');
-                if (frontCover) {
-                  coverUrl = `${baseUrl}${frontCover.filename}`;
-                } else if (gameBoxart[0]) {
-                  coverUrl = `${baseUrl}${gameBoxart[0].filename}`;
-                }
-              } else if (gameBoxart && gameBoxart.filename) {
-                coverUrl = `${baseUrl}${gameBoxart.filename}`;
-              }
-            }
-            
-            // Parse release date
-            let releaseDate = null;
-            if (game.release_date) {
-              // TheGamesDB date format can vary, try to parse it
-              const date = new Date(game.release_date);
-              if (!isNaN(date.getTime())) {
-                releaseDate = date.toISOString().split('T')[0];
-              }
-            }
-            
-            return {
-              id: 'thegamesdb_' + game.id,
-              name: game.game_title || game.game_name || '',
-              releaseDate: releaseDate,
-              coverUrl: coverUrl,
-              source: 'thegamesdb',
-              steamAppId: null, // TheGamesDB doesn't provide Steam App IDs
-            };
-          }).filter(game => game.name); // Filter out games without names
-        }).catch((err) => {
-          console.error('[TheGamesDB Search Error]', err.response?.data || err.message);
-          return [];
-        })
-      : Promise.resolve([]);
-
-    // Wait for all three
-    const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
-
-    // Merge and deduplicate by name (case-insensitive)
-    const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(game => {
-      // If game didn't provide a steamAppId, try to find one from IGDB or RAWG for the same game name
-      if (!game.steamAppId) {
-        const igdbMatch = igdbResults.find(igdbGame => igdbGame.name.toLowerCase() === game.name.toLowerCase() && igdbGame.steamAppId);
-        if (igdbMatch) {
-          return { ...game, steamAppId: igdbMatch.steamAppId };
-        }
-        const rawgMatch = rawgResults.find(rawgGame => rawgGame.name.toLowerCase() === game.name.toLowerCase() && rawgGame.steamAppId);
-        if (rawgMatch) {
-          return { ...game, steamAppId: rawgMatch.steamAppId };
-        }
-      }
-      // If game didn't provide a coverUrl, try to find one from other sources
-      if (!game.coverUrl) {
-        const coverMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
-          otherGame.name.toLowerCase() === game.name.toLowerCase() && otherGame.coverUrl
-        );
-        if (coverMatch) {
-          return { ...game, coverUrl: coverMatch.coverUrl };
-        }
-      }
-      // Do NOT fill releaseDate from another result by name only — different games
-      // can share the same name (e.g. "Judas" 2017 vs unreleased "Judas"), so we
-      // only use each result's own releaseDate to avoid wrong dates.
-      return game;
-    });
-    // Dedupe by name: prefer entry with no release date (unreleased) when multiple same-name results
-    const byName = {};
-    merged.forEach(g => {
-      const k = g.name.toLowerCase();
-      if (!byName[k]) byName[k] = [];
-      byName[k].push(g);
-    });
-    const mergedDeduped = Object.values(byName).map(games =>
-      games.find(g => !g.releaseDate) || games[0]
-    );
-
-    console.log(`[Search] Query: "${query}", Results: ${mergedDeduped.length} games (IGDB: ${igdbResults.length}, RAWG: ${rawgResults.length}, TheGamesDB: ${thegamesdbResults.length})`);
-    res.json(mergedDeduped);
+    const { results, counts } = await catalogService.searchAll(query);
+    console.log(`[Search] Query: "${safeForLog(query, 100)}", Results: ${results.length} games `
+      + `(IGDB: ${counts.igdb}, RAWG: ${counts.rawg}, TheGamesDB: ${counts.thegamesdb})`);
+    res.json(results);
   } catch (error) {
-    console.error('[Search Error]', error);
-    res.status(500).json({ error: 'Failed to fetch games from providers', details: error.message });
+    // searchAll degrades rather than rejecting — every provider has its own catch —
+    // so reaching here means something structural, not a provider being down. The
+    // message is NOT echoed: it would carry provider detail. (v1 sent err.message.)
+    console.error('[Search] Failed:', error.message);
+    res.status(500).json({ error: 'Failed to fetch games from providers' });
   }
 });
 
@@ -1171,10 +965,9 @@ app.post('/api/settings', authRequired, express.json(), (req, res) => {
   }
 });
 
-// Date-only future check — one definition, in services/library.js, because the
-// upsert's status coercion and the search results' "unreleased" labelling must agree
-// about what "releasing today" means. Two copies would disagree by a day at midnight.
-const { isReleaseInFuture } = libraryService;
+// isReleaseInFuture is no longer needed here. Its only remaining callers were the
+// two refresh-metadata routes, and the status re-sync they open-coded now lives in
+// services/library.js#statusForDate alongside the upsert's copy of the same rule.
 
 // --- Add/update a game status for a user (with notification) ---
 app.post('/api/user/:username/games', authRequired, ownershipRequired, (req, res) => {
@@ -1351,598 +1144,106 @@ app.put('/api/user/:username/backlog-reorder', authRequired, ownershipRequired, 
 });
 
 // Refresh metadata for all games in a user's library
-app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired, async (req, res) => {
-  const { username } = req.params;
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  
-  if (!normalizedUsername) {
-    return res.status(400).json({ error: 'Missing username' });
-  }
+app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired, (req, res) => {
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
+  if (!normalizedUsername) return res.status(400).json({ error: 'Missing username' });
 
   withExistingUser(res, normalizedUsername, (user) => {
-
     const run = async () => {
-      const userGames = await new Promise((resolve, reject) => {
-        db.all('SELECT * FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows || []);
-        });
-      });
+      const userGames = await libraryService.listGamesWithAliases(user.id);
+      const results = { total: userGames.length, updated: 0, errors: [], details: [] };
 
-      const results = {
-        total: userGames.length,
-        updated: 0,
-        errors: [],
-        details: []
-      };
-
-      // Process each game
+      // SEQUENTIAL, as in v1. Each game costs up to 1 + 1 + 1 provider searches plus
+      // RAWG's per-result detail lookups, so running a whole library concurrently
+      // would burst hundreds of outbound requests and earn a rate-limit.
       for (const game of userGames) {
         try {
-          // Search for the game using the same logic as the search endpoint
-          const query = game.game_name;
-          // Escape quotes/backslashes in the stored name so it can't break out of the IGDB search literal.
-          const safeQuery = escapeIgdbSearch(query);
-
-          // IGDB request
-          const igdbPromise = axios.post(
-            'https://api.igdb.com/v4/games',
-            `search "${safeQuery}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
-            {
-              headers: {
-                'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
-                'Authorization': `Bearer ${resolveApiKey('IGDB_BEARER_TOKEN')}`,
-                'Accept': 'application/json',
-              },
-            }
-          ).then(async response => {
-            const games = response.data || [];
-            return games.map(game => {
-              let steamAppId = null;
-              if (Array.isArray(game.external_games)) {
-                const steamExternal = game.external_games.find(ext => ext.category === 1 && ext.uid);
-                if (steamExternal) {
-                  steamAppId = steamExternal.uid;
-                }
-              }
-              return {
-                id: 'igdb_' + game.id,
-                name: game.name,
-                releaseDate: game.first_release_date
-                  ? new Date(game.first_release_date * 1000).toISOString().split('T')[0]
-                  : null,
-                coverUrl: game.cover?.image_id
-                  ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${game.cover.image_id}.jpg`
-                  : null,
-                source: 'igdb',
-                steamAppId,
-              };
-            });
-          }).catch(() => []);
-
-          // RAWG request
-          const rawgPromise = axios.get(
-            'https://api.rawg.io/api/games',
-            {
-              params: {
-                key: resolveApiKey('RAWG_API_KEY'),
-                search: query,
-                page_size: 10,
-              }
-            }
-          ).then(async response => {
-            const games = response.data.results || [];
-            const detailedGames = await Promise.all(games.map(async (game) => {
-              let steamAppId = null;
-              try {
-                const detailRes = await axios.get(`https://api.rawg.io/api/games/${game.id}`, {
-                  params: { key: resolveApiKey('RAWG_API_KEY') }
-                });
-                const stores = detailRes.data.stores || [];
-                const steamStore = stores.find(s => s.store && s.store.id === 1 && s.url_en);
-                if (steamStore && steamStore.url_en) {
-                  const match = steamStore.url_en.match(/\/app\/(\d+)/);
-                  if (match) {
-                    steamAppId = match[1];
-                  }
-                }
-              } catch (e) {
-                // Ignore errors
-              }
-              return {
-                id: 'rawg_' + game.id,
-                name: game.name,
-                releaseDate: game.released,
-                coverUrl: game.background_image,
-                source: 'rawg',
-                steamAppId,
-              };
-            }));
-            return detailedGames;
-          }).catch(() => []);
-
-          // TheGamesDB request (optional - only if API key is configured)
-          const thegamesdbPromise = resolveApiKey('THEGAMESDB_API_KEY')
-            ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
-                params: {
-                  apikey: resolveApiKey('THEGAMESDB_API_KEY'),
-                  name: query,
-                }
-              }).then(async response => {
-                const data = response.data;
-                if (!data || !data.data || !data.data.games) {
-                  return [];
-                }
-                const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
-                const baseUrl = data.include?.base_url?.image_base || data.data?.base_url?.image_base || 'https://cdn.thegamesdb.net/images/';
-                
-                return games.slice(0, 10).map(game => {
-                  // Find cover/boxart image
-                  let coverUrl = null;
-                  if (data.include && data.include.boxart) {
-                    const gameBoxart = data.include.boxart[game.id];
-                    if (gameBoxart && Array.isArray(gameBoxart)) {
-                      const frontCover = gameBoxart.find(img => img.side === 'front');
-                      if (frontCover) {
-                        coverUrl = `${baseUrl}${frontCover.filename}`;
-                      } else if (gameBoxart[0]) {
-                        coverUrl = `${baseUrl}${gameBoxart[0].filename}`;
-                      }
-                    } else if (gameBoxart && gameBoxart.filename) {
-                      coverUrl = `${baseUrl}${gameBoxart.filename}`;
-                    }
-                  }
-                  
-                  // Parse release date
-                  let releaseDate = null;
-                  if (game.release_date) {
-                    const date = new Date(game.release_date);
-                    if (!isNaN(date.getTime())) {
-                      releaseDate = date.toISOString().split('T')[0];
-                    }
-                  }
-                  
-                  return {
-                    id: 'thegamesdb_' + game.id,
-                    name: game.game_title || game.game_name || '',
-                    releaseDate: releaseDate,
-                    coverUrl: coverUrl,
-                    source: 'thegamesdb',
-                    steamAppId: null,
-                  };
-                }).filter(game => game.name);
-              }).catch(() => [])
-            : Promise.resolve([]);
-
-          // Wait for all three APIs
-          const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
-
-          // Merge and deduplicate by name (case-insensitive)
-          const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(g => {
-            // If game didn't provide a steamAppId, try to find one from IGDB or RAWG
-            if (!g.steamAppId) {
-              const igdbMatch = igdbResults.find(igdbGame => igdbGame.name.toLowerCase() === g.name.toLowerCase() && igdbGame.steamAppId);
-              if (igdbMatch) {
-                return { ...g, steamAppId: igdbMatch.steamAppId };
-              }
-              const rawgMatch = rawgResults.find(rawgGame => rawgGame.name.toLowerCase() === g.name.toLowerCase() && rawgGame.steamAppId);
-              if (rawgMatch) {
-                return { ...g, steamAppId: rawgMatch.steamAppId };
-              }
-            }
-            // If game didn't provide a coverUrl, try to find one from other sources
-            if (!g.coverUrl) {
-              const coverMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame => 
-                otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.coverUrl
-              );
-              if (coverMatch) {
-                return { ...g, coverUrl: coverMatch.coverUrl };
-              }
-            }
-            // Do NOT fill releaseDate from another result by name only (avoids wrong date from different game with same name)
-            return g;
-          });
-          // Dedupe by name: prefer entry with no release date (unreleased) when multiple same-name results
-          const byNameBulk = {};
-          merged.forEach(g => {
-            const k = g.name.toLowerCase();
-            if (!byNameBulk[k]) byNameBulk[k] = [];
-            byNameBulk[k].push(g);
-          });
-          const mergedDedupedBulk = Object.values(byNameBulk).map(games =>
-            games.find(g => !g.releaseDate) || games[0]
-          );
-
-          // Find the best match (exact name match, case-insensitive)
-          const match = mergedDedupedBulk.find(g => g.name.toLowerCase() === game.game_name.toLowerCase());
-          
-          if (match) {
-            let updated = false;
-            const updates = [];
-            const params = [];
-
-            // Check release date
-            if (match.releaseDate !== game.release_date) {
-              updates.push('release_date = ?');
-              params.push(match.releaseDate);
-              updated = true;
-              // Re-sync status to the new date: future -> lock as unreleased;
-              // past/now on a currently-unreleased game -> promote to wishlist
-              // (mirrors the daily cron auto-transition).
-              if (isReleaseInFuture(match.releaseDate)) {
-                if (game.status !== 'unreleased') {
-                  updates.push('status = ?');
-                  params.push('unreleased');
-                }
-              } else if (game.status === 'unreleased') {
-                updates.push('status = ?');
-                params.push('wishlist');
-              }
-            }
-
-            // Check cover URL
-            if (match.coverUrl !== game.cover_url) {
-              updates.push('cover_url = ?');
-              params.push(match.coverUrl);
-              updated = true;
-            }
-
-            // Check Steam App ID (update if we found one and don't have one)
-            if (match.steamAppId && !game.steam_app_id) {
-              updates.push('steam_app_id = ?');
-              params.push(match.steamAppId);
-              updated = true;
-            }
-
-            if (updated) {
-              params.push(user.id, game.game_id);
-              await new Promise((resolve, reject) => {
-                db.run(
-                  `UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`,
-                  params,
-                  function (err) {
-                    if (err) {
-                      reject(err);
-                    } else {
-                      resolve();
-                    }
-                  }
-                );
-              });
-              results.updated++;
-              results.details.push({
-                gameName: game.game_name,
-                gameId: game.game_id,
-                changes: updates.map(u => u.split(' = ')[0])
-              });
-            } else {
-              results.details.push({
-                gameName: game.game_name,
-                gameId: game.game_id,
-                changes: []
-              });
-            }
-          } else {
-            results.errors.push({
-              gameName: game.game_name,
-              gameId: game.game_id,
-              error: 'Game not found in API search results'
-            });
-            results.details.push({
-              gameName: game.game_name,
-              gameId: game.game_id,
-              changes: [],
-              error: 'Not found'
-            });
+          const { results: candidates } = await catalogService.searchAll(game.game_name,
+            { limit: catalogService.LIMIT_REFRESH });
+          const match = catalogService.findExactMatch(candidates, game.game_name);
+          if (!match) {
+            results.errors.push({ gameName: game.game_name, gameId: game.game_id,
+              error: 'Game not found in API search results' });
+            results.details.push({ gameName: game.game_name, gameId: game.game_id,
+              changes: [], error: 'Not found' });
+            continue;
           }
+          const applied = await libraryService.applyRefreshedMetadata(user.id, game, match);
+          if (applied.updated) results.updated++;
+          results.details.push({ gameName: game.game_name, gameId: game.game_id,
+            changes: applied.changes });
         } catch (error) {
-          results.errors.push({
-            gameName: game.game_name,
-            gameId: game.game_id,
-            error: error.message
-          });
-          results.details.push({
-            gameName: game.game_name,
-            gameId: game.game_id,
-            changes: [],
-            error: error.message
-          });
+          // Per-game, so one bad game does not abandon the sweep. The message is the
+          // service's or the database's, never a provider's — searchAll degrades
+          // instead of throwing.
+          console.error(`[Refresh] ${safeForLog(game.game_name, 80)} failed:`, error.message);
+          results.errors.push({ gameName: game.game_name, gameId: game.game_id,
+            error: 'Refresh failed' });
+          results.details.push({ gameName: game.game_name, gameId: game.game_id,
+            changes: [], error: 'Refresh failed' });
         }
       }
 
       res.json({
         success: true,
         message: `Metadata refresh completed. ${results.updated} games updated out of ${results.total} total games.`,
-        results
+        results,
       });
     };
 
     run().catch((e) => {
-      // Log the detail, return a generic message. This now wraps db.run rejections,
-      // so e.message can be raw Postgres text disclosing table/constraint names or
-      // the shape of the SQL.
-      console.error('Bulk refresh metadata error:', e);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to refresh metadata' });
-      }
+      // Log the detail, return a generic message: e.message can be raw Postgres text
+      // disclosing table and constraint names.
+      console.error('[Refresh] Bulk refresh failed:', e.message);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to refresh metadata' });
     });
   });
 });
 
 // Refresh metadata for a specific game in a user's library
-app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, ownershipRequired, async (req, res) => {
+app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, ownershipRequired, (req, res) => {
   const { username, gameId } = req.params;
   const normalizedUsername = username ? username.toLowerCase() : '';
-
   if (!normalizedUsername || !gameId) {
     return res.status(400).json({ error: 'Missing username or gameId' });
   }
 
-  withExistingUser(res, normalizedUsername, async (user) => {
+  withExistingUser(res, normalizedUsername, (user) => {
+    const run = async () => {
+      const game = await libraryService.findGame(user.id, gameId);
+      if (!game) return res.status(404).json({ error: 'Game not found in user library' });
 
-    db.get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, game) => {
-      if (err) {
-        return res.status(500).json({ error: 'DB error' });
+      const results = { total: 1, updated: 0, errors: [], details: [] };
+      const { results: candidates } = await catalogService.searchAll(game.game_name,
+        { limit: catalogService.LIMIT_REFRESH });
+      const match = catalogService.findExactMatch(candidates, game.game_name);
+
+      if (!match) {
+        results.errors.push({ gameName: game.game_name, gameId: game.game_id,
+          error: 'Game not found in API search results' });
+        results.details.push({ gameName: game.game_name, gameId: game.game_id,
+          changes: [], error: 'Not found' });
+      } else {
+        const applied = await libraryService.applyRefreshedMetadata(user.id, game, match);
+        if (applied.updated) results.updated++;
+        results.details.push({ gameName: game.game_name, gameId: game.game_id,
+          changes: applied.changes });
       }
-      if (!game) {
-        return res.status(404).json({ error: 'Game not found in user library' });
-      }
 
-      const results = {
-        total: 1,
-        updated: 0,
-        errors: [],
-        details: []
-      };
+      res.json({
+        success: true,
+        results,
+        message: `Metadata refresh completed for game ${game.game_name}.`,
+      });
+    };
 
-      try {
-        const query = game.game_name;
-        // Escape quotes/backslashes in the stored name so it can't break out of the IGDB search literal.
-        const safeQuery = escapeIgdbSearch(query);
-
-        const igdbPromise = axios.post(
-          'https://api.igdb.com/v4/games',
-          `search "${safeQuery}"; fields id,name,first_release_date,cover.image_id,external_games.category,external_games.uid; limit 10;`,
-          {
-            headers: {
-              'Client-ID': resolveApiKey('IGDB_CLIENT_ID'),
-              'Authorization': `Bearer ${resolveApiKey('IGDB_BEARER_TOKEN')}`,
-              'Accept': 'application/json',
-            },
-          }
-        ).then(async response => {
-          const games = response.data || [];
-          return games.map(game => {
-            let steamAppId = null;
-            if (Array.isArray(game.external_games)) {
-              const steamExternal = game.external_games.find(ext => ext.category === 1 && ext.uid);
-              if (steamExternal) {
-                steamAppId = steamExternal.uid;
-              }
-            }
-            return {
-              id: 'igdb_' + game.id,
-              name: game.name,
-              releaseDate: game.first_release_date
-                ? new Date(game.first_release_date * 1000).toISOString().split('T')[0]
-                : null,
-              coverUrl: game.cover?.image_id
-                ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${game.cover.image_id}.jpg`
-                : null,
-              source: 'igdb',
-              steamAppId,
-            };
-          });
-        }).catch(() => []);
-
-        const rawgPromise = axios.get(
-          'https://api.rawg.io/api/games',
-          {
-            params: {
-              key: resolveApiKey('RAWG_API_KEY'),
-              search: query,
-              page_size: 10,
-            }
-          }
-        ).then(async response => {
-          const games = response.data.results || [];
-          const detailedGames = await Promise.all(games.map(async (game) => {
-            let steamAppId = null;
-            try {
-              const detailRes = await axios.get(`https://api.rawg.io/api/games/${game.id}`, {
-                params: { key: resolveApiKey('RAWG_API_KEY') }
-              });
-              const stores = detailRes.data.stores || [];
-              const steamStore = stores.find(s => s.store && s.store.id === 1 && s.url_en);
-              if (steamStore && steamStore.url_en) {
-                const match = steamStore.url_en.match(/\/app\/(\d+)/);
-                if (match) {
-                  steamAppId = match[1];
-                }
-              }
-            } catch (e) {
-              // Ignore errors
-            }
-            return {
-              id: 'rawg_' + game.id,
-              name: game.name,
-              releaseDate: game.released,
-              coverUrl: game.background_image,
-              source: 'rawg',
-              steamAppId,
-            };
-          }));
-          return detailedGames;
-        }).catch(() => []);
-
-        const thegamesdbPromise = resolveApiKey('THEGAMESDB_API_KEY')
-          ? axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', {
-              params: {
-                apikey: resolveApiKey('THEGAMESDB_API_KEY'),
-                name: query,
-              }
-            }).then(async response => {
-              const data = response.data;
-              if (!data || !data.data || !data.data.games) {
-                return [];
-              }
-              const games = Array.isArray(data.data.games) ? data.data.games : [data.data.games];
-              const baseUrl = data.include?.base_url?.image_base || data.data?.base_url?.image_base || 'https://cdn.thegamesdb.net/images/';
-              
-              return games.slice(0, 10).map(game => {
-                let coverUrl = null;
-                if (data.include && data.include.boxart) {
-                  const gameBoxart = data.include.boxart[game.id];
-                  if (gameBoxart && Array.isArray(gameBoxart)) {
-                    const frontCover = gameBoxart.find(img => img.side === 'front');
-                    if (frontCover) {
-                      coverUrl = `${baseUrl}${frontCover.filename}`;
-                    } else if (gameBoxart[0]) {
-                      coverUrl = `${baseUrl}${gameBoxart[0].filename}`;
-                    }
-                  } else if (gameBoxart && gameBoxart.filename) {
-                    coverUrl = `${baseUrl}${gameBoxart.filename}`;
-                  }
-                }
-                
-                let releaseDate = null;
-                if (game.release_date) {
-                  const date = new Date(game.release_date);
-                  if (!isNaN(date.getTime())) {
-                    releaseDate = date.toISOString().split('T')[0];
-                  }
-                }
-                
-                return {
-                  id: 'thegamesdb_' + game.id,
-                  name: game.game_title || game.game_name || '',
-                  releaseDate: releaseDate,
-                  coverUrl: coverUrl,
-                  source: 'thegamesdb',
-                  steamAppId: null,
-                };
-              }).filter(game => game.name);
-            }).catch(() => [])
-          : Promise.resolve([]);
-
-        const [igdbResults, rawgResults, thegamesdbResults] = await Promise.all([igdbPromise, rawgPromise, thegamesdbPromise]);
-
-        const merged = [...igdbResults, ...rawgResults, ...thegamesdbResults].map(g => {
-          if (!g.steamAppId) {
-            const igdbMatch = igdbResults.find(igdbGame => igdbGame.name.toLowerCase() === g.name.toLowerCase() && igdbGame.steamAppId);
-            if (igdbMatch) return { ...g, steamAppId: igdbMatch.steamAppId };
-            const rawgMatch = rawgResults.find(rawgGame => rawgGame.name.toLowerCase() === g.name.toLowerCase() && rawgGame.steamAppId);
-            if (rawgMatch) return { ...g, steamAppId: rawgMatch.steamAppId };
-          }
-          if (!g.coverUrl) {
-            const coverMatch = [...igdbResults, ...rawgResults, ...thegamesdbResults].find(otherGame =>
-              otherGame.name.toLowerCase() === g.name.toLowerCase() && otherGame.coverUrl
-            );
-            if (coverMatch) return { ...g, coverUrl: coverMatch.coverUrl };
-          }
-          // Do NOT fill releaseDate from another result by name only (avoids wrong date from different game with same name)
-          return g;
-        });
-        // Dedupe by name: prefer entry with no release date (unreleased) when multiple same-name results
-        const byNameSingle = {};
-        merged.forEach(g => {
-          const k = g.name.toLowerCase();
-          if (!byNameSingle[k]) byNameSingle[k] = [];
-          byNameSingle[k].push(g);
-        });
-        const mergedDedupedSingle = Object.values(byNameSingle).map(games =>
-          games.find(g => !g.releaseDate) || games[0]
-        );
-
-        const match = mergedDedupedSingle.find(g => g.name.toLowerCase() === game.game_name.toLowerCase());
-
-        if (match) {
-          let updated = false;
-          const updates = [];
-          const params = [];
-
-          if (match.releaseDate !== game.release_date) {
-            updates.push('release_date = ?');
-            params.push(match.releaseDate);
-            updated = true;
-            // Re-sync status to the new date (see bulk refresh above).
-            if (isReleaseInFuture(match.releaseDate)) {
-              if (game.status !== 'unreleased') {
-                updates.push('status = ?');
-                params.push('unreleased');
-              }
-            } else if (game.status === 'unreleased') {
-              updates.push('status = ?');
-              params.push('wishlist');
-            }
-          }
-          if (match.coverUrl !== game.cover_url) {
-            updates.push('cover_url = ?');
-            params.push(match.coverUrl);
-            updated = true;
-          }
-          if (match.steamAppId && !game.steam_app_id) {
-            updates.push('steam_app_id = ?');
-            params.push(match.steamAppId);
-            updated = true;
-          }
-
-          if (updated) {
-            params.push(user.id, game.game_id);
-            await new Promise((resolve, reject) => {
-              db.run(
-                `UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`,
-                params,
-                function (err) {
-                  if (err) reject(err);
-                  else resolve();
-                }
-              );
-            });
-            results.updated++;
-            results.details.push({
-              gameName: game.game_name,
-              gameId: game.game_id,
-              changes: updates.map(u => u.split(' = ')[0])
-            });
-          } else {
-            results.details.push({
-              gameName: game.game_name,
-              gameId: game.game_id,
-              changes: []
-            });
-          }
-        } else {
-          results.errors.push({
-            gameName: game.game_name,
-            gameId: game.game_id,
-            error: 'Game not found in API search results'
-          });
-          results.details.push({
-            gameName: game.game_name,
-            gameId: game.game_id,
-            changes: [],
-            error: 'Not found'
-          });
-        }
-
-        return res.json({
-          success: true,
-          results,
-          message: `Metadata refresh completed for game ${game.game_name}.`,
-        });
-      } catch (error) {
-        console.error(`Error refreshing metadata for game_id ${gameId}:`, error);
-        results.errors.push({
-          gameName: game.game_name,
-          gameId: game.game_id,
-          error: error.message || 'Unknown error'
-        });
-        return res.status(500).json({
-          error: 'Failed to refresh metadata for game',
-          results
-        });
+    run().catch((error) => {
+      // v1 put error.message into the RESPONSE here. It is the service's or the
+      // database's message — searchAll degrades rather than throwing — so it could
+      // carry Postgres table and constraint names to the caller.
+      console.error(`[Refresh] game_id ${safeForLog(gameId, 80)} failed:`, error.message);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to refresh metadata for game' });
       }
     });
   });
