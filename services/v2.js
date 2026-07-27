@@ -180,7 +180,21 @@ function notificationSettings(row) {
   };
 }
 
+// A backlog entry. `position` rather than `backlogOrder`: this resource IS the
+// ordering, so the field names what it means here rather than echoing the column.
+function backlogEntry(row, index) {
+  return {
+    gameId: row.game_id,
+    name: row.game_name ?? null,
+    // The stored backlog_order may be NULL on rows predating the column, and may have
+    // gaps. The client asked for "the backlog in order", so the answer is 1..n by
+    // position in the returned sequence — not the raw column, which would leak the
+    // storage's holes as if they meant something.
+    position: index + 1,
+  };
+}
+
 module.exports = {
-  toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings,
+  toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings, backlogEntry,
   PLANNED_CODES, WWW_AUTHENTICATE,
 };

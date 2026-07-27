@@ -2098,6 +2098,65 @@ v2Router.delete('/library/games/:gameId', (req, res) => {
     .catch((err) => v2.send(res, err, { log: '[v2] game delete failed:' }));
 });
 
+// PATCH /api/v2/library/games/:gameId — status only, re-derived from the STORED date.
+//
+// There is deliberately no releaseDate in the body. Accepting one is what let v1 write
+// an already-released game back to `unreleased` and then announce it to every
+// notification channel on the next correct write.
+v2Router.patch('/library/games/:gameId', (req, res) => {
+  const body = req.body || {};
+  if (!Object.hasOwn(body, 'status')) {
+    return v2.send(res, {
+      code: SVC.VALIDATION,
+      message: 'status is the only updatable field; send it',
+      details: { field: 'status' },
+    });
+  }
+  libraryService.setStatus(req.user.id, req.params.gameId, body.status)
+    .then(({ game }) => res.json(v2.libraryGame(game)))
+    .catch((err) => v2.send(res, err, { log: '[v2] status change failed:' }));
+});
+
+// GET /api/v2/library/backlog — the backlog in display order.
+v2Router.get('/library/backlog', (req, res) => {
+  libraryService.listBacklog(req.user.id)
+    .then((rows) => res.json({ data: rows.map(v2.backlogEntry) }))
+    .catch((err) => v2.send(res, err, { log: '[v2] backlog read failed:' }));
+});
+
+// PUT /api/v2/library/backlog — replace the order wholesale.
+//
+// Bulk BY DESIGN: ordering is a set operation, and applying it as a sequence of moves
+// leaves a half-ordered list on any failure. One transaction under one advisory lock.
+v2Router.put('/library/backlog', (req, res) => {
+  const order = (req.body || {}).order;
+  if (!Array.isArray(order)) {
+    return v2.send(res, {
+      code: SVC.VALIDATION, message: 'order must be an array of game ids',
+      details: { field: 'order' },
+    });
+  }
+  if (order.length > 1000) {
+    return v2.send(res, {
+      code: SVC.VALIDATION, message: 'order may contain at most 1000 ids',
+      details: { field: 'order' },
+    });
+  }
+  libraryService.reorderBacklog(req.user.id, order)
+    .then((meta) => libraryService.listBacklog(req.user.id)
+      .then((rows) => res.json({ data: rows.map(v2.backlogEntry), meta })))
+    .catch((err) => v2.send(res, err, { log: '[v2] reorder failed:' }));
+});
+
+// ─── EVERY v2 ROUTE MUST BE REGISTERED ABOVE THIS LINE ───────────────────────
+//
+// Express matches layers in stack order, so the catch-all below answers anything
+// declared after it. Three routes were added below it once and every one of them
+// returned 404 with the middleware and the inventory both looking correct — the
+// authorization gate cannot see this, because the routes exist on the router and
+// carry the right tier; they are simply unreachable. Only booting the server found
+// it. test/api-surface.test.js now asserts the ordering directly.
+
 // An unknown /api/v2 path, answered in v2's format. Without this the app-level
 // terminal handler replies `{"error":"Not found"}` as application/json — the v1
 // envelope, on a surface whose entire contract says problem+json, so a generated

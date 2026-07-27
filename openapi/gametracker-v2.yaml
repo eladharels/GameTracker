@@ -447,6 +447,7 @@ paths:
     patch:
       tags: [library]
       operationId: updateLibraryGame
+      x-implemented: true
       x-required-scope: library
       summary: Update a game's status or metadata
       description: |
@@ -496,6 +497,7 @@ paths:
     get:
       tags: [library]
       operationId: getBacklog
+      x-implemented: true
       x-required-scope: library
       summary: The backlog, in display order
       responses:
@@ -515,6 +517,7 @@ paths:
     put:
       tags: [library]
       operationId: replaceBacklogOrder
+      x-implemented: true
       x-required-scope: library
       summary: Replace the backlog order
       description: |

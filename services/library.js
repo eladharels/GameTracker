@@ -96,7 +96,10 @@ async function findGame(userId, gameId) {
 // The backlog, in display order.
 async function listBacklog(userId) {
   return all(
-    'SELECT id, game_id, backlog_order FROM user_games WHERE user_id = ? AND status = ? ORDER BY backlog_order ASC NULLS FIRST, id ASC',
+    // game_name is selected for v2's BacklogEntry.name. v1's callers ignore the extra
+    // column; without it the v2 backlog can only return opaque ids, which is the shape
+    // an LLM-driven client is least able to do anything with.
+    'SELECT id, game_id, game_name, backlog_order FROM user_games WHERE user_id = ? AND status = ? ORDER BY backlog_order ASC NULLS FIRST, id ASC',
     [userId, 'backlog']
   );
 }
@@ -632,6 +635,63 @@ async function listPage(userId, opts = {}) {
   return { data: page, meta: { total: totalRow ? totalRow.total : 0, limit, nextCursor } };
 }
 
+// Change a game's status, deriving the result from the STORED release date.
+//
+// THIS IS THE FIX FOR v1'S WORST TRAP, expressed as its own function rather than as a
+// flag on upsertGame. There, status was computed from the `releaseDate` in the REQUEST:
+// send `{gameId, gameName, status:'done'}` for a game released in 2020 and omit the
+// date, and validReleaseDate(undefined) is null, isReleased(null) is false, so the row
+// was written `unreleased` — while release_date was PRESERVED, because it is not in the
+// ON CONFLICT DO UPDATE list. The row then read `release_date='2020-01-01',
+// status='unreleased'`, and the next correct write made decideEvents emit RELEASED and
+// push "has been released!" to four channels for a six-year-old game.
+//
+// The SPA never tripped it because it always resends the date. A script or an MCP is
+// exactly the client that will not, which is why v2 does not accept a date here at all.
+async function setStatus(userId, gameId, status) {
+  const requested = String(status ?? '').trim().toLowerCase();
+  if (!STATUSES.includes(requested)) {
+    throw serviceError(CODES.VALIDATION,
+      `status must be one of: ${STATUSES.join(', ')}`, { field: 'status' });
+  }
+  const row = await get(
+    'SELECT id, release_date, status, backlog_order FROM user_games WHERE user_id = ? AND game_id = ?',
+    [userId, String(gameId)]
+  );
+  if (!row) throw serviceError(CODES.NOT_FOUND, 'no such game in your library');
+
+  // The stored date decides whether `unreleased` is even available. Asking for it on a
+  // game that is already out is a contradiction the server resolves rather than stores.
+  const resolved = statusForDate(row.release_date, requested);
+
+  // Entering the backlog needs a position; leaving it must give one up, or the row
+  // keeps a stale slot that the reorder then has to reason about.
+  let backlogOrder = row.backlog_order;
+  if (resolved === 'backlog' && row.status !== 'backlog') {
+    await db.withTransaction(async (tx) => {
+      // Same lock every other writer of backlog_order takes. Without it this read of
+      // MAX and the reorder's row-by-row rewrite interleave and produce duplicate
+      // positions, which make the up/down move a permanent no-op.
+      await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, userId]);
+      const maxRow = (await tx.query(
+        'SELECT MAX(backlog_order) AS "maxOrder" FROM user_games WHERE user_id = ?', [userId]
+      )).rows[0];
+      const next = (maxRow && maxRow.maxOrder != null ? Number(maxRow.maxOrder) : 0) + 1;
+      await tx.query('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
+        [resolved, next, row.id]);
+    });
+  } else {
+    backlogOrder = resolved === 'backlog' ? backlogOrder : null;
+    await db.promises.run('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
+      [resolved, backlogOrder, row.id]);
+  }
+
+  const updated = await get('SELECT * FROM user_games WHERE id = ?', [row.id]);
+  // `coerced` tells the caller the server resolved their request to something else,
+  // rather than silently storing a different value than they asked for.
+  return { game: updated, coerced: resolved !== requested };
+}
+
 // AT THE END OF THE FILE, deliberately. This block used to sit above the v2
 // pagination helpers, which put every name it referenced in the temporal dead zone —
 // `require('./library')` threw ReferenceError before any caller ran. Keeping exports
@@ -650,5 +710,5 @@ module.exports = {
   listBacklog,
   moveBacklogItem,
   reorderBacklog,
-  listPage, SORTS, MAX_PAGE, DEFAULT_PAGE, encodeCursor,
+  listPage, SORTS, MAX_PAGE, DEFAULT_PAGE, encodeCursor, setStatus,
 };

@@ -243,6 +243,9 @@ const EXPECTED_V2 = {
   'DELETE /api/v2/tokens/:tokenId': 'pat',
   'GET /api/v2/me/notifications': 'pat',
   'PATCH /api/v2/me/notifications': 'pat',
+  'PATCH /api/v2/library/games/:gameId': 'pat',
+  'GET /api/v2/library/backlog': 'pat',
+  'PUT /api/v2/library/backlog': 'pat',
 };
 
 // separately and by hand. A route reaching 'public' without being on this list is a
@@ -377,6 +380,30 @@ check('x-required-scope agrees with the tier the router derives', () => {
     assert.strictEqual(declared === 'admin', routerSaysAdmin,
       `${key}: spec says x-required-scope '${declared}' but the router's tier is '${tier}'`);
   }
+});
+
+check('no v2 route is registered below the catch-all that would shadow it', () => {
+  // The authorization gate CANNOT see this. Three routes were once added below the
+  // terminal 404 handler: they were present on the router, carried tier `pat`, matched
+  // the spec, and every assertion in this file passed — while all three returned 404 to
+  // every caller. Express answers with the first matching layer, and a path-less
+  // `.use()` matches everything.
+  //
+  // Asserted from the router's own stack rather than from source text, so it holds
+  // however the routes are written.
+  const v2Layer = (app.router || app._router).stack.find(
+    (l) => l.handle && Array.isArray(l.handle.stack) && mountPath(l) === '/api/v2');
+  assert.ok(v2Layer, 'the /api/v2 router is no longer mounted');
+
+  const stack = v2Layer.handle.stack;
+  // A catch-all is a path-less `.use()` that is not the authenticator.
+  const firstCatchAll = stack.findIndex(
+    (l) => !l.route && typeof l.handle === 'function' && l.handle.name !== 'patRequired'
+           && mountedAtRoot(l));
+  if (firstCatchAll === -1) return;   // no terminal handler yet; nothing to shadow
+  const shadowed = stack.slice(firstCatchAll + 1).filter((l) => l.route).map((l) => l.route.path);
+  assert.deepStrictEqual(shadowed, [],
+    `these v2 routes are registered below the catch-all and are UNREACHABLE: ${shadowed.join(', ')}`);
 });
 
 check('every v2 route is token-authenticated, never merely authenticated', () => {
