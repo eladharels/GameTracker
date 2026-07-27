@@ -807,6 +807,51 @@ checkAsync('an admin cannot write another user\'s notification target', async ()
   }
 });
 
+checkAsync('a hostile body can only ever emit allowlisted column literals', async () => {
+  // The property the whole raw-body seam rests on. PUT /api/users/:id passes
+  // req.body to update() wholesale — deliberately, so a route cannot forget to
+  // forward a field the service must refuse — and that is safe ONLY because every
+  // string appended to the UPDATE is hardcoded. Asserting it here is what stops a
+  // future refactor turning that seam into an arbitrary-column write.
+  const original = dbModule.promises.run;
+  let issued = null;
+  let bound = null;
+  dbModule.promises.run = async (sql, params) => { issued = sql; bound = params; return { changes: 1 }; };
+  try {
+    const hostile = JSON.parse(JSON.stringify({
+      email: 'a@b.c',
+      "password = 'x', can_manage_users = 1 -- ": 'injected',
+      origin: 'ldap',
+      id: 999,
+      username: 'root2',
+      can_create_users: 1,
+      created_at: '1970-01-01',
+    }));
+    await usersService.update(7, hostile, 1);
+  } finally {
+    dbModule.promises.run = original;
+  }
+
+  assert.strictEqual(issued, 'UPDATE users SET email = ? WHERE id = ?',
+    `a non-allowlisted key reached the SQL: ${issued}`);
+  assert.deepStrictEqual(bound, ['a@b.c', 7]);
+});
+
+checkAsync('prototype pollution cannot smuggle a notification target past the guard', async () => {
+  // The other half of the raw-body argument: an inherited property is still visible
+  // to the guard, so a polluted body fails CLOSED rather than slipping through.
+  Object.prototype.gotify_token = 'pwned';
+  try {
+    await assert.rejects(
+      () => usersService.update(7, { email: 'a@b.c' }, 1),
+      (err) => err.code === SVC.VALIDATION && String(err.message).includes('gotify_token'),
+      'an inherited gotify_token was not refused — the raw-body seam fails OPEN'
+    );
+  } finally {
+    delete Object.prototype.gotify_token;
+  }
+});
+
 check('every channel column in the schema is classified as user-owned', () => {
   // Derived from the SCHEMA, not from a copy of the list. Without this, shrinking
   // USER_OWNED_NOTIFICATION_COLUMNS back to two names silently un-guarded ntfy_url,
@@ -815,19 +860,35 @@ check('every channel column in the schema is classified as user-owned', () => {
   // away. This is the same control as api-surface.test.js failing on an unrecorded
   // route: a NEW channel column added to `users` fails here until someone classifies
   // it, rather than defaulting to admin-writable by omission.
-  const schema = require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'migrations', '001_initial_schema.sql'), 'utf8');
-  const table = schema.match(/CREATE TABLE IF NOT EXISTS users \(([\s\S]*?)\n\);/);
+  // EVERY migration, not just 001. CLAUDE.md requires a new column to arrive as a
+  // new numbered migration and forbids editing one that has already been applied —
+  // so reading 001 alone missed the only sanctioned way to add a column. A migration
+  // adding `pushover_user_key` to users passed this test while it read one file.
+  const fs = require('fs');
+  const path = require('path');
+  const dir = path.join(__dirname, '..', 'migrations');
+  const sql = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+
+  const table = sql.match(/CREATE TABLE IF NOT EXISTS users \(([\s\S]*?)\n\);/);
   assert.ok(table, 'could not find the users table definition');
 
   const columns = table[1].split('\n')
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('--'))
     .map((line) => line.split(/\s+/)[0]);
+  // ...unioned with every column any later migration bolts on.
+  for (const m of sql.matchAll(/ALTER\s+TABLE\s+users\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)/gi)) {
+    columns.push(m[1]);
+  }
   assert.ok(columns.includes('gotify_token'), `column parse failed: ${columns.join(',')}`);
 
-  // Anything that names a delivery endpoint or carries a bearer value.
-  const channelish = /(ntfy|gotify|telegram|discord|slack|webhook)|_(url|token|topic|secret|key|chat_id)$/;
+  // Vocabulary-based, and therefore only as good as the vocabulary: this catches a
+  // column NAMED like the channels we already know. `matrix_room_id` would slip
+  // through. It is a tripwire for the likely case, not a proof, and the comment says
+  // so rather than letting the commit message overstate it.
+  const channelish =
+    /(ntfy|gotify|telegram|discord|slack|matrix|pushover|apprise|webhook)|_(url|token|topic|secret|key|chat_id|room_id)$/;
   const owned = new Set(usersService.USER_OWNED_NOTIFICATION_COLUMNS);
   for (const column of columns.filter((c) => channelish.test(c))) {
     assert.ok(

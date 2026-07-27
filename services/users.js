@@ -147,7 +147,17 @@ async function update(id, fields, actingUserId) {
   }
 
   params.push(id);
-  const ctx = await run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+  // `db.promises.run`, not the destructured `run`, for the same reason listAll uses
+  // db.promises.all: so a test can observe the SQL this actually emits.
+  //
+  // That matters more here than anywhere else in this file. The route hands the whole
+  // request body to this function, and the ONLY thing making that safe is that every
+  // string appended to `updates` above is a hardcoded literal — nothing caller-
+  // controlled reaches this template. Nothing asserted that. A later "generalise the
+  // update path" refactor introducing `updates.push(\`${key} = ?\`)` would silently
+  // turn the raw-body seam into an arbitrary-column write primitive with the suite
+  // green. The test now drives a hostile body through and asserts what comes out.
+  const ctx = await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
   if (ctx.changes === 0) throw serviceError(CODES.NOT_FOUND, 'User not found');
   return { updated: ctx.changes };
 }
