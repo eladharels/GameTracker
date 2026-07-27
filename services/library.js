@@ -172,16 +172,22 @@ function isReleaseInFuture(dateStr) {
 async function upsertGame(userId, fields) {
   const gameId = fields.gameId == null ? '' : String(fields.gameId);
   const gameName = fields.gameName == null ? '' : String(fields.gameName);
-  if (!gameId || !gameName || !fields.status) {
+  // Normalised BEFORE the allowlist, not after. Rejecting 'Done' outright would be a
+  // new 400 on input v1 accepted, and we know something has been sending capitalised
+  // statuses — the stored 'Done' row is the evidence, and the SPA carries a
+  // normalizeStatus() that lowercases on read. GameTracker-mobile is a live REST
+  // client against this API and cannot be inspected from here. So fold the case,
+  // which still stores exactly one spelling, and reject only genuine junk.
+  const requested = String(fields.status ?? '').trim().toLowerCase();
+  if (!gameId || !gameName || !requested) {
     throw serviceError(CODES.VALIDATION, 'gameId, gameName and status are required');
   }
-  if (!STATUSES.includes(fields.status)) {
+  if (!STATUSES.includes(requested)) {
     throw serviceError(CODES.VALIDATION,
       `status must be one of: ${STATUSES.join(', ')}`, { field: 'status' });
   }
 
   const releaseDate = fields.releaseDate || null;
-  const requested = fields.status;
   const status = (!releaseDate || isReleaseInFuture(releaseDate)) ? 'unreleased' : requested;
 
   return db.withTransaction(async (tx) => {

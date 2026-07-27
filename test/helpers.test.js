@@ -563,6 +563,15 @@ check('a per-route override replaces the text but cannot expose a hidden one', (
   // and it cannot change the status
   assert.strictEqual(problem.toProblem(serviceError(SVC.CONFLICT, 'x'), { [SVC.CONFLICT]: 'nope' }).status, 409);
 });
+check('send() does nothing when the response is already sent', () => {
+  // The library upsert dispatches notifications AFTER res.json, so a rejection there
+  // reaches this helper with the headers gone. A second write is a crash, not an
+  // error response.
+  let wrote = false;
+  const res = { headersSent: true, status() { wrote = true; return this; }, json() { wrote = true; } };
+  problem.send(res, serviceError(SVC.VALIDATION, 'too late'));
+  assert.strictEqual(wrote, false, 'problem.send wrote a second response');
+});
 check('send() never echoes an unknown error message', () => {
   // The same rule as `expose`, applied to the case where we do not know what it is.
   let captured = null;

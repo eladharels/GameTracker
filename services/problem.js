@@ -57,6 +57,16 @@ function toProblem(err, messages = {}) {
 // The 500 branch NEVER echoes err.message — that is the same disclosure rule as
 // `expose`, applied to the case where we do not even know what the error is.
 function send(res, err, { fallback = 'DB error', log, messages } = {}) {
+  // The response may ALREADY be sent. The library upsert is the first adapter that
+  // does work after res.json() — it dispatches notifications off the response path —
+  // so anything thrown there lands in this function's .catch() with the headers long
+  // gone, and a second write is an ERR_HTTP_HEADERS_SENT crash rather than an error
+  // response. The guard lives here so it covers all eight adapters at once, and so
+  // the next one that moves work after the response inherits it.
+  if (res.headersSent) {
+    console.error(log || '[problem] error after the response was sent:', err?.message || err);
+    return undefined;
+  }
   const problem = toProblem(err, messages);
   if (problem) return res.status(problem.status).json(problem.body);
   if (log) console.error(log, err?.message || err);
