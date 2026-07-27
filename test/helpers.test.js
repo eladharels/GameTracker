@@ -566,6 +566,53 @@ const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
     assert.strictEqual(asked, 0, 'a rejected query still reached the providers');
   });
 
+  console.log('catalog.nobodyAnswered (THE rule every "not found" has to consult first):');
+  check('an all-SKIPPED lookup asked nobody, and that is not `degraded`', () => {
+    // The distinction the metadata refresh got wrong: `degraded` means at least one
+    // provider FAILED, so an instance with no API keys is not degraded and still asked
+    // nobody. Reporting that as "not found" told a user every game in their library
+    // had ceased to exist in every database.
+    assert.strictEqual(catalogSvc.nobodyAnswered({ igdb: 'skipped', rawg: 'skipped', thegamesdb: 'skipped' }), true);
+    assert.strictEqual(catalogSvc.nobodyAnswered({ igdb: 'failed', rawg: 'skipped', thegamesdb: 'failed' }), true);
+    assert.strictEqual(catalogSvc.nobodyAnswered({ igdb: 'failed', rawg: 'failed', thegamesdb: 'failed' }), true);
+    assert.strictEqual(catalogSvc.nobodyAnswered({ igdb: 'ok', rawg: 'failed', thegamesdb: 'skipped' }), false);
+    // Fail-closed on a shape it does not recognise: "we cannot tell who answered" must
+    // not resolve to "everybody did".
+    for (const junk of [undefined, null, {}, 'ok']) {
+      assert.strictEqual(catalogSvc.nobodyAnswered(junk), true, `nobodyAnswered(${JSON.stringify(junk)}) said someone answered`);
+    }
+  });
+  checkAsync('the metadata refresh says provider_unavailable, not not_found, when nobody was asked', async () => {
+    // Driven through the real function with the provider layer and the database
+    // stubbed, because this is the exact combination that shipped: two games, three
+    // skipped providers, and two `not_found` failures on the wire.
+    const jobsSvc = require('../services/jobs');
+    const librarySvc = require('../services/library');
+    const realList = librarySvc.listGamesWithAliases;
+    const realSearch = catalogSvc.searchAll;
+    librarySvc.listGamesWithAliases = async () => [{ game_id: 'igdb_1', game_name: 'Halo' }];
+    catalogSvc.searchAll = async () => ({
+      results: [], providers: { igdb: 'skipped', rawg: 'skipped', thegamesdb: 'skipped' },
+      counts: {}, degraded: false,
+    });
+    try {
+      const out = await jobsSvc.refreshMetadata({ userId: 1 });
+      assert.deepStrictEqual(out.failures, [{ gameId: 'igdb_1', reason: 'provider_unavailable' }]);
+      assert.strictEqual(out.failed, 1);
+      assert.strictEqual(out.succeeded, 0);
+      // ...and a provider that DID answer and had nothing is a real not_found.
+      catalogSvc.searchAll = async () => ({
+        results: [], providers: { igdb: 'ok', rawg: 'skipped', thegamesdb: 'skipped' },
+        counts: {}, degraded: false,
+      });
+      const found = await jobsSvc.refreshMetadata({ userId: 1 });
+      assert.deepStrictEqual(found.failures, [{ gameId: 'igdb_1', reason: 'not_found' }]);
+    } finally {
+      librarySvc.listGamesWithAliases = realList;
+      catalogSvc.searchAll = realSearch;
+    }
+  });
+
   console.log('catalog.resolveGame (ambiguity is a REFUSAL, never a guess):');
   checkAsync('an exact case-insensitive match resolves', async () => {
     const game = await catalogSvc.resolveGame({ name: 'HALO' }, {
@@ -616,6 +663,136 @@ const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
 // v2svc is declared further down this file; required locally so these checks can
 // sit beside the catalog ones they belong with.
 const v2map = require('../services/v2');
+
+console.log('job-runner (ownership is the control; the id being unguessable is what makes 404 safe):');
+{
+  const runner = require('../services/job-runner');
+  const settle = () => new Promise((r) => setImmediate(() => setImmediate(r)));
+  const done = () => Promise.resolve({ processed: 1, succeeded: 1, failed: 0 });
+
+  checkAsync('a job is readable ONLY by the account that started it', async () => {
+    runner._reset();
+    const job = runner.start({ kind: 'updatePrices', scope: 'instance', ownerId: 1, work: done });
+    assert.ok(runner.get(job.id, 1), 'the owner cannot read their own job');
+    // 404, not 403 — and the same answer as an id that never existed, which is the
+    // whole point. An instance-wide job's failures[] names game ids from every user's
+    // library, so ownership rather than scope is what protects it.
+    assert.strictEqual(runner.get(job.id, 2), null);
+    assert.strictEqual(runner.get(job.id, '2'), null);
+    assert.strictEqual(runner.get('no-such-id', 1), null);
+    // ...and the id must be unguessable, or 404-vs-403 buys nothing. 24 random bytes.
+    assert.ok(job.id.length >= 32, `job id is only ${job.id.length} chars`);
+    assert.ok(!/^\d+$/.test(job.id), 'job ids are sequential — they can be enumerated');
+    const second = runner.start({ kind: 'checkReleases', scope: 'instance', ownerId: 1, work: done });
+    assert.notStrictEqual(second.id, job.id);
+    await settle();
+  });
+
+  checkAsync('a second job of the same kind and scope is refused while one runs', async () => {
+    runner._reset();
+    // The gate is created EAGERLY, not inside `work`: start() invokes the work on a
+    // microtask, so a resolver assigned in there does not exist yet when this test
+    // reaches the line that releases it.
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const held = () => gate.then(() => ({ processed: 0, succeeded: 0, failed: 0 }));
+    runner.start({ kind: 'updatePrices', scope: 'instance', ownerId: 1, work: held });
+    let code = null;
+    try {
+      runner.start({ kind: 'updatePrices', scope: 'instance', ownerId: 1, work: done });
+    } catch (err) { code = err.code; }
+    assert.strictEqual(code, 'conflict', 'two instance-wide sweeps of one kind ran at once');
+    // A DIFFERENT admin must be refused too: the lock is per instance, not per caller,
+    // or two administrators double every outbound request to the providers.
+    assert.throws(() => runner.start({ kind: 'updatePrices', scope: 'instance', ownerId: 99, work: done }));
+    // A different KIND is unaffected, and so is the same kind at `self` scope for a
+    // different account — a per-library refresh must not be blocked by someone else's.
+    runner.start({ kind: 'checkReleases', scope: 'instance', ownerId: 1, work: done });
+    runner.start({ kind: 'refreshMetadata', scope: 'self', ownerId: 7, work: done });
+    runner.start({ kind: 'refreshMetadata', scope: 'self', ownerId: 8, work: done });
+    // ...but the SAME account's own refresh is single-flighted.
+    assert.throws(() => runner.start({ kind: 'refreshMetadata', scope: 'self', ownerId: 7, work: done }));
+    release();
+    await settle();
+    // Once it has finished, the same kind may start again.
+    runner.start({ kind: 'updatePrices', scope: 'instance', ownerId: 1, work: done });
+    await settle();
+  });
+
+  checkAsync('a rejected job records a CLOSED reason, never the exception message', async () => {
+    runner._reset();
+    const { serviceError, CODES } = require('../services/errors');
+    const cases = [
+      [serviceError(CODES.PROVIDER_UNAVAILABLE, 'IGDB said: key sk-live-abc is over quota'), 'provider_unavailable'],
+      [serviceError(CODES.NOT_FOUND, 'nope'), 'not_found'],
+      [serviceError(CODES.VALIDATION, 'bad'), 'invalid_data'],
+      [new Error('ECONNREFUSED 10.0.0.5:5432 — relation "users" does not exist'), 'internal'],
+    ];
+    for (const [err, expected] of cases) {
+      const job = runner.start({
+        kind: 'updatePrices', scope: 'instance', ownerId: 1,
+        work: () => Promise.reject(err),
+      });
+      await settle();
+      assert.strictEqual(job.status, 'failed');
+      assert.strictEqual(job.error, expected);
+      // The message must not survive anywhere on the record. These sweeps call five
+      // third-party services whose error text carries endpoint paths, quota state and
+      // occasionally the failing key.
+      const wire = JSON.stringify(require('../services/v2').job(job));
+      assert.ok(!wire.includes('sk-live-abc') && !wire.includes('10.0.0.5') && !wire.includes('users'),
+        `an exception message reached the job record: ${wire}`);
+    }
+  });
+
+  checkAsync('a synchronous throw inside the work is caught, not an unhandled rejection', async () => {
+    runner._reset();
+    const job = runner.start({
+      kind: 'updatePrices', scope: 'instance', ownerId: 1,
+      work: () => { throw new Error('boom'); },
+    });
+    await settle();
+    assert.strictEqual(job.status, 'failed');
+    assert.strictEqual(job.error, 'internal');
+    assert.ok(job.finishedAt, 'finishedAt was never stamped');
+  });
+
+  check('normaliseResult truncates failures and keeps `failed` truthful', () => {
+    const failures = Array.from({ length: 500 }, (_, i) => ({ gameId: `igdb_${i}`, reason: 'not_found' }));
+    const out = runner.normaliseResult({ processed: 500, succeeded: 0, failed: 500, failures });
+    assert.strictEqual(out.failures.length, runner.MAX_FAILURES);
+    // The COUNT stays true. Truncating both would report a 500-failure sweep as a
+    // 200-failure one, which is the "everything failed reads like success" defect
+    // this shape exists to prevent, one step removed.
+    assert.strictEqual(out.failed, 500);
+  });
+  check('a reason outside the closed set becomes internal, never travels as-is', () => {
+    const out = runner.normaliseResult({
+      processed: 1, succeeded: 0, failed: 1,
+      failures: [{ gameId: 'igdb_1', reason: 'RAWG 401: key=sk-live-abc' }],
+    });
+    assert.strictEqual(out.failures[0].reason, 'internal');
+    assert.ok(!JSON.stringify(out).includes('sk-live-abc'));
+    // ...and every published reason must be one the spec's enum lists.
+    for (const reason of runner.REASONS) {
+      const kept = runner.normaliseResult({ failures: [{ gameId: 'g', reason }] });
+      assert.strictEqual(kept.failures[0].reason, reason);
+    }
+  });
+  check('junk counts become 0 rather than NaN on the wire', () => {
+    const out = runner.normaliseResult({ processed: 'many', succeeded: undefined, failed: -3 });
+    assert.deepStrictEqual(out, { processed: 0, succeeded: 0, failed: 0 });
+    assert.strictEqual(runner.normaliseResult(null).processed, 0);
+  });
+
+  check('the runner\'s reason set is EXACTLY the spec\'s FailureReason enum', () => {
+    // Two closed sets that must agree. They are compared against the spec in
+    // test/openapi.test.js from the other side; this is the half that fails if the
+    // runner grows a reason nobody documented.
+    assert.deepStrictEqual([...runner.REASONS].sort(),
+      ['internal', 'invalid_data', 'not_found', 'provider_unavailable', 'rate_limited']);
+  });
+}
 
 console.log('v2 admin mappers (the rename is where a guard stops recognising a field):');
 {

@@ -261,6 +261,12 @@ const EXPECTED_V2 = {
   'DELETE /api/v2/users/:userId': 'pat-admin:can_manage_users',
   'GET /api/v2/settings': 'pat-admin:can_manage_users',
   'PATCH /api/v2/settings': 'pat-admin:can_manage_users',
+  // Library-scoped on purpose: POST /library/refresh hands back a job, and an
+  // operation whose own caller cannot poll the result is not an operation. Ownership,
+  // not scope, is what protects an instance-wide job's failures[].
+  'POST /api/v2/library/refresh': 'pat',
+  'GET /api/v2/jobs/:jobId': 'pat',
+  'POST /api/v2/jobs': 'pat-admin:can_manage_users',
 };
 
 // separately and by hand. A route reaching 'public' without being on this list is a

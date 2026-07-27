@@ -564,6 +564,7 @@ paths:
     post:
       tags: [library]
       operationId: refreshMyLibrary
+      x-implemented: true
       x-required-scope: library
       summary: Re-fetch metadata for the caller's own library
       description: |
@@ -999,6 +1000,7 @@ paths:
     post:
       tags: [jobs]
       operationId: startJob
+      x-implemented: true
       summary: Start a long-running operation
       x-required-scope: admin
       description: |
@@ -1055,6 +1057,7 @@ paths:
     get:
       tags: [jobs]
       operationId: getJob
+      x-implemented: true
       summary: Job status and result
       x-required-scope: library
       description: |

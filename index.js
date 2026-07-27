@@ -41,6 +41,7 @@ const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
 const catalogService = require('./services/catalog');
 const jobsService = require('./services/jobs');
+const jobRunner = require('./services/job-runner');
 const usersService = require('./services/users');
 const authService = require('./services/auth');
 const v2 = require('./services/v2');
@@ -1213,12 +1214,19 @@ app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired
             // "Not found" and "we could not look it up" are different sentences, and
             // a user acts on them differently. During a provider outage every game in
             // the library would otherwise be reported as not existing in any database.
-            const why = lookup.degraded
+            // nobodyAnswered rather than `degraded`, and the widening is a correctness
+            // fix, not a preference: `degraded` means "at least one provider FAILED", so
+            // an instance whose providers are all merely SKIPPED — no API keys — is not
+            // degraded, asked nobody, and reported every game in the library as not
+            // existing in any database. Both message strings already existed; only the
+            // condition choosing between them changed, so no response shape moves.
+            const unavailable = catalogService.nobodyAnswered(lookup.providers);
+            const why = unavailable
               ? 'Lookup unavailable — a game database did not respond'
               : 'Game not found in API search results';
             results.errors.push({ gameName: game.game_name, gameId: game.game_id, error: why });
             results.details.push({ gameName: game.game_name, gameId: game.game_id,
-              changes: [], error: lookup.degraded ? 'Lookup unavailable' : 'Not found' });
+              changes: [], error: unavailable ? 'Lookup unavailable' : 'Not found' });
             continue;
           }
           const applied = await libraryService.applyRefreshedMetadata(user.id, game, match);
@@ -2345,6 +2353,82 @@ v2Router.patch('/settings', requireAdminScope, (req, res) => {
   } catch (err) {
     v2.send(res, err, { log: '[v2] settings write failed:' });
   }
+});
+
+// --- jobs --------------------------------------------------------------------
+//
+// The two pieces of state services/jobs.js does not own, passed in once. `dedupe` is
+// the file-backed sent-notifications log; without it every run re-sends every due
+// reminder to real users, which is why jobs.js REQUIRES it rather than defaulting.
+// `refreshCrackStatus` wraps the module-scope cache below, returning its size so the
+// job has a count to report.
+// A FUNCTION, evaluated per request, not a module-scope object. `dedupe` is declared
+// several hundred lines below this point, so building the object here would read it in
+// its temporal dead zone and `require('./index')` would throw ReferenceError before the
+// server ever listened — the same class of failure the exports block at the end of
+// services/library.js carries a comment about. Deferring the read costs nothing and
+// removes the ordering dependency entirely.
+const jobDeps = () => ({
+  dedupe,
+  refreshCrackStatus: async () => {
+    await refreshCrackWatchCache();
+    return Object.keys(crackWatchCache).length;
+  },
+});
+
+// POST /api/v2/library/refresh — the caller's OWN library. 202, never inline.
+//
+// Separate from POST /jobs, and that separation is the control: an instance-wide
+// `kind` enum on one admin-only operation is how "refresh my library" quietly becomes
+// "refresh everyone's". This one is library-scoped and hard-wired to scope 'self'.
+v2Router.post('/library/refresh', (req, res) => {
+  try {
+    const record = jobRunner.start({
+      kind: 'refreshMetadata',
+      scope: 'self',
+      ownerId: req.user.id,
+      work: () => jobsService.runJob('refreshMetadata', { scope: 'self', userId: req.user.id, deps: jobDeps() }),
+    });
+    res.status(202).location(`/api/v2/jobs/${record.id}`).json(v2.job(record));
+  } catch (err) {
+    v2.send(res, err, { log: '[v2] refresh start failed:' });
+  }
+});
+
+// POST /api/v2/jobs — the INSTANCE-WIDE sweeps. Admin-only by definition.
+v2Router.post('/jobs', requireAdminScope, (req, res) => {
+  const kind = (req.body || {}).kind;
+  if (!jobsService.JOB_KINDS.includes(kind)) {
+    return v2.send(res, {
+      code: SVC.VALIDATION,
+      message: `kind must be one of: ${jobsService.JOB_KINDS.join(', ')}`,
+      details: { field: 'kind' },
+    });
+  }
+  try {
+    const record = jobRunner.start({
+      kind,
+      scope: 'instance',
+      ownerId: req.user.id,
+      work: () => jobsService.runJob(kind, { scope: 'instance', deps: jobDeps() }),
+    });
+    res.status(202).location(`/api/v2/jobs/${record.id}`).json(v2.job(record));
+  } catch (err) {
+    v2.send(res, err, { log: '[v2] job start failed:' });
+  }
+});
+
+// GET /api/v2/jobs/:jobId — status and result, for the account that STARTED it.
+//
+// library-scoped, not admin: POST /library/refresh is, and an operation that hands
+// back a job its own caller cannot poll is not an operation. OWNERSHIP is what
+// protects an instance-wide job's result, which matters because its `failures[]` names
+// game ids from every user's library. Someone else's id is a 404, never a 403 — which
+// is only worth having because the ids are 24 random bytes rather than sequential.
+v2Router.get('/jobs/:jobId', (req, res) => {
+  const record = jobRunner.get(req.params.jobId, req.user.id);
+  if (!record) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such job' });
+  res.json(v2.job(record));
 });
 
 // ─── EVERY v2 ROUTE MUST BE REGISTERED ABOVE THIS LINE ───────────────────────

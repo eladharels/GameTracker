@@ -18,6 +18,8 @@ const axios = require('axios');
 const db = require('../db');
 const { all } = db.promises;
 const library = require('./library');
+const catalog = require('./catalog');
+const { serviceError, CODES } = require('./errors');
 const notifications = require('./notifications');
 const { sanitizeText } = require('../user-rules');
 
@@ -201,4 +203,120 @@ async function updatePrices({ region = 'il' } = {}) {
   return report;
 }
 
-module.exports = { NO_DEDUPE, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames };
+// --- Metadata refresh ------------------------------------------------------
+//
+// The FIFTH copy of "call the providers, take an exact title match, apply it" — and
+// the last one still living in a route. `POST /api/user/:username/refresh-metadata`
+// runs this inline, holding the request open for the whole library; here it is a
+// function the job runner can run off the response, which is the only version of it
+// that can honestly report what happened.
+//
+// SEQUENTIAL, as v1 is. Each game costs up to three provider searches plus RAWG's
+// per-result detail lookups, so a whole library run concurrently bursts hundreds of
+// outbound requests and earns a rate-limit.
+async function refreshMetadata({ userId }) {
+  const games = await library.listGamesWithAliases(userId);
+  const result = { processed: 0, succeeded: 0, failed: 0, failures: [] };
+  for (const game of games) {
+    result.processed++;
+    try {
+      const lookup = await catalog.searchAll(game.game_name, { limit: catalog.LIMIT_REFRESH });
+      const match = catalog.findExactMatch(lookup.results, game.game_name);
+      if (!match) {
+        result.failed++;
+        // "Nobody has this game" and "we could not ask" are different facts and a user
+        // acts on them differently — during a provider outage the whole library would
+        // otherwise be reported as not existing in any database. The closed reason set
+        // is what carries the difference; a message would have carried the provider's.
+        result.failures.push({
+          gameId: game.game_id,
+          // nobodyAnswered, not `degraded`: an instance with no API keys configured
+          // reports every provider `skipped`, which is not degraded and still asked
+          // nobody — and reporting that as `not_found` tells a client every game in
+          // the library has ceased to exist. Measured live before this line changed.
+          reason: catalog.nobodyAnswered(lookup.providers) ? 'provider_unavailable' : 'not_found',
+        });
+        continue;
+      }
+      await library.applyRefreshedMetadata(userId, game, match);
+      result.succeeded++;
+    } catch (err) {
+      // Per game: one bad row must not abandon the sweep.
+      result.failed++;
+      result.failures.push({ gameId: game.game_id, reason: 'internal' });
+      console.error(`[Jobs] Metadata refresh failed for ${safe(game.game_name)}:`, err.message);
+    }
+  }
+  return result;
+}
+
+// Every user's library, one after another. Same reasoning as above about
+// concurrency, one level up.
+async function refreshMetadataAll() {
+  const users = await all('SELECT id FROM users ORDER BY id ASC', []);
+  const total = { processed: 0, succeeded: 0, failed: 0, failures: [] };
+  for (const user of users) {
+    const one = await refreshMetadata({ userId: user.id });
+    total.processed += one.processed;
+    total.succeeded += one.succeeded;
+    total.failed += one.failed;
+    total.failures.push(...one.failures);
+  }
+  return total;
+}
+
+// --- The v2 job surface ------------------------------------------------------
+//
+// One table, so a kind cannot exist on the router without a runner or the reverse.
+// Every entry returns the JobResult shape; the counts below are chosen so that a sweep
+// where everything failed and one where everything succeeded cannot read the same —
+// which the v1 price sweep genuinely could, reporting success while writing nothing.
+const JOB_KINDS = Object.freeze(['refreshMetadata', 'checkReleases', 'refreshCrackStatus', 'updatePrices']);
+
+// `deps` carries the two pieces of state this module does not own: the file-backed
+// sent-notifications log, and the CrackWatch cache, which lives at module scope in
+// index.js behind its own file. Both are required rather than defaulted — omitting the
+// dedupe log silently re-sends every due reminder to real users, which is precisely
+// the failure NO_DEDUPE was introduced to make impossible to reach by accident.
+async function runJob(kind, { scope = 'instance', userId = null, deps = {} } = {}) {
+  if (!JOB_KINDS.includes(kind)) {
+    throw serviceError(CODES.VALIDATION, `kind must be one of: ${JOB_KINDS.join(', ')}`, { field: 'kind' });
+  }
+
+  if (kind === 'refreshMetadata') {
+    return scope === 'self' ? refreshMetadata({ userId }) : refreshMetadataAll();
+  }
+
+  if (kind === 'checkReleases') {
+    const report = await checkReleases({ dedupe: deps.dedupe });
+    return {
+      processed: report.usersChecked,
+      // What the sweep DID, which is the number worth reporting: a run that checked
+      // 40 users and promoted nothing is not 40 successes.
+      succeeded: report.promoted.length + report.remindersSent.length,
+      failed: report.errors.length,
+    };
+  }
+
+  if (kind === 'updatePrices') {
+    const report = await updatePrices();
+    // `withoutPrice` is neither a success nor a failure — a game Steam has no price
+    // for is a correct answer — so it is counted in `processed` and nowhere else.
+    return { processed: report.checked, succeeded: report.updated, failed: report.errors };
+  }
+
+  // refreshCrackStatus. The cache is index.js's module state and its refresh is
+  // all-or-nothing: it either rebuilds the map or it does not, with no per-item
+  // outcome to report, so `processed` is the resulting cache size.
+  if (typeof deps.refreshCrackStatus !== 'function') {
+    throw serviceError(CODES.VALIDATION, 'refreshCrackStatus requires its cache refresher');
+  }
+  const count = await deps.refreshCrackStatus();
+  const n = Number.isFinite(Number(count)) ? Number(count) : 0;
+  return { processed: n, succeeded: n, failed: 0 };
+}
+
+module.exports = {
+  NO_DEDUPE, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames,
+  refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS,
+};

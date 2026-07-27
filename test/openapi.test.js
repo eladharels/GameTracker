@@ -781,6 +781,30 @@ check('bounds agree with the constants the services enforce', () => {
   assert.strictEqual(spec.components.schemas.TokenCreate.properties.name.maxLength, authService.MAX_NAME_LENGTH);
   assert.strictEqual(spec.paths['/catalog/search'].get.parameters.find((p) => p.name === 'limit').schema.maximum,
     catalog.LIMIT_SEARCH);
+  assert.strictEqual(spec.components.schemas.JobResult.properties.failures.maxItems,
+    require('../services/job-runner').MAX_FAILURES);
+  assert.strictEqual(spec.components.schemas.GameRef.pattern, catalog.GAME_REF_PATTERN);
+});
+
+check('the job enums match the runner and the service, in BOTH directions', () => {
+  // Three closed sets that only mean anything if they agree: FailureReason exists to
+  // stop a provider's error text reaching a caller, and a runner emitting a reason the
+  // spec does not publish is a client branching on nothing — or a leak, if the extra
+  // reason came from an exception message.
+  const runner = require('../services/job-runner');
+  const jobs = require('../services/jobs');
+  assert.deepStrictEqual([...spec.components.schemas.FailureReason.enum].sort(),
+    [...runner.REASONS].sort());
+  assert.deepStrictEqual([...spec.components.schemas.Job.properties.status.enum].sort(),
+    [...runner.STATUSES].sort());
+  assert.deepStrictEqual([...spec.components.schemas.Job.properties.scope.enum].sort(),
+    [...runner.SCOPES].sort());
+  assert.deepStrictEqual([...spec.components.schemas.Job.properties.kind.enum].sort(),
+    [...jobs.JOB_KINDS].sort());
+  // ...and the request body's kind enum, which is the one a caller actually sends. It
+  // was a separate literal in the spec, so the two could drift apart silently.
+  const started = spec.paths['/jobs'].post.requestBody.content['application/json'].schema;
+  assert.deepStrictEqual([...started.properties.kind.enum].sort(), [...jobs.JOB_KINDS].sort());
 });
 
 console.log(`\n${n} spec assertions passed.`);

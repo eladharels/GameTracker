@@ -342,6 +342,7 @@ const MAX_QUERY = 200;
 
 // GameRef, parsed. The pattern is the one in openapi/gametracker-v2.yaml — the two are
 // kept in step by test/openapi.test.js rather than by remembering.
+const GAME_REF_PATTERN = '^(igdb|rawg|thegamesdb)_[A-Za-z0-9_-]+$';
 const GAME_REF = /^(igdb|rawg|thegamesdb)_([A-Za-z0-9_-]+)$/;
 const MAX_REF = 200;
 
@@ -384,11 +385,22 @@ async function search(query, { limit = LIMIT_SEARCH } = {}, deps = {}) {
       `q must be at most ${MAX_QUERY} characters`, { field: 'q' });
   }
   const result = await searchProviders(term, { limit: boundedLimit(limit) });
-  const statuses = Object.values(result.providers);
-  if (!statuses.includes('ok')) {
+  if (nobodyAnswered(result.providers)) {
     throw serviceError(CODES.PROVIDER_UNAVAILABLE, 'no catalog provider answered');
   }
   return result;
+}
+
+// Did any provider actually answer?
+//
+// THE rule, in one place, because every caller that reports "not found" has to consult
+// it first. `degraded` is not that rule: it means "at least one failed", so a lookup
+// where all three were SKIPPED — an instance with no API keys — is not degraded and
+// still asked nobody. The metadata refresh had exactly that bug, reporting every game
+// in the library as not existing in any database on an instance that had never been
+// given a key. Exported so the two v2 callers and the v1 refresh route share it.
+function nobodyAnswered(providers) {
+  return !Object.values(providers || {}).includes('ok');
 }
 
 // 1..LIMIT_SEARCH. A caller-supplied limit multiplies outbound provider traffic — the
@@ -589,5 +601,5 @@ module.exports = {
   igdbDate, parseLooseDate, theGamesDbCover,
   mergeResults, searchAll, findExactMatch,
   search, fetchById, resolveGame, parseGameRef, boundedLimit, steamAppIdFromStores,
-  igdbByIdQuery,
+  igdbByIdQuery, GAME_REF_PATTERN, nobodyAnswered,
 };

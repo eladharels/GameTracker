@@ -317,6 +317,22 @@ function userWrite(body, { create = false } = {}) {
   return out;
 }
 
+// A job. `key` and `ownerId` are internal — the single-flight key names other
+// accounts' jobs by construction, and the owner id is not the caller's business —
+// which is why this names its fields rather than returning the stored record.
+function job(record) {
+  return {
+    id: record.id,
+    scope: record.scope,
+    kind: record.kind,
+    status: record.status,
+    startedAt: record.startedAt ?? null,
+    finishedAt: record.finishedAt ?? null,
+    result: record.result ?? null,
+    error: record.error ?? null,
+  };
+}
+
 // --- settings ----------------------------------------------------------------
 //
 // The ONE place the storage names and the wire names are related. settings.json keeps
@@ -422,7 +438,7 @@ function settingsUpdate(body) {
 
 module.exports = {
   toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings, backlogEntry,
-  catalogGame, searchMeta, share, user, userWrite, maskedSettings, settingsUpdate,
+  catalogGame, searchMeta, share, user, userWrite, job, maskedSettings, settingsUpdate,
   SETTINGS_FIELDS, API_KEY_FIELDS, USER_WRITE_FIELDS,
   PLANNED_CODES, WWW_AUTHENTICATE,
 };
