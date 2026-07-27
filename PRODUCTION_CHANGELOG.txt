@@ -6,6 +6,68 @@ When you apply an entry from STAGING_CHANGELOG.txt to production, add it here
 with the date applied.
 
 ================================================================================
+  2026-07-27 — BREAKING API CHANGE affecting GameTracker-mobile (Android)
+                Admin user endpoints no longer expose or accept notification targets
+================================================================================
+Security fix. A user's notification target — which device a release reminder
+reaches — is their own setting, changed by them on My Account. The admin user
+endpoints both returned and accepted those values for OTHER users.
+
+The read was a disclosure: GET /api/users handed every administrator the ntfy
+topic and Gotify application token of every user. Both are bearer secrets —
+possession of a Gotify app token is enough to post notifications to that user's
+devices.
+
+The write was worse, and there were two of them. An admin could overwrite another
+user's ntfy_topic/gotify_token via PUT /api/users/:id, or plant them at account
+creation via POST /api/users, silently redirecting that user's notifications to a
+channel the admin controls. The creation case survives the new user changing their
+password, so it outlives them taking full ownership of the account. It is not
+invisible — My Account renders both values in plain inputs, so a user who opens
+that page can see them — but nothing announces the change.
+
+  GET /api/users
+    REMOVED : ntfy_topic, gotify_token   (from every user object in the array)
+    UNCHANGED: id, username, can_manage_users, email, created_at, origin,
+               display_name, shares_library
+
+  PUT /api/users/:id
+    CHANGED : now 400s if the body contains ntfy_url, ntfy_topic, gotify_url,
+              gotify_token or telegram_chat_id. Previously the first two were
+              written and the other three silently ignored.
+
+  POST /api/users
+    CHANGED : same five fields now 400. Previously ntfy_topic and gotify_token
+              were written into the new row.
+
+  NOT AFFECTED: GET /api/user/me and PUT /api/user/me/settings. A user reads and
+              writes their OWN notification settings exactly as before. This
+              change removes only the ability to do it to SOMEONE ELSE.
+
+REMEDIATION for any admin client (this is the realistic break):
+  A naive read-modify-write — GET /api/users, edit one field, PUT the whole user
+  object back — now fails with 400 on EVERY field, not just these five. Send only
+  the fields you intend to change. The web SPA already does this: its admin panel
+  only ever sends {password} or {can_manage_users}, verified at
+  frontend/src/App.jsx:416 and :649.
+
+  If the Android admin screen displays a user's ntfy topic or Gotify token, those
+  fields will now render empty. That is intended.
+
+WHY THIS SHIPPED AGAINST A FROZEN v1: /api is frozen and permanently supported,
+but freezing an API does not freeze a credential leak into it. Recorded here
+rather than only in a commit message because GameTracker-mobile talks to this same
+REST API and is not in this repository — nobody working on it can see the fix.
+
+The three fields that were previously ignored rather than written (ntfy_url,
+gotify_url, telegram_chat_id) are now refused for the same reason the other two
+are: an admin tool told {success:true} for a write that did not happen has been
+told something false. The two server URLs matter as much as the secrets, since
+writing a URL redirects the channel just as effectively as writing the token
+presented to it.
+
+
+================================================================================
   2026-07-27 — API CHANGE affecting GameTracker-mobile (Android)
 ================================================================================
 POST /api/admin/check-releases changed response shape when the release sweep was

@@ -16,8 +16,10 @@ listed in the Service gaps appendix rather than quietly softened.
 **v1 is frozen and permanently supported.** Not deprecated-then-sunset: the Android
 companion app is a build we do not control, so v1 keeps working. No `Sunset` headers.
 The one exception is removing a security defect — a frozen API is not frozen against
-fixing a credential leak (already applied: admin no longer receives or writes other
-users' `ntfy_topic`/`gotify_token`).
+fixing a credential leak. Already applied: the admin user endpoints no longer return
+or accept another user's notification target on any of the three paths that had it
+(`GET /api/users`, `PUT /api/users/:id`, `POST /api/users`). The break is recorded in
+`PRODUCTION_CHANGELOG.txt` for the Android client, which is not in this repository.
 
 ---
 

@@ -742,22 +742,45 @@ check('absent, unparseable and future all mean "not released"', () => {
 // projection is a string, and the refusal is thrown before any query is issued.
 
 const usersService = require('../services/users');
+const dbModule = require('../db');
 
-check('admin user list does not expose per-user push credentials', () => {
-  for (const column of usersService.PUSH_CREDENTIAL_COLUMNS) {
+// Tokenised, not a substring match: `includes('ntfy_topic')` would also accept a
+// column named ntfy_topic_hash, and `includes('password')` would spuriously fail on
+// a future last_password_change. Compare column names as a set.
+const listedColumns = (sql) =>
+  new Set(sql.replace(/^\s*SELECT\s+/i, '').split(/\s+FROM\s+/i)[0].split(',').map((c) => c.trim()));
+
+checkAsync('the admin list query itself excludes every user-owned channel', async () => {
+  // Asserted against the SQL listAll ACTUALLY issues, not against the exported
+  // constant. Asserting the constant proved nothing: rewriting listAll to
+  // `SELECT * FROM users` would ship every credential AND the bcrypt hash to every
+  // admin while every assertion about ADMIN_LIST_COLUMNS still passed. That is the
+  // same "test covers the artifact, not the behaviour" failure that let a weakened
+  // SSRF guard through earlier in this project.
+  const original = dbModule.promises.all;
+  let issued = null;
+  dbModule.promises.all = async (sql) => { issued = sql; return []; };
+  try {
+    await usersService.listAll();
+  } finally {
+    dbModule.promises.all = original;
+  }
+
+  assert.ok(issued, 'listAll issued no query at all');
+  const columns = listedColumns(issued);
+  assert.ok(!columns.has('*'), `admin list is SELECT * — it would ship the password hash: ${issued}`);
+  assert.ok(!columns.has('password'), `password is in the admin list query: ${issued}`);
+  for (const column of usersService.USER_OWNED_NOTIFICATION_COLUMNS) {
     assert.ok(
-      !usersService.ADMIN_LIST_COLUMNS.includes(column),
-      `${column} is back in ADMIN_LIST_COLUMNS — GET /api/users would hand every `
-      + `admin a bearer secret for every user's notification channel`
+      !columns.has(column),
+      `${column} is in the query GET /api/users actually runs — every admin would `
+      + `receive every user's notification target`
     );
   }
-  // The projection must stay an allowlist. `SELECT *` here would ship `password`.
-  assert.ok(!usersService.ADMIN_LIST_COLUMNS.includes('*'), 'admin list must not be SELECT *');
-  assert.ok(!usersService.ADMIN_LIST_COLUMNS.includes('password'), 'admin list must never include password');
 });
 
-checkAsync('an admin cannot write another user\'s push credentials', async () => {
-  for (const column of usersService.PUSH_CREDENTIAL_COLUMNS) {
+checkAsync('an admin cannot write another user\'s notification target', async () => {
+  for (const column of usersService.USER_OWNED_NOTIFICATION_COLUMNS) {
     await assert.rejects(
       // actingUserId deliberately differs from id: this is an admin editing someone
       // else, the case that repointed another user's notifications.
@@ -771,7 +794,74 @@ checkAsync('an admin cannot write another user\'s push credentials', async () =>
   await assert.rejects(
     () => usersService.update(7, { email: 'a@b.c', gotify_token: 'x' }, 1),
     (err) => err.code === SVC.VALIDATION,
-    'a credential smuggled alongside a legitimate field must still be refused'
+    'a field smuggled alongside a legitimate one must still be refused'
+  );
+  // null and "" are sent, not absent — JSON cannot carry undefined. Clearing another
+  // user's channel is a silent denial of notification, the same unobservable write.
+  for (const value of [null, '']) {
+    await assert.rejects(
+      () => usersService.update(7, { ntfy_topic: value }, 1),
+      (err) => err.code === SVC.VALIDATION,
+      `update() accepted ntfy_topic: ${JSON.stringify(value)} — clearing a channel is still writing it`
+    );
+  }
+});
+
+check('every channel column in the schema is classified as user-owned', () => {
+  // Derived from the SCHEMA, not from a copy of the list. Without this, shrinking
+  // USER_OWNED_NOTIFICATION_COLUMNS back to two names silently un-guarded ntfy_url,
+  // gotify_url and telegram_chat_id and the whole suite still passed — the list is
+  // the policy, so nothing asserting its contents means the policy can be edited
+  // away. This is the same control as api-surface.test.js failing on an unrecorded
+  // route: a NEW channel column added to `users` fails here until someone classifies
+  // it, rather than defaulting to admin-writable by omission.
+  const schema = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'migrations', '001_initial_schema.sql'), 'utf8');
+  const table = schema.match(/CREATE TABLE IF NOT EXISTS users \(([\s\S]*?)\n\);/);
+  assert.ok(table, 'could not find the users table definition');
+
+  const columns = table[1].split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('--'))
+    .map((line) => line.split(/\s+/)[0]);
+  assert.ok(columns.includes('gotify_token'), `column parse failed: ${columns.join(',')}`);
+
+  // Anything that names a delivery endpoint or carries a bearer value.
+  const channelish = /(ntfy|gotify|telegram|discord|slack|webhook)|_(url|token|topic|secret|key|chat_id)$/;
+  const owned = new Set(usersService.USER_OWNED_NOTIFICATION_COLUMNS);
+  for (const column of columns.filter((c) => channelish.test(c))) {
+    assert.ok(
+      owned.has(column),
+      `users.${column} addresses a notification channel but is not in `
+      + `USER_OWNED_NOTIFICATION_COLUMNS — an admin could write it on another user's `
+      + `account and silently redirect their notifications`
+    );
+  }
+  // Every name in the list must be a real column, or the guard protects nothing.
+  for (const column of owned) {
+    assert.ok(columns.includes(column), `USER_OWNED_NOTIFICATION_COLUMNS names users.${column}, which does not exist`);
+  }
+});
+
+check('no INSERT into users writes a caller-supplied notification target', () => {
+  // EVERY INSERT, not the first one. Matching a single statement silently tested the
+  // root-seed INSERT at index.js:171, which never carried these columns — so the
+  // assertion passed while the create route happily wrote a caller's gotify_token.
+  // A vacuous assertion is worse than none: it reports the rule as covered.
+  const source = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
+  const inserts = [...source.matchAll(/INSERT INTO users \([^)]*\)/g)].map((m) => m[0]);
+  assert.ok(inserts.length >= 3, `expected every user INSERT to be found, saw ${inserts.length}`);
+  for (const statement of inserts) {
+    for (const column of usersService.USER_OWNED_NOTIFICATION_COLUMNS) {
+      assert.ok(!statement.includes(column), `${column} is back in a user INSERT: ${statement}`);
+    }
+  }
+  // The create route must still run the guard; there is no other path that refuses a
+  // credential planted at provisioning time.
+  assert.ok(
+    /assertNotUserOwned/.test(source),
+    'index.js no longer calls assertNotUserOwned — POST /api/users can plant a '
+    + "notification target on a new account, which survives the user changing their password"
   );
 });
 

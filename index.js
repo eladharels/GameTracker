@@ -1728,8 +1728,21 @@ function parseRouteId(value) {
 
 // Create user (admin only)
 app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {
-  const { username, password, can_manage_users = 0, email = '', ntfy_topic = '', gotify_token = '', shares_library = 0 } = req.body;
-  
+  const { username, password, can_manage_users = 0, email = '', shares_library = 0 } = req.body || {};
+
+  // Same rule as the update path, from the same place. Creation was the other half
+  // of the write: an admin could not overwrite a user's notification target, but
+  // could plant one at provisioning time — and that survives the new user changing
+  // their password, so it outlives them taking ownership of the account.
+  //
+  // Checked before bcrypt.hash and before the INSERT. The columns are nullable, so
+  // the row is created without them and the user sets them on My Account.
+  try {
+    usersService.assertNotUserOwned(req.body);
+  } catch (err) {
+    return problem.send(res, err, { log: '[Users] Create rejected:' });
+  }
+
   // Enhanced validation. Both fields must be STRINGS — a JSON number reaching
   // bcrypt.hash rejects with "Illegal arguments", and an unhandled rejection takes
   // the whole process down under Node's default --unhandled-rejections=throw.
@@ -1771,8 +1784,8 @@ app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req
   bcrypt.hash(password, 10).then(hash => {
     db.run(
       // RETURNING id -- required for this.lastID under Postgres. See db.js.
-      'INSERT INTO users (username, password, can_manage_users, email, ntfy_topic, gotify_token, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-      [normalizedUsername, hash, can_manage_users ? 1 : 0, email, ntfy_topic, gotify_token, new Date().toISOString(), 'local', normalizedUsername, shares_library ? 1 : 0],
+      'INSERT INTO users (username, password, can_manage_users, email, created_at, origin, display_name, shares_library) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      [normalizedUsername, hash, can_manage_users ? 1 : 0, email, new Date().toISOString(), 'local', normalizedUsername, shares_library ? 1 : 0],
       function (err) {
         if (err) return res.status(400).json({ error: 'User already exists' });
         res.json({ success: true, id: this.lastID });
@@ -1795,14 +1808,21 @@ app.get('/api/users', authRequired, requirePermission('can_manage_users'), (req,
 app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
   const id = parseRouteId(req.params.id);
   if (id === null) return res.status(404).json({ error: 'User not found' });
-  // ntfy_topic and gotify_token are still forwarded even though an admin may no
-  // longer write them: the service REFUSES them with a 400, and it can only do that
-  // if it can see they were sent. Dropping them here would restore the silent-ignore
-  // this fix exists to remove. An absent key destructures to undefined, which the
-  // service treats as "not sent" — so the SPA is unaffected.
-  const { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library } = req.body;
-
-  usersService.update(id, { password, can_manage_users, email, ntfy_topic, gotify_token, shares_library }, req.user.id)
+  // The WHOLE body goes to the service, deliberately.
+  //
+  // This route used to hand-list the fields it forwarded. That made the list a second
+  // copy of the service's rule with nothing asserting the two agreed: a field the
+  // service refuses is only refused if the route bothered to forward it, so adding a
+  // column to the service's list silently failed to guard it, and "tidying" a name
+  // out of the route turned a 400 back into a silent ignore. There is now nothing to
+  // forget — the service sees everything that was sent.
+  //
+  // Safe because update()'s write path is structurally an allowlist: it appends only
+  // hardcoded `column = ?` literals for the four fields an admin may set, so nothing
+  // caller-controlled can reach the SQL string regardless of what the body contains.
+  // A prototype-polluted body fails CLOSED — an inherited `gotify_token` is still
+  // visible to the guard, which refuses it.
+  usersService.update(id, req.body, req.user.id)
     .then(() => res.json({ success: true }))
     .catch((err) => {
       problem.send(res, err, { log: '[Users] Update failed:', messages: { [SVC.NOT_FOUND]: 'User not found' } });

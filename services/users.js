@@ -12,36 +12,80 @@
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 // Shared promise surface — see db.js. Four services had each written their own.
-const { all, get, run } = db.promises;
+// `all` is deliberately absent: listAll() calls db.promises.all through the module
+// so a test can observe the SQL it issues. See listAll.
+const { get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
 const { isValidEmailAddress, validatePassword } = require('../user-rules');
 
 
-// Per-user PUSH CREDENTIALS — bearer secrets, not profile fields.
+// Where a user's notifications GO. The user's own setting, on My Account — never an
+// administrative field.
 //
-// A Gotify application token lets the holder post notifications to that user's
-// devices; an ntfy topic is a bearer secret in the same way, since anyone who knows
-// the topic can publish to it. The user sets both themselves on My Account.
+// Every column here answers "which device does this reach". A Gotify application
+// token lets the holder post to that user's devices; an ntfy topic is a bearer
+// secret in the same way, since anyone who knows the topic can publish to it; a
+// Telegram chat id addresses a conversation; and the two server URLs decide which
+// host the token or topic is presented to, so writing a URL redirects the channel
+// just as effectively as writing the secret.
 //
-// `GET /api/users` returned both, for EVERY user, to EVERY admin — and
-// `PUT /api/users:id` let an admin overwrite them, silently repointing another
-// user's notifications at a channel the admin controls. Neither had a consumer: the
-// SPA touches these only on the My Account profile page, which reads the CALLER'S
-// OWN row through a different route, and the admin panel only ever sends
-// `{password}` or `{can_manage_users}` (frontend/src/App.jsx:416,649).
+// `GET /api/users` returned ntfy_topic and gotify_token for EVERY user to EVERY
+// admin, and `PUT /api/users/:id` let an admin overwrite them — silently repointing
+// another user's notifications at a channel the admin controls. The other three were
+// never readable or writable there; they are named here so that sending one is
+// ANSWERED rather than shrugged off, which is the same dishonesty in a quieter form.
 //
-// Naming them once, and asserting the projection and the update path against this
-// list in test/helpers.test.js, is what stops them being reinstated by someone
-// adding "the rest of the columns" back to the SELECT.
-const PUSH_CREDENTIAL_COLUMNS = Object.freeze(['ntfy_topic', 'gotify_token']);
+// The name is deliberately about ownership, not secrecy: two of these are URLs. The
+// rule is "the user owns their delivery path", and that is what makes the set
+// well-defined enough to be worth asserting against.
+//
+// This list is the ONLY place these names appear on the write path — the routes
+// derive their forwarded fields from it (index.js). Hand-listing them there meant
+// adding a name here silently failed to guard it, since the route never forwarded it
+// for the service to see: the exact silent-ignore this rule exists to remove,
+// reintroduced by editing the list meant to prevent it.
+const USER_OWNED_NOTIFICATION_COLUMNS = Object.freeze([
+  'ntfy_url', 'ntfy_topic', 'gotify_url', 'gotify_token', 'telegram_chat_id',
+]);
 
 // Columns the admin list exposes. Deliberately not `SELECT *`: `password` is in that
 // table too, and an allowlist fails closed when a column is added.
 const ADMIN_LIST_COLUMNS =
   'id, username, can_manage_users, email, created_at, origin, display_name, shares_library';
 
+// `db.promises.all`, not the destructured `all`, so a test can observe the SQL this
+// actually issues. Asserting the ADMIN_LIST_COLUMNS constant alone proved nothing:
+// rewriting this line to `SELECT *` would ship every credential AND the password
+// hash while every assertion about the constant still passed. The test now reads the
+// query, so the artifact and the behaviour cannot diverge.
 async function listAll() {
-  return all(`SELECT ${ADMIN_LIST_COLUMNS} FROM users ORDER BY id ASC`, []);
+  return db.promises.all(`SELECT ${ADMIN_LIST_COLUMNS} FROM users ORDER BY id ASC`, []);
+}
+
+// Refused, not silently dropped. An admin tool that thinks it just set a user's
+// Gotify token and got `{success:true}` back has been told something false; a 400
+// naming the field is the only answer that leaves the caller correctly informed.
+//
+// EXPORTED because account CREATION never went through this service — it is still an
+// inline INSERT in index.js. A guard living only inside update() covered one of the
+// two write paths while the error message it threw claimed to cover both, so an
+// admin could simply plant the credentials at provisioning time instead: the new
+// user changes their password and every release notification keeps flowing to the
+// admin's device, surviving the user taking full ownership of the account.
+//
+// Callers must invoke this BEFORE any other work, so it cannot be reached past a
+// partial write.
+function assertNotUserOwned(fields) {
+  for (const column of USER_OWNED_NOTIFICATION_COLUMNS) {
+    if (typeof fields?.[column] !== 'undefined') {
+      throw serviceError(
+        CODES.VALIDATION,
+        `${column} is that user's own notification setting, changed by them on My Account. `
+        + 'An administrator cannot set it on their behalf.',
+        { field: column }
+      );
+    }
+  }
 }
 
 async function findById(id) {
@@ -57,19 +101,7 @@ async function update(id, fields, actingUserId) {
   const updates = [];
   const params = [];
 
-  // Refused, not silently dropped. An admin tool that thinks it just set a user's
-  // Gotify token and got `{success:true}` back has been told something false; a 400
-  // naming the field is the only answer that leaves the caller correctly informed.
-  // Checked before any other work so it cannot be reached past a partial update.
-  for (const column of PUSH_CREDENTIAL_COLUMNS) {
-    if (typeof fields[column] !== 'undefined') {
-      throw serviceError(
-        CODES.VALIDATION,
-        `${column} is a per-user notification credential and can only be set by that user, on My Account.`,
-        { field: column }
-      );
-    }
-  }
+  assertNotUserOwned(fields);
 
   if (typeof fields.can_manage_users !== 'undefined') {
     if (!fields.can_manage_users && String(actingUserId) === String(id)) {
@@ -146,4 +178,7 @@ async function remove(id, actingUserId) {
   return { removed: ctx.changes, username: row.username };
 }
 
-module.exports = { listAll, findById, update, remove, ADMIN_LIST_COLUMNS, PUSH_CREDENTIAL_COLUMNS };
+module.exports = {
+  listAll, findById, update, remove,
+  assertNotUserOwned, ADMIN_LIST_COLUMNS, USER_OWNED_NOTIFICATION_COLUMNS,
+};
