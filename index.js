@@ -43,6 +43,7 @@ const catalogService = require('./services/catalog');
 const jobsService = require('./services/jobs');
 const usersService = require('./services/users');
 const authService = require('./services/auth');
+const v2 = require('./services/v2');
 const settingsService = require('./services/settings');
 const notifications = require('./services/notifications');
 const { CODES: SVC } = require('./services/errors');
@@ -281,7 +282,7 @@ const SERVER_VERSION = require('./package.json').version;
 // Flipped by the commit that mounts the v2 router, in the same diff. Kept as one
 // named constant so "is v2 live" has exactly one answer, rather than a route
 // advertising availability that the router does not back.
-const V2_MOUNTED = false;
+const V2_MOUNTED = true;
 
 app.get('/api/health', (req, res) => {
   db.get('SELECT 1', [], (err) => {
@@ -1375,6 +1376,55 @@ function authRequired(req, res, next) {
       next();
     });
 }
+// v2's authentication: PERSONAL ACCESS TOKENS ONLY.
+//
+// Named, so test/api-surface.test.js can derive a v2 route's tier from the middleware
+// chain exactly as it does for authRequired — an anonymous closure would make every
+// v2 route indistinguishable from an unauthenticated one.
+//
+// A 12-hour session JWT is refused here, and the reason is not tidiness. A JWT carries
+// NO SCOPE, so authorize() would hand it the account's full privilege; an API that
+// declares an admin boundary and also accepts JWTs has that boundary bypassable by
+// logging in with a password. v2 has no login endpoint precisely so this can hold.
+//
+// Everything else matches the v1 token path deliberately: the same verifier, the same
+// database privilege re-read on every request, the same undifferentiated 401 for
+// missing, malformed, unknown, expired and orphaned — telling a prober which of those
+// applied confirms which guess was once real.
+function patRequired(req, res, next) {
+  const auth = req.headers.authorization;
+  const credential = auth && auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!authService.looksLikePat(credential)) {
+    return v2.send(res, { code: SVC.FORBIDDEN, message: 'this API accepts personal access tokens only' });
+  }
+  return authService.verifyToken(credential)
+    .then((identity) => {
+      if (!identity) {
+        return v2.send(res, { code: SVC.FORBIDDEN, message: 'invalid or expired token' });
+      }
+      req.user = authService.authorize(identity);
+      req.auth = {
+        kind: 'pat',
+        scopes: identity.scopes,
+        tokenId: identity.tokenId,
+        expiresAt: identity.expiresAt,
+      };
+      next();
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] Token verification failed:' }));
+}
+
+// The v2 analogue of requirePermission, and NAMED for the same reason. Scope has
+// already narrowed can_manage_users by the time this runs, so a library-scoped token
+// held by an administrator is refused here without this function knowing scopes exist.
+function requireAdminScope(req, res, next) {
+  if (!req.user || !req.user.can_manage_users) {
+    return v2.send(res, { code: SVC.FORBIDDEN, message: 'this operation requires the admin scope' });
+  }
+  return next();
+}
+requireAdminScope.requiredPermission = 'can_manage_users';
+
 function requirePermission(permission) {
   // NAMED, and tagged with the permission it enforces. Both matter: the Express
   // router exposes each route's middleware chain by function name, and
@@ -1929,6 +1979,74 @@ app.put('/api/users/:id', authRequired, requirePermission('can_manage_users'), (
       problem.send(res, err, { log: '[Users] Update failed:', messages: { [SVC.NOT_FOUND]: 'User not found' } });
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// /api/v2 — the first routes
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A SEPARATE ROUTER, mounted once. That is what lets test/api-surface.test.js walk
+// v2 as its own surface (KNOWN_MOUNTS has listed '/api/v2' since before any of it
+// existed) and what keeps `patRequired` off every v1 route.
+//
+// These adapters are THIN by contract: auth and HTTP here, work in the services, so
+// /api and /api/v2 remain two skins over one implementation. Nothing below reaches
+// into the database or reimplements a rule — where v2 differs from v1 it is because
+// the SERVICE offers a different function, not because the adapter behaves differently.
+//
+// openapi/gametracker-v2.yaml is the source for these, not a description of them:
+// every operation here matches an `x-implemented: true` operation in that document,
+// and test/api-surface.test.js fails if the two disagree in either direction.
+const v2Router = express.Router();
+
+// Every v2 route is token-authenticated. Applied to the ROUTER rather than repeated
+// per route, so a new route cannot be added unauthenticated by forgetting a word.
+v2Router.use(patRequired);
+
+// GET /api/v2/me — identity and EFFECTIVE privilege, for orientation.
+v2Router.get('/me', (req, res) => {
+  res.json(v2.me(req.user, req.auth));
+});
+
+// GET /api/v2/library/games — filtered, sorted, paged SERVER-SIDE.
+v2Router.get('/library/games', (req, res) => {
+  libraryService.listPage(req.user.id, {
+    status: req.query.status,
+    sort: req.query.sort,
+    order: req.query.order,
+    limit: req.query.limit,
+    cursor: req.query.cursor,
+  })
+    .then((page) => res.json({
+      data: page.data.map(v2.libraryGame),
+      meta: page.meta,
+    }))
+    .catch((err) => v2.send(res, err, { log: '[v2] library list failed:' }));
+});
+
+// GET /api/v2/library/games/:gameId — v1 had no per-game read outside a route
+// literally named /api/debug/, so reading one game meant fetching the whole library.
+v2Router.get('/library/games/:gameId', (req, res) => {
+  libraryService.findGame(req.user.id, req.params.gameId)
+    .then((row) => {
+      if (!row) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such game in your library' });
+      res.json(v2.libraryGame(row));
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] game read failed:' }));
+});
+
+// DELETE /api/v2/library/games/:gameId — 204, or 404 when there was nothing to
+// delete. v1 answered {"success":true} either way, so a mistyped id was a silent
+// no-op reported as success: the worst possible shape for an LLM-driven client.
+v2Router.delete('/library/games/:gameId', (req, res) => {
+  libraryService.removeGame(req.user.id, req.params.gameId)
+    .then(({ removed }) => {
+      if (!removed) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such game in your library' });
+      res.status(204).end();
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] game delete failed:' }));
+});
+
+app.use('/api/v2', v2Router);
 
 app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users'), (req, res) => {
   const id = parseRouteId(req.params.id);

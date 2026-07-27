@@ -58,10 +58,27 @@ function liveRoutes(stack = (app.router || app._router).stack, prefix = '', inhe
       }
       continue;
     }
-    // A mounted router: recurse, carrying the mount path and any middleware applied
-    // at the mount point (so `app.use('/x', authRequired, router)` counts).
+    // A mounted router: recurse, carrying the mount path, any middleware applied at
+    // the mount point (so `app.use('/x', authRequired, router)` counts), AND the
+    // router's OWN `.use()` middleware.
+    //
+    // That last part is not a refinement — without it this walker reported all four
+    // /api/v2 routes as tier 'public'. `v2Router.use(patRequired)` is a separate layer
+    // in the router's stack, NOT part of any route's own handler chain, so a router
+    // that authenticates every route through one `.use()` looked identical to one that
+    // authenticates nothing. It failed CLOSED (the unauthenticated-route allowlist
+    // fired) rather than open, which is the right direction — but it would have forced
+    // whoever hit it to either repeat the middleware on every route or loosen the
+    // assertion, and both are worse than reading the stack correctly.
     if (layer.handle && Array.isArray(layer.handle.stack)) {   // mounted router
-      out.push(...liveRoutes(layer.handle.stack, prefix + mountPath(layer), inherited));
+      const routerMiddleware = layer.handle.stack
+        .filter((l) => !l.route && typeof l.handle === 'function' && !Array.isArray(l.handle.stack))
+        .map((l) => l.handle);
+      out.push(...liveRoutes(
+        layer.handle.stack,
+        prefix + mountPath(layer),
+        [...inherited, ...routerMiddleware]
+      ));
     } else if (layer.handle && typeof layer.handle === 'function' && layer.regexp
                && layer.regexp.source === '^\\/?(?=\\/|$)') {
       // App-level middleware applied to every route (cors, json, headers). Not
@@ -103,13 +120,28 @@ function mountPath(layer) {
 // `/api/admin/test-notification` is the reason: it lives under /api/admin/ and is
 // deliberately NOT admin-gated, so any path-based inference would be wrong.
 function tierOf(route) {
-  if (route.perms.length) return `admin:${route.perms.join('+')}`;
+  if (route.perms.length) {
+    // requireAdminScope carries the same .requiredPermission tag as requirePermission,
+    // so a v2 admin route reports the same tier as its v1 counterpart and the spec's
+    // x-required-scope can be compared against one vocabulary rather than two.
+    return route.names.includes('patRequired')
+      ? `pat-admin:${route.perms.join('+')}`
+      : `admin:${route.perms.join('+')}`;
+  }
   if (route.names.includes('ownershipRequired')) return 'owner-or-admin';
   // Strictly narrower than owner-or-admin: self, with NO admin bypass. Recorded as
   // its own tier so the table states the real rule — it previously logged these as
   // plain 'auth', which understated them.
   if (route.selfOnly) return 'self-only';
   if (route.names.includes('authRequired')) return 'auth';
+  // v2. A DISTINCT tier, not folded into 'auth': patRequired refuses a session JWT,
+  // and a table that showed the two as the same tier would hide exactly the property
+  // v2 depends on — a JWT carries no scope, so accepting one would make the admin
+  // boundary bypassable by logging in with a password.
+  //
+  // Applied to the router with .use(), so it appears in the middleware chain of every
+  // route mounted under /api/v2 without being repeated per route.
+  if (route.names.includes('patRequired')) return 'pat';
   return 'public';
 }
 
@@ -176,8 +208,22 @@ const EXPECTED = {
 };
 
 // Unauthenticated routes are the ones that can hurt, so they are allowlisted
+// --- /api/v2 -------------------------------------------------------------
+// Tier 'pat' is NOT the same as 'auth': patRequired refuses a session JWT, which is
+// what keeps the admin boundary from being bypassable by logging in with a password.
+// Every one of these is also an operation in openapi/gametracker-v2.yaml carrying
+// `x-implemented: true`, and the drift check below fails if the two disagree.
+const EXPECTED_V2 = {
+  'GET /api/v2/me': 'pat',
+  'GET /api/v2/library/games': 'pat',
+  'GET /api/v2/library/games/:gameId': 'pat',
+  'DELETE /api/v2/library/games/:gameId': 'pat',
+};
+
 // separately and by hand. A route reaching 'public' without being on this list is a
 // hard failure regardless of what EXPECTED says.
+Object.assign(EXPECTED, EXPECTED_V2);
+
 const PUBLIC_ALLOWLIST = new Set([
   'GET /api/health',        // container healthcheck + CI deploy gate; leaks nothing
   'POST /api/auth/login',   // rate-limited per IP and per account
@@ -245,6 +291,77 @@ check('authRequired precedes every authorization middleware', () => {
     }
   }
   assert.deepStrictEqual(bad, [], 'authorization middleware runs before authRequired:\n    ' + bad.join('\n    '));
+});
+
+// --- DRIFT GATE: the published spec vs the live router -------------------------
+//
+// api-surface proves the router matches the recorded table. This proves the router
+// matches what openapi/gametracker-v2.yaml TELLS THE WORLD. Different lie, same
+// ground truth — and for an MCP the failure mode is specific: an operation the spec
+// promises but the router does not serve means an agent calls a 404 and reasons
+// around it.
+//
+// The spec is the SOURCE for v2, so it necessarily describes operations that are not
+// built yet. `x-implemented: true` marks the ones that are, and the gate checks BOTH
+// directions against it: a route with no implemented operation is undocumented
+// surface, and an implemented operation with no route is a published lie.
+console.log('/api/v2 spec drift:');
+
+const yaml = require('js-yaml');
+const spec = yaml.load(require('fs').readFileSync(
+  require('path').join(__dirname, '..', 'openapi', 'gametracker-v2.yaml'), 'utf8'));
+
+// OpenAPI writes `{gameId}`; Express writes `:gameId`.
+const specKeys = new Map();
+for (const [path, item] of Object.entries(spec.paths)) {
+  for (const [method, op] of Object.entries(item)) {
+    if (!['get', 'put', 'post', 'delete', 'patch'].includes(method)) continue;
+    if (op['x-implemented'] !== true) continue;
+    const express = path.replace(/\{(\w+)\}/g, ':$1');
+    specKeys.set(`${method.toUpperCase()} /api/v2${express}`, op);
+  }
+}
+
+check('every implemented spec operation exists on the router', () => {
+  const live = new Set(liveRoutes().map((r) => r.key));
+  for (const key of specKeys.keys()) {
+    assert.ok(live.has(key),
+      `the spec marks '${key}' x-implemented but the router does not serve it — `
+      + 'a client generated from this document would call a 404');
+  }
+});
+
+check('every v2 route on the router is in the spec', () => {
+  for (const route of liveRoutes().filter((r) => r.key.includes('/api/v2/'))) {
+    assert.ok(specKeys.has(route.key),
+      `${route.key} is served but is not an x-implemented operation in the spec — `
+      + 'undocumented surface is how a route nobody has read reaches production');
+  }
+});
+
+check('x-required-scope agrees with the tier the router derives', () => {
+  // The one comparison worth making: the spec's published authorization claim against
+  // the middleware chain that actually runs. `library` is defined as the ABSENCE of
+  // admin, so only the admin boundary is derivable — which is exactly what
+  // API_V2_DESIGN.md narrowed the claim to.
+  const tiers = new Map(liveRoutes().map((r) => [r.key, tierOf(r)]));
+  for (const [key, op] of specKeys) {
+    const declared = op['x-required-scope'];
+    const tier = tiers.get(key);
+    const routerSaysAdmin = String(tier).startsWith('pat-admin:');
+    assert.strictEqual(declared === 'admin', routerSaysAdmin,
+      `${key}: spec says x-required-scope '${declared}' but the router's tier is '${tier}'`);
+  }
+});
+
+check('every v2 route is token-authenticated, never merely authenticated', () => {
+  // A v2 route reaching 'auth' would mean it accepted a session JWT — and a JWT
+  // carries no scope, so the admin boundary would be bypassable by logging in.
+  for (const route of liveRoutes().filter((r) => r.key.includes('/api/v2/'))) {
+    const tier = tierOf(route);
+    assert.ok(tier === 'pat' || tier.startsWith('pat-admin:'),
+      `${route.key} has tier '${tier}' — every /api/v2 route must go through patRequired`);
+  }
 });
 
 check('parseRouteId rejects everything that is not a plain integer', () => {

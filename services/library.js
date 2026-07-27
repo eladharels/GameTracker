@@ -465,6 +465,146 @@ async function promoteReleased(username, gameId) {
   return { promoted: ctx.changes > 0 };
 }
 
+
+// --- v2 paginated read -------------------------------------------------------
+//
+// Server-side filter, sort and page. "What is in my backlog, in order" must not mean
+// shipping an entire library through a model's context window.
+//
+// KEYSET, not OFFSET. Offset paging re-runs the query per page, so a row inserted or
+// moved between two requests shifts every later page — the reader silently skips a
+// game or sees one twice. Keyset asks "what comes after this exact row", which is
+// stable under concurrent writes. It also costs the same at page 50 as at page 1.
+//
+// THE ORDER IS TOTAL, ALWAYS. Three of the four sort keys are non-unique and two are
+// nullable, so `ORDER BY key` alone leaves ties in engine-defined order and keyset
+// paging over it duplicates and drops rows. Every sort carries an `id` tiebreaker,
+// and NULLS LAST is stated explicitly because Postgres defaults to NULLS LAST on ASC
+// and NULLS FIRST on DESC — and this data outlived a migration from SQLite, which
+// defaulted the other way.
+
+// Wire name -> column. An allowlist, not a mapping applied to caller input: the value
+// is interpolated into the ORDER BY, which is the one place in this file where a
+// caller-supplied string reaches the SQL text.
+const SORT_COLUMNS = Object.freeze({
+  name: 'game_name',
+  releaseDate: 'release_date',
+  backlogOrder: 'backlog_order',
+  addedAt: 'added_at',
+});
+const SORTS = Object.freeze(Object.keys(SORT_COLUMNS));
+const MAX_PAGE = 200;
+const DEFAULT_PAGE = 50;
+
+// The cursor is server-generated and validated on receipt. It is NEVER an
+// authorization input: every query below is scoped by user_id regardless of what the
+// cursor contains, so a forged one can only produce a wrong page of the caller's own
+// library, never someone else's row.
+function encodeCursor(state) {
+  return Buffer.from(JSON.stringify(state), 'utf8').toString('base64url');
+}
+
+function decodeCursor(raw, expected) {
+  let state;
+  try {
+    state = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8'));
+  } catch {
+    throw serviceError(CODES.VALIDATION, 'cursor is not a cursor this server issued', { field: 'cursor' });
+  }
+  if (!state || typeof state !== 'object') {
+    throw serviceError(CODES.VALIDATION, 'cursor is not a cursor this server issued', { field: 'cursor' });
+  }
+  // The cursor PINS the query. Changing sort, order or filter mid-page would otherwise
+  // resume from a position that means something different in the new ordering, and the
+  // caller would get a page that is neither the old sequence nor the new one — silently.
+  // This is the first thing a client hits when it changes sort while paging.
+  for (const key of ['sort', 'order', 'status']) {
+    if (String(state[key] ?? '') !== String(expected[key] ?? '')) {
+      throw serviceError(CODES.VALIDATION,
+        `cursor was issued for ${key}='${state[key] ?? ''}' but this request asks for `
+        + `'${expected[key] ?? ''}' — start a new page when you change the query`,
+        { field: 'cursor' });
+    }
+  }
+  return state;
+}
+
+async function listPage(userId, opts = {}) {
+  const sort = opts.sort ?? 'name';
+  const order = (opts.order ?? 'asc').toLowerCase();
+  const status = opts.status ?? null;
+
+  if (!SORTS.includes(sort)) {
+    throw serviceError(CODES.VALIDATION, `sort must be one of: ${SORTS.join(', ')}`, { field: 'sort' });
+  }
+  if (order !== 'asc' && order !== 'desc') {
+    throw serviceError(CODES.VALIDATION, "order must be 'asc' or 'desc'", { field: 'order' });
+  }
+  if (status !== null && !STATUSES.includes(status)) {
+    throw serviceError(CODES.VALIDATION, `status must be one of: ${STATUSES.join(', ')}`, { field: 'status' });
+  }
+  // Ordering by backlog position across statuses is not a meaningful question: every
+  // row outside the backlog has NULL there, so the answer is "the backlog, then
+  // everything else in id order" dressed up as a sort.
+  if (sort === 'backlogOrder' && status !== 'backlog') {
+    throw serviceError(CODES.VALIDATION,
+      "sort=backlogOrder is only meaningful with status=backlog", { field: 'sort' });
+  }
+
+  const limit = Math.min(Math.max(Number(opts.limit) || DEFAULT_PAGE, 1), MAX_PAGE);
+  const column = SORT_COLUMNS[sort];               // allowlisted above, never raw input
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+
+  const where = ['user_id = ?'];
+  const params = [userId];
+  if (status) { where.push('status = ?'); params.push(status); }
+
+  if (opts.cursor) {
+    const state = decodeCursor(opts.cursor, { sort, order, status });
+    // Explicit rather than a row comparison: a NULL anywhere inside a Postgres row
+    // comparison makes the whole comparison NULL, which silently drops every row it
+    // touches instead of ordering them.
+    if (state.lastKey === null) {
+      // Already past the non-null block; only later NULL rows remain.
+      where.push(`${column} IS NULL AND id > ?`);
+      params.push(state.lastId);
+    } else {
+      const cmp = order === 'asc' ? '>' : '<';
+      where.push(`((${column} IS NOT NULL AND (${column} ${cmp} ? OR (${column} = ? AND id > ?))) OR ${column} IS NULL)`);
+      params.push(state.lastKey, state.lastKey, state.lastId);
+    }
+  }
+
+  const whereSql = where.join(' AND ');
+  // `total` ignores paging, so a client can show "12 of 340" on the first page. It is
+  // a second count per page; at this scale that is the right trade, and the spec
+  // states it as a promise rather than leaving it optional.
+  const totalRow = await db.promises.get(
+    `SELECT COUNT(*)::int AS total FROM user_games WHERE ${whereSql}`, params);
+
+  // One extra row decides whether another page exists, without a second query.
+  const rows = await db.promises.all(
+    `SELECT * FROM user_games
+      WHERE ${whereSql}
+      ORDER BY (${column} IS NULL) ASC, ${column} ${direction}, id ASC
+      LIMIT ?`,
+    [...params, limit + 1]
+  );
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last
+    ? encodeCursor({ sort, order, status, lastKey: last[column] ?? null, lastId: last.id })
+    : null;
+
+  return { data: page, meta: { total: totalRow ? totalRow.total : 0, limit, nextCursor } };
+}
+
+// AT THE END OF THE FILE, deliberately. This block used to sit above the v2
+// pagination helpers, which put every name it referenced in the temporal dead zone —
+// `require('./library')` threw ReferenceError before any caller ran. Keeping exports
+// last means adding a function below them cannot repeat that.
 module.exports = {
   STATUSES, EVENTS, MAX_GAME_ID, MAX_GAME_NAME,
   isReleaseInFuture, validReleaseDate, decideEvents, upsertGame,
@@ -479,4 +619,5 @@ module.exports = {
   listBacklog,
   moveBacklogItem,
   reorderBacklog,
+  listPage, SORTS, MAX_PAGE, DEFAULT_PAGE, encodeCursor,
 };

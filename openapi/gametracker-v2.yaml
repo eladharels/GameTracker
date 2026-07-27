@@ -1,7 +1,11 @@
 # This document is the SOURCE for the /api/v2 routes, not a description of them.
-# No v2 route exists yet: every operation here is a specification to be implemented,
-# and the drift gate in test/api-surface.test.js will fail on any mismatch once the
-# first one lands. See API_V2_DESIGN.md for the decisions behind each choice.
+#
+# Operations carrying `x-implemented: true` are LIVE, and test/api-surface.test.js
+# enforces both directions against the running router: an implemented operation with
+# no route is a published lie, and a v2 route with no implemented operation is
+# undocumented surface. Everything else here is still a specification to be built.
+#
+# See API_V2_DESIGN.md for the decisions behind each choice.
 
 openapi: 3.1.0
 
@@ -128,6 +132,7 @@ paths:
     get:
       tags: [identity]
       operationId: getMe
+      x-implemented: true
       x-required-scope: library
       summary: Identity and effective privilege for this credential
       description: |
@@ -286,6 +291,7 @@ paths:
     get:
       tags: [library]
       operationId: listLibraryGames
+      x-implemented: true
       x-required-scope: library
       summary: The caller's library
       description: |
@@ -413,6 +419,7 @@ paths:
     get:
       tags: [library]
       operationId: getLibraryGame
+      x-implemented: true
       x-required-scope: library
       summary: One game from the caller's library
       description: |
@@ -462,6 +469,7 @@ paths:
     delete:
       tags: [library]
       operationId: removeLibraryGame
+      x-implemented: true
       x-required-scope: library
       summary: Remove a game from the library
       description: |

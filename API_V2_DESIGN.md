@@ -1,9 +1,10 @@
 # /api/v2 — contract decisions
 
-**Status:** decided, not yet implemented. This document gates the OpenAPI spec; the spec
-gates the routes. Nothing under `/api/v2` gets written until the decisions below are
-settled, because every one of them is cheap now and expensive once a generated client
-depends on it.
+**Status:** decided; the first four routes are LIVE. This document gates the OpenAPI
+spec; the spec gates the routes. Nothing under `/api/v2` gets written until the
+decisions below are settled, because every one of them is cheap now and expensive once
+a generated client depends on it — and an operation is not live until it carries
+`x-implemented: true` in the spec AND exists on the router, which CI checks both ways.
 
 **Audience:** the owner (scripts, terminal), and an MCP server built on the generated
 client. Not a public API. That narrows several decisions — see D1 on scopes.
@@ -261,8 +262,8 @@ to build it.
 
 | Gap | Service | For |
 |---|---|---|
-| `listGamesFor` has no `ORDER BY`; pagination over it is unsound | `services/library.js` | D8 |
-| No cursor implementation anywhere; needs `(sort, order, status, lastKey, lastId)` and a `(key NULLS LAST, id)` total order | `services/library.js` | D8 |
+| ~~`listGamesFor` has no `ORDER BY`~~ — v2 reads through `listPage`, which orders explicitly; `listGamesFor` stays unordered because v1's response is frozen | `services/library.js` | D8 |
+| ~~No cursor implementation~~ — done. KEYSET, not offset: offset re-runs the query per page, so a row inserted between requests shifts every later page and the reader skips or repeats a game | `services/library.js` | D8 |
 | ~~**`user_games` has no `added_at` column**~~ — done, `migrations/004`. Nullable and deliberately not backfilled: nothing in the table records when an existing row was added, and a migration-time value would be false for every one of them and indistinguishable afterwards from a true one. Set on insert, absent from the upsert's DO UPDATE list so a status change does not reset it | schema | D8 |
 | No catalog fetch-by-id. `searchAll` searches by query string only, so the `gameId` branch of add-a-game has no name, cover or date to store — and `upsertGame` requires a name | `services/catalog.js` | D9 |
 | Status derived from the request's date rather than the stored row | `services/library.js` upsert | D7 |
@@ -338,9 +339,17 @@ pure enough to assert against directly, no database needed.
 3. ~~The OpenAPI 3.1 document — v2 only, hand-written.~~ `openapi/gametracker-v2.yaml`,
    **28 operations**. It is the SOURCE for the routes, not a description of them: no v2
    route exists yet, so every operation in it is a specification to be implemented.
-4. The drift gate, landed **with the first v2 route**, not after. A spec without the gate
-   is a document, not a contract.
-5. v2 routes in slices — library first (that is what the MCP and the terminal both want),
+4. ~~The drift gate, landed **with the first v2 route**, not after.~~ Done, in
+   `test/api-surface.test.js`: every `x-implemented` operation exists on the router,
+   every v2 route is an `x-implemented` operation, `x-required-scope` agrees with the
+   router-derived tier, and every v2 route resolves to the `pat` tier rather than
+   `auth`. Landing it with the routes immediately paid: the walker reported all four
+   as `public`, because `router.use(patRequired)` is a separate layer and not part of
+   any route's own handler chain — it failed CLOSED, but a gate written afterwards
+   would have been written around that rather than fixing it.
+5. v2 routes in slices — library first. **First four live**: `GET /me`,
+   `GET /library/games` (filter/sort/page), `GET /library/games/{gameId}`,
+   `DELETE /library/games/{gameId}`. Remaining 24 to go (that is what the MCP and the terminal both want),
    admin second. Normalise the shares argument order before the second adapter set exists.
    Carry into this step, from the spec reviews: split `LibraryGameCreate`'s `oneOf` into
    named `AddByRef`/`AddByName` branches. Most generators discard a `oneOf` whose branches

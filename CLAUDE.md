@@ -99,6 +99,11 @@ GameTracker/
 │                                   #   decides whether a service's message may be shown to the
 │                                   #   caller; a 500 never echoes one. Adapters call
 │                                   #   problem.send(res, err, ...) instead of hand-rolling a ladder
+│   ├── v2.js                       # The /api/v2 WIRE FORMAT: the problem+json renderer and
+│   │                               #   the camelCase mapper. Reuses problem.js's code table
+│   │                               #   INCLUDING its `expose` column — a message v1 withholds
+│   │                               #   is withheld here too, in a format whose `detail` field
+│   │                               #   invites putting an exception message in it
 │   ├── auth.js                     # Personal access tokens: minting, verification, and the
 │   │                               #   scope rule. Scopes only ever NARROW the privilege
 │   │                               #   read from `users` — never grant. Deliberately does
@@ -224,6 +229,16 @@ GameTracker/
 > fresh database and their empty error callbacks swallowed the failures — silently shipping installs
 > missing `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Postgres removes the race,
 > but the swallowing was the real defect. Do not reintroduce a "log and continue" migration path.
+
+> **`/api/v2` routes go on `v2Router` and are PAT-only.** `patRequired` is applied with
+> `v2Router.use()`, so a new v2 route cannot be added unauthenticated by forgetting a word,
+> and it refuses a session JWT deliberately: a JWT carries no scope, so accepting one would
+> make the admin boundary bypassable by logging in with a password. `tierOf()` reports these
+> as `pat`, a distinct tier from `auth` — folding them together would hide exactly that.
+>
+> The spec is the SOURCE: an operation marked `x-implemented: true` in
+> `openapi/gametracker-v2.yaml` must exist on the router, and every v2 route must be such an
+> operation. Both directions are enforced.
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
 > router and asserts the authorization tier of all 42 routes — public / auth / owner-or-admin /

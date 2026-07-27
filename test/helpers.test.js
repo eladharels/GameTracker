@@ -1270,6 +1270,84 @@ checkAsync('the token listing never returns the hash', async () => {
   assert.ok(!/\*/.test(issued), `the listing is SELECT *, so a new column ships automatically: ${issued}`);
 });
 
+// --- services/v2.js: the wire format ------------------------------------------
+
+const v2svc = require('../services/v2');
+
+check('v2 errors are problem+json and never leak a withheld message', () => {
+  const exposed = v2svc.toProblem(serviceError(SVC.VALIDATION, 'sort must be one of: name', { field: 'sort' }));
+  assert.strictEqual(exposed.status, 400);
+  assert.strictEqual(exposed.body.code, 'validation');
+  assert.strictEqual(exposed.body.type, '/problems/validation');
+  assert.ok(exposed.body.detail.includes('sort must be'));
+
+  // expose:false in services/problem.js means the service's own message must not
+  // appear — the same rule v1 applies, carried onto a format whose `detail` field
+  // invites putting an exception message in it.
+  const hidden = v2svc.toProblem(serviceError(SVC.NOT_FOUND, 'user 42 has no row in user_games'));
+  assert.strictEqual(hidden.status, 404);
+  assert.strictEqual(hidden.body.detail, undefined, 'a withheld message reached `detail`');
+  assert.ok(!/user_games|42/.test(JSON.stringify(hidden.body)));
+
+  // An unrecognised error is never pattern-matched into a 4xx and never echoed.
+  const unknown = v2svc.toProblem(new Error('connection terminated unexpectedly'));
+  assert.strictEqual(unknown.status, 500);
+  assert.strictEqual(unknown.body.code, 'internal');
+  assert.ok(!/connection terminated/.test(JSON.stringify(unknown.body)));
+});
+
+check('the v2 mapper emits camelCase ONCE, with no v1 aliases', () => {
+  const row = {
+    id: 1, user_id: 2, game_id: 'igdb_5', game_name: 'A', cover_url: null,
+    release_date: '2024-01-01', status: 'backlog', steam_app_id: '440',
+    last_price: null, last_price_updated: null, crack_status: 'cracked',
+    backlog_order: 3, added_at: '2026-01-01T00:00:00.000Z',
+  };
+  const out = v2svc.libraryGame(row);
+  assert.deepStrictEqual(Object.keys(out).sort(), [
+    'addedAt', 'backlogOrder', 'coverUrl', 'crackStatus', 'gameId', 'lastPrice',
+    'lastPriceUpdatedAt', 'name', 'releaseDate', 'status', 'steamAppId',
+  ]);
+  // No snake_case survives, and no internal ids leak.
+  for (const key of Object.keys(out)) assert.ok(!key.includes('_'), `${key} is snake_case`);
+  assert.strictEqual(out.id, undefined, 'the internal row id reached the response');
+  assert.strictEqual(out.userId, undefined, 'the owning user id reached the response');
+});
+
+check('the mapper uses ?? so a real 0 is not turned into null', () => {
+  // `|| null` would map backlogOrder 0 to null. Position 0 does not occur today; the
+  // habit is what matters, and the same operator protects every other optional.
+  const out = v2svc.libraryGame({ game_id: 'igdb_1', game_name: 'A', status: 'backlog', backlog_order: 0 });
+  assert.strictEqual(out.backlogOrder, 0);
+  // ...and an absent value is null, never undefined: JSON.stringify drops undefined
+  // keys entirely, so a client sees "field removed" rather than "no value".
+  assert.strictEqual(out.coverUrl, null);
+  assert.ok('coverUrl' in out);
+});
+
+check('me() reports EFFECTIVE privilege, after scope narrowing', () => {
+  const admin = { id: 1, username: 'root', display_name: 'root', origin: 'local', can_manage_users: true };
+  // authorize() has already narrowed can_manage_users by the time this runs, so a
+  // library-scoped admin arrives here as false — which is the correct answer for what
+  // that credential can do, and what /api/v2/me must report.
+  const narrowed = v2svc.me({ ...admin, can_manage_users: false }, { scopes: ['library'], expiresAt: null });
+  assert.strictEqual(narrowed.canManageUsers, false);
+  assert.deepStrictEqual(narrowed.scopes, ['library']);
+  assert.deepStrictEqual(Object.keys(narrowed).sort(),
+    ['canManageUsers', 'displayName', 'id', 'origin', 'scopes', 'tokenExpiresAt', 'username']);
+});
+
+check('the cursor pins the query it was issued for', () => {
+  const libraryService = require('../services/library');
+  const cursor = libraryService.encodeCursor({ sort: 'name', order: 'asc', status: null, lastKey: 'A', lastId: 1 });
+  // Opaque to a client, but decodable here: it must not be a bare offset, and it must
+  // carry the query it belongs to so a sort change mid-page is caught rather than
+  // silently resuming in a different ordering.
+  const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+  assert.deepStrictEqual(Object.keys(decoded).sort(), ['lastId', 'lastKey', 'order', 'sort', 'status']);
+  assert.ok(!/^\d+$/.test(cursor), 'the cursor is a bare number — that is an offset, not a keyset position');
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {
