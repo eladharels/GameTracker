@@ -1557,38 +1557,57 @@ function attemptKeys(clientIP, username) {
   return keys;
 }
 
-function isLockedOut(clientIP, username) {
+// The sudo-mode counter for POST /api/user/me/tokens, in its own key namespace.
+//
+// KEYED ON USER ID, not on IP and not on username, and each choice matters:
+//   * IP would let one user lock out everyone behind the same NAT or proxy;
+//   * the username namespace is the LOGIN counter, and sharing it means five
+//     fat-fingered attempts on the token form lock you out of signing in — or,
+//     worse, that an attacker can burn a victim's login budget from a session.
+// The caller can only ever attack their OWN id here (verifyPassword takes
+// req.user.id), so a per-id budget is exactly the right unit.
+const sudoKeys = (userId) => [`sudo:${userId}`];
+
+// Both counters share one store and one implementation. Writing a second copy of
+// "count failures, lock out for a window" is how the two would drift on the day one
+// of them is tuned — and the sweep below only evicts from the store it knows about.
+function lockoutMinutes(keys) {
   const now = Date.now();
-  for (const key of attemptKeys(clientIP, username)) {
+  for (const key of keys) {
     const attempts = loginAttempts.get(key);
     if (!attempts) continue;
     if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
       const elapsed = now - attempts.firstAttempt;
-      if (elapsed < LOCKOUT_DURATION) {
-        return Math.ceil((LOCKOUT_DURATION - elapsed) / 1000 / 60);
-      }
-      loginAttempts.delete(key); // lockout expired
+      if (elapsed < LOCKOUT_DURATION) return Math.ceil((LOCKOUT_DURATION - elapsed) / 1000 / 60);
+      loginAttempts.delete(key);
     }
   }
   return 0;
 }
 
-// Track failed login attempts for rate limiting
-function trackFailedAttempt(clientIP, username) {
+function trackFailures(keys) {
   const now = Date.now();
-  for (const key of attemptKeys(clientIP, username)) {
+  for (const key of keys) {
     const attempts = loginAttempts.get(key) || { count: 0, firstAttempt: now };
     attempts.count++;
     if (attempts.count === 1) attempts.firstAttempt = now;
     loginAttempts.set(key, attempts);
   }
+}
+
+const clearFailures = (keys) => { for (const key of keys) loginAttempts.delete(key); };
+
+// The login limiter, expressed in terms of the shared primitives above. Behaviour is
+// unchanged — same keys, same window, same log line.
+const isLockedOut = (clientIP, username) => lockoutMinutes(attemptKeys(clientIP, username));
+
+function trackFailedAttempt(clientIP, username) {
+  trackFailures(attemptKeys(clientIP, username));
   console.log(`[Auth] Failed login attempt from IP ${clientIP} for '${safeForLog(username || 'unknown', 64)}'.`);
 }
 
 // Clear only the keys belonging to the account that actually authenticated.
-function clearFailedAttempts(clientIP, username) {
-  for (const key of attemptKeys(clientIP, username)) loginAttempts.delete(key);
-}
+const clearFailedAttempts = (clientIP, username) => clearFailures(attemptKeys(clientIP, username));
 
 // Entries for IPs that fail a few times and never return were never evicted — an
 // unbounded slow leak under background scanning traffic. Sweep hourly.
@@ -1926,7 +1945,18 @@ app.post('/api/auth/login', (req, res) => {
 // fake database errors) where SQLite simply matched nothing and 404'd.
 // See divergence 5 in db.js.
 function parseRouteId(value) {
-  return /^[0-9]+$/.test(String(value)) ? Number(value) : null;
+  if (!/^[0-9]+$/.test(String(value))) return null;
+  const n = Number(value);
+  // BOUNDED, not merely numeric. Every id this parses addresses a Postgres `integer`
+  // column, and a value past int4 reaches the driver as an out-of-range error that
+  // surfaces as `500 {"error":"DB error"}` — a request that is simply not found
+  // reported as a server fault, plus log noise on every scan. `99999999999999999999`
+  // did this on both DELETE /api/users/:id and DELETE /api/user/me/tokens/:tokenId.
+  //
+  // MAX_SAFE_INTEGER is not the right ceiling either: beyond it, Number() silently
+  // rounds, so two different ids would parse to the same number.
+  const INT4_MAX = 2147483647;
+  return n >= 1 && n <= INT4_MAX ? n : null;
 }
 
 // Create user (admin only)
@@ -2829,11 +2859,39 @@ app.get('/api/user/me/tokens', authRequired, (req, res) => {
 app.post('/api/user/me/tokens', authRequired, (req, res) => {
   const body = req.body || {};
 
-  // SUDO MODE. Holding a session must not be enough to mint a credential that
-  // outlives it: a stolen 12-hour JWT would otherwise be upgradeable into permanent
-  // access, which is a persistence escalation even though it grants nothing the JWT
-  // did not already have for those 12 hours. Re-entering the password is what GitHub
-  // and GitLab both require here, and it is checked BEFORE anything is created.
+  // SUDO MODE, and its LIMIT stated honestly.
+  //
+  // What it does: a NON-ADMIN session cannot turn itself into a credential that
+  // outlives it. That is a real persistence escalation — the token never expires,
+  // where the session lasts twelve hours — and re-entering the password is what
+  // GitHub and GitLab both require here.
+  //
+  // What it does NOT do, and an earlier version of this comment wrongly claimed it
+  // did: stop a stolen ADMIN session. An admin may PUT /api/users/:id against their
+  // own id to set a new password with no knowledge of the old one, then mint with the
+  // password they just chose. A security review demonstrated it in two requests.
+  // Nothing is lost by it — a stolen admin session can already create a second admin
+  // account and persist that way — but a comment asserting a guarantee its code does
+  // not provide is worse than no comment, which is this codebase's own standard.
+  //
+  // Closing it means requiring the current password on a self-targeted password
+  // change in PUT /api/users/:id. That route is v1 and frozen, and adding a required
+  // field would break the admin UI, so it is recorded here rather than done quietly.
+  //
+  // RATE LIMITED, per user id. Without this the check below is an unthrottled
+  // password oracle — measured at 11.6 guesses/second sustained, against a control
+  // whose whole job is to be hard to pass, while the identical check in the login
+  // route stops after five. It is also the first route in this codebase that lets a
+  // non-admin trigger unbounded bcrypt work: 30 concurrent mints took /api/health
+  // from 2ms to 2.5 SECONDS, because bcryptjs is pure JS on the shared event loop.
+  // One limiter fixes both, and it must run BEFORE bcrypt to fix the second.
+  const lockedFor = lockoutMinutes(sudoKeys(req.user.id));
+  if (lockedFor) {
+    return res.status(429).json({
+      error: `Too many incorrect password attempts. Try again in ${lockedFor} minutes.`,
+    });
+  }
+
   usersService.verifyPassword(req.user.id, body.password)
     .then((check) => {
       if (!check.ok) {
@@ -2848,11 +2906,22 @@ app.post('/api/user/me/tokens', authRequired, (req, res) => {
               + 'create-api-token.js on the server.',
           });
         }
+        // COUNTED, and logged. The review found neither: a failed attempt here left
+        // no trace at all, so an attacker guessing against a stolen session produced
+        // no detection signal anywhere. `not_local` is deliberately not counted — it
+        // fails for every attempt on a directory account regardless of the password,
+        // so counting it would lock those users out of a control they cannot use.
+        trackFailures(sudoKeys(req.user.id));
+        console.log(`[Tokens] Failed password confirmation for '${safeForLog(req.user.username, 64)}'.`);
         // One answer for a missing password and a wrong one. Distinguishing them
         // turns this into an oracle for whether the SESSION is still the right
         // account's, which is exactly what an attacker holding a stolen JWT probes.
         return res.status(403).json({ error: 'Incorrect password.' });
       }
+
+      // Cleared on success, so a user who mistypes twice and then gets it right does
+      // not carry a stale budget into their next legitimate mint.
+      clearFailures(sudoKeys(req.user.id));
 
       // The scope FLOOR, applied here rather than trusted from the body: a token may
       // never carry a privilege the account itself does not hold. The service already
@@ -3208,4 +3277,9 @@ module.exports = {
   db,
   parseRouteId,
   dedupe,
+  // Exported for test/api-contract.test.js, which asserts that exhausting the
+  // token-minting gate does NOT lock the same account out of logging in. The two
+  // counters share a store and an implementation but not a key namespace, and
+  // nothing else can observe that they stayed separate.
+  isLockedOut,
 };

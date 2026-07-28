@@ -1670,6 +1670,31 @@ check('no INSERT into users writes a caller-supplied notification target', () =>
   );
 });
 
+console.log('auth.createToken expiry (minting something inert and reporting success):');
+checkAsync('a non-string expiresAt is REFUSED, not coerced into a dead token', async () => {
+  const authSvc = require('../services/auth');
+  // Date.parse coerces via toString, so ["2099-01-01"] parses as a valid future
+  // instant — and the array is then stored as the Postgres literal {"2099-01-01"},
+  // which reads back as NaN. The token minted, reported 201, and 401'd on first use.
+  // Not exploitable (verifyToken fails closed) but exactly what this function's own
+  // comment forbids two lines further down.
+  for (const bad of [['2099-01-01'], 2099, { toString: () => '2099-01-01' }, true]) {
+    let code = null;
+    await authSvc.createToken({ userId: 1, name: 'x', scopes: ['library'], expiresAt: bad })
+      .catch((err) => { code = err.code; });
+    assert.strictEqual(code, 'validation', `createToken accepted expiresAt ${JSON.stringify(bad)}`);
+  }
+  // null still means "never expires", and a real ISO string still passes validation.
+  // Neither reaches the database here — both throw later, on the insert — so the
+  // assertion is only that they got PAST the type check.
+  for (const good of [null, '2099-01-01T00:00:00.000Z']) {
+    let code = null;
+    await authSvc.createToken({ userId: 1, name: 'x', scopes: ['library'], expiresAt: good })
+      .catch((err) => { code = err.code; });
+    assert.notStrictEqual(code, 'validation', `createToken rejected a legitimate expiresAt ${good}`);
+  }
+});
+
 console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
 {
   const dbMod = require('../db');

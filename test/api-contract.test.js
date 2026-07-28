@@ -376,6 +376,69 @@ checkAsync('the scope FLOOR comes from the account, never from the body', async 
     'a non-admin session offered admin in grantedScopes — the floor is the account, not the request');
 });
 
+checkAsync('five wrong passwords lock the gate, and bcrypt stops being reachable', async () => {
+  // Two findings, one fix. Unthrottled, this was measured at 11.6 guesses/second
+  // against the single control protecting persistence escalation — and it was the
+  // first route letting a non-admin trigger unbounded bcrypt, which took /api/health
+  // from 2ms to 2.5s under 30 concurrent calls because bcryptjs shares the event loop.
+  //
+  // A distinct user id per run: the counter is module state and would otherwise carry
+  // between assertions in this file.
+  const uid = 4242;
+  const wrong = async () => {
+    const usersService = require('../services/users');
+    const authService = require('../services/auth');
+    const realVerify = usersService.verifyPassword;
+    const realCreate = authService.createToken;
+    let verified = 0;
+    usersService.verifyPassword = async () => { verified++; return { ok: false, reason: 'wrong_password' }; };
+    authService.createToken = async () => { throw new Error('must not be reached'); };
+    const res = recordingRes();
+    try {
+      await handlerFor('post', '/api/user/me/tokens')(
+        { body: { name: 'x', password: 'no' }, user: { id: uid, username: 'victim', can_manage_users: false } }, res);
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      usersService.verifyPassword = realVerify;
+      authService.createToken = realCreate;
+    }
+    return { res, verified };
+  };
+
+  for (let i = 0; i < 5; i++) {
+    const { res } = await wrong();
+    assert.strictEqual(res.statusCode, 403, `attempt ${i + 1} should still be a 403`);
+  }
+  const sixth = await wrong();
+  assert.strictEqual(sixth.res.statusCode, 429, 'the sixth attempt was not rate limited');
+  assert.match(sixth.res.body.error, /minutes/);
+  // The point of putting the limiter BEFORE the check: once locked, no bcrypt runs.
+  assert.strictEqual(sixth.verified, 0,
+    'verifyPassword still ran while locked out — the bcrypt DoS is not actually bounded');
+});
+
+checkAsync('the token gate and the LOGIN limiter do not share a budget', async () => {
+  // Keyed on user id, in its own namespace. If they shared keys, five fat-fingered
+  // attempts on the token form would lock the account out of signing in — and an
+  // attacker holding a session could burn a victim's login budget deliberately.
+  const { isLockedOut } = require('../index.js');
+  // No silent skip. An earlier version of this returned early when the export was
+  // missing, which made it a test that passed whether or not the property held —
+  // exactly the vacuous shape this suite exists to avoid.
+  assert.strictEqual(typeof isLockedOut, 'function',
+    'index.js no longer exports isLockedOut, so this assertion can no longer be made');
+  // Probed with the USER ID as the username. The mutation this catches is
+  // `sudo:${userId}` -> `user:${userId}`, which collides with the login namespace for
+  // any account whose name is its own id — and, more to the point, means the two
+  // counters are one. Probing with an unrelated name would have passed either way,
+  // which is how the first version of this assertion missed it.
+  assert.strictEqual(isLockedOut('9.9.9.9', '4242'), 0,
+    'exhausting the token gate also consumed the LOGIN budget — the two counters share a namespace');
+  assert.strictEqual(isLockedOut('9.9.9.9', 'victim'), 0,
+    'exhausting the token gate locked an unrelated account out of login');
+});
+
 checkAsync('a correct password mints, and answers 201 with the plaintext', async () => {
   const { res, created } = await callMintToken({ name: 'ok', password: 'right' });
   assert.strictEqual(res.statusCode, 201);

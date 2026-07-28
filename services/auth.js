@@ -126,6 +126,18 @@ async function createToken({ userId, name, scopes, expiresAt = null, grantedScop
   const kept = normaliseScopes(scopes, { strict: true });
 
   if (expiresAt !== null) {
+    // A STRING, checked before Date.parse rather than trusting it. `Date.parse` takes
+    // whatever it is given and coerces via toString, so `["2099-01-01"]` parses as a
+    // valid future instant — and the array is then bound into Postgres as the literal
+    // `{"2099-01-01"}`, which reads back as NaN and 401s on first use. The token was
+    // minted, reported 201, and could never authenticate.
+    //
+    // Not exploitable — verifyToken's NaN handling fails closed, exactly as its
+    // comment promises — but it is precisely what the paragraph below forbids:
+    // minting a dead credential and reporting success is worse than refusing.
+    if (typeof expiresAt !== 'string') {
+      throw serviceError(CODES.VALIDATION, 'expiresAt must be an ISO timestamp string, or null', { field: 'expiresAt' });
+    }
     const parsed = Date.parse(expiresAt);
     if (Number.isNaN(parsed)) {
       throw serviceError(CODES.VALIDATION, 'expiresAt must be an ISO timestamp, or null', { field: 'expiresAt' });
