@@ -259,8 +259,15 @@ const EXPECTED_V2 = {
   'GET /api/v2/library/backlog': 'pat',
   'PUT /api/v2/library/backlog': 'pat',
   'GET /api/v2/catalog/search': 'pat',
+  // A LIVE Steam price, distinct from the library row's stored one. Library scope: an
+  // agent asking "what does this cost" is doing library work, not administration.
+  'GET /api/v2/catalog/prices/:steamAppId': 'pat',
   'POST /api/v2/library/games': 'pat',
   'GET /api/v2/shares': 'pat',
+  // Share TARGETS. Library-scoped and NOT admin, deliberately: listUsers is admin-only,
+  // so without this a non-admin credential could reach POST /shares/outgoing and had no
+  // way to discover a valid value for it. Username and display name only.
+  'GET /api/v2/users/directory': 'pat',
   'PUT /api/v2/shares/outgoing': 'pat',
   'POST /api/v2/shares/outgoing': 'pat',
   'DELETE /api/v2/shares/outgoing/:username': 'pat',

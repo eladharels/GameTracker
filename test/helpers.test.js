@@ -1774,6 +1774,111 @@ checkAsync('a LOCAL account is unaffected', async () => {
   }
 });
 
+console.log('jobs.fetchSteamPrice — three outcomes, never collapsed:');
+{
+  const axiosMod = require('axios');
+  const jobsSvc = require('../services/jobs');
+  const withSteam = async (impl, fn) => {
+    const real = axiosMod.get;
+    axiosMod.get = impl;
+    try { return await fn(); } finally { axiosMod.get = real; }
+  };
+
+  checkAsync('a priced game returns the formatted string for that region', async () => {
+    let seen = null;
+    await withSteam(async (url, cfg) => {
+      seen = { url, params: cfg.params, redirects: cfg.maxRedirects, timeout: cfg.timeout };
+      return { data: { 440: { success: true, data: { price_overview: { final_formatted: '₪59.99' } } } } };
+    }, async () => {
+      const r = await jobsSvc.fetchSteamPrice('440', { region: 'il' });
+      assert.deepStrictEqual(r, { ok: true, price: '₪59.99', reason: null });
+    });
+    assert.strictEqual(seen.params.cc, 'il', 'the region was not passed to Steam');
+    assert.strictEqual(seen.redirects, 0,
+      'redirects are followed — a 302 off Steam is not an answer about a price');
+    assert.ok(seen.timeout > 0, 'no timeout, so a hung Steam holds the request open');
+  });
+
+  checkAsync('an app absent from the region is 200-with-null, not an error', async () => {
+    // Steam answers success:false for an id its regional store does not carry. That is
+    // an ANSWER. Collapsing it into the error branch makes the route 502 and a caller
+    // report an outage for a game that is simply not sold there.
+    await withSteam(async () => ({ data: { 999: { success: false } } }), async () => {
+      const r = await jobsSvc.fetchSteamPrice('999');
+      assert.strictEqual(r.ok, true);
+      assert.strictEqual(r.price, null);
+      assert.strictEqual(r.reason, 'not_in_region');
+    });
+  });
+
+  checkAsync('a free or unreleased game is also 200-with-null, distinctly', async () => {
+    await withSteam(async () => ({ data: { 7: { success: true, data: {} } } }), async () => {
+      const r = await jobsSvc.fetchSteamPrice('7');
+      assert.deepStrictEqual(r, { ok: true, price: null, reason: 'free_or_unpriced' });
+    });
+  });
+
+  checkAsync('an unreachable Steam is NOT ok, and carries no upstream body', async () => {
+    await withSteam(async () => { const e = new Error('connect ETIMEDOUT'); e.response = { data: 'secret upstream body' }; throw e; },
+      async () => {
+        const r = await jobsSvc.fetchSteamPrice('440');
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'connect ETIMEDOUT');
+        assert.ok(!JSON.stringify(r).includes('secret upstream body'),
+          'the upstream response body reached the caller');
+      });
+  });
+
+  checkAsync('a hostile price string is sanitised and bounded', async () => {
+    // This value lands in a user-visible column. A non-string once became the literal
+    // "[object Object]" while the run reported success.
+    await withSteam(async () => ({ data: { 1: { success: true, data: { price_overview: { final_formatted: { evil: 1 } } } } } }),
+      async () => {
+        assert.strictEqual((await jobsSvc.fetchSteamPrice('1')).price, null);
+      });
+    await withSteam(async () => ({ data: { 1: { success: true, data: { price_overview: { final_formatted: 'x'.repeat(500) } } } } }),
+      async () => {
+        const r = await jobsSvc.fetchSteamPrice('1');
+        assert.ok(r.price.length <= 64, `price not bounded: ${r.price.length} chars`);
+      });
+  });
+}
+
+console.log('jobs.updatePrices — the sweep counts three outcomes separately:');
+checkAsync('updated / withoutPrice / errors are not collapsed, and only priced rows are written', async () => {
+  // The counting was rewritten when the Steam call was extracted for the v2 price
+  // route, and it had no test — a run that checked 40 games and priced none must not
+  // report 40 successes, and an unreachable Steam must not read as "no price".
+  const axiosMod = require('axios');
+  const dbMod = require('../db');
+  const jobsSvc = require('../services/jobs');
+  const realGet = axiosMod.get, realAll = dbMod.promises.all, realRun = dbMod.promises.run;
+  const written = [];
+  dbMod.promises.all = async () => ([
+    { id: 1, steam_app_id: '440' },   // priced
+    { id: 2, steam_app_id: '999' },   // not in region
+    { id: 3, steam_app_id: '7' },     // Steam unreachable
+  ]);
+  dbMod.promises.run = async (sql, params) => { written.push(params[0]); return { changes: 1 }; };
+  axiosMod.get = async (url, cfg) => {
+    const id = cfg.params.appids;
+    if (id === '440') return { data: { 440: { success: true, data: { price_overview: { final_formatted: '₪59.99' } } } } };
+    if (id === '999') return { data: { 999: { success: false } } };
+    throw new Error('connect ETIMEDOUT');
+  };
+  try {
+    const report = await jobsSvc.updatePrices({ region: 'il' });
+    assert.deepStrictEqual(report, { checked: 3, updated: 1, withoutPrice: 1, errors: 1 },
+      `the sweep miscounted: ${JSON.stringify(report)}`);
+    // ONLY the priced row is written. An unreachable Steam must not blank a price that
+    // was correct yesterday.
+    assert.deepStrictEqual(written, ['₪59.99'],
+      'the sweep wrote a row it had no price for');
+  } finally {
+    axiosMod.get = realGet; dbMod.promises.all = realAll; dbMod.promises.run = realRun;
+  }
+});
+
 console.log('auth admin revocation — the SQL is the safety property:');
 {
   const dbMod = require('../db');

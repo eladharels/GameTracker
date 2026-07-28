@@ -758,7 +758,95 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /catalog/prices/{steamAppId}:
+    parameters:
+      - name: steamAppId
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9]{1,10}$' }
+        description: Steam application id, as carried on a library game's `steamAppId`.
+    get:
+      tags: [catalog]
+      operationId: getGamePrice
+      x-implemented: true
+      x-required-scope: library
+      summary: Current Steam price for one game
+      description: |
+        A LIVE lookup, distinct from the `lastPrice` on a library row — that one is
+        whatever the weekly sweep last stored and can be days old. Use this when the
+        answer has to be current; use the stored one when a stale figure is acceptable
+        and a round trip to Steam is not.
+
+        `price` is Steam's own formatted string for the requested region, currency
+        symbol included, because the currency is a property of the region and splitting
+        them invites rendering a number with the wrong one.
+
+        **A game with no price is not an error.** Free titles, unreleased titles, and
+        titles absent from the requested region's store all answer `200` with
+        `price: null` and a `reason`. A caller that treats "no price" as a failure will
+        report an outage every time somebody asks about a free game.
+      parameters:
+        - name: region
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[a-z]{2}$', default: il }
+          description: |
+            ISO 3166-1 alpha-2 country code selecting the Steam store. Defaults to the
+            same region the weekly price sweep uses, so this endpoint and the stored
+            `lastPrice` are comparable by default.
+      responses:
+        '200':
+          description: The lookup completed. `price` may still be null — see `reason`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GamePrice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502':
+          description: |
+            Steam could not be reached or answered unusably. Distinct from a `200` with
+            a null price, which means Steam answered and the game has none.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   # ----------------------------------------------------------------- sharing --
+  /users/directory:
+    get:
+      tags: [sharing]
+      operationId: listDirectory
+      x-implemented: true
+      x-required-scope: library
+      summary: Accounts this library can be shared with
+      description: |
+        Sharing needs a target, and until this existed v2 could create a share but not
+        discover who to create it for — `listUsers` is admin-scoped, so a non-admin
+        credential could reach `POST /shares/outgoing` and had no way to learn a single
+        valid value for it. A write operation whose only argument is undiscoverable is
+        not usable, which is why this is library-scoped rather than admin.
+
+        **Username and display name only.** Deliberately NOT the `User` schema: this is
+        readable by every credential on the instance, so it carries what a share picker
+        needs and nothing else — no email, no administrator flag, no origin, no
+        timestamps. `listUsers` remains the administrative view.
+
+        This is the same directory v1 exposes at `GET /api/all-users` to any
+        authenticated caller, so it widens nothing; it narrows the fields.
+      responses:
+        '200':
+          description: Every account, ordered by username.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/DirectoryEntry' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /shares:
     get:
       tags: [sharing]
@@ -1603,6 +1691,37 @@ components:
           type: array
           items: { type: string, enum: [library, admin] }
         tokenExpiresAt: { type: [string, 'null'], format: date-time, description: Null when the token has no expiry. Revocation, not expiry, is the safety mechanism. }
+      additionalProperties: false
+
+    DirectoryEntry:
+      type: object
+      description: |
+        The minimum needed to choose a share target. Closed, and deliberately much
+        narrower than `User` — every credential on the instance can read this.
+      required: [username, displayName]
+      properties:
+        username: { type: string, description: Lowercase, and what share operations take. }
+        displayName: { type: string, description: For rendering; falls back to the username. }
+      additionalProperties: false
+
+    GamePrice:
+      type: object
+      required: [steamAppId, region, price, reason]
+      properties:
+        steamAppId: { type: string }
+        region: { type: string, description: The store actually queried. }
+        price:
+          type: [string, 'null']
+          description: |
+            Steam's formatted price for that region, symbol included. Null when the game
+            has no price there — which is an answer, not a failure.
+        reason:
+          type: [string, 'null']
+          enum: [null, free_or_unpriced, not_in_region]
+          description: |
+            Why `price` is null; null when a price was returned. Present so a caller can
+            tell "this game is free" from "this game is not sold here" without guessing
+            from an absent field.
       additionalProperties: false
 
     Token:

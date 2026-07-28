@@ -152,8 +152,14 @@ async function checkReleases({ dedupe } = {}) {
 // `<> ''` as well as NOT NULL, matching update_library_prices.js: an empty
 // steam_app_id can never resolve to a price, and `appids=` makes Steam answer 200
 // with an empty body, which reads in the log like a game that simply has no price.
+// `db.promises.all` through the module, not the destructured `all`. updatePrices was
+// refactored to share its Steam call with the v2 price route, and its three-way
+// counting — updated / withoutPrice / errors — had no test at all, because the
+// destructured binding made the query un-stubbable and the suite forbids a real
+// database. That is the trap CLAUDE.md documents: not a false pass here, but a whole
+// function left untestable and therefore untested.
 async function priceableGames() {
-  return all(
+  return db.promises.all(
     "SELECT id, game_id, steam_app_id FROM user_games WHERE steam_app_id IS NOT NULL AND steam_app_id <> '' ORDER BY id",
     []
   );
@@ -172,19 +178,57 @@ function priceString(value) {
   return trimmed || null;
 }
 
+// One Steam lookup. Extracted because there are now two callers — the weekly sweep
+// below and `GET /api/v2/catalog/prices/{steamAppId}` — and the alternative was the
+// route re-implementing the request, the timeout, the redirect refusal and the
+// price-string sanitising. v1 does exactly that in an inline route handler, which is
+// why its version has none of the last three.
+//
+// Returns a DISCRIMINATED result rather than a string or a throw, because "Steam says
+// this game has no price" and "Steam could not be reached" are different answers and
+// the caller must not collapse them: the sweep counts them separately, and the route
+// answers 200 for one and 502 for the other.
+//
+//   { ok: true,  price }              a formatted price for that region
+//   { ok: true,  price: null, reason } Steam answered; the game has no price there
+//   { ok: false, error }              Steam could not be reached or was unusable
+async function fetchSteamPrice(steamAppId, { region = 'il' } = {}) {
+  const id = String(steamAppId);
+  try {
+    const response = await axios.get('https://store.steampowered.com/api/appdetails', {
+      params: { appids: id, cc: region, l: 'en' },
+      timeout: STEAM_TIMEOUT_MS,
+      // No redirects: a 302 off store.steampowered.com is not an answer about a price,
+      // and following it would send the request somewhere this code never named.
+      maxRedirects: 0,
+    });
+    const data = response.data?.[id];
+    // `success:false` is Steam's answer for an app id that is not in this region's
+    // store at all — distinct from an app that is there and simply has no price_overview
+    // (free, unreleased, or bundled).
+    if (!data?.success) return { ok: true, price: null, reason: 'not_in_region' };
+    const price = priceString(data?.data?.price_overview?.final_formatted);
+    if (!price) return { ok: true, price: null, reason: 'free_or_unpriced' };
+    return { ok: true, price, reason: null };
+  } catch (err) {
+    // Steam's message only, never the response body.
+    return { ok: false, error: err.message };
+  }
+}
+
 async function updatePrices({ region = 'il' } = {}) {
   const report = { checked: 0, updated: 0, withoutPrice: 0, errors: 0 };
   const games = await priceableGames();
   for (const game of games) {
     report.checked++;
-    try {
-      const response = await axios.get('https://store.steampowered.com/api/appdetails', {
-        params: { appids: game.steam_app_id, cc: region, l: 'en' },
-        timeout: STEAM_TIMEOUT_MS,
-        maxRedirects: 0,
-      });
-      const data = response.data?.[game.steam_app_id];
-      const price = priceString(data?.success && data?.data?.price_overview?.final_formatted);
+    {
+      const result = await fetchSteamPrice(game.steam_app_id, { region });
+      if (!result.ok) {
+        report.errors++;
+        console.error(`[Jobs] Price lookup failed for app ${safe(game.steam_app_id, 20)}:`, result.error);
+        continue;
+      }
+      const price = result.price;
       if (!price) { report.withoutPrice++; continue; }
       // AWAITED. v1 fired this through the callback shim without waiting, which
       // db.js divergence #9 says can be abandoned without its callback ever running —
@@ -194,10 +238,6 @@ async function updatePrices({ region = 'il' } = {}) {
         [price, new Date().toISOString(), game.id]
       );
       report.updated++;
-    } catch (err) {
-      report.errors++;
-      // Steam's message only, never the response body.
-      console.error(`[Jobs] Price lookup failed for app ${safe(game.steam_app_id, 20)}:`, err.message);
     }
   }
   return report;
@@ -318,5 +358,5 @@ async function runJob(kind, { scope = 'instance', userId = null, deps = {} } = {
 
 module.exports = {
   NO_DEDUPE, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames,
-  refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS,
+  refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice,
 };

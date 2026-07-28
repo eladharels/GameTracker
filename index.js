@@ -2210,6 +2210,61 @@ v2Router.post('/library/games', (req, res) => {
 //
 // v1 needs three requests and a directory fetch to build this: one for outgoing, one
 // for incoming, and the whole user list to turn usernames into display names.
+// GET /api/v2/users/directory — who can this library be shared WITH.
+//
+// Library-scoped, not admin. Sharing needs a target, and `listUsers` is admin-only —
+// so before this, a non-admin credential could reach POST /shares/outgoing and had no
+// way to discover a single valid value for it. A write whose only argument is
+// undiscoverable is not a usable operation, and an MCP client hits that wall first.
+//
+// Username and display name ONLY. Every credential on the instance can read this, so
+// it carries what a share picker needs and nothing else — the admin listing keeps the
+// email, the permission flag and the origin.
+v2Router.get('/users/directory', (req, res) => {
+  sharesService.listDirectory()
+    .then((rows) => res.json({
+      data: rows.map((r) => ({
+        username: r.username,
+        // Falls back to the username rather than emitting null: this field exists to
+        // be rendered, and a picker showing a blank row is worse than a plain one.
+        displayName: r.display_name || r.username,
+      })),
+    }))
+    .catch((err) => v2.send(res, err, { log: '[v2] directory list failed:' }));
+});
+
+// GET /api/v2/catalog/prices/:steamAppId — a LIVE price, unlike the library row's
+// `lastPrice`, which is whatever the weekly sweep last stored.
+//
+// The three outcomes are kept distinct on purpose. A game Steam has no price for
+// answers 200 with a null price and a reason — free and unreleased titles are the
+// common case, and a caller that reads "no price" as a failure reports an outage every
+// time someone asks about one. Steam being unreachable is a 502, because that is this
+// server's problem and not an answer about the game.
+v2Router.get('/catalog/prices/:steamAppId', (req, res) => {
+  const steamAppId = String(req.params.steamAppId || '');
+  // Validated here rather than passed through: this value goes into an outbound URL,
+  // and the spec's pattern is only a promise until something enforces it.
+  if (!/^[0-9]{1,10}$/.test(steamAppId)) {
+    return v2.send(res, { code: SVC.VALIDATION, message: 'steamAppId must be a Steam application id' });
+  }
+  const region = req.query.region === undefined ? 'il' : String(req.query.region);
+  if (!/^[a-z]{2}$/.test(region)) {
+    return v2.send(res, { code: SVC.VALIDATION, message: 'region must be a two-letter country code' });
+  }
+  jobsService.fetchSteamPrice(steamAppId, { region })
+    .then((result) => {
+      if (!result.ok) {
+        // The upstream message is logged, never returned — it is a third party's error
+        // text about a request this caller did not make.
+        console.error(`[v2] Steam price lookup failed for ${safeForLog(steamAppId, 20)}:`, result.error);
+        return v2.send(res, { code: SVC.PROVIDER_UNAVAILABLE, message: 'Steam could not be reached' });
+      }
+      res.json({ steamAppId, region, price: result.price, reason: result.reason });
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] price lookup failed:' }));
+});
+
 v2Router.get('/shares', (req, res) => {
   Promise.all([
     sharesService.listOutgoingShares(req.user.username),
