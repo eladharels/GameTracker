@@ -1695,6 +1695,29 @@ checkAsync('a non-string expiresAt is REFUSED, not coerced into a dead token', a
   }
 });
 
+console.log('ldap-helpers.satisfiesRequiredGroup:');
+{
+  const { satisfiesRequiredGroup } = require('../ldap-helpers');
+  check('an empty requiredGroup means the control is not in use', () => {
+    for (const none of ['', '   ', null, undefined]) {
+      assert.strictEqual(satisfiesRequiredGroup({ memberOf: [] }, none), true);
+    }
+  });
+  check('membership is case-insensitive on BOTH the attribute name and the value', () => {
+    // A directory answering `memberof` (lowercase) used to read as "member of
+    // nothing", which refused every login and presented as a directory outage.
+    assert.strictEqual(satisfiesRequiredGroup({ memberof: ['CN=Gamers,dc=x'] }, 'gamers'), true);
+    assert.strictEqual(satisfiesRequiredGroup({ MemberOf: ['cn=gamers,dc=x'] }, 'GAMERS'), true);
+  });
+  check('a non-member is refused, and so is an entry with no groups at all', () => {
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=other,dc=x'] }, 'gamers'), false);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: [] }, 'gamers'), false);
+    assert.strictEqual(satisfiesRequiredGroup({}, 'gamers'), false);
+    // Fails CLOSED on a malformed entry rather than treating absence as membership.
+    assert.strictEqual(satisfiesRequiredGroup(null, 'gamers'), false);
+  });
+}
+
 console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
   check('readSettings() really does return { settings, degraded }', () => {
     // The stubs below imitate this shape. When they imitated it WRONGLY — returning
@@ -1747,6 +1770,45 @@ console.log('users.verifyPassword (sudo mode for minting a token from the browse
           assert.strictEqual(out.reason, 'no_directory');
         });
       }
+    } finally {
+      settingsStore.readSettings = realRead;
+      ldapHelpers.verifyLdapCredentials = realVerify;
+    }
+  });
+
+  checkAsync('a verified directory user OUTSIDE requiredGroup is still refused', async () => {
+    // The blocker. requiredGroup lives only in the directory — it is never mirrored
+    // into `users` — so the per-request privilege re-read cannot revoke it. Without
+    // this re-check a deprovisioned account, refused at login, could still turn its
+    // residual session into a token with no expiry that no admin can see or revoke.
+    //
+    // Asserted HERE and not only at the route, because the route test stubs
+    // verifyPassword whole: deleting this check left every route assertion green.
+    const ldapHelpers = require('../ldap-helpers');
+    const settingsStore = require('../settings-store');
+    const realRead = settingsStore.readSettings;
+    const realVerify = ldapHelpers.verifyLdapCredentials;
+    settingsStore.readSettings = () => ({
+      settings: { ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw', requiredGroup: 'gamers' } },
+      degraded: false,
+    });
+    try {
+      // Correct password, but the entry is not in the group.
+      ldapHelpers.verifyLdapCredentials = async () => ({
+        ok: true, entry: { dn: 'uid=jane', memberOf: ['cn=other,dc=x'] },
+      });
+      await withRow({ username: 'jane', password: null, origin: 'ldap' }, async () => {
+        const out = await usersService.verifyPassword(1, 'their-real-password');
+        assert.strictEqual(out.ok, false, 'a user outside the required group was allowed to mint');
+        assert.strictEqual(out.reason, 'directory_not_authorized');
+      });
+      // ...and a member of the group still passes, so the check is not just refusing.
+      ldapHelpers.verifyLdapCredentials = async () => ({
+        ok: true, entry: { dn: 'uid=jane', memberOf: ['cn=gamers,dc=x'] },
+      });
+      await withRow({ username: 'jane', password: null, origin: 'ldap' }, async () => {
+        assert.strictEqual((await usersService.verifyPassword(1, 'pw')).ok, true);
+      });
     } finally {
       settingsStore.readSettings = realRead;
       ldapHelpers.verifyLdapCredentials = realVerify;

@@ -464,6 +464,100 @@ checkAsync('the token gate and the LOGIN limiter do not share a budget', async (
     'exhausting the token gate locked an unrelated account out of login');
 });
 
+console.log('POST /api/auth/login (the LDAP verification ladder):');
+
+checkAsync('an UNRECOGNISED verification result never issues a session', async () => {
+  // The ladder used to test four reason strings and then fall through to the success
+  // branch, so any other non-ok reason authenticated. A review proved it: the route
+  // logged "User password authentication succeeded" for a FAILED verification. It
+  // failed closed only by accident, because `result.entry` was absent and reading
+  // `.dn` threw. A future reason that CARRIES an entry — password_expired,
+  // account_locked, both natural shapes here — would have issued a real session.
+  const ldapHelpers = require('../ldap-helpers');
+  const settingsStore = require('../settings-store');
+  const realVerify = ldapHelpers.verifyLdapCredentials;
+  // loadSettings, not readSettings: the login route reads through the former, and
+  // stubbing the latter left isLdapConfigured false — so this test exercised LOCAL
+  // auth and passed while the LDAP ladder it names was never reached at all.
+  const realLoad = settingsStore.loadSettings;
+  settingsStore.loadSettings = () => ({
+    ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' },
+  });
+  // Carries an entry, exactly like the shapes that would make the old code issue a
+  // session. If the ladder ever falls through again, this authenticates.
+  ldapHelpers.verifyLdapCredentials = async () => ({
+    ok: false,
+    reason: 'password_expired',
+    entry: { dn: 'uid=jane,dc=x', cn: 'Jane', memberOf: [] },
+  });
+  // The database is STUBBED so the success path can actually complete. Without this
+  // the test proves nothing: with the guard removed the route reaches getOrCreateUser,
+  // finds no database, and errors out before issuing a token — passing the assertion
+  // for the wrong reason. That accidental failure-to-authenticate is precisely the
+  // property under review, so it must not be what makes the test green.
+  const realGet = db.get;
+  const realRun = db.run;
+  db.get = (sql, params, cb) => cb(null, { id: 42, username: 'jane', can_manage_users: 0 });
+  db.run = (sql, params, cb) => { if (typeof cb === 'function') cb.call({ lastID: 42 }, null); };
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/auth/login')(
+      { body: { username: 'jane', password: 'anything' }, ip: '203.0.113.9' }, res);
+    await new Promise((r) => setTimeout(r, 60));
+  } finally {
+    ldapHelpers.verifyLdapCredentials = realVerify;
+    settingsStore.loadSettings = realLoad;
+    db.get = realGet;
+    db.run = realRun;
+  }
+  assert.ok(!res.body || !res.body.token,
+    'an unrecognised verification reason issued a session token');
+  assert.notStrictEqual(res.statusCode, 200,
+    'an unrecognised verification reason authenticated the caller');
+});
+
+checkAsync('a directory account outside requiredGroup CANNOT mint', async () => {
+  // The blocker a review reproduced: ldap.requiredGroup is the only authorization
+  // signal that lives in the directory and is never mirrored into `users`, so the
+  // per-request privilege re-read cannot revoke it. Without the group re-check, an
+  // account removed from the group was refused at LOGIN and could still turn its
+  // residual session into a token with no expiry that no admin can see or revoke.
+  const { res, created } = await callMintToken(
+    { name: 'x', password: 'their-real-directory-password' },
+    { verify: async () => ({ ok: false, reason: 'directory_not_authorized', viaDirectory: true }) });
+  assert.strictEqual(res.statusCode, 403);
+  assert.strictEqual(created, 0, 'a deprovisioned directory account minted a permanent token');
+  assert.match(res.body.error, /required group/i);
+});
+
+checkAsync('every directory-backed attempt is counted, including the successful ones', async () => {
+  // Findings 2 and 3: the wrong-password counter cannot bound directory load, because
+  // it does not count faults and it is CLEARED on success. Unthrottled, a review drove
+  // 40 mints against a dead domain controller and 40 successful mints costing 80 binds
+  // and 40 subtree searches — an outbound flood at someone else's DC from any session.
+  const uid = 7777;
+  const call = (result) => callMintToken({ name: 'x', password: 'pw' }, { uid, verify: async () => result });
+
+  // 20 SUCCESSFUL directory mints: allowed, then capped. Success must not buy more.
+  let last;
+  for (let i = 0; i < 20; i++) last = await call({ ok: true, viaDirectory: true });
+  assert.strictEqual(last.res.statusCode, 201, 'the 20th legitimate mint should still work');
+  const capped = await call({ ok: true, viaDirectory: true });
+  assert.strictEqual(capped.res.statusCode, 429, 'successful directory mints are still unbounded');
+  assert.strictEqual(capped.created, 0);
+});
+
+checkAsync('a LOCAL account is never charged to the directory budget', async () => {
+  // The cap exists to protect a domain controller. A local account never touches one,
+  // so charging it there would throttle bcrypt users for someone else's problem.
+  const uid = 8888;
+  for (let i = 0; i < 25; i++) {
+    const { res } = await callMintToken({ name: 'x', password: 'pw' },
+      { uid, verify: async () => ({ ok: true }) });   // no viaDirectory
+    assert.strictEqual(res.statusCode, 201, `local mint ${i + 1} was throttled by the directory cap`);
+  }
+});
+
 checkAsync('a correct password mints, and answers 201 with the plaintext', async () => {
   const { res, created } = await callMintToken({ name: 'ok', password: 'right' });
   assert.strictEqual(res.statusCode, 201);

@@ -421,8 +421,15 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   accounts verify with a real LDAP bind through `ldap-helpers.js#verifyLdapCredentials` — the
   SAME function the login route calls, so there is one implementation of resolve-DN-then-bind
   and not two. Rate limited per user id, in its own key namespace so it cannot consume the
-  login budget. A directory FAULT (unreachable, ambiguous, unconfigured) answers 503 and never
-  "incorrect password": the user cannot fix an outage by retyping. **This does not constrain a
+  login budget, plus a SECOND independent budget (20 per 2 minutes) covering every attempt that
+  reaches the directory — success included — because the password counter exempts faults and is
+  cleared on success, so it cannot bound outbound load on someone else's domain controller.
+  A directory FAULT (unreachable, ambiguous, unconfigured) answers 503 and never "incorrect
+  password": the user cannot fix an outage by retyping. **`ldap.requiredGroup` is re-checked
+  here**, because it is the one authorization signal that lives in the directory and is never
+  mirrored into `users` — so the per-request privilege re-read cannot revoke it, and without the
+  re-check a deprovisioned account turns its residual session into a token no admin can see or
+  revoke. **This does not constrain a
   stolen ADMIN session** — an admin can reset their own password through `PUT /api/users/:id`
   without the old one and then mint. That is recorded rather than fixed, because requiring the
   old password there would add a required field to a frozen v1 route.

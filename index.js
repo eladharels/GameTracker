@@ -30,11 +30,24 @@ const {
   attrValue,
   attrValues,
   compatTreeAdvice,
-  verifyLdapCredentials,
 } = require('./ldap-helpers');
+// The two credential-decision helpers are reached through the MODULE, not
+// destructured. Which verification outcome yields a session is the safety property of
+// the login route, and a destructured binding is captured at load time and cannot be
+// intercepted — so a test asserting "an unrecognised reason must not authenticate"
+// could not be written against it at all. A review had to mutate the module's exports
+// before index.js loaded to prove the fail-open. That is the trap CLAUDE.md documents,
+// on the one route where it matters most.
+const ldapHelpers = require('./ldap-helpers');
 // escapeIgdbSearch is no longer used here: every APIcalypse literal in the server
 // is now built inside services/catalog.js, which is the point of the extraction.
-const { loadSettings, resolveApiKey } = require('./settings-store');
+const { resolveApiKey } = require('./settings-store');
+// Through the module. Which settings the LOGIN route sees decides whether it consults
+// the directory at all, so a test that cannot control it cannot reach the LDAP path —
+// a contract test meant to prove the verification ladder silently exercised local auth
+// instead and passed against a bypass. Same destructuring trap CLAUDE.md documents.
+const settingsStore = require('./settings-store');
+const loadSettings = (...args) => settingsStore.loadSettings(...args);
 // Service layer. Route handlers are adapters over these: they do auth and HTTP,
 // the services do the work. Lets /api and the coming /api/v2 be two skins over one
 // implementation instead of two implementations that drift.
@@ -1569,17 +1582,37 @@ function attemptKeys(clientIP, username) {
 // req.user.id), so a per-id budget is exactly the right unit.
 const sudoKeys = (userId) => [`sudo:${userId}`];
 
+// A SECOND, independent budget covering every sudo-mode attempt that actually reaches
+// the directory — successful, failed, or faulted alike.
+//
+// The wrong-password counter above cannot do this job. It deliberately does not count
+// a directory FAULT (a user must not be locked out by an outage they did not cause)
+// and it is CLEARED on success — so a review drove 40 sequential mints against a dead
+// domain controller with zero throttling, and 60 concurrent ones held 60 sockets for
+// ten seconds each. With the correct password it was worse: 40 successful mints cost
+// the directory 80 binds and 40 subtree searches, unthrottled. Neither is an
+// event-loop DoS here (LDAP is I/O-bound; /api/health stayed at 4ms) but both are an
+// unbounded outbound flood at someone else's domain controller, startable by anyone
+// holding any session.
+//
+// Deliberately generous and short: this is an amplification cap, not an auth control.
+// It must not become a way to lock a user out of minting, so a legitimate burst costs
+// a couple of minutes rather than the 15 the password counter imposes.
+const DIRECTORY_KEYS = (userId) => [`sudo-dir:${userId}`];
+const DIRECTORY_MAX_ATTEMPTS = 20;
+const DIRECTORY_WINDOW_MS = 2 * 60 * 1000;
+
 // Both counters share one store and one implementation. Writing a second copy of
 // "count failures, lock out for a window" is how the two would drift on the day one
 // of them is tuned — and the sweep below only evicts from the store it knows about.
-function lockoutMinutes(keys) {
+function lockoutMinutes(keys, max = MAX_LOGIN_ATTEMPTS, duration = LOCKOUT_DURATION) {
   const now = Date.now();
   for (const key of keys) {
     const attempts = loginAttempts.get(key);
     if (!attempts) continue;
-    if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
+    if (attempts.count >= max) {
       const elapsed = now - attempts.firstAttempt;
-      if (elapsed < LOCKOUT_DURATION) return Math.ceil((LOCKOUT_DURATION - elapsed) / 1000 / 60);
+      if (elapsed < duration) return Math.ceil((duration - elapsed) / 1000 / 60);
       loginAttempts.delete(key);
     }
   }
@@ -1727,7 +1760,7 @@ app.post('/api/auth/login', (req, res) => {
   // there is deliberately one implementation. What stays here is everything that is
   // specific to logging IN: the fallback policy, the group check, the user sync and
   // the session token.
-  verifyLdapCredentials(ldapSettings, normalizedUsername, password).then((result) => {
+  ldapHelpers.verifyLdapCredentials(ldapSettings, normalizedUsername, password).then((result) => {
     if (authCompleted) return;
 
     // FALL BACK on 'unreachable' and 'not_found', exactly as before. A directory
@@ -1758,6 +1791,23 @@ app.post('/api/auth/login', (req, res) => {
       return fallbackLocalAuth();
     }
 
+    // POSITIVE test, and the ladder above is not trusted to have been exhaustive.
+    //
+    // This used to fall straight through to the success branch for any reason string
+    // the ladder did not name — a review proved it by returning an unrecognised
+    // reason and watching the route log "User password authentication succeeded" for
+    // a FAILED verification. It fails closed today only by accident, because
+    // `result.entry` is absent and reading `.dn` throws into the catch below. Add a
+    // future non-ok reason that carries an entry — `password_expired` and
+    // `account_locked` are both natural shapes for this function — and the route
+    // issues a session for a verification that failed.
+    //
+    // Decided by omission is exactly how authorization has gone wrong here before.
+    if (!result.ok) {
+      console.error('[LDAP] Unrecognised verification result, refusing:', result.reason);
+      return fallbackLocalAuth();
+    }
+
     const foundUser = result.entry;
     console.log('[LDAP] User password authentication succeeded.');
 
@@ -1766,16 +1816,8 @@ app.post('/api/auth/login', (req, res) => {
     // authenticates but is outside the required group is not authorized, so clearing
     // here would let them reset the throttle at will.
     if (ldapSettings.requiredGroup) {
-      // Case-insensitive: a directory answering `memberof` used to leave this
-      // undefined, which read as "member of nothing" and refused every login with
-      // requiredGroup set. It fails closed, so it presented as a directory outage
-      // rather than as a bug here.
-      const groups = attrValues(foundUser, 'memberOf');
-      console.log('[LDAP] User is member of groups:', groups);
-      const isMember = groups.some((group) =>
-        group.toLowerCase() === ldapSettings.requiredGroup.toLowerCase() ||
-        group.toLowerCase().includes(`cn=${ldapSettings.requiredGroup.toLowerCase()}`));
-      if (!isMember) {
+      console.log('[LDAP] User is member of groups:', attrValues(foundUser, 'memberOf'));
+      if (!ldapHelpers.satisfiesRequiredGroup(foundUser, ldapSettings.requiredGroup)) {
         console.log(`[LDAP] Authorization failed: User is not in required group '${ldapSettings.requiredGroup}'.`);
         authCompleted = true;
         return res.status(403).json({ error: 'Not a member of the required group' });
@@ -2800,9 +2842,23 @@ app.post('/api/user/me/tokens', authRequired, (req, res) => {
       error: `Too many incorrect password attempts. Try again in ${lockedFor} minutes.`,
     });
   }
+  // The directory-load cap, checked separately and BEFORE the check runs, because for
+  // a directory account the check itself is the expensive thing being bounded.
+  const dirLockedFor = lockoutMinutes(
+    DIRECTORY_KEYS(req.user.id), DIRECTORY_MAX_ATTEMPTS, DIRECTORY_WINDOW_MS);
+  if (dirLockedFor) {
+    return res.status(429).json({
+      error: `Too many token requests. Try again in ${dirLockedFor} minutes.`,
+    });
+  }
 
   usersService.verifyPassword(req.user.id, body.password)
     .then((check) => {
+      // Counted for ANY outcome that cost a round trip — success included. The two
+      // exemptions that made the wrong-password counter unable to bound this (faults
+      // are not counted, success clears it) are exactly why this is a separate budget.
+      if (check.viaDirectory) trackFailures(DIRECTORY_KEYS(req.user.id));
+
       if (!check.ok) {
         // A directory FAULT is not a wrong password and must not be reported as one:
         // the user cannot fix an unreachable domain controller by retyping, and being
@@ -2812,6 +2868,13 @@ app.post('/api/user/me/tokens', authRequired, (req, res) => {
           return res.status(503).json({
             error: 'Could not reach the directory to confirm your password. Try again in a moment.',
           });
+        }
+        if (check.reason === 'directory_not_authorized') {
+          // Authenticated but no longer authorized: the account is outside
+          // ldap.requiredGroup right now, whatever the session says. 403, and the same
+          // message the login route gives, because it is the same refusal.
+          console.log(`[Tokens] '${safeForLog(req.user.username, 64)}' is outside the required group; refusing to mint.`);
+          return res.status(403).json({ error: 'Not a member of the required group' });
         }
         if (check.reason === 'directory_ambiguous' || check.reason === 'no_directory') {
           // Both are server misconfiguration the user can do nothing about, and both

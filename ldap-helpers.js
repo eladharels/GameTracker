@@ -317,7 +317,14 @@ function verifyLdapCredentials(ldapSettings, username, password) {
 
           // Read attributes with attrValue/attrValues, never by property access —
           // the keys carry whatever casing the directory sent.
-          const entry = { dn: rawEntries[0].dn.toString(), ...entryAttributes(rawEntries[0]) };
+          // DN LAST, deliberately. With the spread second, an entry carrying an
+          // attribute literally named `dn` overwrote the DN the directory actually
+          // reported — and that value is what step 3 then binds as. A review
+          // demonstrated an entry whose `dn` attribute read `cn=svc,...` making this
+          // bind as the SERVICE ACCOUNT. Impact was limited (the caller still has to
+          // know that DN's password) but it breaks the invariant the ambiguity guard
+          // rests on: that we bind as the entry that matched.
+          const entry = { ...entryAttributes(rawEntries[0]), dn: rawEntries[0].dn.toString() };
           // Log the DN only. Dumping the whole entry put mail addresses and full group
           // membership into shared logs for every single login.
           console.log('[LDAP] Resolved to DN:', entry.dn);
@@ -336,8 +343,32 @@ function verifyLdapCredentials(ldapSettings, username, password) {
   });
 }
 
+// Does this entry satisfy `requiredGroup`?
+//
+// Extracted for the same reason as the bind above: there are now two callers. The
+// login route applies it at sign-in, and the sudo-mode check applies it again before
+// minting a token — because `requiredGroup` is the ONLY authorization signal in this
+// system that lives in the directory and is never mirrored into `users`, so it is the
+// one thing the per-request privilege re-read cannot revoke.
+//
+// Case-insensitive, and reads memberOf through attrValues: a directory answering
+// `memberof` used to leave a property access undefined, which read as "member of
+// nothing" and refused every login. It fails closed, so it presented as a directory
+// outage rather than as a bug.
+//
+// An empty/absent requiredGroup means the control is not in use — every entry passes.
+function satisfiesRequiredGroup(entry, requiredGroup) {
+  if (!requiredGroup || String(requiredGroup).trim() === '') return true;
+  const want = String(requiredGroup).toLowerCase();
+  return attrValues(entry, 'memberOf').some((group) => {
+    const g = String(group).toLowerCase();
+    return g === want || g.includes(`cn=${want}`);
+  });
+}
+
 module.exports = {
   verifyLdapCredentials,
+  satisfiesRequiredGroup,
   escapeLdapFilterValue,
   buildUserSearchFilter,
   createLdapClient,

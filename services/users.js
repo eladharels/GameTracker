@@ -291,10 +291,17 @@ async function create(fields) {
 // answer for the user: it made the feature unavailable to every domain identity —
 // which, on an LDAP-backed instance, is everyone. Extracting the check served both.
 //
-// The group check is deliberately NOT repeated here. This proves knowledge of a
-// password; it does not re-decide authorization, which is re-read from `users` on
-// every request and cannot be widened by minting a token (services/auth.js applies
-// the scope floor from that same row).
+// THE GROUP CHECK IS REPEATED HERE, and an earlier version of this comment argued
+// the opposite on the grounds that authorization is re-read from `users` on every
+// request. That is true of can_manage_users and FALSE of ldap.requiredGroup, which is
+// the one authorization signal in this system that lives in the directory and is
+// never mirrored into any column — so the per-request re-read cannot revoke it.
+//
+// Without this, a user removed from the required group is refused at login and can
+// still mint from a session issued before the removal: a review reproduced a
+// deprovisioned account turning its residual ≤12-hour session into a token with no
+// expiry, which no administrator can even see, let alone revoke, because listing and
+// revocation are owner-scoped. Deleting the account was the only remediation.
 //
 // Returns a discriminated result rather than a boolean so the adapter can tell "wrong
 // password" from "the directory could not be reached" — a caller who mistyped and a
@@ -315,7 +322,11 @@ async function verifyPassword(userId, password) {
   // bcrypt.compare, which rejects with "Illegal arguments" on a null hash — an
   // unhandled rejection there takes the process down under Node's default
   // --unhandled-rejections=throw.
-  if (!row.password || typeof row.password !== 'string') {
+  // `origin` OR a missing hash — the two signals should agree, and where they do not
+  // this takes the safer reading. A row with origin='ldap' that somehow acquired a
+  // local hash must not be verifiable by that hash, and a row with no hash at all
+  // cannot be verified locally whatever its origin says.
+  if (row.origin === 'ldap' || !row.password || typeof row.password !== 'string') {
     // `.settings`, NOT the return value. readSettings() answers
     // { settings, degraded } — reading `.ldap` off the wrapper gives undefined, which
     // silently became "no directory configured" and refused every directory user with
@@ -339,12 +350,21 @@ async function verifyPassword(userId, password) {
       return { ok: false, reason: 'no_directory', origin: row.origin || 'ldap' };
     }
     const result = await ldapHelpers.verifyLdapCredentials(ldapSettings, row.username, password);
-    if (result.ok) return { ok: true };
+    if (result.ok) {
+      // Same test the login route applies, from the same function — the entry's own
+      // memberOf, read fresh from the directory just now, not from anything cached.
+      if (!ldapHelpers.satisfiesRequiredGroup(result.entry, ldapSettings.requiredGroup)) {
+        return { ok: false, reason: 'directory_not_authorized', viaDirectory: true };
+      }
+      return { ok: true, viaDirectory: true };
+    }
     // 'unreachable' and 'ambiguous' are NOT "wrong password" and must not be reported
     // as one: the first is an outage the user cannot fix by retyping, and the second
     // is a directory misconfiguration that the login route refuses outright.
-    if (result.reason === 'bad_password') return { ok: false, reason: 'wrong_password' };
-    return { ok: false, reason: 'directory_' + result.reason, origin: row.origin || 'ldap' };
+    if (result.reason === 'bad_password') return { ok: false, reason: 'wrong_password', viaDirectory: true };
+    // `viaDirectory` tells the adapter this attempt cost a round trip to the domain
+    // controller, so it can be rate limited independently of whether it succeeded.
+    return { ok: false, reason: 'directory_' + result.reason, origin: row.origin || 'ldap', viaDirectory: true };
   }
   const valid = await bcrypt.compare(password, row.password);
   return valid ? { ok: true } : { ok: false, reason: 'wrong_password' };
