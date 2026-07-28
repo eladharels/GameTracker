@@ -1670,6 +1670,38 @@ check('no INSERT into users writes a caller-supplied notification target', () =>
   );
 });
 
+checkAsync('a duplicate username is CONFLICT, matched on SQLSTATE and not on message text', async () => {
+  // The other half of the v1 shim asserted in api-contract.test.js: that shim only
+  // fires if create() actually throws CONFLICT here. db.js divergence #11 — match the
+  // SQLSTATE, never the message, which is localisable and version-dependent. 23505 is
+  // unique_violation, and username is the only unique constraint on this table.
+  const dbMod = require('../db');
+  const real = dbMod.promises.run;
+  const throwing = (code) => async () => { const e = new Error('whatever the driver says'); e.code = code; throw e; };
+  try {
+    dbMod.promises.run = throwing('23505');
+    let err = null;
+    await usersService.create({ username: 'taken', password: 'longenoughpassword' }).catch((e) => { err = e; });
+    assert.strictEqual(err?.code, 'conflict');
+    assert.strictEqual(err.message, 'User already exists');
+
+    // Any OTHER database error must NOT be laundered into a 4xx. 23503 is a foreign
+    // key violation — a real defect, and reporting it as "user already exists" sends
+    // whoever is debugging it in precisely the wrong direction.
+    dbMod.promises.run = throwing('23503');
+    let other = null;
+    await usersService.create({ username: 'fine', password: 'longenoughpassword' }).catch((e) => { other = e; });
+    // Rethrown UNTOUCHED — still the driver's error, still carrying its SQLSTATE, and
+    // not a ServiceError, so problem.js sends it to the 500 branch that never echoes a
+    // message rather than pattern-matching it into a 4xx.
+    assert.notStrictEqual(other?.name, 'ServiceError',
+      'a non-unique-violation was laundered into a service error');
+    assert.strictEqual(other.code, '23503');
+    assert.strictEqual(require('../services/problem').toProblem(other), null,
+      'a raw driver error is recognised by the problem table — it must fall through to the 500');
+  } finally { dbMod.promises.run = real; }
+});
+
 checkAsync('the create path REFUSES a planted notification target, on both surfaces', async () => {
   // The assertion above reads the source; this drives the function. Both matter: the
   // grep proves the call has not been deleted, and this proves it still refuses —

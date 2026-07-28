@@ -211,6 +211,97 @@ check('every error CODE maps to a status, so none can fall through to 500', () =
   }
 });
 
+// --- the adapters, for the one route whose STATUS is a compatibility shim --------
+//
+// The header of this file says it cannot exercise the Express adapters. That is
+// still true in general, and it stopped being acceptable for one route: POST
+// /api/users no longer contains its own logic — it calls services/users.js#create,
+// which BOTH surfaces use — and the only thing keeping v1's wire behaviour is three
+// lines in the handler that turn the service's CONFLICT into the 400 v1 has always
+// answered for a duplicate username. Nothing else in the suite can see those lines.
+// Delete them as a tidy-up and v1 silently starts answering 409.
+//
+// So this drives the real handler off the live router with the service stubbed. It
+// is not a substitute for the smoke test — no HTTP, no database — but it puts the
+// route's own status mapping under assertion, which is where this change lands.
+console.log('POST /api/users (v1 status is a shim over the shared service):');
+
+// The handler, pulled out of the live Express stack rather than re-imported. Walking
+// the router is what makes this the route that actually runs.
+function handlerFor(method, path) {
+  process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-only-secret-not-used-for-signing';
+  const { app } = require('../index.js');
+  for (const layer of (app.router || app._router).stack) {
+    if (!layer.route || layer.route.path !== path) continue;
+    if (!layer.route.methods[method]) continue;
+    // The LAST handler in the chain — the ones before it are authRequired and
+    // requirePermission, which this test deliberately does not exercise (tiers are
+    // api-surface.test.js's job).
+    return layer.route.stack[layer.route.stack.length - 1].handle;
+  }
+  throw new Error(`no ${method.toUpperCase()} ${path} on the live router`);
+}
+
+// A res that records rather than writes. `json` and `status` are all these handlers
+// use; anything else appearing here should fail loudly rather than be absorbed.
+function recordingRes() {
+  const res = { statusCode: 200, body: undefined, headersSent: false };
+  res.status = (code) => { res.statusCode = code; return res; };
+  res.json = (body) => { res.body = body; res.headersSent = true; return res; };
+  return res;
+}
+
+// The route calls usersService.create through the module object, so this is
+// observable — the destructured-binding trap CLAUDE.md documents does not apply.
+async function callCreate(stub) {
+  const usersService = require('../services/users');
+  const real = usersService.create;
+  usersService.create = stub;
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/users')({ body: { username: 'x', password: 'y' } }, res);
+    // The handler is promise-chained, not awaited by Express: give the chain a turn.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+  } finally { usersService.create = real; }
+  return res;
+}
+
+checkAsync('a duplicate username is still 400, not the service\'s 409', async () => {
+  const res = await callCreate(async () => { throw serviceError(CODES.CONFLICT, 'User already exists'); });
+  assert.strictEqual(res.statusCode, 400,
+    'POST /api/users answered 409 for a duplicate. v1 has always answered 400 here; the '
+    + 'shim in the handler is the only thing preserving that, and v2 is where the 409 lives.');
+  assert.deepStrictEqual(res.body, { error: 'User already exists' });
+});
+
+checkAsync('a successful create still returns {success, id} and nothing more', async () => {
+  const res = await callCreate(async () => ({ id: 42, username: 'x' }));
+  assert.strictEqual(res.statusCode, 200);
+  // EXACT key set. `username` comes back from the service now and must not start
+  // appearing in the response just because it is available.
+  assertKeys(res.body, ['success', 'id'], 'POST /api/users');
+  assert.strictEqual(res.body.success, true);
+  assert.strictEqual(res.body.id, 42);
+});
+
+checkAsync('a validation refusal keeps the {error} envelope and its message', async () => {
+  const res = await callCreate(async () => {
+    throw serviceError(CODES.VALIDATION, 'Password must be at least 8 characters long', { field: 'password' });
+  });
+  assert.strictEqual(res.statusCode, 400);
+  // v1's envelope is a bare {error}. The `field` detail v2 renders as `errors[]` must
+  // NOT leak into it — a client parsing v1 would see a key it has never seen.
+  assertKeys(res.body, ['error'], 'POST /api/users validation');
+  assert.strictEqual(res.body.error, 'Password must be at least 8 characters long');
+});
+
+checkAsync('an unrecognised failure is a 500 with a fixed message, never the exception', async () => {
+  const res = await callCreate(async () => { throw new Error('relation "users" does not exist'); });
+  assert.strictEqual(res.statusCode, 500);
+  assert.deepStrictEqual(res.body, { error: 'Failed to create user' });
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {
