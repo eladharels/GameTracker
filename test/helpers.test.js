@@ -1774,6 +1774,69 @@ checkAsync('a LOCAL account is unaffected', async () => {
   }
 });
 
+console.log('auth admin revocation — the SQL is the safety property:');
+{
+  const dbMod = require('../db');
+  const authSvc = require('../services/auth');
+  const capture = async (fn) => {
+    const realRun = dbMod.promises.run;
+    const realAll = dbMod.promises.all;
+    const seen = [];
+    dbMod.promises.run = async (sql, params) => { seen.push({ sql, params }); return { changes: 1 }; };
+    dbMod.promises.all = async (sql, params) => { seen.push({ sql, params }); return []; };
+    try { await fn(); } finally { dbMod.promises.run = realRun; dbMod.promises.all = realAll; }
+    return seen;
+  };
+
+  checkAsync('revoking ONE token matches BOTH the token and the owner', async () => {
+    // Matching on tokenId alone and checking the owner separately leaves a window
+    // between the check and the delete — and, more practically, a mistyped userId
+    // would silently destroy a token belonging to an account nobody meant to touch.
+    // Asserted against the statement actually issued, not against a constant.
+    const [{ sql, params }] = await capture(() => authSvc.revokeTokenForUser(7, 42));
+    const where = sql.slice(sql.toUpperCase().indexOf('WHERE'));
+    assert.match(where, /\bid\s*=\s*\?/, 'the token id is not in the WHERE clause');
+    assert.match(where, /\buser_id\s*=\s*\?/, 'the OWNER is not in the WHERE clause');
+    assert.deepStrictEqual(params, [7, 42]);
+  });
+
+  checkAsync('a token id that matches nothing is NOT_FOUND, never a silent success', async () => {
+    const realRun = dbMod.promises.run;
+    dbMod.promises.run = async () => ({ changes: 0 });
+    try {
+      let code = null;
+      await authSvc.revokeTokenForUser(7, 42).catch((err) => { code = err.code; });
+      assert.strictEqual(code, 'not_found');
+    } finally { dbMod.promises.run = realRun; }
+  });
+
+  checkAsync('bulk revoke is scoped to the one account, and zero is a SUCCESS', async () => {
+    const [{ sql, params }] = await capture(() => authSvc.revokeAllTokensForUser(42));
+    assert.match(sql, /DELETE FROM api_tokens WHERE user_id = \?/i);
+    assert.deepStrictEqual(params, [42], 'bulk revoke is not scoped to a single account');
+    // Zero revoked must not throw: "that account had nothing" is the outcome the
+    // administrator wanted, and an error there trains them to ignore errors from the
+    // one call whose whole job is to be trusted during an incident.
+    const realRun = dbMod.promises.run;
+    dbMod.promises.run = async () => ({ changes: 0 });
+    try {
+      assert.deepStrictEqual(await authSvc.revokeAllTokensForUser(42), { revoked: 0 });
+    } finally { dbMod.promises.run = realRun; }
+  });
+
+  checkAsync('the admin listing never selects the hash', async () => {
+    // This projection now crosses an account boundary, where token_hash matters more
+    // than it did on the self-service listing. Read from the statement, because
+    // rewriting it to SELECT * would ship the lookup key with every assertion green.
+    const [{ sql, params }] = await capture(() => authSvc.listTokensForUser(42));
+    const projection = sql.slice(0, sql.toUpperCase().indexOf('FROM'));
+    assert.ok(!/token_hash/i.test(projection), 'the admin token listing selects token_hash');
+    assert.ok(!/\*/.test(projection), 'the admin token listing uses SELECT *');
+    assert.match(sql, /WHERE user_id = \?/i);
+    assert.deepStrictEqual(params, [42]);
+  });
+}
+
 console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
   check('readSettings() really does return { settings, degraded }', () => {
     // The stubs below imitate this shape. When they imitated it WRONGLY — returning

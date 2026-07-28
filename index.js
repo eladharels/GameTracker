@@ -2349,6 +2349,65 @@ v2Router.delete('/users/:userId', requireAdminScope, (req, res) => {
     .catch((err) => v2.send(res, err, { log: '[v2] user delete failed:' }));
 });
 
+// --- another account's tokens (admin) ------------------------------------------
+//
+// The deprovisioning surface. Blocking new mints is not revoking old ones: a token
+// minted before its holder was removed from ldap.requiredGroup keeps working and has
+// no expiry unless one was set — and until these routes existed, destroying it meant
+// DELETING THE ACCOUNT, taking the user's library with it.
+//
+// requireAdminScope is repeated on each, never applied with a path-scoped
+// v2Router.use('/users', ...). Both work at runtime; only this form is visible to the
+// drift gate, which credits a `.use()` to a route only when it is mounted at the
+// router root. See CLAUDE.md.
+
+// GET /api/v2/users/:userId/tokens — you cannot revoke what you cannot see.
+v2Router.get('/users/:userId/tokens', requireAdminScope, (req, res) => {
+  const id = parseRouteId(req.params.userId);
+  if (id === null) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such user' });
+  authService.listTokensForUser(id)
+    .then((rows) => res.json({ data: rows.map(v2.token) }))
+    .catch((err) => v2.send(res, err, { log: '[v2] admin token list failed:' }));
+});
+
+// DELETE /api/v2/users/:userId/tokens — revoke ALL of them.
+//
+// 200 with a count, not 204, and zero is a success. "That account had nothing to
+// revoke" is the outcome the administrator wanted; making it an error would train them
+// to ignore errors from the one call whose whole job is to be trusted in an incident.
+v2Router.delete('/users/:userId/tokens', requireAdminScope, (req, res) => {
+  const id = parseRouteId(req.params.userId);
+  if (id === null) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such user' });
+  authService.revokeAllTokensForUser(id)
+    .then((result) => {
+      // Logged unconditionally, including the zero case. This is the audit record for
+      // an action taken on someone else's credentials, and "nothing happened" is worth
+      // as much as "seven revoked" when reconstructing an incident afterwards.
+      console.log(`[v2] '${safeForLog(req.user.username, 64)}' revoked ${result.revoked} token(s) for user ${id}`);
+      res.json({ revoked: result.revoked });
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] admin bulk revoke failed:' }));
+});
+
+// DELETE /api/v2/users/:userId/tokens/:tokenId — revoke exactly one.
+//
+// For a single leaked credential, where revoking everything would be an outage the
+// incident does not call for. BOTH ids are matched in the service's WHERE clause, so a
+// mistyped userId cannot destroy a token from an account nobody meant to touch.
+v2Router.delete('/users/:userId/tokens/:tokenId', requireAdminScope, (req, res) => {
+  const userId = parseRouteId(req.params.userId);
+  const tokenId = parseRouteId(req.params.tokenId);
+  if (userId === null || tokenId === null) {
+    return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such token' });
+  }
+  authService.revokeTokenForUser(tokenId, userId)
+    .then(() => {
+      console.log(`[v2] '${safeForLog(req.user.username, 64)}' revoked token ${tokenId} for user ${userId}`);
+      res.status(204).end();
+    })
+    .catch((err) => v2.send(res, err, { log: '[v2] admin revoke failed:' }));
+});
+
 // GET /api/v2/settings — server configuration, secrets masked.
 //
 // A non-admin gets 403 here. v1 answers 200 with `{}`, which for a browser rendering

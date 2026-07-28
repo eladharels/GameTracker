@@ -326,8 +326,58 @@ async function revokeToken(tokenId, userId) {
   return { revoked: ctx.changes };
 }
 
+// --- the administrative surface -------------------------------------------------
+//
+// Everything above is owner-scoped by construction: the caller's id is in the WHERE
+// clause and there is no argument that could point it elsewhere. These three take the
+// target account as a PARAMETER, which is a different safety property — the caller's
+// authority is checked by the route's requireAdminScope, and what is enforced here is
+// that the SQL cannot be made to act on a row the caller did not name.
+//
+// They exist because revoking a credential you cannot see is not a workflow. Until
+// now an administrator could not tell whether a departing user held a token at all,
+// and the only way to destroy one was deleting the account — which is why
+// deprovisioning someone meant erasing their library too.
+
+// Another account's tokens. Same projection as listTokens, deliberately: `token_hash`
+// stays out of a response that now crosses an account boundary, where it matters more
+// than it did on the self-service listing.
+async function listTokensForUser(userId) {
+  const rows = await db.promises.all(
+    `SELECT id, name, hint, scopes, created_at, last_used_at, expires_at
+       FROM api_tokens WHERE user_id = ? ORDER BY id ASC`,
+    [userId]
+  );
+  return rows.map((row) => ({ ...row, scopes: parseScopes(row.scopes) }));
+}
+
+// Revoke EVERY token an account holds. The deprovisioning action.
+//
+// Zero rows is a SUCCESS, not a NOT_FOUND. "This account had nothing to revoke" is the
+// outcome the administrator wanted, and raising an error there would train them to
+// ignore an error from this operation — on the one call whose whole purpose is to be
+// trusted in an incident. The route answers 200 with the count either way.
+async function revokeAllTokensForUser(userId) {
+  const ctx = await db.promises.run('DELETE FROM api_tokens WHERE user_id = ?', [userId]);
+  return { revoked: ctx.changes };
+}
+
+// Revoke ONE token belonging to a named account.
+//
+// BOTH ids are in the WHERE clause. Matching on tokenId alone and checking the owner
+// separately would leave a window between the check and the delete, and — more
+// practically — a mistyped userId would silently revoke a token from an account the
+// administrator never meant to touch. Here that combination simply matches nothing.
+async function revokeTokenForUser(tokenId, userId) {
+  const ctx = await db.promises.run(
+    'DELETE FROM api_tokens WHERE id = ? AND user_id = ?', [tokenId, userId]);
+  if (ctx.changes === 0) throw serviceError(CODES.NOT_FOUND, 'Token not found');
+  return { revoked: ctx.changes };
+}
+
 module.exports = {
   TOKEN_PREFIX, SCOPES, ALL_SCOPES, MAX_NAME_LENGTH,
   hashToken, looksLikePat, normaliseScopes, parseScopes, authorize,
   createToken, verifyToken, listTokens, revokeToken,
+  listTokensForUser, revokeAllTokensForUser, revokeTokenForUser,
 };

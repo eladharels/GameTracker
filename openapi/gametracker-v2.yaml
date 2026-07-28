@@ -291,6 +291,110 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /users/{userId}/tokens:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      tags: [admin]
+      operationId: listUserTokens
+      x-implemented: true
+      x-required-scope: admin
+      summary: List another account's tokens
+      description: |
+        The administrative counterpart to `listTokens`. It exists because revoking a
+        token you cannot see is not a workflow: until this operation, an administrator
+        could not tell whether a departing user held a credential at all, and the only
+        remedy was deleting the account.
+
+        Returns exactly the same `Token` shape as the self-service listing, which
+        includes `hint` and excludes the secret and its hash. Seeing that an account
+        holds an `admin`-scoped token that was last used yesterday is the point;
+        recovering the token is not, and is not possible.
+      responses:
+        '200':
+          description: That account's tokens, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Token' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [admin]
+      operationId: revokeAllUserTokens
+      x-implemented: true
+      x-required-scope: admin
+      summary: Revoke every token an account holds
+      description: |
+        The deprovisioning action, and the reason this group exists. Blocking new mints
+        is not revoking old ones: a token minted before a user was removed from
+        `ldap.requiredGroup` keeps working, has no expiry unless one was set, and — until
+        this operation — could only be destroyed by deleting the account.
+
+        Takes effect on each token's next request. Returns the number revoked, so
+        "nothing to revoke" is distinguishable from "revoked several"; both are `200`,
+        because an account with no tokens is a successful outcome for this operation and
+        not an error.
+
+        Refuses nothing. An administrator may revoke another administrator's tokens, and
+        may revoke their own — the same authority that already lets them delete the
+        account. Revoking your own does not lock you out: a session can mint a new token
+        by re-entering your password.
+      responses:
+        '200':
+          description: Revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked]
+                properties:
+                  revoked: { type: integer, minimum: 0, description: How many tokens were destroyed. }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /users/{userId}/tokens/{tokenId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+      - name: tokenId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    delete:
+      tags: [admin]
+      operationId: revokeUserToken
+      x-implemented: true
+      x-required-scope: admin
+      summary: Revoke one of another account's tokens
+      description: |
+        For the case where a single credential leaked and the account is otherwise fine —
+        revoking all of them would be an outage the incident does not call for.
+
+        BOTH ids are matched in the delete. A `tokenId` that exists but belongs to a
+        different account is a `404`, not a silent success, so a mistyped `userId` cannot
+        revoke a token from an account the administrator did not mean to touch.
+      responses:
+        '204':
+          description: Revoked.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   # ----------------------------------------------------------------- library --
   /library/games:
     get:

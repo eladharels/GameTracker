@@ -271,6 +271,14 @@ const EXPECTED_V2 = {
   'POST /api/v2/users': 'pat-admin:can_manage_users',
   'PATCH /api/v2/users/:userId': 'pat-admin:can_manage_users',
   'DELETE /api/v2/users/:userId': 'pat-admin:can_manage_users',
+  // The DEPROVISIONING surface. Revoking a credential you cannot see is not a
+  // workflow — before these, an admin could not tell whether a departing user held a
+  // token at all, and destroying one meant deleting the account and their library
+  // with it. Admin scope, so an admin ACCOUNT holding a library-scoped token is not
+  // an admin here either.
+  'GET /api/v2/users/:userId/tokens': 'pat-admin:can_manage_users',
+  'DELETE /api/v2/users/:userId/tokens': 'pat-admin:can_manage_users',
+  'DELETE /api/v2/users/:userId/tokens/:tokenId': 'pat-admin:can_manage_users',
   'GET /api/v2/settings': 'pat-admin:can_manage_users',
   'PATCH /api/v2/settings': 'pat-admin:can_manage_users',
   // Library-scoped on purpose: POST /library/refresh hands back a job, and an

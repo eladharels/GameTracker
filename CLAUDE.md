@@ -197,7 +197,7 @@ GameTracker/
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
 ├── openapi/
-│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 28 operations, ALL of them
+│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 31 operations, ALL of them
 │                                   #   now live (`x-implemented: true`). It is the SOURCE for
 │                                   #   the routes, not a description of them: the drift gate in
 │                                   #   api-surface.test.js fails if an operation is marked
@@ -258,7 +258,7 @@ GameTracker/
 >
 > The spec is the SOURCE: an operation marked `x-implemented: true` in
 > `openapi/gametracker-v2.yaml` must exist on the router, and every v2 route must be such an
-> operation. Both directions are enforced. All 28 are now implemented, so the practical
+> operation. Both directions are enforced. All 31 are now implemented, so the practical
 > effect is that a NEW v2 route requires a spec change first.
 >
 > **`requireAdminScope` is repeated per admin route, never applied with a path-scoped
@@ -442,6 +442,12 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   `authRequired` alongside JWTs (additive — no route or response shape changed). The login rate
   limiter lives inside the login route, so token auth never reaches it; that is deliberate, since
   5 retries from an MCP client would otherwise lock the owner out for 15 minutes.
+  **Revocable by an ADMIN, not only by the owner**: `GET/DELETE /api/v2/users/:id/tokens`
+  (+ `/:tokenId`) exist because blocking new mints is not revoking old ones — a token
+  minted before its holder lost `ldap.requiredGroup` keeps working, and destroying it used
+  to mean deleting the account and its library. The bulk delete answers 200 with a COUNT
+  rather than 204: zero revoked is a success, and a 204 could not tell "revoked seven"
+  from "revoked none", which is v1's `{success:true}` defect wearing a new status code.
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns

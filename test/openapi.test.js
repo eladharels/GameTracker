@@ -260,15 +260,41 @@ check('no response is a bare array', () => {
   }
 });
 
-check('mutations are falsifiable — DELETE is 204 plus 404, never 200 {success:true}', () => {
+check('mutations are falsifiable — a DELETE can always say "nothing was there"', () => {
   // D6. v1 answered {"success": true} whether or not a row existed, so a mistyped id
-  // was a silent no-op reported as success.
+  // was a silent no-op reported as success. What this rule protects is FALSIFIABILITY,
+  // not the number 204 — the caller must be able to tell a delete that did something
+  // from one that did nothing.
+  //
+  // A single-resource DELETE gets that from 204-plus-404. A BULK delete over a
+  // collection cannot: "that account held no tokens" is a successful outcome of
+  // revokeAllUserTokens and not a 404, so 404 would have to mean "no such user"
+  // instead, and a 204 would then be indistinguishable between "revoked seven" and
+  // "revoked none" — which is exactly the v1 defect wearing a different status code.
+  // Such an operation must return a COUNT, and the count is what makes it falsifiable.
+  //
+  // `{success: true}` still fails both branches, which is the point.
   for (const { path: p, method, op } of operations()) {
     if (method !== 'delete') continue;
     const codes = Object.keys(op.responses);
-    assert.ok(codes.includes('204'), `DELETE ${p} does not return 204`);
     assert.ok(codes.includes('404'), `DELETE ${p} does not document 404 — a no-op delete would report success`);
-    assert.ok(!codes.includes('200'), `DELETE ${p} returns 200; use 204 and let 404 mean "nothing there"`);
+
+    if (codes.includes('204')) {
+      assert.ok(!codes.includes('200'), `DELETE ${p} returns BOTH 204 and 200; pick one`);
+      continue;
+    }
+    // No 204: this must be the bulk shape, and it must carry a count.
+    const schema = op.responses['200']?.content?.['application/json']?.schema;
+    assert.ok(schema, `DELETE ${p} returns neither 204 nor a 200 body; it cannot report what it did`);
+    const counters = Object.entries(schema.properties || {})
+      .filter(([, prop]) => prop.type === 'integer');
+    assert.ok(counters.length > 0,
+      `DELETE ${p} returns 200 without an integer count — that is {success:true} again, `
+      + 'and a caller cannot tell a no-op from a deletion');
+    for (const [name] of counters) {
+      assert.ok((schema.required || []).includes(name),
+        `DELETE ${p} may omit its '${name}' count, so a caller cannot rely on it`);
+    }
   }
 });
 
@@ -576,7 +602,12 @@ check('the admin operation set is PINNED, not merely non-empty', () => {
     // getJob is deliberately NOT here: it is library-scoped and protected by OWNERSHIP,
     // because POST /library/refresh is library-scoped and an operation that returns a
     // job its own caller cannot poll is not an operation.
-    ['createUser', 'deleteUser', 'getSettings', 'listUsers', 'startJob', 'updateSettings', 'updateUser'],
+    // The three token-revocation operations are admin-scoped for the same reason
+    // deleteUser is: they act on another account's credentials. An admin ACCOUNT
+    // presenting a library-scoped token is not an admin here — authorize() has
+    // already narrowed can_manage_users before requireAdminScope reads it.
+    ['createUser', 'deleteUser', 'getSettings', 'listUserTokens', 'listUsers',
+      'revokeAllUserTokens', 'revokeUserToken', 'startJob', 'updateSettings', 'updateUser'],
     'the set of admin-scoped operations changed');
 });
 
@@ -604,6 +635,8 @@ check('the operation inventory is pinned', () => {
     'DELETE /shares/outgoing/{username} removeOutgoingShare',
     'DELETE /tokens/{tokenId} revokeToken',
     'DELETE /users/{userId} deleteUser',
+    'DELETE /users/{userId}/tokens revokeAllUserTokens',
+    'DELETE /users/{userId}/tokens/{tokenId} revokeUserToken',
     'GET /catalog/search searchCatalog',
     'GET /jobs/{jobId} getJob',
     'GET /library/backlog getBacklog',
@@ -616,6 +649,7 @@ check('the operation inventory is pinned', () => {
     'GET /shares/incoming/{username}/games getSharedLibrary',
     'GET /tokens listTokens',
     'GET /users listUsers',
+    'GET /users/{userId}/tokens listUserTokens',
     'PATCH /library/games/{gameId} updateLibraryGame',
     'PATCH /me/notifications updateMyNotificationSettings',
     'PATCH /settings updateSettings',
