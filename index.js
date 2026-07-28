@@ -1684,6 +1684,9 @@ app.post('/api/auth/login', (req, res) => {
   // socket error usually beats the bind callback). Without this latch the fallback
   // ran twice and the second run threw ERR_HTTP_HEADERS_SENT.
   let authCompleted = false;
+  // Set once the directory has authenticated the caller. See the .catch at the end of
+  // the LDAP path: past this point a bug must be a 500, never a fallback to local auth.
+  let directoryVerified = false;
   function fallbackLocalAuth() {
     if (authCompleted) return;
     authCompleted = true;
@@ -1807,6 +1810,14 @@ app.post('/api/auth/login', (req, res) => {
       console.error('[LDAP] Unrecognised verification result, refusing:', result.reason);
       return fallbackLocalAuth();
     }
+    // The directory has now SPOKEN, and from here a thrown exception must not become a
+    // local login. Everything below — the group test, the attribute reads, the user
+    // sync — runs after authentication but before `authCompleted` is set, and the
+    // terminal .catch used to answer that window with fallbackLocalAuth(). A review
+    // forced it: with the group test throwing, a user OUT of the group and holding a
+    // local password got a 200 and a session. Before the extraction the same throw
+    // crashed the process, which was fail-CLOSED; the .catch traded that for fail-open.
+    directoryVerified = true;
 
     const foundUser = result.entry;
     console.log('[LDAP] User password authentication succeeded.');
@@ -1883,9 +1894,18 @@ app.post('/api/auth/login', (req, res) => {
     }, { origin: 'ldap', display_name: displayName });
   }).catch((ldapError) => {
     // verifyLdapCredentials never rejects, so this is a defect in the handling above
-    // rather than a directory failure. Falling back keeps a bug here from becoming a
-    // total login outage, and the log line says which it was.
+    // rather than a directory failure.
     console.error('[LDAP] Unexpected error handling the directory result:', ldapError);
+    if (authCompleted) return;
+    // AFTER the directory authenticated, a bug is a 500. Falling back here would let an
+    // exception in the group test hand a session to someone the directory just refused
+    // to authorize — fail-open on authorization, which is worse than an outage.
+    if (directoryVerified) {
+      authCompleted = true;
+      return res.status(500).json({ error: 'Authentication error' });
+    }
+    // BEFORE it spoke, falling back is right: a bug here must not become a total login
+    // outage for local accounts.
     return fallbackLocalAuth();
   });
 });

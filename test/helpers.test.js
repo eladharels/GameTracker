@@ -1703,6 +1703,21 @@ console.log('ldap-helpers.satisfiesRequiredGroup:');
       assert.strictEqual(satisfiesRequiredGroup({ memberOf: [] }, none), true);
     }
   });
+  check('a PADDED requiredGroup still matches', () => {
+    // Untrimmed, ' gamers ' matched nothing and locked every user out permanently,
+    // while '   ' read as unconfigured and silently turned the control off. A stray
+    // space in a settings field should not be able to do either.
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=gamers,dc=x'] }, ' gamers '), true);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=other,dc=x'] }, ' gamers '), false);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=gamers,dc=x'] }, '\tGAMERS\n'), true);
+  });
+  check('a single-valued memberOf (a bare string) is handled like a list', () => {
+    // entryAttributes collapses a one-element attribute to a scalar, so this is what a
+    // user in exactly one group actually looks like.
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: 'cn=gamers,dc=x' }, 'gamers'), true);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: 'cn=other,dc=x' }, 'gamers'), false);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: '' }, 'gamers'), false);
+  });
   check('membership is case-insensitive on BOTH the attribute name and the value', () => {
     // A directory answering `memberof` (lowercase) used to read as "member of
     // nothing", which refused every login and presented as a directory outage.
@@ -1717,6 +1732,47 @@ console.log('ldap-helpers.satisfiesRequiredGroup:');
     assert.strictEqual(satisfiesRequiredGroup(null, 'gamers'), false);
   });
 }
+
+console.log('users.update — a directory account may not be given a local password:');
+checkAsync('setting a password on an origin=ldap row is REFUSED', async () => {
+  // The hybrid this prevents authenticates two ways and only one consults the
+  // directory, so ldap.requiredGroup is skipped on the local path — a review showed an
+  // account removed from the required group being refused with its directory password
+  // and admitted with its local one.
+  const dbMod = require('../db');
+  const realGet = dbMod.promises.get;
+  const realRun = dbMod.promises.run;
+  let wrote = 0;
+  dbMod.promises.get = async () => ({ origin: 'ldap' });
+  dbMod.promises.run = async () => { wrote++; };
+  try {
+    let code = null;
+    await usersService.update(5, { password: 'a-perfectly-valid-password' }, 1)
+      .catch((err) => { code = err.code; });
+    assert.strictEqual(code, 'validation', 'a directory account accepted a local password');
+    assert.strictEqual(wrote, 0, 'the password was written despite the refusal');
+  } finally {
+    dbMod.promises.get = realGet;
+    dbMod.promises.run = realRun;
+  }
+});
+
+checkAsync('a LOCAL account is unaffected', async () => {
+  const dbMod = require('../db');
+  const realGet = dbMod.promises.get;
+  const realRun = dbMod.promises.run;
+  dbMod.promises.get = async () => ({ origin: 'local' });
+  dbMod.promises.run = async () => {};
+  try {
+    let code = null;
+    await usersService.update(5, { password: 'a-perfectly-valid-password' }, 1)
+      .catch((err) => { code = err.code; });
+    assert.notStrictEqual(code, 'validation', 'a local account was refused its own password change');
+  } finally {
+    dbMod.promises.get = realGet;
+    dbMod.promises.run = realRun;
+  }
+});
 
 console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
   check('readSettings() really does return { settings, degraded }', () => {

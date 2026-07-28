@@ -359,7 +359,11 @@ function verifyLdapCredentials(ldapSettings, username, password) {
 // An empty/absent requiredGroup means the control is not in use — every entry passes.
 function satisfiesRequiredGroup(entry, requiredGroup) {
   if (!requiredGroup || String(requiredGroup).trim() === '') return true;
-  const want = String(requiredGroup).toLowerCase();
+  // TRIMMED. Untrimmed, ' gamers ' matched nothing and locked every user out
+  // permanently, while '   ' read as unconfigured and silently switched the control
+  // OFF — a leading space being a total outage and an all-space value being a quiet
+  // disable is the worst possible pairing of those two failures.
+  const want = String(requiredGroup).trim().toLowerCase();
   return attrValues(entry, 'memberOf').some((group) => {
     const g = String(group).toLowerCase();
     return g === want || g.includes(`cn=${want}`);

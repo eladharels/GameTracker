@@ -179,6 +179,31 @@ async function update(id, fields, actingUserId) {
   if (wantsPassword) {
     const problem = validatePassword(fields.password);
     if (problem) throw serviceError(CODES.VALIDATION, problem, { field: 'password' });
+
+    // A DIRECTORY account may not be given a local password.
+    //
+    // Setting one creates a hybrid that authenticates two ways, and only one of them
+    // consults the directory — so `ldap.requiredGroup` is skipped entirely on the
+    // local path. A review reproduced it: an account removed from the required group
+    // is refused when it signs in with its directory password and gets a session when
+    // it signs in with the local one. The group is the only authorization signal that
+    // lives in the directory, so that path silently un-deprovisions the account.
+    //
+    // Refused at the WRITE rather than patched at the read, because the hybrid shape
+    // has no legitimate use here and every future reader of `users` would otherwise
+    // have to know it exists. getOrCreateUser already writes NULL for ldap rows, so
+    // this closes the only door that created one.
+    // `db.promises.get` through the module: this guard is a safety property, so a test
+    // has to be able to observe the row it read. The destructured `get` above is the
+    // legacy shape and is not interceptable — using it here made the first version of
+    // this test reach the real database instead.
+    const target = await db.promises.get('SELECT origin FROM users WHERE id = ?', [id]);
+    if (target && target.origin === 'ldap') {
+      throw serviceError(CODES.VALIDATION,
+        'This account signs in through the directory, so it cannot be given a local password. '
+        + 'A local password would bypass the directory group check.',
+        { field: 'password' });
+    }
   }
 
   if (updates.length === 0 && !wantsPassword) {
