@@ -605,20 +605,42 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          MCP_BIND: ${{ vars.MCP_BIND }}
+          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS }}
         run: |
           # NEVER add --volumes here. That would delete gametracker-pgdata,
           # which is now the production database.
           docker compose -f docker-compose.yaml down || true
 
       - name: Start production stack
+        # MCP_BIND / MCP_ALLOWED_HOSTS are repository VARIABLES, not secrets — a LAN
+        # address is not a credential, and a secret would be masked in the logs where
+        # the whole point is being able to read back which interface was published.
+        #
+        # They must be HERE and not only in a host-side `.env`: this job runs
+        # actions/checkout into a fresh workspace, so compose reads the checked-out
+        # directory and never sees a `.env` sitting next to the running stack. That is
+        # exactly how MCP kept coming back on 127.0.0.1 after MCP_BIND was implemented
+        # — the setting was correct, the deploy simply never carried it, and compose's
+        # `${MCP_BIND:-127.0.0.1}` default silently applied.
+        #
+        # Unset is the safe case: an empty value is not a value to `:-`, so compose
+        # still defaults to loopback.
         env:
           IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
           IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          MCP_BIND: ${{ vars.MCP_BIND }}
+          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS }}
         run: |
           docker compose -f docker-compose.yaml up -d
+          # Print what MCP was actually published on. `docker ps` after a deploy is the
+          # only way anyone noticed the default was in force; printing it here means the
+          # deploy log answers "which interface?" without a shell on the host.
+          echo "[deploy] MCP_BIND=${MCP_BIND:-127.0.0.1} (unset => loopback only)"
+          docker compose -f docker-compose.yaml port mcp 3001 || true
 
       # env is needed even though this step starts nothing: the failure path runs
       # `docker compose logs`, which interpolates the compose file. Without it the
@@ -632,6 +654,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          MCP_BIND: ${{ vars.MCP_BIND }}
+          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS }}
         run: |
           echo "[deploy] Waiting for production backend to become healthy..."
           MAX_WAIT=90

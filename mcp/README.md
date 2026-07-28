@@ -114,13 +114,23 @@ database access and no secrets.
 
 ### Reaching it from another machine
 
-Set `MCP_BIND` to the address it should answer on, in `.env`:
+Set `MCP_BIND` to the address it should answer on. Clients then use
+`http://192.168.1.30:3001/mcp`.
 
-```env
-MCP_BIND=192.168.1.30
-```
+**Set it where the deploy will actually see it.** There are two paths and they do not
+share configuration:
 
-then `docker compose up -d mcp`. Clients use `http://192.168.1.30:3001/mcp`.
+* **Deployed by CI** (the normal case — a push to `main` runs the `deploy` job): set a
+  repository **variable**, not a secret — GitHub → Settings → Secrets and variables →
+  Actions → **Variables** → `MCP_BIND` = `192.168.1.30`. Then re-run the deploy.
+* **Started by hand on the host**: put it in `.env` next to `docker-compose.yaml` and
+  run `docker compose up -d mcp`.
+
+A `.env` on the host does **not** reach a CI deploy: that job checks the repository out
+into a fresh workspace, so compose reads the checkout and never sees it — and
+`${MCP_BIND:-127.0.0.1}` quietly falls back to loopback. If `docker ps` shows
+`127.0.0.1:3001->3001/tcp` after you set it, this is why. The deploy log prints the
+value it used.
 
 That is the only variable needed. The server refuses Host headers it does not
 recognise — DNS-rebinding protection — and compose derives the published address from
