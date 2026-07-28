@@ -46,7 +46,7 @@ belongs.
 
 ## Tools
 
-Sixteen, shaped around what people ask for rather than around HTTP endpoints. A large
+Fifteen, shaped around what people ask for rather than around HTTP endpoints. A large
 tool list measurably degrades model performance, so this is not one tool per endpoint.
 
 | Tool | |
@@ -54,7 +54,6 @@ tool list measurably degrades model performance, so this is not one tool per end
 | `read_gametracker_guide` | the full application explanation — call this first |
 | `whoami` | which account, and what the token may do |
 | `search_games` | find a game across IGDB, RAWG and TheGamesDB |
-| `get_game_price` | current Steam price (live, unlike a library row's stored one) |
 | `list_library` | your games, filterable and sortable |
 | `get_game` | one game, without listing the whole library |
 | `add_game` | add one found via `search_games` |
@@ -69,6 +68,9 @@ tool list measurably degrades model performance, so this is not one tool per end
 | `read_shared_library` | read a library shared with you |
 
 ### What is deliberately absent
+
+Price lookup — a library row's `lastPrice` is a weekly snapshot and that is all this
+server reports; nobody uses an assistant to check a store price.
 
 User management, server settings, token administration, and instance-wide job
 triggering. **None of them are reachable through this server even if you hand it an

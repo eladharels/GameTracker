@@ -34,8 +34,9 @@ Four things an agent gets wrong without being told:
    to wishlist on release). A game the user "has" might be under any of them, so check
    before saying a game is or is not in their library. get_game answers that for one
    game without listing everything.
-4. lastPrice on a library game is a weekly snapshot and may be days stale;
-   lastPriceUpdatedAt says how stale. Use get_game_price when currency matters.
+4. lastPrice on a library game is a weekly snapshot, not a live price. There is no
+   price lookup here. If a user asks what something costs now, say the stored figure
+   is from lastPriceUpdatedAt and point them at the store.
 
 Call read_gametracker_guide once at the start of any session that will do more than a
 single lookup. It explains the status lifecycle, sharing, pagination and what every
@@ -131,32 +132,24 @@ guessing. Adding the wrong game is silent: it succeeds, and the user finds out l
 | \`gameId\` | The source-prefixed id. Stable, and what every other call takes. |
 | \`name\`, \`coverUrl\`, \`releaseDate\` | Resolved from the provider when added. |
 | \`status\` | One of the five above. |
-| \`steamAppId\` | Steam's id, when known. What \`get_game_price\` takes. May be absent. |
+| \`steamAppId\` | Steam's id, when known. May be absent. |
 | \`lastPrice\` | **A weekly snapshot, not a live price.** See below. |
 | \`lastPriceUpdatedAt\` | When that snapshot was taken. This is how to answer "how stale?". |
 | \`crackStatus\` | DRM/availability status, refreshed daily. May be \`unknown\`. |
 | \`addedAt\` | When it was added to the library. Sort by this for "what did I add recently". |
 | \`backlogOrder\` | Position, only meaningful when status is \`backlog\`. |
 
-### Prices are two different things
+### About lastPrice
 
-\`lastPrice\` on a library row is whatever a weekly background sweep last recorded. It
-can be days old, and it exists so a library view can show something without calling
-Steam for every row.
+\`lastPrice\` is whatever a weekly background sweep last recorded from Steam, and
+\`lastPriceUpdatedAt\` says when. It exists so a library view can show something
+without calling Steam for every row.
 
-\`get_game_price\` is a live lookup. Use it when the answer actually depends on the
-current price — "is it on sale", "how much is it now". Say which one you used if it
-could matter.
-
-A null price is a normal answer, not an error: the game may be free, unreleased, or not
-sold in the requested region. The \`reason\` field distinguishes them. Prices are
-region-specific and carry their own currency symbol.
-
-**There is no "on sale" flag and no bulk price lookup.** For "is anything on my wishlist
-cheap right now", use each row's \`lastPrice\` and \`lastPriceUpdatedAt\` to shortlist a
-handful of candidates, then confirm those few with \`get_game_price\`. Do not call
-\`get_game_price\` once per game in a library — a fifty-game wishlist is fifty calls and
-the user will not thank you for it.
+**There is no price lookup in this tool set** — deliberately, because it is not what
+people use this for. Report \`lastPrice\` as what it is: a figure from a date, not a
+current price. If someone is deciding whether to buy, say when the snapshot was taken
+and let them check the store. An empty \`lastPrice\` usually means the game has no
+Steam id, not that it is free.
 
 ## Sharing
 
@@ -250,8 +243,8 @@ Two fields are snapshots rather than live values, and saying so costs one clause
 * \`lastPrice\` — refreshed weekly.
 * \`crackStatus\` — refreshed daily.
 
-If a user is making a decision on either, use \`get_game_price\` for the price, and say
-plainly that DRM status is a daily cache.
+If a user is making a decision on either, say when the figure is from rather than
+presenting it as current.
 
 ## Pagination
 

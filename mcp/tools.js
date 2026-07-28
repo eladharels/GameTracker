@@ -152,28 +152,6 @@ const TOOLS = [
   },
 
   {
-    name: 'get_game_price',
-    config: {
-      title: 'Get current Steam price',
-      description:
-        'Look up a game\'s CURRENT price on Steam, by Steam app id. Library games carry their '
-        + '`steamAppId`, and `lastPrice` on a library game is whatever was recorded by the weekly '
-        + 'sweep — possibly days old. Use this tool when the price needs to be current.\n\n'
-        + 'A null price is a normal answer, not a failure: the game may be free, unreleased, or not '
-        + 'sold in the requested region. The `reason` field says which.',
-      inputSchema: {
-        steamAppId: z.string().regex(/^[0-9]{1,10}$/)
-          .describe('Steam application id, e.g. "440". Found on a library game as steamAppId.'),
-        region: z.string().regex(/^[a-z]{2}$/).optional()
-          .describe('Two-letter country code selecting the Steam store. Defaults to the instance\'s region.'),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    handler: tool(({ steamAppId, region }, token) =>
-      api.call(token, 'get', `/catalog/prices/${encodeURIComponent(steamAppId)}`, { params: { region } })),
-  },
-
-  {
     name: 'list_library',
     config: {
       title: 'List my games',

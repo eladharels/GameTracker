@@ -29,7 +29,6 @@ const EXPECTED_TOOLS = [
   'add_game',
   'get_backlog',
   'get_game',
-  'get_game_price',
   'list_library',
   'list_shareable_users',
   'list_shares',
@@ -108,7 +107,7 @@ check('destructive tools are annotated as destructive', () => {
 });
 
 check('read-only tools are annotated read-only', () => {
-  const readOnly = ['whoami', 'search_games', 'get_game_price', 'list_library',
+  const readOnly = ['whoami', 'search_games', 'list_library', 'get_game',
     'get_backlog', 'list_shares', 'list_shareable_users', 'read_shared_library'];
   for (const name of readOnly) {
     const t = TOOLS.find((x) => x.name === name);
@@ -127,8 +126,10 @@ check('the instructions cover the four defaults an agent gets wrong', () => {
   assert.match(INSTRUCTIONS, /backlog/i, 'the instructions do not mention backlog ordering');
   assert.match(INSTRUCTIONS, /exactly one status|one status/i,
     'the instructions do not warn that a game has exactly one status');
-  assert.match(INSTRUCTIONS, /stale|snapshot/i,
-    'the instructions do not warn that lastPrice is stale');
+  assert.match(INSTRUCTIONS, /snapshot|not a live price/i,
+    'the instructions do not warn that lastPrice is not current');
+  assert.ok(!/get_game_price/.test(INSTRUCTIONS),
+    'the instructions still reference a price tool that no longer exists');
   assert.match(INSTRUCTIONS, /gametracker:\/\/guide/,
     'the instructions do not point at the guide resource');
 });
@@ -276,6 +277,19 @@ checkAsync('output is compact — indentation is pure cost', async () => {
     assert.deepStrictEqual(JSON.parse(text).meta, { total: 1 }, 'output is not valid JSON');
   } finally {
     api.call = realCall;
+  }
+});
+
+check('no tool references a capability this server does not have', () => {
+  // Price lookup was removed. A description that still names a tool the agent cannot
+  // call is worse than no description: it produces a plan whose next step does not
+  // exist, and the model has no way to discover that until it fails.
+  const gone = ['get_game_price'];
+  const surfaces = TOOLS.map((t) => `${t.name} ${t.config.description}`).join('\n')
+    + INSTRUCTIONS + GUIDE + CONVENTIONS;
+  for (const name of gone) {
+    assert.ok(!surfaces.includes(name),
+      `${name} was removed but is still referenced — an agent will plan a call it cannot make`);
   }
 });
 
