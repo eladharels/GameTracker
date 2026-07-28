@@ -2366,7 +2366,13 @@ v2Router.get('/users/:userId/tokens', requireAdminScope, (req, res) => {
   const id = parseRouteId(req.params.userId);
   if (id === null) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such user' });
   authService.listTokensForUser(id)
-    .then((rows) => res.json({ data: rows.map(v2.token) }))
+    .then((rows) => {
+      // LOGGED, like the two deletes. Enumerating which accounts hold admin-scoped
+      // tokens and when each was last used is the reconnaissance step before using a
+      // stolen admin token — and it was the one step in this group that left no trace.
+      console.log(`[v2] '${safeForLog(req.user.username, 64)}' listed ${rows.length} token(s) for user ${id}`);
+      res.json({ data: rows.map(v2.token) });
+    })
     .catch((err) => v2.send(res, err, { log: '[v2] admin token list failed:' }));
 });
 

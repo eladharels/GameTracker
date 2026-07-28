@@ -339,10 +339,34 @@ async function revokeToken(tokenId, userId) {
 // and the only way to destroy one was deleting the account — which is why
 // deprovisioning someone meant erasing their library too.
 
+// Does this account exist?
+//
+// Both admin operations below ask first, and neither did originally — which made
+// `DELETE /users/99999/tokens` answer `200 {"revoked": 0}` for an id that was never a
+// user. A review named the failure exactly: an operator deprovisioning a departing
+// employee mistypes the id, reads "revoked none" as "they held no credentials", and
+// closes the ticket while a live admin-scoped token with no expiry keeps working.
+//
+// That is v1's `{success:true}` defect in the one call this feature exists to make
+// trustworthy. The count distinguishes "revoked seven" from "revoked none"; it cannot
+// distinguish "revoked none" from "you did not address a real account", and the second
+// ambiguity is the dangerous one.
+//
+// The sibling `DELETE /users/:id` already 404s on a bad id, and the spec documented a
+// 404 on these two from the start — the implementation simply never produced it.
+async function assertUserExists(userId) {
+  const row = await db.promises.get('SELECT id FROM users WHERE id = ?', [userId]);
+  if (!row) throw serviceError(CODES.NOT_FOUND, 'User not found');
+}
+
 // Another account's tokens. Same projection as listTokens, deliberately: `token_hash`
 // stays out of a response that now crosses an account boundary, where it matters more
 // than it did on the self-service listing.
 async function listTokensForUser(userId) {
+  // Checked here too, not only on the delete: an empty list for a mistyped id reads as
+  // "this account holds nothing" and is what an operator confirms the wrong answer
+  // against BEFORE revoking.
+  await assertUserExists(userId);
   const rows = await db.promises.all(
     `SELECT id, name, hint, scopes, created_at, last_used_at, expires_at
        FROM api_tokens WHERE user_id = ? ORDER BY id ASC`,
@@ -358,7 +382,11 @@ async function listTokensForUser(userId) {
 // ignore an error from this operation — on the one call whose whole purpose is to be
 // trusted in an incident. The route answers 200 with the count either way.
 async function revokeAllTokensForUser(userId) {
+  await assertUserExists(userId);
   const ctx = await db.promises.run('DELETE FROM api_tokens WHERE user_id = ?', [userId]);
+  // Zero is still a SUCCESS for a REAL account — that part of the original design was
+  // right. What changed is that "no such user" is now a 404 instead of masquerading as
+  // one of those successes.
   return { revoked: ctx.changes };
 }
 

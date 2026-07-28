@@ -1778,14 +1778,26 @@ console.log('auth admin revocation — the SQL is the safety property:');
 {
   const dbMod = require('../db');
   const authSvc = require('../services/auth');
-  const capture = async (fn) => {
+  // `get` is stubbed too: the admin operations now resolve the target account FIRST and
+  // 404 when it is absent, so without this they reach the real database. Returns a row
+  // by default — the "no such user" case is asserted separately below.
+  const capture = async (fn, { userExists = true } = {}) => {
+    const realGet = dbMod.promises.get;
     const realRun = dbMod.promises.run;
     const realAll = dbMod.promises.all;
     const seen = [];
+    dbMod.promises.get = async (sql, params) => {
+      seen.push({ sql, params, lookup: true });
+      return userExists ? { id: params[0] } : undefined;
+    };
     dbMod.promises.run = async (sql, params) => { seen.push({ sql, params }); return { changes: 1 }; };
     dbMod.promises.all = async (sql, params) => { seen.push({ sql, params }); return []; };
-    try { await fn(); } finally { dbMod.promises.run = realRun; dbMod.promises.all = realAll; }
-    return seen;
+    try { await fn(); } finally {
+      dbMod.promises.get = realGet;
+      dbMod.promises.run = realRun;
+      dbMod.promises.all = realAll;
+    }
+    return seen.filter((q) => !q.lookup);
   };
 
   checkAsync('revoking ONE token matches BOTH the token and the owner', async () => {
@@ -1814,14 +1826,36 @@ console.log('auth admin revocation — the SQL is the safety property:');
     const [{ sql, params }] = await capture(() => authSvc.revokeAllTokensForUser(42));
     assert.match(sql, /DELETE FROM api_tokens WHERE user_id = \?/i);
     assert.deepStrictEqual(params, [42], 'bulk revoke is not scoped to a single account');
-    // Zero revoked must not throw: "that account had nothing" is the outcome the
-    // administrator wanted, and an error there trains them to ignore errors from the
-    // one call whose whole job is to be trusted during an incident.
+    // The zero-revoked case has its own assertion above, where the account-existence
+    // lookup is stubbed too. Doing it inline here reached the real database.
+  });
+
+  checkAsync('a user id that is not a user is NOT_FOUND, not a quiet success', async () => {
+    // The defect a review found in production: DELETE /users/99999/tokens answered
+    // 200 {"revoked": 0}, which an operator deprovisioning a departing employee reads
+    // as "they held no credentials" — while a live admin-scoped token with no expiry
+    // keeps working. The count tells "revoked seven" from "revoked none"; it cannot
+    // tell "revoked none" from "you did not address a real account".
+    for (const call of [
+      () => authSvc.revokeAllTokensForUser(99999),
+      () => authSvc.listTokensForUser(99999),
+    ]) {
+      let code = null;
+      await capture(async () => { await call().catch((err) => { code = err.code; }); }, { userExists: false });
+      assert.strictEqual(code, 'not_found', 'a nonexistent account was reported as a success');
+    }
+  });
+
+  checkAsync('zero tokens for a REAL account is still a success', async () => {
+    // The other half, and the reason this is not just "throw on zero": an account that
+    // genuinely holds nothing is the outcome the administrator wanted.
+    const realGet = dbMod.promises.get;
     const realRun = dbMod.promises.run;
+    dbMod.promises.get = async () => ({ id: 42 });
     dbMod.promises.run = async () => ({ changes: 0 });
     try {
       assert.deepStrictEqual(await authSvc.revokeAllTokensForUser(42), { revoked: 0 });
-    } finally { dbMod.promises.run = realRun; }
+    } finally { dbMod.promises.get = realGet; dbMod.promises.run = realRun; }
   });
 
   checkAsync('the admin listing never selects the hash', async () => {

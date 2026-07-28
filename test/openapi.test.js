@@ -283,17 +283,35 @@ check('mutations are falsifiable — a DELETE can always say "nothing was there"
       assert.ok(!codes.includes('200'), `DELETE ${p} returns BOTH 204 and 200; pick one`);
       continue;
     }
-    // No 204: this must be the bulk shape, and it must carry a count.
+    // No 204: this must be the bulk shape, and it must carry a count of what was
+    // REMOVED. The first version of this branch asked only for "a required integer",
+    // and a review walked `{success: {type: integer, minimum: 1, maximum: 1}}` straight
+    // through it — v1's `{success:true}` with the boolean swapped for a constant. So
+    // three things are checked, and each rules out a specific way of faking a count.
     const schema = op.responses['200']?.content?.['application/json']?.schema;
     assert.ok(schema, `DELETE ${p} returns neither 204 nor a 200 body; it cannot report what it did`);
+
+    // (a) The NAME must be one that means "how many were destroyed". `remaining`
+    // reports what survived and `total` what existed — both are integers, neither is
+    // falsifiable as a deletion. A new name is a deliberate edit here, not a smuggle.
+    const COUNT_NAMES = ['revoked', 'deleted', 'removed'];
     const counters = Object.entries(schema.properties || {})
-      .filter(([, prop]) => prop.type === 'integer');
+      .filter(([name, prop]) => prop.type === 'integer' && COUNT_NAMES.includes(name));
     assert.ok(counters.length > 0,
-      `DELETE ${p} returns 200 without an integer count — that is {success:true} again, `
-      + 'and a caller cannot tell a no-op from a deletion');
-    for (const [name] of counters) {
+      `DELETE ${p} returns 200 with no count named one of ${COUNT_NAMES.join('/')} — that is `
+      + '{success:true} again, and a caller cannot tell a no-op from a deletion');
+
+    for (const [name, prop] of counters) {
+      // (b) REQUIRED, or a caller cannot rely on it being there at all.
       assert.ok((schema.required || []).includes(name),
         `DELETE ${p} may omit its '${name}' count, so a caller cannot rely on it`);
+      // (c) It must be able to be ZERO, and must not be pinned to a single value. A
+      // constant cannot report anything: that is the exact shape the review got past
+      // the old rule.
+      assert.strictEqual(prop.minimum, 0,
+        `DELETE ${p}'s '${name}' does not allow 0, so it cannot express "nothing was there"`);
+      assert.ok(prop.maximum === undefined,
+        `DELETE ${p}'s '${name}' is bounded above, so it is a flag rather than a count`);
     }
   }
 });
