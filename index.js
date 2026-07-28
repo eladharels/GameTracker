@@ -30,6 +30,7 @@ const {
   attrValue,
   attrValues,
   compatTreeAdvice,
+  verifyLdapCredentials,
 } = require('./ldap-helpers');
 // escapeIgdbSearch is no longer used here: every APIcalypse literal in the server
 // is now built inside services/catalog.js, which is the point of the extraction.
@@ -1717,226 +1718,134 @@ app.post('/api/auth/login', (req, res) => {
     return fallbackLocalAuth();
   }
 
-  // If LDAP is enabled with a service account, use the reliable search-then-bind method.
-  try {
-    warnIfCleartextLdap(ldapSettings.url);
-    // If the directory is unreachable, fall back to local auth instead of letting an
-    // unhandled 'error' event kill the process (an anonymous login request used to
-    // be enough to take the server down whenever the DC was down).
-    const client = createLdapClient(ldapSettings.url, () => fallbackLocalAuth());
+  // LDAP is configured: resolve the username to exactly one directory entry and
+  // verify the password by binding as that entry.
+  //
+  // Steps 1-3 now live in ldap-helpers.js#verifyLdapCredentials, because minting a
+  // personal access token has to make the SAME check and the alternative was a second
+  // copy of them. Two of the branches below were once authentication bypasses, so
+  // there is deliberately one implementation. What stays here is everything that is
+  // specific to logging IN: the fallback policy, the group check, the user sync and
+  // the session token.
+  verifyLdapCredentials(ldapSettings, normalizedUsername, password).then((result) => {
+    if (authCompleted) return;
 
-    // 1. Bind as service account
-    client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
-      if (err) {
-        console.log('[LDAP] Service account bind failed:', err.message);
-        client.markHandled();
-        client.unbind();
-        return fallbackLocalAuth();
+    // FALL BACK on 'unreachable' and 'not_found', exactly as before. A directory
+    // outage must not lock out local accounts, and a username the directory does not
+    // know may still be a local one.
+    if (result.reason === 'unreachable' || result.reason === 'not_found') {
+      return fallbackLocalAuth();
+    }
+
+    // REFUSE on ambiguity — never fall back, never guess. If the search matched
+    // several entries we cannot know which identity the caller meant, and binding as
+    // an arbitrary one is an authentication bug.
+    if (result.reason === 'ambiguous') {
+      console.error(`[LDAP] Ambiguous login: ${result.dns.length} entries matched username '${safeForLog(normalizedUsername, 64)}'. Refusing to authenticate.`);
+      // Overwhelmingly the cause is a search base that spans a compat tree. Say so —
+      // this used to present as an unexplained total login outage.
+      const advice = compatTreeAdvice(result.dns, ldapSettings.base);
+      if (advice) console.error(`[LDAP] ${advice}`);
+      trackFailedAttempt(clientIP, normalizedUsername);
+      authCompleted = true;
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Wrong password for a directory account. Still falls back, as before: the same
+    // username may also exist locally with a different password.
+    if (result.reason === 'bad_password') {
+      trackFailedAttempt(clientIP, normalizedUsername);
+      return fallbackLocalAuth();
+    }
+
+    const foundUser = result.entry;
+    console.log('[LDAP] User password authentication succeeded.');
+
+    // 4. Check group membership (Authorization).
+    // The failed-attempt counter is deliberately NOT cleared yet: a user who
+    // authenticates but is outside the required group is not authorized, so clearing
+    // here would let them reset the throttle at will.
+    if (ldapSettings.requiredGroup) {
+      // Case-insensitive: a directory answering `memberof` used to leave this
+      // undefined, which read as "member of nothing" and refused every login with
+      // requiredGroup set. It fails closed, so it presented as a directory outage
+      // rather than as a bug here.
+      const groups = attrValues(foundUser, 'memberOf');
+      console.log('[LDAP] User is member of groups:', groups);
+      const isMember = groups.some((group) =>
+        group.toLowerCase() === ldapSettings.requiredGroup.toLowerCase() ||
+        group.toLowerCase().includes(`cn=${ldapSettings.requiredGroup.toLowerCase()}`));
+      if (!isMember) {
+        console.log(`[LDAP] Authorization failed: User is not in required group '${ldapSettings.requiredGroup}'.`);
+        authCompleted = true;
+        return res.status(403).json({ error: 'Not a member of the required group' });
       }
-      console.log('[LDAP] Service account bind succeeded.');
+      console.log('[LDAP] Authorization passed: Group membership check OK.');
+    }
+    // Fully authenticated AND authorized — now it is safe to clear.
+    clearFailedAttempts(clientIP, normalizedUsername);
 
-      // 2. Search for the user by username using multiple attributes:
-      //    Active Directory: sAMAccountName, FreeIPA: uid. The username is
-      //    RFC 4515-escaped so it cannot alter the filter's structure.
-      const searchOptions = {
-        filter: buildUserSearchFilter(normalizedUsername),
-        scope: 'sub',
-        attributes: ['dn', 'memberOf', 'displayName', 'cn', 'mail', 'email']
-      };
-      console.log(`[LDAP] Searching for user with filter: ${searchOptions.filter}`);
+    // 5. Create the session.
+    let cnValue = attrValue(foundUser, 'cn');
+    if (!cnValue && foundUser.dn) {
+      const match = foundUser.dn.match(/CN=([^,]+)/i);
+      if (match) cnValue = match[1];
+    }
+    // Sanitised before it becomes users.display_name: a directory-supplied cn
+    // containing newlines was stored verbatim and then rendered in the UI,
+    // notification subjects and exports.
+    const cleanCn = sanitizeDirectoryText(cnValue);
+    const displayName = cleanCn !== '' ? cleanCn : normalizedUsername;
+    const userEmail = attrValue(foundUser, 'mail', 'email');
 
-      client.search(ldapSettings.base, searchOptions, (err, searchRes) => {
-        if (err) {
-          console.log('[LDAP] Search initiation failed:', err);
-          client.markHandled();
-          client.unbind();
-          return fallbackLocalAuth();
-        }
+    // safeForLog: these are raw directory attribute values. ldapjs escapes control
+    // characters inside a DN but NOT inside attributes, so a cn of
+    // "bob\n[LDAP] Service account bind succeeded." wrote a fabricated line straight
+    // into the audit trail.
+    console.log('[DEBUG] Extracted cnValue:', safeForLog(cnValue));
+    console.log('[DEBUG] Final displayName:', safeForLog(displayName));
+    console.log('[DEBUG] User email from LDAP:', safeForLog(userEmail));
 
-        // Entries are BUFFERED rather than folded down as they arrive, because
-        // whether a cn=compat entry is a redundant mirror or somebody's only account
-        // cannot be judged from that entry alone -- it depends on whether its
-        // cn=accounts counterpart is elsewhere in the same result set. Deciding per
-        // entry is what made the first version of this an authentication bypass.
-        // Nothing is discarded; see the 'end' handler.
-        const rawEntries = [];
-        searchRes.on('searchEntry', (entry) => {
-          console.log('[LDAP] Search entry received for user lookup.');
-          rawEntries.push(entry);
-        });
+    getOrCreateUser(normalizedUsername, (err, user) => {
+      if (err) {
+        if (authCompleted) return;
+        authCompleted = true;
+        return res.status(500).json({ error: 'DB error' });
+      }
+      const updates = ['display_name = ?, origin = ?'];
+      const params = [displayName, 'ldap'];
+      // Validated at THIS write site, not only at the send sink. The comment on
+      // isValidEmailAddress names four writers that must all check; this one — the
+      // LDAP login path — was not among them, so a directory-supplied address
+      // smuggling a comma reached users.email and could fan notifications out to
+      // arbitrary third parties from this deployment's SPF/DKIM-aligned domain.
+      if (isValidEmailAddress(userEmail)) {
+        updates.push('email = ?');
+        params.push(userEmail.trim());
+      } else if (userEmail) {
+        console.warn('[LDAP] Ignoring malformed email from directory:', safeForLog(userEmail));
+      }
+      params.push(normalizedUsername);
+      db.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ?`, params);
 
-        searchRes.on('error', (err) => {
-          console.error('[LDAP] Search error during processing:', err.message);
-          client.markHandled();
-          client.unbind();
-          return fallbackLocalAuth();
-        });
-
-        searchRes.on('end', (result) => {
-          console.log('[LDAP] Search finished. Result status:', result ? result.status : 'N/A');
-
-          // NOTHING IS FILTERED OUT HERE, deliberately. Two attempts to recognise
-          // and discard FreeIPA's cn=compat duplicate were both authentication
-          // bypasses, because a DN is a name rather than evidence: any shape treated
-          // as proof that two entries are the same person can be created by an
-          // attacker who can add a directory entry. See ldap-helpers.js.
-          //
-          // Every matched entry therefore counts, and the fail-closed ambiguity
-          // refusal below decides. A too-broad search base is reported as the
-          // configuration error it is.
-          const entries = rawEntries;
-          const matchCount = entries.length;
-
-          // Read anything out of this with attrValue/attrValues, never by property
-          // access -- the keys carry whatever casing the directory sent.
-          const foundUser = matchCount
-            ? { dn: entries[0].dn.toString(), ...entryAttributes(entries[0]) }
-            : null;
-          // Log the DN only. Dumping the whole entry put mail addresses and full
-          // group membership into shared logs for every single login.
-          if (foundUser) console.log('[LDAP] Parsed user object for DN:', foundUser.dn);
-
-          if (!foundUser) {
-            console.log('[LDAP] User object was not populated from search. This could be a permissions issue or the user truly does not exist in the search base.');
-            client.markHandled();
-            client.unbind();
-            return fallbackLocalAuth();
-          }
-          // A username must identify exactly one directory entry. If the search
-          // matched several, we cannot know which identity the caller meant — the
-          // old code silently kept whichever arrived last. Refuse instead of
-          // guessing; binding as an arbitrary matched DN is an authentication bug.
-          if (matchCount > 1) {
-            console.error(`[LDAP] Ambiguous login: ${matchCount} entries matched username '${normalizedUsername}'. Refusing to authenticate.`);
-            // Overwhelmingly the cause is a search base that spans a compat tree.
-            // Say so — this used to present as an unexplained total login outage.
-            const advice = compatTreeAdvice(entries.map((e) => e.dn.toString()), ldapSettings.base);
-            if (advice) console.error(`[LDAP] ${advice}`);
-            client.markHandled();
-            client.unbind();
-            trackFailedAttempt(clientIP, normalizedUsername);
-            if (authCompleted) return;
-            authCompleted = true;
-            return res.status(401).json({ error: 'Invalid credentials' });
-          }
-
-          const userDn = foundUser.dn;
-          console.log(`[LDAP] Found user's correct DN: ${userDn}`);
-
-          // 3. Authenticate as the found user (verifies their password)
-          client.bind(userDn, password, (err) => {
-            if (err) {
-              console.log('[LDAP] User password authentication failed:', err);
-              client.markHandled();
-              client.unbind();
-              // Track failed attempt
-              trackFailedAttempt(clientIP, normalizedUsername);
-              return fallbackLocalAuth(); // Incorrect password for this user
-            }
-            console.log('[LDAP] User password authentication succeeded.');
-
-            // 4. Check group membership (Authorization).
-            // The failed-attempt counter is deliberately NOT cleared yet: a user who
-            // authenticates but is outside the required group is not authorized, so
-            // clearing here would let them reset the throttle at will.
-            if (ldapSettings.requiredGroup) {
-                // Case-insensitive: a directory answering `memberof` used to leave
-                // this undefined, which read as "member of nothing" and refused every
-                // login with requiredGroup set. It fails closed, so it presented as a
-                // directory outage rather than as a bug here.
-                const groups = attrValues(foundUser, 'memberOf');
-                console.log('[LDAP] User is member of groups:', groups);
-
-                const isMember = groups.some(group =>
-                    group.toLowerCase() === ldapSettings.requiredGroup.toLowerCase() ||
-                    group.toLowerCase().includes(`cn=${ldapSettings.requiredGroup.toLowerCase()}`)
-                );
-
-                if (!isMember) {
-                    console.log(`[LDAP] Authorization failed: User is not in required group '${ldapSettings.requiredGroup}'.`);
-                    client.markHandled();
-                    client.unbind();
-                    if (authCompleted) return;
-                    authCompleted = true;
-                    return res.status(403).json({ error: 'Not a member of the required group' });
-                }
-                console.log('[LDAP] Authorization passed: Group membership check OK.');
-            }
-            // Fully authenticated AND authorized — now it is safe to clear.
-            clearFailedAttempts(clientIP, normalizedUsername);
-
-            // 5. User is authenticated and authorized, create token.
-            client.markHandled();
-            client.unbind();
-            // Try to get CN from attribute, else extract from DN
-            let cnValue = attrValue(foundUser, 'cn');
-            if (!cnValue && foundUser.dn) {
-              // Extract CN from DN string
-              const match = foundUser.dn.match(/CN=([^,]+)/i);
-              if (match) cnValue = match[1];
-            }
-            // Sanitised before it becomes users.display_name: a directory-supplied cn
-            // containing newlines was stored verbatim and then rendered in the UI,
-            // notification subjects and exports.
-            const cleanCn = sanitizeDirectoryText(cnValue);
-            const displayName = cleanCn !== '' ? cleanCn : normalizedUsername;
-            
-            // Get email from LDAP attributes
-            const userEmail = attrValue(foundUser, 'mail', 'email');
-            
-            // safeForLog: these are raw directory attribute values. ldapjs escapes
-            // control characters inside a DN but NOT inside attributes, so a cn of
-            // "bob\n[LDAP] Service account bind succeeded." wrote a fabricated line
-            // straight into the audit trail.
-            console.log('[DEBUG] Extracted cnValue:', safeForLog(cnValue));
-            console.log('[DEBUG] Final displayName:', safeForLog(displayName));
-            console.log('[DEBUG] User email from LDAP:', safeForLog(userEmail));
-
-            getOrCreateUser(normalizedUsername, (err, user) => {
-              if (err) {
-                if (authCompleted) return;
-                authCompleted = true;
-                return res.status(500).json({ error: 'DB error' });
-              }
-              // Update display_name, origin, and email for LDAP users
-              const updates = ['display_name = ?, origin = ?'];
-              const params = [displayName, 'ldap'];
-              
-              // Validated at THIS write site, not only at the send sink. The
-              // comment on isValidEmailAddress names four writers that must all
-              // check; this one — the LDAP login path — was not among them, so a
-              // directory-supplied address smuggling a comma reached users.email and
-              // could fan notifications out to arbitrary third parties from this
-              // deployment's SPF/DKIM-aligned domain.
-              if (isValidEmailAddress(userEmail)) {
-                updates.push('email = ?');
-                params.push(userEmail.trim());
-              } else if (userEmail) {
-                console.warn('[LDAP] Ignoring malformed email from directory:', safeForLog(userEmail));
-              }
-              
-              params.push(normalizedUsername);
-              db.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ?`, params);
-              
-              const token = jwt.sign({
-                id: user.id,
-                username: user.username,
-                can_manage_users: !!user.can_manage_users,
-                origin: 'ldap',
-                display_name: displayName
-              }, JWT_SECRET, { expiresIn: '12h' });
-              if (authCompleted) return;
-              authCompleted = true;
-              res.json({ token });
-            }, { origin: 'ldap', display_name: displayName });
-          });
-        });
-      });
-    });
-  } catch (ldapError) {
-    console.error('[LDAP] Error creating LDAP client:', ldapError);
+      const token = jwt.sign({
+        id: user.id,
+        username: user.username,
+        can_manage_users: !!user.can_manage_users,
+        origin: 'ldap',
+        display_name: displayName,
+      }, JWT_SECRET, { expiresIn: '12h' });
+      if (authCompleted) return;
+      authCompleted = true;
+      res.json({ token });
+    }, { origin: 'ldap', display_name: displayName });
+  }).catch((ldapError) => {
+    // verifyLdapCredentials never rejects, so this is a defect in the handling above
+    // rather than a directory failure. Falling back keeps a bug here from becoming a
+    // total login outage, and the log line says which it was.
+    console.error('[LDAP] Unexpected error handling the directory result:', ldapError);
     return fallbackLocalAuth();
-  }
+  });
 });
 
 // --- User Management Endpoints ---
@@ -2895,17 +2804,26 @@ app.post('/api/user/me/tokens', authRequired, (req, res) => {
   usersService.verifyPassword(req.user.id, body.password)
     .then((check) => {
       if (!check.ok) {
-        if (check.reason === 'not_local') {
-          // Directory accounts cannot be verified here — see the comment on
-          // verifyPassword for why a second copy of the LDAP bind is refused rather
-          // than written. 400, not 403: nothing is forbidden, this surface simply
-          // cannot perform the check, and the caller has somewhere else to go.
-          return res.status(400).json({
-            error: 'Your account signs in through the directory, so this page cannot verify '
-              + 'your password. Ask an administrator to mint a token with '
-              + 'create-api-token.js on the server.',
+        // A directory FAULT is not a wrong password and must not be reported as one:
+        // the user cannot fix an unreachable domain controller by retyping, and being
+        // told "incorrect password" sends them to reset a password that was right.
+        // 503, not 4xx — the request was well-formed and the fault is this end's.
+        if (check.reason === 'directory_unreachable') {
+          return res.status(503).json({
+            error: 'Could not reach the directory to confirm your password. Try again in a moment.',
           });
         }
+        if (check.reason === 'directory_ambiguous' || check.reason === 'no_directory') {
+          // Both are server misconfiguration the user can do nothing about, and both
+          // are already loud in the log. Say so rather than blaming their typing.
+          return res.status(503).json({
+            error: 'Your account cannot be verified against the directory. Ask an administrator '
+              + 'to check the LDAP configuration.',
+          });
+        }
+        // directory_not_found falls through to the same 403 as a wrong password: it
+        // means the account exists locally but the directory does not know it, and
+        // distinguishing that would confirm which usernames the directory holds.
         // COUNTED, and logged. The review found neither: a failed attempt here left
         // no trace at all, so an attacker guessing against a stolen session produced
         // no detection signal anywhere. `not_local` is deliberately not counted — it

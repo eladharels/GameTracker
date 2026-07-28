@@ -201,7 +201,143 @@ function attrValue(attrs, ...names) {
   return values.length ? values[0] : null;
 }
 
+// --- Verify a directory password -------------------------------------------------
+//
+// THE ONLY PLACE IN THIS CODEBASE THAT BINDS AS A USER. Everything else that touches
+// the directory (directory.js, the backfills, test_ldap_sync.js) binds as the service
+// account to READ; this is the one that proves someone knows a password.
+//
+// It exists because there are now two callers — the interactive login and the sudo-mode
+// re-check that guards minting a personal access token — and the alternative was a
+// second copy of the sequence below. Two of this function's branches were once
+// authentication BYPASSES (see the ambiguity refusal, and ldap-helpers' notes on
+// cn=compat), so a second copy is a second thing that has to stay correct forever.
+//
+// Deliberately does steps 1-3 ONLY: resolve the username to exactly one entry, then
+// bind as that entry. It does NOT check group membership, create or sync the local
+// user, or issue anything. Those are authorization and session concerns that differ
+// between the two callers, and folding them in here is what would make this
+// unreusable again.
+//
+// Returns a DISCRIMINATED result rather than a boolean, because the callers must treat
+// the failures differently — login falls back to local auth on `unreachable` and
+// `not_found`, but must REFUSE on `ambiguous`. Collapsing them would turn a directory
+// outage into "wrong password" and, worse, turn an ambiguous match into a fallback.
+//
+//   { ok: true,  entry }                  password verified; entry is attribute-mapped
+//   { ok: false, reason: 'unreachable' }  socket/service-bind/search failure
+//   { ok: false, reason: 'not_found' }    no entry matched the username
+//   { ok: false, reason: 'ambiguous', dns } more than one matched — caller MUST refuse
+//   { ok: false, reason: 'bad_password' } entry found, bind as that entry rejected
+//
+// Never rejects. A thrown error here would land in whichever caller's chain, and one
+// of them is a login route where an unhandled rejection used to take the process down.
+function verifyLdapCredentials(ldapSettings, username, password) {
+  return new Promise((resolve) => {
+    // SETTLE-ONCE LATCH. The bind callback, the search callback and the client's
+    // 'error' event are three independent signals that do NOT arrive in a fixed
+    // order — on a refused connection the socket error usually beats the bind
+    // callback. Without this the login route resolved twice and threw
+    // ERR_HTTP_HEADERS_SENT. A Promise only settles once, but the cleanup below
+    // (markHandled/unbind) must also happen exactly once.
+    let settled = false;
+    const done = (result, client) => {
+      if (settled) return;
+      settled = true;
+      if (client) {
+        try { client.markHandled(); client.unbind(); } catch { /* already gone */ }
+      }
+      resolve(result);
+    };
+
+    // An empty password is a special case that MUST NOT reach the directory. LDAP
+    // treats a simple bind with an empty password as an ANONYMOUS bind and returns
+    // success, so `bind(userDn, '')` would report that any existing user's password
+    // is correct. This is the classic LDAP unauthenticated-bind bypass.
+    if (typeof password !== 'string' || password === '') {
+      return done({ ok: false, reason: 'bad_password' }, null);
+    }
+
+    warnIfCleartextLdap(ldapSettings.url);
+    const client = createLdapClient(ldapSettings.url, () =>
+      done({ ok: false, reason: 'unreachable' }, null));
+
+    // 1. Bind as the service account.
+    client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
+      if (err) {
+        console.log('[LDAP] Service account bind failed:', err.message);
+        return done({ ok: false, reason: 'unreachable' }, client);
+      }
+
+      // 2. Find the user. The username is RFC 4515-escaped by buildUserSearchFilter,
+      // so it cannot alter the filter's structure.
+      const searchOptions = {
+        filter: buildUserSearchFilter(username),
+        scope: 'sub',
+        attributes: ['dn', 'memberOf', 'displayName', 'cn', 'mail', 'email'],
+      };
+      client.search(ldapSettings.base, searchOptions, (err, searchRes) => {
+        if (err) {
+          console.log('[LDAP] Search initiation failed:', err.message);
+          return done({ ok: false, reason: 'unreachable' }, client);
+        }
+
+        // Entries are BUFFERED rather than folded down as they arrive. Whether a
+        // cn=compat entry is a redundant mirror or somebody's only account cannot be
+        // judged from that entry alone — it depends on whether its cn=accounts
+        // counterpart is elsewhere in the same result set. Deciding per entry is what
+        // made the first version of this an authentication bypass.
+        const rawEntries = [];
+        searchRes.on('searchEntry', (entry) => rawEntries.push(entry));
+        searchRes.on('error', (err) => {
+          console.error('[LDAP] Search error during processing:', err.message);
+          return done({ ok: false, reason: 'unreachable' }, client);
+        });
+
+        searchRes.on('end', () => {
+          // NOTHING IS FILTERED OUT HERE, deliberately. Two attempts to recognise and
+          // discard FreeIPA's cn=compat duplicate were both authentication bypasses,
+          // because a DN is a name rather than evidence: any shape treated as proof
+          // that two entries are the same person can be created by an attacker who can
+          // add a directory entry. Every matched entry counts, and the fail-closed
+          // ambiguity refusal below decides.
+          if (rawEntries.length === 0) {
+            return done({ ok: false, reason: 'not_found' }, client);
+          }
+          if (rawEntries.length > 1) {
+            // A username must identify exactly one entry. Binding as an arbitrary
+            // matched DN is an authentication bug — the old code silently kept
+            // whichever arrived last.
+            return done({
+              ok: false,
+              reason: 'ambiguous',
+              dns: rawEntries.map((e) => e.dn.toString()),
+            }, client);
+          }
+
+          // Read attributes with attrValue/attrValues, never by property access —
+          // the keys carry whatever casing the directory sent.
+          const entry = { dn: rawEntries[0].dn.toString(), ...entryAttributes(rawEntries[0]) };
+          // Log the DN only. Dumping the whole entry put mail addresses and full group
+          // membership into shared logs for every single login.
+          console.log('[LDAP] Resolved to DN:', entry.dn);
+
+          // 3. Bind AS THAT ENTRY. This is the step that verifies the password.
+          client.bind(entry.dn, password, (err) => {
+            if (err) {
+              console.log('[LDAP] User password authentication failed:', err.message);
+              return done({ ok: false, reason: 'bad_password' }, client);
+            }
+            return done({ ok: true, entry }, client);
+          });
+        });
+      });
+    });
+  });
+}
+
 module.exports = {
+  verifyLdapCredentials,
   escapeLdapFilterValue,
   buildUserSearchFilter,
   createLdapClient,

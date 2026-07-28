@@ -17,6 +17,15 @@ const db = require('../db');
 const { get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
 const { isValidEmailAddress, validatePassword, sanitizeText, RESERVED_USERNAMES } = require('../user-rules');
+// Required as MODULES, not destructured. The mapping below — which LDAP outcome
+// becomes "wrong password" and which must not — is itself the safety property, so a
+// test has to be able to stub these and observe it. A destructured binding is
+// captured at load time and cannot be intercepted: the stub installs, is never
+// called, and the assertion runs against whatever the real directory did. That is
+// the silent false pass CLAUDE.md documents, and it has already bitten this file once.
+const ldapHelpers = require('../ldap-helpers');
+// settings-store direct, not services/settings: this needs the UNMASKED bindPass.
+const settingsStore = require('../settings-store');
 
 
 // Where a user's notifications GO. The user's own setting, on My Account — never an
@@ -267,25 +276,29 @@ async function create(fields) {
 // Re-verify a password for an ALREADY-AUTHENTICATED account.
 //
 // This is the "sudo mode" check: minting a personal access token from the browser
-// must cost more than holding a session cookie, because a stolen 12-hour session
-// would otherwise be upgradeable into a credential that never expires and cannot be
-// read back after it is created. GitHub and GitLab both gate token creation this way.
+// must cost more than holding a session cookie, because a stolen session would
+// otherwise be upgradeable into a credential that never expires and cannot be read
+// back after it is created. GitHub and GitLab both gate token creation this way.
 //
-// LOCAL ACCOUNTS ONLY, and the refusal for LDAP accounts is deliberate rather than a
-// gap. Verifying a directory password means resolve-the-DN-then-bind-as-the-user,
-// which is steps 1-3 of POST /api/auth/login — a route carrying three separately
-// documented authentication bypasses in its history, two of them in exactly that
-// search-result handling. A second copy of it here would be a second thing to get
-// right forever, and this codebase has repeatedly paid for duplicated logic drifting
-// (the release sweep reached four copies; the metadata refresh, five).
+// BOTH ORIGINS. A local account is a bcrypt comparison against `users.password`; a
+// directory account has NULL there by design — the password lives in the directory
+// and never touches this database — so it is verified by binding to the directory as
+// that user, through the SAME ldap-helpers#verifyLdapCredentials the login route
+// calls. There is one implementation of that sequence, not two.
 //
-// So an LDAP account is told to use create-api-token.js on the server, which needs
-// shell access — a higher bar than the browser, not a lower one. This FAILS CLOSED:
-// the alternative shape, "skip the check when we cannot perform it", would silently
-// remove the control for precisely the accounts that are domain identities.
+// An earlier version refused directory accounts outright rather than write a second
+// copy of the bind. That was the right instinct about duplication and the wrong
+// answer for the user: it made the feature unavailable to every domain identity —
+// which, on an LDAP-backed instance, is everyone. Extracting the check served both.
+//
+// The group check is deliberately NOT repeated here. This proves knowledge of a
+// password; it does not re-decide authorization, which is re-read from `users` on
+// every request and cannot be widened by minting a token (services/auth.js applies
+// the scope floor from that same row).
 //
 // Returns a discriminated result rather than a boolean so the adapter can tell "wrong
-// password" from "cannot check here" — they are different answers to the caller.
+// password" from "the directory could not be reached" — a caller who mistyped and a
+// caller whose directory is down need different answers.
 async function verifyPassword(userId, password) {
   if (typeof password !== 'string' || password === '') {
     return { ok: false, reason: 'missing' };
@@ -296,13 +309,42 @@ async function verifyPassword(userId, password) {
   // the silent false pass CLAUDE.md documents. It happened here on the first run:
   // the suite reached the live host and failed with ENOTFOUND rather than lying, but
   // only because there was no database to reach.
-  const row = await db.promises.get('SELECT password, origin FROM users WHERE id = ?', [userId]);
+  const row = await db.promises.get('SELECT username, password, origin FROM users WHERE id = ?', [userId]);
   if (!row) return { ok: false, reason: 'no_such_user' };
-  // The column is NULL for directory accounts. Checked before bcrypt.compare, which
-  // rejects with "Illegal arguments" on a null hash — an unhandled rejection there
-  // takes the process down under Node's default --unhandled-rejections=throw.
+  // No local hash means a directory account: ask the directory. Checked before
+  // bcrypt.compare, which rejects with "Illegal arguments" on a null hash — an
+  // unhandled rejection there takes the process down under Node's default
+  // --unhandled-rejections=throw.
   if (!row.password || typeof row.password !== 'string') {
-    return { ok: false, reason: 'not_local', origin: row.origin || 'ldap' };
+    // `.settings`, NOT the return value. readSettings() answers
+    // { settings, degraded } — reading `.ldap` off the wrapper gives undefined, which
+    // silently became "no directory configured" and refused every directory user with
+    // a 503. It fails CLOSED, so it presented as a directory outage rather than as a
+    // bug here, and the unit test agreed with it because the stub copied the same
+    // wrong shape. A live login is what caught it.
+    //
+    // A DEGRADED read lands here too, as EMPTY_SETTINGS: no url, no bindDn, so the
+    // completeness test below refuses. That is the right answer for both — "the
+    // configuration cannot be read" and "there is no directory" are equally
+    // unverifiable from here, and both are the administrator's to fix.
+    const { settings } = settingsStore.readSettings();
+    const ldapSettings = settings.ldap || {};
+    // Same completeness test the login route applies. Without a service account there
+    // is no way to resolve the username to a DN, so there is nothing to bind as.
+    const configured = ['url', 'base', 'bindDn', 'bindPass']
+      .every((k) => typeof ldapSettings[k] === 'string' && ldapSettings[k].trim() !== '');
+    if (!configured) {
+      // An account with no local password on an instance with no directory cannot
+      // authenticate at all. Fails closed and says which it is.
+      return { ok: false, reason: 'no_directory', origin: row.origin || 'ldap' };
+    }
+    const result = await ldapHelpers.verifyLdapCredentials(ldapSettings, row.username, password);
+    if (result.ok) return { ok: true };
+    // 'unreachable' and 'ambiguous' are NOT "wrong password" and must not be reported
+    // as one: the first is an outage the user cannot fix by retyping, and the second
+    // is a directory misconfiguration that the login route refuses outright.
+    if (result.reason === 'bad_password') return { ok: false, reason: 'wrong_password' };
+    return { ok: false, reason: 'directory_' + result.reason, origin: row.origin || 'ldap' };
   }
   const valid = await bcrypt.compare(password, row.password);
   return valid ? { ok: true } : { ok: false, reason: 'wrong_password' };

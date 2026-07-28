@@ -52,11 +52,6 @@ export default function ApiDocsPage() {
           user-management, settings and jobs operations.
         </p>
         <p className="api-docs-hint">
-          If your account signs in through a directory, the browser cannot verify your
-          password — mint the token on the server instead:
-          <code className="api-docs-cmd">docker compose exec backend node create-api-token.js &lt;user&gt; &quot;name&quot; library</code>
-        </p>
-        <p className="api-docs-hint">
           The older <strong>/api</strong> surface — the one this web app itself uses — is frozen
           and deliberately has no specification. Generating a client from it would produce one
           carrying three naming conventions and a degradation flag hidden in a header.

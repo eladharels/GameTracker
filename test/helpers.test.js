@@ -1696,6 +1696,18 @@ checkAsync('a non-string expiresAt is REFUSED, not coerced into a dead token', a
 });
 
 console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
+  check('readSettings() really does return { settings, degraded }', () => {
+    // The stubs below imitate this shape. When they imitated it WRONGLY — returning
+    // the settings object bare — verifyPassword read `.ldap` off the wrapper, got
+    // undefined, and refused every directory user with a 503 while these tests stayed
+    // green. A stub is only as good as the contract it copies, so the contract is
+    // asserted against the real module here.
+    const real = require('../settings-store').readSettings();
+    assert.ok(Object.hasOwn(real, 'settings'), 'readSettings() no longer returns a .settings wrapper');
+    assert.ok(Object.hasOwn(real, 'degraded'), 'readSettings() no longer reports .degraded');
+    assert.strictEqual(typeof real.settings, 'object');
+  });
+
 {
   const dbMod = require('../db');
   const bcryptLib = require('bcryptjs');
@@ -1716,17 +1728,69 @@ console.log('users.verifyPassword (sudo mode for minting a token from the browse
     });
   });
 
-  checkAsync('a NULL password never reaches bcrypt, and never passes', async () => {
+  checkAsync('a NULL password never reaches bcrypt', async () => {
     // Directory accounts have no local hash. bcrypt.compare REJECTS on a null hash
     // rather than returning false — and an unhandled rejection in the route's promise
     // chain takes the process down under Node's default --unhandled-rejections=throw.
-    // The refusal is also the control: "cannot verify" must not degrade to "verified".
-    for (const stored of [null, undefined, '', 0, {}]) {
-      await withRow({ password: stored, origin: 'ldap' }, async () => {
-        const out = await usersService.verifyPassword(1, 'anything at all');
-        assert.strictEqual(out.ok, false, `a stored password of ${JSON.stringify(stored)} was accepted`);
-        assert.strictEqual(out.reason, 'not_local');
-      });
+    const ldapHelpers = require('../ldap-helpers');
+    const settingsStore = require('../settings-store');
+    const realRead = settingsStore.readSettings;
+    const realVerify = ldapHelpers.verifyLdapCredentials;
+    settingsStore.readSettings = () => ({ settings: { ldap: {} }, degraded: false });
+    ldapHelpers.verifyLdapCredentials = async () => { throw new Error('must not be called'); };
+    try {
+      for (const stored of [null, undefined, '', 0, {}]) {
+        await withRow({ username: 'u', password: stored, origin: 'ldap' }, async () => {
+          const out = await usersService.verifyPassword(1, 'anything at all');
+          assert.strictEqual(out.ok, false, `a stored password of ${JSON.stringify(stored)} was accepted`);
+          // No local hash AND no directory to ask: fails closed, and says which.
+          assert.strictEqual(out.reason, 'no_directory');
+        });
+      }
+    } finally {
+      settingsStore.readSettings = realRead;
+      ldapHelpers.verifyLdapCredentials = realVerify;
+    }
+  });
+
+  checkAsync('a directory account is verified against the DIRECTORY, and the outcomes are not collapsed', async () => {
+    // The mapping is the safety property. 'unreachable' is an outage the user cannot
+    // fix by retyping and 'ambiguous' is a directory misconfiguration the login route
+    // refuses outright — reporting either as "wrong password" would send the user to
+    // debug their own typing while the real fault sits elsewhere. Only a rejected bind
+    // is a wrong password.
+    const ldapHelpers = require('../ldap-helpers');
+    const settingsStore = require('../settings-store');
+    const realRead = settingsStore.readSettings;
+    const realVerify = ldapHelpers.verifyLdapCredentials;
+    settingsStore.readSettings = () => ({
+      settings: { ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' } },
+      degraded: false,
+    });
+    const cases = [
+      [{ ok: true, entry: { dn: 'uid=jane' } }, { ok: true }],
+      [{ ok: false, reason: 'bad_password' }, { ok: false, reason: 'wrong_password' }],
+      [{ ok: false, reason: 'unreachable' }, { ok: false, reason: 'directory_unreachable' }],
+      [{ ok: false, reason: 'ambiguous', dns: ['a', 'b'] }, { ok: false, reason: 'directory_ambiguous' }],
+      [{ ok: false, reason: 'not_found' }, { ok: false, reason: 'directory_not_found' }],
+    ];
+    try {
+      for (const [ldapResult, expected] of cases) {
+        let sawUsername = null;
+        ldapHelpers.verifyLdapCredentials = async (_settings, username) => {
+          sawUsername = username; return ldapResult;
+        };
+        await withRow({ username: 'jane', password: null, origin: 'ldap' }, async () => {
+          const out = await usersService.verifyPassword(1, 'typed-password');
+          assert.strictEqual(out.ok, expected.ok, `${ldapResult.reason}: ok mismatch`);
+          if (expected.reason) assert.strictEqual(out.reason, expected.reason);
+          // The DIRECTORY username comes from the row, never from the caller.
+          assert.strictEqual(sawUsername, 'jane');
+        });
+      }
+    } finally {
+      settingsStore.readSettings = realRead;
+      ldapHelpers.verifyLdapCredentials = realVerify;
     }
   });
 
@@ -1760,9 +1824,14 @@ console.log('users.verifyPassword (sudo mode for minting a token from the browse
     await withRow({ password: hash, origin: 'local' }, async () => {
       assert.strictEqual((await usersService.verifyPassword(1, 'nope')).reason, 'wrong_password');
     });
-    await withRow({ password: null, origin: 'ldap' }, async () => {
-      assert.strictEqual((await usersService.verifyPassword(1, 'nope')).reason, 'not_local');
-    });
+    const settingsStore = require('../settings-store');
+    const realRead = settingsStore.readSettings;
+    settingsStore.readSettings = () => ({ settings: { ldap: {} }, degraded: false });
+    try {
+      await withRow({ username: 'u', password: null, origin: 'ldap' }, async () => {
+        assert.strictEqual((await usersService.verifyPassword(1, 'nope')).reason, 'no_directory');
+      });
+    } finally { settingsStore.readSettings = realRead; }
   });
 }
 

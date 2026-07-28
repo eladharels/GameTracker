@@ -74,9 +74,13 @@ GameTracker/
 │                                   #   (GITIGNORED — holds live credentials)
 ├── db.js                           # Postgres pool + node-sqlite3-compatible shim
 ├── ldap-helpers.js                 # RFC 4515 filter escaping, the error-listening ldapjs
-│                                   #   client, and case-insensitive search-entry attribute
-│                                   #   access. Shared by index.js and the operator scripts —
-│                                   #   never hand-roll an LDAP filter or client anywhere else
+│                                   #   client, case-insensitive search-entry attribute
+│                                   #   access, and verifyLdapCredentials() — the ONE
+│                                   #   place that binds as a USER to check a password.
+│                                   #   Everything else binds as the service account to
+│                                   #   READ. Shared by index.js and the operator scripts —
+│                                   #   never hand-roll an LDAP filter, client or bind
+│                                   #   anywhere else
 ├── igdb-helpers.js                 # escapeIgdbSearch() — the ONLY way to interpolate a
 │                                   #   value into an APIcalypse `search "..."` literal
 ├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
@@ -412,6 +416,16 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 
 - **Local auth**: bcrypt-hashed passwords stored in Postgres
 - **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure
+- **Sudo mode**: minting a PAT from the browser re-checks the password, because a token
+  outlives the 12-hour session that created it. Local accounts verify with bcrypt; directory
+  accounts verify with a real LDAP bind through `ldap-helpers.js#verifyLdapCredentials` — the
+  SAME function the login route calls, so there is one implementation of resolve-DN-then-bind
+  and not two. Rate limited per user id, in its own key namespace so it cannot consume the
+  login budget. A directory FAULT (unreachable, ambiguous, unconfigured) answers 503 and never
+  "incorrect password": the user cannot fix an outage by retyping. **This does not constrain a
+  stolen ADMIN session** — an admin can reset their own password through `PUT /api/users/:id`
+  without the old one and then mint. That is recorded rather than fixed, because requiring the
+  old password there would add a required field to a frozen v1 route.
 - **Personal access tokens (PATs)**: for scripts and the planned MCP, so nothing has to store the
   owner's password. Opaque `gt_pat_<base64url>`, SHA-256 hashed in `api_tokens` (never stored in
   plaintext — a database dump yields no working credentials), revoked by DELETEing one row. Two

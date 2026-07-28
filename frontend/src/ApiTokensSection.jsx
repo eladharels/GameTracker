@@ -278,8 +278,9 @@ export default function ApiTokensSection({ canManageUsers }) {
               onChange={(e) => setPassword(e.target.value)}
             />
             <small>
-              Asked again because a token outlives this browser session. If you sign in
-              through a directory, tokens must be created on the server instead.
+              Asked again because a token outlives this browser session. Directory
+              accounts are checked against the directory, so use the password you sign
+              in with.
             </small>
           </label>
 

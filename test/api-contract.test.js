@@ -311,7 +311,14 @@ checkAsync('an unrecognised failure is a 500 with a fixed message, never the exc
 // this route exists to prevent, so it is asserted against the handler that runs.
 console.log('POST /api/user/me/tokens (sudo mode):');
 
-async function callMintToken(body, { verify, create } = {}) {
+// A DISTINCT user id per call by default. The sudo gate is rate limited on user id
+// and that counter is module state, so reusing one id across these assertions meant
+// the sixth deliberate failure locked out every test after it — which presented as
+// "createToken was never called" three assertions later. Tests that exercise the
+// limiter pass an explicit uid.
+let nextMintUid = 1000;
+
+async function callMintToken(body, { verify, create, uid } = {}) {
   const usersService = require('../services/users');
   const authService = require('../services/auth');
   const realVerify = usersService.verifyPassword;
@@ -325,7 +332,7 @@ async function callMintToken(body, { verify, create } = {}) {
   const res = recordingRes();
   try {
     await handlerFor('post', '/api/user/me/tokens')(
-      { body, user: { id: 7, username: 'someone', can_manage_users: false } }, res);
+      { body, user: { id: uid ?? nextMintUid++, username: 'someone', can_manage_users: false } }, res);
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
   } finally {
@@ -354,14 +361,32 @@ checkAsync('a MISSING password is the same 403 — not a distinguishable answer'
   assert.strictEqual(missing.created + wrong.created, 0);
 });
 
-checkAsync('a directory account is told where to go, and still mints nothing', async () => {
-  const { res, created } = await callMintToken(
-    { name: 'x', password: 'whatever' },
-    { verify: async () => ({ ok: false, reason: 'not_local', origin: 'ldap' }) });
-  assert.strictEqual(res.statusCode, 400);
-  assert.strictEqual(created, 0);
-  assert.match(res.body.error, /create-api-token\.js/,
-    'the LDAP refusal must name the way forward, or it is a dead end');
+checkAsync('a directory FAULT is not reported as a wrong password', async () => {
+  // Directory accounts are now verified by binding to the directory, so these are
+  // reachable outcomes. Reporting an unreachable domain controller as "incorrect
+  // password" sends the user to reset a password that was right all along, and a
+  // misconfigured search base is not something they can fix by retyping either.
+  for (const reason of ['directory_unreachable', 'directory_ambiguous', 'no_directory']) {
+    const { res, created } = await callMintToken(
+      { name: 'x', password: 'whatever' },
+      { verify: async () => ({ ok: false, reason, origin: 'ldap' }) });
+    assert.strictEqual(res.statusCode, 503, `${reason} should be a 503, not a client error`);
+    assert.strictEqual(created, 0, `${reason} minted a token`);
+    assert.doesNotMatch(res.body.error, /password.{0,20}(incorrect|wrong)/i,
+      `${reason} blamed the user's password for a server-side fault`);
+  }
+});
+
+checkAsync('an account the directory does not know is the SAME 403 as a wrong password', async () => {
+  // Deliberately not distinguished: telling a caller that the directory has no such
+  // entry confirms which usernames the directory holds, to anyone with any session.
+  const notFound = await callMintToken({ name: 'x', password: 'w' },
+    { verify: async () => ({ ok: false, reason: 'directory_not_found' }) });
+  const wrong = await callMintToken({ name: 'x', password: 'w' },
+    { verify: async () => ({ ok: false, reason: 'wrong_password' }) });
+  assert.strictEqual(notFound.res.statusCode, wrong.res.statusCode);
+  assert.deepStrictEqual(notFound.res.body, wrong.res.body);
+  assert.strictEqual(notFound.created + wrong.created, 0);
 });
 
 checkAsync('the scope FLOOR comes from the account, never from the body', async () => {
