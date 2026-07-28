@@ -5,6 +5,9 @@
   "description": "MCP server exposing the GameTracker /api/v2 surface to AI agents",
   "main": "server.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node test/tools.test.js"

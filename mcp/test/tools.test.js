@@ -334,6 +334,102 @@ checkAsync('a tool called without a token fails closed, and says why', async () 
     'the no-token message does not explain that the client must supply one');
 });
 
+// --- the runtime the IMAGE ships ---------------------------------------------------
+//
+// This pair exists because the server shipped for a full deploy cycle unable to answer a
+// single MCP call. `initialize` died with `ReferenceError: crypto is not defined`: the
+// SDK's HTTP transport calls the GLOBAL crypto.randomUUID() on every request carrying a
+// JSON-RPC request, and node:18-slim does not expose globalThis.crypto without a flag.
+//
+// Nothing caught it, for two separate reasons, and BOTH needed closing:
+//
+//  1. This suite runs on the CI runner's Node (20), never the image's (18). A handshake
+//     test alone would have passed while production was broken — so the version the
+//     image will actually run is asserted STATICALLY, from the Dockerfile text.
+//  2. The smoke-test stack had no mcp service at all, so the container was never started
+//     in CI, let alone spoken to. That is fixed in docker-compose.test.yml.
+//
+// /health kept returning 200 throughout. Liveness is not readiness for a protocol server.
+
+check('the Dockerfile base image satisfies the engines floor', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+
+  const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+  const from = /^FROM\s+node:(\d+)/m.exec(dockerfile);
+  assert.ok(from, 'no `FROM node:<major>` in the Dockerfile — cannot verify the runtime');
+
+  const engines = require('../package.json').engines?.node;
+  assert.ok(engines, 'package.json declares no engines.node floor');
+  const floor = /(\d+)/.exec(engines);
+  assert.ok(floor, `engines.node is not a comparable version range: ${engines}`);
+
+  assert.ok(Number(from[1]) >= Number(floor[1]),
+    `Dockerfile runs node:${from[1]} but package.json requires node${engines}. `
+    + 'The SDK transport needs globalThis.crypto (Node 19+); below that EVERY MCP '
+    + 'request fails while /health still answers 200.');
+});
+
+checkAsync('a real initialize handshake succeeds over HTTP', async () => {
+  // The end-to-end check the inventory assertions cannot make: definitions can all be
+  // correct while the transport is unable to complete a single exchange. Loopback only —
+  // no backend, no database, no internet, so the suite's scope rule holds.
+  const http = require('http');
+  const { app } = require('../server');
+
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+
+  try {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'gametracker-test', version: '0' },
+      },
+    });
+
+    const res = await new Promise((resolve, reject) => {
+      const req = http.request({
+        host: '127.0.0.1',
+        port: server.address().port,
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: 'Bearer gt_pat_test',
+          // Bare '127.0.0.1' is allowlisted whatever MCP_PORT is, so this needs no
+          // fixed port and cannot collide with anything else on the runner.
+          host: '127.0.0.1',
+        },
+      }, (r) => {
+        let text = '';
+        r.on('data', (c) => { text += c; });
+        r.on('end', () => resolve({ status: r.statusCode, text }));
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+
+    assert.strictEqual(res.status, 200,
+      `handshake did not succeed: HTTP ${res.status} ${res.text.slice(0, 200)}`);
+
+    // The transport answers as SSE when the client accepts it.
+    const payload = JSON.parse(/^data: (.+)$/m.exec(res.text)[1]);
+    assert.ok(!payload.error, `handshake returned an error: ${JSON.stringify(payload.error)}`);
+    assert.strictEqual(payload.result.serverInfo.name, 'gametracker');
+    assert.ok(payload.result.capabilities.tools, 'the server advertised no tools capability');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // --- error mapping ----------------------------------------------------------------
 
 check('the published address is accepted without a second setting', () => {

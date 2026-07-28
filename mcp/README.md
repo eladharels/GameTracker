@@ -106,6 +106,25 @@ gets wrong unaided. Everything else is one call away.
 | `MCP_PUBLIC_HOST` | follows `MCP_BIND` | The address clients use. Compose sets it automatically; you should not need to. |
 | `MCP_ALLOWED_HOSTS` | — | Extra Host header values, comma-separated. Only needed for a DNS name or a reverse proxy. Adds to the defaults. |
 
+## Runtime requirement: Node 20+
+
+The image is `node:22-slim` and `package.json` sets `engines: >=20`. This is a hard
+requirement, not a preference: the MCP SDK's HTTP transport calls the **global**
+`crypto.randomUUID()` on every request carrying a JSON-RPC request, and
+`globalThis.crypto` is only exposed by default from Node 19.
+
+On Node 18 the failure is unusually quiet. `/health` returns 200, the container is
+healthy by every orchestrator's reckoning, and every single MCP call comes back:
+
+```json
+{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error",
+ "data":"ReferenceError: crypto is not defined"},"id":null}
+```
+
+The SDK's own `engines` field says `>=18`, so npm never warns. `mcp/test/tools.test.js`
+asserts the Dockerfile's base image satisfies the floor instead — a static check,
+because the test suite runs on whatever Node the CI runner has, never the image's.
+
 ## Deployment
 
 It ships as its own container in `docker-compose.yaml`, published on `127.0.0.1:3001`

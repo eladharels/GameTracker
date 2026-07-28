@@ -83,6 +83,47 @@ services:
       retries: 12
       start_period: 10s
 
+  # The MCP server was absent from this stack, and that is how it reached production
+  # unable to answer a single call: node:18-slim has no globalThis.crypto, the SDK
+  # transport needs it on every request, and every `initialize` returned a -32700 while
+  # /health cheerfully answered 200. Nothing in CI ever spoke MCP to the container.
+  #
+  # A liveness probe cannot substitute for a protocol exchange, so the smoke test does
+  # a real handshake against this service.
+  mcp:
+    image: local/gametracker-mcp:latest
+    container_name: gametracker-mcp-smoke
+    pull_policy: never
+    ports:
+      - "127.0.0.1:${MCP_TEST_PORT:-3199}:3001"
+    environment:
+      - NODE_ENV=production
+      # Points at the smoke backend. `initialize` never calls it — the handshake is
+      # answered by the transport alone — but a wrong value here would be a misleading
+      # thing to leave in a test stack.
+      - GAMETRACKER_API_URL=http://backend:3000/api/v2
+      - MCP_PORT=3001
+      - MCP_BIND=0.0.0.0
+      # The host port (3199) differs from the container port (3001), so the Host header
+      # a curl sends is `127.0.0.1:3199` — which MCP_PUBLIC_HOST cannot derive, since it
+      # only ever appends the CONTAINER port. This is the case the explicit list is for.
+      - MCP_ALLOWED_HOSTS=127.0.0.1:${MCP_TEST_PORT:-3199},localhost:${MCP_TEST_PORT:-3199}
+    depends_on:
+      backend:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3001/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   frontend:
     image: local/gametracker-frontend:latest
     container_name: gametracker-frontend-smoke

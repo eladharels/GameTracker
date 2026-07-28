@@ -412,6 +412,7 @@ jobs:
     env:
       BACKEND_TEST_PORT: 3099
       FRONTEND_TEST_PORT: 8099
+      MCP_TEST_PORT: 3199
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -541,6 +542,64 @@ jobs:
           }
           rm -f /tmp/smoke-404.json
           echo "[smoke] API 404 handling check PASSED"
+
+      # A real MCP handshake against the real container, on the image's own Node.
+      #
+      # This is the check that was missing. The MCP server shipped a full deploy cycle
+      # answering `ReferenceError: crypto is not defined` to every call, and nothing
+      # noticed: `npm test` runs on the RUNNER's Node 20 where globalThis.crypto exists,
+      # the image ran node:18-slim where it does not, and the container was not in this
+      # stack at all. /health returned 200 the whole time — which is exactly why a
+      # liveness probe is not enough for a protocol server. Speak the protocol.
+      #
+      # The token is a fake. `initialize` is answered by the transport and never reaches
+      # the API, so a valid one would prove nothing extra; what is under test is that the
+      # server can complete an exchange at all.
+      - name: Verify the MCP server completes an initialize handshake
+        run: |
+          set -euo pipefail
+          # Liveness first, so a slow start is reported as a slow start rather than as a
+          # protocol failure. It proves nothing on its own — that is the entire lesson
+          # here — but it makes the handshake result below unambiguous.
+          ELAPSED=0
+          until curl -sf "http://127.0.0.1:${{ env.MCP_TEST_PORT }}/health" > /dev/null 2>&1; do
+            if [ "$ELAPSED" -ge 30 ]; then
+              echo "[smoke] ERROR: MCP container never became reachable"
+              docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+              exit 1
+            fi
+            sleep 3
+            ELAPSED=$((ELAPSED + 3))
+          done
+          echo "[smoke] MCP reachable after ${ELAPSED}s"
+
+          BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+          STATUS=$(curl -o /tmp/smoke-mcp.txt -sw "%{http_code}" \
+            -X POST "http://127.0.0.1:${{ env.MCP_TEST_PORT }}/mcp" \
+            -H 'content-type: application/json' \
+            -H 'accept: application/json, text/event-stream' \
+            -H 'authorization: Bearer gt_pat_smoke-test-not-a-real-token' \
+            -d "$BODY")
+          echo "[smoke] MCP initialize status: $STATUS"
+          echo "[smoke] MCP initialize body: $(head -c 400 /tmp/smoke-mcp.txt)"
+          [ "$STATUS" -eq 200 ] || {
+            echo "[smoke] ERROR: MCP initialize returned $STATUS, expected 200."
+            docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+            exit 1
+          }
+          # A JSON-RPC error is delivered with HTTP 200 in some paths, so the status
+          # code alone would not have caught the crypto failure. Assert the RESULT.
+          grep -q '"serverInfo"' /tmp/smoke-mcp.txt && grep -q '"name":"gametracker"' /tmp/smoke-mcp.txt || {
+            echo "[smoke] ERROR: MCP initialize did not return a serverInfo result."
+            docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+            exit 1
+          }
+          grep -q '"error"' /tmp/smoke-mcp.txt && {
+            echo "[smoke] ERROR: MCP initialize returned a JSON-RPC error."
+            exit 1
+          } || true
+          rm -f /tmp/smoke-mcp.txt
+          echo "[smoke] MCP handshake check PASSED"
 
       - name: Tear down smoke test stack
         if: always()
