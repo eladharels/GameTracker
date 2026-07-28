@@ -1,0 +1,18 @@
+{
+  "name": "gametracker-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MCP server exposing the GameTracker /api/v2 surface to AI agents",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/tools.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "axios": "^1.7.7",
+    "express": "^5.0.1",
+    "zod": "^3.23.8"
+  }
+}

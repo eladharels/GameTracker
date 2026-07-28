@@ -95,6 +95,50 @@ services:
       - /app/cache
     restart: unless-stopped
 
+  # The MCP server: a protocol translator between AI clients and /api/v2.
+  #
+  # A SEPARATE CONTAINER, deliberately. It is the least-trusted consumer in this design
+  # — services/auth.js says so in the comment explaining why token scopes may only ever
+  # narrow — and running it inside the backend would give it the database, settings.json
+  # and the LDAP bind password by proximity. Here it has a network route to `backend`
+  # and nothing else: no volumes, no database, no secrets, no writable path.
+  #
+  # It holds NO CREDENTIALS. Every request must carry its own
+  # `Authorization: Bearer gt_pat_...`, which it forwards to the API unchanged, so
+  # authorization stays the backend's and reaching this port grants nothing on its own.
+  mcp:
+    image: local/gametracker-mcp:latest
+    pull_policy: never
+    ports:
+      # 127.0.0.1 by DEFAULT, unlike the backend. This is an agent-facing surface and
+      # the common case is an MCP client on this same host. To reach it from elsewhere,
+      # set MCP_BIND=0.0.0.0 and put TLS in front of it — a personal access token would
+      # otherwise cross the network in a cleartext header.
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-3001}:3001"
+    environment:
+      - NODE_ENV=production
+      # The compose SERVICE name, not the published port: this talks to the backend
+      # over the internal network and never leaves it.
+      - GAMETRACKER_API_URL=http://backend:3000/api/v2
+      - MCP_PORT=3001
+      - MCP_BIND=0.0.0.0
+    depends_on:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    # Nothing to write. It reads no config file, keeps no cache and stores no state —
+    # /tmp is here only because Node may want it.
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
   frontend:
     image: local/gametracker-frontend:latest
     pull_policy: never

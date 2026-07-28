@@ -142,6 +142,19 @@ jobs:
       - name: Lint backend
         run: npm run lint
 
+      # The MCP server is a separate package with its own lockfile, so it gets its own
+      # install. Its suite pins the exposed TOOL INVENTORY — every tool there is
+      # reachable by an AI agent acting on a real library, so adding one must be a
+      # deliberate edit rather than a side effect — and asserts that the server holds
+      # no credential of its own.
+      - name: Install MCP dependencies
+        run: npm ci --ignore-scripts
+        working-directory: ./mcp
+
+      - name: Run MCP unit tests
+        run: npm test
+        working-directory: ./mcp
+
       - name: Install frontend dependencies
         working-directory: ./frontend
         run: npm ci
@@ -166,9 +179,11 @@ jobs:
     env:
       BACKEND_IMAGE_BASE: local/gametracker-backend
       FRONTEND_IMAGE_BASE: local/gametracker-frontend
+      MCP_IMAGE_BASE: local/gametracker-mcp
     outputs:
       backend_image: ${{ steps.image-tags.outputs.backend_image }}
       frontend_image: ${{ steps.image-tags.outputs.frontend_image }}
+      mcp_image: ${{ steps.image-tags.outputs.mcp_image }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -183,6 +198,7 @@ jobs:
         run: |
           echo "backend_image=${BACKEND_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
           echo "frontend_image=${FRONTEND_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
+          echo "mcp_image=${MCP_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
 
       - name: Build backend Docker image
         run: |
@@ -196,6 +212,12 @@ jobs:
           docker build \
             -t ${FRONTEND_IMAGE_BASE}:latest \
             ./frontend
+
+      - name: Build MCP Docker image
+        run: |
+          docker build \
+            -t ${MCP_IMAGE_BASE}:latest \
+            ./mcp
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 5: Container Scan — Backend / API (Trivy)
@@ -308,6 +330,63 @@ jobs:
             --format table \
             --ignorefile .trivyignore \
             ${{ needs.build-images.outputs.frontend_image }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 6b: Container Scan — MCP (Trivy)
+  # The MCP image is built from the same node:18-slim base and ships to production
+  # alongside the others, so it is scanned on the same terms. An image in the
+  # deployment that no scan job covers is a hole the pipeline would report as green.
+  # ─────────────────────────────────────────────────────────────────────────────
+  trivy-mcp:
+    name: Container Scan — MCP (Trivy)
+    runs-on: self-hosted
+    continue-on-error: false
+    needs: build-images
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Pinned release tarball, verified before use. The previous version piped
+      # raw.githubusercontent.com/.../main/contrib/install.sh into `sudo sh` — a
+      # mutable ref executed as root on the same host that runs production and holds
+      # JWT_SECRET. It was also guarded by `if ! command -v trivy`, so on a
+      # persistent runner anyone who could drop a stub at /usr/local/bin/trivy would
+      # permanently green-light the scan while CI still reported success.
+      - name: Install Trivy (pinned)
+        env:
+          # Must be a REAL release tag — verify at github.com/aquasecurity/trivy/releases
+          # before changing. The asset is trivy_<ver>_Linux-64bit.tar.gz (capital L, hyphen).
+          # 0.70.0 is what this runner already has, so the pin normally downloads nothing.
+          TRIVY_VERSION: "0.70.0"
+        run: |
+          set -euo pipefail
+          if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
+            echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
+            curl -sSfL --proto '=https' --tlsv1.2 \
+              "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+              -o /tmp/trivy.tar.gz
+            tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+            sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+            rm -f /tmp/trivy.tar.gz /tmp/trivy
+          fi
+          # Fail closed if the binary on PATH is not the pinned version.
+          trivy --version
+          trivy --version | head -1 | grep -q "${TRIVY_VERSION}"
+
+      - name: Scan MCP image
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: "true"
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --no-progress \
+            --format table \
+            --ignorefile .trivyignore \
+            ${{ needs.build-images.outputs.mcp_image }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 7: Smoke Test (docker compose)
@@ -483,7 +562,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 8: Deploy to Production
-  # ONLY runs when ALL 7 upstream jobs pass.
+  # ONLY runs when ALL 8 upstream jobs pass.
   # Uses docker image prune -f (dangling only) to preserve layer cache.
   # ─────────────────────────────────────────────────────────────────────────────
   deploy:
@@ -497,10 +576,12 @@ jobs:
       - build-images
       - trivy-api
       - trivy-web
+      - trivy-mcp
       - smoke-test
     env:
       BACKEND_IMAGE_BASE: local/gametracker-backend
       FRONTEND_IMAGE_BASE: local/gametracker-frontend
+      MCP_IMAGE_BASE: local/gametracker-mcp
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

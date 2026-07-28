@@ -1,0 +1,7 @@
+# Nothing here holds secrets — this service deliberately has no credentials — but the
+# build context should still be only what runs.
+node_modules
+npm-debug.log*
+test
+probe-e2e.js
+.eslintcache

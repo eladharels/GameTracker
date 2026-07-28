@@ -202,6 +202,18 @@ GameTracker/
 │   ├── eslint.config.js
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
+├── mcp/                            # The MCP server — a SEPARATE container and a separate
+│                                   #   npm package. Exposes 14 task-shaped tools over
+│                                   #   /api/v2 for AI clients. HOLDS NO CREDENTIALS: every
+│                                   #   request must carry its own Bearer PAT, which it
+│                                   #   forwards unchanged, so authorization stays the
+│                                   #   backend's and reaching the port grants nothing.
+│                                   #   Stateless — a fresh McpServer per request, token
+│                                   #   closed over, nothing retained between callers.
+│                                   #   DELIBERATELY EXCLUDES user management, settings,
+│                                   #   token administration and instance-wide jobs, even
+│                                   #   with an admin token. Tool inventory is PINNED in
+│                                   #   mcp/test/tools.test.js like the route tiers are
 ├── openapi/
 │   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 34 operations, ALL of them
 │                                   #   now live (`x-implemented: true`). It is the SOURCE for
@@ -652,6 +664,7 @@ deploy  (needs: ALL 7 upstream jobs)
 |---|---|
 | Backend | `no-new-privileges:true`, runs as `node` user (UID 1000) |
 | Frontend | `no-new-privileges:true`, `read_only: true`, tmpfs for `/tmp`, `/var/cache/nginx`, `/var/run`, runs as `nginx` user via `nginxinc/nginx-unprivileged:alpine` |
+| MCP | `no-new-privileges:true`, `read_only: true`, tmpfs for `/tmp`, runs as `node` user. No volumes, no database, no secrets — it needs none of them |
 | Backend read_only | **Enabled.** SQLite's need for a writable `/app/` was the only blocker. Bind-mounted files (`settings.json`, `sent_notifications.json`) stay writable under `read_only`; the ephemeral CrackWatch and system-status caches live on a tmpfs at `/app/cache` via `CACHE_DIR` |
 | Database | `postgres-gametracker` (postgres:16-alpine). Port **not published**; backend gated on `condition: service_healthy`. Named volume `gametracker-pgdata` |
 
