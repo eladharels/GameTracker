@@ -605,17 +605,25 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          MCP_BIND: ${{ vars.MCP_BIND }}
-          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS }}
+          MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
+          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
         run: |
           # NEVER add --volumes here. That would delete gametracker-pgdata,
           # which is now the production database.
           docker compose -f docker-compose.yaml down || true
 
       - name: Start production stack
-        # MCP_BIND / MCP_ALLOWED_HOSTS are repository VARIABLES, not secrets — a LAN
-        # address is not a credential, and a secret would be masked in the logs where
-        # the whole point is being able to read back which interface was published.
+        # MCP_BIND / MCP_ALLOWED_HOSTS are repository VARIABLES by preference — a LAN
+        # address is not a credential, and a secret is masked in the logs where the
+        # whole point is being able to read back which interface was published.
+        #
+        # `vars.X || secrets.X` because the two live on adjacent tabs of the same
+        # settings page under near-identical forms, and putting it on the wrong one
+        # fails SILENTLY: `vars.MCP_BIND` resolves to empty, compose takes its
+        # loopback default, every job goes green and the only symptom is a port
+        # binding nobody looks at. That already cost one full deploy cycle. Reading
+        # both means the setting works wherever it was put; the log line below still
+        # says which interface won, and prints `***` if it came from a secret.
         #
         # They must be HERE and not only in a host-side `.env`: this job runs
         # actions/checkout into a fresh workspace, so compose reads the checked-out
@@ -632,8 +640,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          MCP_BIND: ${{ vars.MCP_BIND }}
-          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS }}
+          MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
+          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
         run: |
           docker compose -f docker-compose.yaml up -d
           # Print what MCP was actually published on. `docker ps` after a deploy is the
@@ -654,8 +662,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          MCP_BIND: ${{ vars.MCP_BIND }}
-          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS }}
+          MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
+          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
         run: |
           echo "[deploy] Waiting for production backend to become healthy..."
           MAX_WAIT=90
