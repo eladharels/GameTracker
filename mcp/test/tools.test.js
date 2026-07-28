@@ -336,6 +336,33 @@ checkAsync('a tool called without a token fails closed, and says why', async () 
 
 // --- error mapping ----------------------------------------------------------------
 
+check('the published address is accepted without a second setting', () => {
+  // Binding to a LAN address publishes the port there, but the CONTAINER only ever
+  // binds 0.0.0.0 — so the Host header names an address this process never saw, and
+  // the DNS-rebinding check refuses a legitimate client with an error that points at
+  // neither of the two addresses involved. Deriving it means one variable does the job.
+  const { execFileSync } = require('child_process');
+  const read = (env) => execFileSync(process.execPath,
+    ['-e', 'const s=require("./server.js");console.log(JSON.stringify(s.ALLOWED_HOSTS))'],
+    { cwd: require('path').join(__dirname, '..'), env: { ...process.env, ...env } }).toString();
+
+  const lan = JSON.parse(read({ MCP_PUBLIC_HOST: '192.168.1.30', MCP_PORT: '3001' }));
+  assert.ok(lan.includes('192.168.1.30:3001'), `published address not accepted: ${lan}`);
+  assert.ok(lan.includes('192.168.1.30'), 'published address not accepted without the port');
+  // Localhost must survive it, or setting one address locks out same-host clients.
+  assert.ok(lan.includes('127.0.0.1:3001') && lan.includes('localhost:3001'),
+    'setting a published address dropped the localhost defaults');
+
+  // 0.0.0.0 is not a Host anything sends; adding it would be noise.
+  const wild = JSON.parse(read({ MCP_PUBLIC_HOST: '0.0.0.0', MCP_PORT: '3001' }));
+  assert.ok(!wild.includes('0.0.0.0'), '0.0.0.0 was added as an accepted Host');
+
+  // The explicit list ADDS rather than replaces, so it cannot lock out localhost.
+  const named = JSON.parse(read({ MCP_ALLOWED_HOSTS: 'games.example.com', MCP_PORT: '3001' }));
+  assert.ok(named.includes('games.example.com'), 'the explicit allowlist was ignored');
+  assert.ok(named.includes('localhost:3001'), 'the explicit allowlist replaced the defaults');
+});
+
 console.log('error mapping (what the model is told to do next):');
 
 check('401 and 403 are DIFFERENT answers', () => {

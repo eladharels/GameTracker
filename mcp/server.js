@@ -33,11 +33,30 @@ const PORT = Number(process.env.MCP_PORT || 3001);
 // Set MCP_BIND=0.0.0.0 to publish it, and put TLS in front of it when you do.
 const BIND = process.env.MCP_BIND || '127.0.0.1';
 
-// Host header values this server will answer to. Defaults cover the local cases; set
-// MCP_ALLOWED_HOSTS when publishing it under a name.
-const ALLOWED_HOSTS = (process.env.MCP_ALLOWED_HOSTS
-  || `127.0.0.1:${PORT},localhost:${PORT},127.0.0.1,localhost,mcp:${PORT},mcp`)
-  .split(',').map((h) => h.trim()).filter(Boolean);
+// Host header values this server will answer to.
+//
+// MCP_PUBLIC_HOST is the address CLIENTS use, which inside a container is NOT the
+// address this process binds to: compose publishes the port on a host interface and
+// the container itself always binds 0.0.0.0. So an operator who sets MCP_BIND to a LAN
+// address gets a Host header this server has never heard of, and the DNS-rebinding
+// check below rejects a perfectly legitimate client with an error that says nothing
+// about which of the two addresses is wrong.
+//
+// Deriving it from the published address means one setting does the whole job.
+// MCP_ALLOWED_HOSTS remains for the cases this cannot infer — a DNS name, a reverse
+// proxy in front, several addresses — and ADDS to the defaults rather than replacing
+// them, so setting it cannot accidentally lock out localhost.
+const PUBLIC_HOST = (process.env.MCP_PUBLIC_HOST || '').trim();
+
+const ALLOWED_HOSTS = [
+  `127.0.0.1:${PORT}`, '127.0.0.1', `localhost:${PORT}`, 'localhost',
+  // The compose service name, for a client on the same Docker network.
+  `mcp:${PORT}`, 'mcp',
+  // Whatever the port is published on, with and without the port suffix — a client
+  // may send either depending on whether the port is the scheme default.
+  ...(PUBLIC_HOST && PUBLIC_HOST !== '0.0.0.0' ? [`${PUBLIC_HOST}:${PORT}`, PUBLIC_HOST] : []),
+  ...(process.env.MCP_ALLOWED_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean),
+];
 
 const SERVER_INFO = {
   name: 'gametracker',
@@ -170,10 +189,11 @@ app.delete('/mcp', noSessions);
 if (require.main === module) {
   app.listen(PORT, BIND, () => {
     console.log(`[MCP] gametracker-mcp listening on ${BIND}:${PORT}`);
+    console.log(`[MCP] Accepting Host: ${ALLOWED_HOSTS.join(', ')}`);
     console.log(`[MCP] Forwarding to ${api.API_BASE}`);
     console.log(`[MCP] ${TOOLS.length} tools registered. This server holds no credentials; `
       + 'each request must carry its own Authorization: Bearer gt_pat_...');
   });
 }
 
-module.exports = { app, serverForToken, tokenFromRequest, INSTRUCTIONS, SERVER_INFO };
+module.exports = { app, serverForToken, tokenFromRequest, INSTRUCTIONS, SERVER_INFO, ALLOWED_HOSTS };

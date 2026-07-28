@@ -102,8 +102,9 @@ gets wrong unaided. Everything else is one call away.
 |---|---|---|
 | `GAMETRACKER_API_URL` | `http://backend:3000/api/v2` | must include `/api/v2` |
 | `MCP_PORT` | `3001` | |
-| `MCP_BIND` | `127.0.0.1` | `0.0.0.0` in the container; compose publishes to loopback |
-| `MCP_ALLOWED_HOSTS` | localhost/mcp variants | Host header allowlist. Set this when publishing under a name. |
+| `MCP_BIND` | `127.0.0.1` | Host interface the port is published on. Set it to a LAN address to reach the server from another machine. |
+| `MCP_PUBLIC_HOST` | follows `MCP_BIND` | The address clients use. Compose sets it automatically; you should not need to. |
+| `MCP_ALLOWED_HOSTS` | — | Extra Host header values, comma-separated. Only needed for a DNS name or a reverse proxy. Adds to the defaults. |
 
 ## Deployment
 
@@ -111,8 +112,25 @@ It ships as its own container in `docker-compose.yaml`, published on `127.0.0.1:
 by default. It talks to `backend:3000` over the internal network and has no volumes, no
 database access and no secrets.
 
-To reach it from another machine, set `MCP_BIND=0.0.0.0` — **and put TLS in front of
-it**, or personal access tokens will cross the network in a cleartext header.
+### Reaching it from another machine
+
+Set `MCP_BIND` to the address it should answer on, in `.env`:
+
+```env
+MCP_BIND=192.168.1.30
+```
+
+then `docker compose up -d mcp`. Clients use `http://192.168.1.30:3001/mcp`.
+
+That is the only variable needed. The server refuses Host headers it does not
+recognise — DNS-rebinding protection — and compose derives the published address from
+`MCP_BIND` so the address you just set is accepted. Use `0.0.0.0` for every interface,
+or `MCP_ALLOWED_HOSTS` if clients reach it by a DNS name or through a proxy.
+
+Check the startup log if a client is refused; it prints every Host it accepts.
+
+**A personal access token then crosses the network in a cleartext header.** On a
+trusted LAN that may be a reasonable trade. Over anything else, put TLS in front.
 
 Running it separately from the backend is deliberate: it is the least-trusted consumer
 in this design, and inside the backend container it would have `settings.json`, the

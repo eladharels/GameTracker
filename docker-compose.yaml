@@ -111,9 +111,14 @@ services:
     pull_policy: never
     ports:
       # 127.0.0.1 by DEFAULT, unlike the backend. This is an agent-facing surface and
-      # the common case is an MCP client on this same host. To reach it from elsewhere,
-      # set MCP_BIND=0.0.0.0 and put TLS in front of it — a personal access token would
-      # otherwise cross the network in a cleartext header.
+      # the common case is an MCP client on this same host.
+      #
+      # To reach it from another machine, set MCP_BIND to the LAN address it should
+      # answer on (e.g. MCP_BIND=192.168.1.30) or 0.0.0.0 for every interface.
+      # MCP_PUBLIC_HOST below follows it automatically, so one variable is enough.
+      #
+      # A personal access token then crosses the network in a cleartext header. On a
+      # trusted LAN that may be acceptable; over anything else, put TLS in front.
       - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-3001}:3001"
     environment:
       - NODE_ENV=production
@@ -121,7 +126,18 @@ services:
       # over the internal network and never leaves it.
       - GAMETRACKER_API_URL=http://backend:3000/api/v2
       - MCP_PORT=3001
+      # Always 0.0.0.0 INSIDE the container — what decides who can reach it is the
+      # ports mapping above, which binds one host interface.
       - MCP_BIND=0.0.0.0
+      # The address CLIENTS use, which is the host interface the port is published on.
+      # The container cannot infer it: it only ever sees 0.0.0.0. Without this, setting
+      # MCP_BIND to a LAN address publishes the port correctly and then the server
+      # rejects every request to it, because the Host header names an address its
+      # DNS-rebinding allowlist has never heard of.
+      - MCP_PUBLIC_HOST=${MCP_BIND:-127.0.0.1}
+      # For anything the above cannot infer — a DNS name, a reverse proxy in front,
+      # several addresses. ADDS to the defaults; it cannot lock out localhost.
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
     depends_on:
       - backend
     security_opt:
