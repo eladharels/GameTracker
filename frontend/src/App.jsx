@@ -1,11 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash, FaCode } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 import GameDetailModal from './GameDetailModal'
+// LAZY, deliberately. swagger-ui-react is larger than the rest of this application
+// put together, and it is needed on exactly one page that most sessions never open.
+// Statically imported it would land in the main chunk and slow every login.
+const ApiDocsPage = lazy(() => import('./ApiDocsPage'))
 
 const ACCENT_PRESETS = [
   { name: 'Violet',  value: '#8b5cf6' },
@@ -139,6 +143,7 @@ function App() {
   else if (location.pathname.startsWith('/account')) pageTitle = 'My Account'
   else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings'
   else if (location.pathname.startsWith('/system-status')) pageTitle = 'System Status'
+  else if (location.pathname.startsWith('/api-docs')) pageTitle = 'API Reference'
   else if (location.pathname.startsWith('/game/')) pageTitle = 'Game Details'
 
   // If not logged in, render only the login page/route
@@ -192,6 +197,10 @@ function App() {
             <FaCog className="nav-icon" />
             <span className="nav-label">Settings</span>
           </Link>
+          <Link to="/api-docs" className={location.pathname === '/api-docs' ? 'active' : ''}>
+            <FaCode className="nav-icon" />
+            <span className="nav-label">API Docs</span>
+          </Link>
           {user?.can_manage_users && (
             <Link to="/system-status" className={location.pathname === '/system-status' ? 'active' : ''}>
               <FaServer className="nav-icon" />
@@ -236,6 +245,14 @@ function App() {
           <Route path="/account" element={<AccountPage />} />
           <Route path="/users" element={<UserManagementPage user={user} />} />
           <Route path="/settings" element={<SettingsPage />} />
+          {/* Suspense boundary is required by the lazy import above. The fallback is
+              deliberately plain text rather than a spinner component: this chunk is
+              large, so the fallback is what a first-time visitor actually reads. */}
+          <Route path="/api-docs" element={
+            <Suspense fallback={<div className="api-docs-loading">Loading the API reference…</div>}>
+              <ApiDocsPage />
+            </Suspense>
+          } />
           <Route path="/system-status" element={<SystemStatusPage />} />
           <Route path="*" element={<Navigate to="/search" />} />
         </Routes>

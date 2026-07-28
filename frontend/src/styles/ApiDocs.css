@@ -1,0 +1,225 @@
+/* Swagger UI, re-skinned for the glassmorphism dark theme.
+ *
+ * Swagger UI ships a light theme with its own hardcoded palette. Dropping it in
+ * unstyled gives a white slab in the middle of a near-black app — which is why this
+ * file exists and why it is mostly overrides rather than new design.
+ *
+ * EVERY COLOUR HERE IS A TOKEN from App.css. Nothing is hardcoded, so the six accent
+ * presets and any future palette change carry through to this page for free. The one
+ * exception is the HTTP-method colours, which are semantic rather than decorative:
+ * GET/POST/DELETE are recognised by hue across every API tool anyone has used, and
+ * re-tinting them to the accent would cost more in recognition than it gains in
+ * consistency. They are darkened to sit on a dark surface, not re-hued.
+ */
+
+.api-docs-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+}
+
+/* --- the explanation above the reference ---------------------------------- */
+
+.api-docs-note {
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.api-docs-note h3 {
+  margin: 0 0 0.75rem;
+  font-family: var(--font-display);
+  color: var(--text-primary);
+  font-size: 1.05rem;
+}
+
+.api-docs-note p { margin: 0 0 0.75rem; }
+.api-docs-note p:last-child { margin-bottom: 0; }
+.api-docs-note strong { color: var(--text-primary); font-weight: 600; }
+
+.api-docs-hint {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+/* Block, not inline: these are shell commands, and a command that wraps mid-flag is
+   a command someone pastes wrong. */
+.api-docs-note code {
+  display: block;
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* --- Swagger UI overrides -------------------------------------------------- */
+
+.api-docs-page .swagger-ui {
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+}
+
+/* Swagger's own topbar is a URL box for loading arbitrary specs. This page serves
+   exactly one, from the server it is running on, so the control is meaningless here —
+   and a visible "load a spec" field on an internal tool is an invitation to paste a
+   URL and wonder why it fails. */
+.api-docs-page .swagger-ui .topbar,
+.api-docs-page .swagger-ui .information-container .info__contact { display: none; }
+
+.api-docs-page .swagger-ui .info .title,
+.api-docs-page .swagger-ui .info h1,
+.api-docs-page .swagger-ui .info h2,
+.api-docs-page .swagger-ui .info h3,
+.api-docs-page .swagger-ui .info h4,
+.api-docs-page .swagger-ui .info h5,
+.api-docs-page .swagger-ui .opblock-tag,
+.api-docs-page .swagger-ui .opblock .opblock-summary-path,
+.api-docs-page .swagger-ui .opblock .opblock-summary-path__deprecated,
+.api-docs-page .swagger-ui table thead tr td,
+.api-docs-page .swagger-ui table thead tr th,
+.api-docs-page .swagger-ui .parameter__name,
+.api-docs-page .swagger-ui .response-col_status,
+.api-docs-page .swagger-ui .model-title,
+.api-docs-page .swagger-ui .scheme-container .schemes > label,
+.api-docs-page .swagger-ui .btn,
+.api-docs-page .swagger-ui label {
+  color: var(--text-primary);
+}
+
+.api-docs-page .swagger-ui .info li,
+.api-docs-page .swagger-ui .info p,
+.api-docs-page .swagger-ui .info table,
+.api-docs-page .swagger-ui .opblock-description-wrapper p,
+.api-docs-page .swagger-ui .opblock-external-docs-wrapper p,
+.api-docs-page .swagger-ui .opblock-title_normal p,
+.api-docs-page .swagger-ui .response-col_description__inner p,
+.api-docs-page .swagger-ui .parameter__type,
+.api-docs-page .swagger-ui .prop-format,
+.api-docs-page .swagger-ui .markdown p,
+.api-docs-page .swagger-ui .renderedMarkdown p {
+  color: var(--text-secondary);
+}
+
+/* The descriptions in this spec are the reasoning behind each decision — they are the
+   most valuable text on the page and Swagger renders them small and grey by default. */
+.api-docs-page .swagger-ui .renderedMarkdown p,
+.api-docs-page .swagger-ui .markdown p { line-height: 1.65; }
+
+.api-docs-page .swagger-ui .scheme-container,
+.api-docs-page .swagger-ui .opblock .opblock-section-header {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  box-shadow: none;
+}
+
+.api-docs-page .swagger-ui section.models,
+.api-docs-page .swagger-ui section.models .model-container,
+.api-docs-page .swagger-ui .model-box {
+  background: var(--surface-2);
+  border-color: var(--border-default);
+}
+
+.api-docs-page .swagger-ui .opblock {
+  background: var(--surface-1);
+  border-radius: var(--radius-md);
+  border-color: var(--border-default);
+  box-shadow: none;
+  margin-bottom: 0.75rem;
+}
+
+.api-docs-page .swagger-ui .opblock .opblock-summary { border-color: var(--border-subtle); }
+.api-docs-page .swagger-ui .opblock-tag { border-color: var(--border-subtle); }
+.api-docs-page .swagger-ui .opblock-tag small { color: var(--text-muted); }
+
+/* Method colours: darkened for a dark surface, NOT re-hued. See the file header. */
+.api-docs-page .swagger-ui .opblock.opblock-get { background: rgba(97,175,254,0.08); border-color: rgba(97,175,254,0.4); }
+.api-docs-page .swagger-ui .opblock.opblock-post { background: rgba(73,204,144,0.08); border-color: rgba(73,204,144,0.4); }
+.api-docs-page .swagger-ui .opblock.opblock-put { background: rgba(252,161,48,0.08); border-color: rgba(252,161,48,0.4); }
+.api-docs-page .swagger-ui .opblock.opblock-patch { background: rgba(80,227,194,0.08); border-color: rgba(80,227,194,0.4); }
+.api-docs-page .swagger-ui .opblock.opblock-delete { background: rgba(249,62,62,0.08); border-color: rgba(249,62,62,0.4); }
+
+.api-docs-page .swagger-ui .opblock .opblock-summary-description { color: var(--text-secondary); }
+
+/* Code samples and schema blocks */
+.api-docs-page .swagger-ui .highlight-code,
+.api-docs-page .swagger-ui .microlight,
+.api-docs-page .swagger-ui textarea,
+.api-docs-page .swagger-ui input[type=text],
+.api-docs-page .swagger-ui input[type=password],
+.api-docs-page .swagger-ui select {
+  background: var(--surface-0) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.api-docs-page .swagger-ui .microlight code,
+.api-docs-page .swagger-ui .microlight * { color: var(--text-primary) !important; }
+
+.api-docs-page .swagger-ui input:focus,
+.api-docs-page .swagger-ui textarea:focus,
+.api-docs-page .swagger-ui select:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* Buttons — accent-tinted, so the six presets carry through. */
+.api-docs-page .swagger-ui .btn {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.api-docs-page .swagger-ui .btn:hover { background: var(--surface-4); border-color: var(--accent-border); }
+.api-docs-page .swagger-ui .btn.authorize { background: var(--accent-soft); border-color: var(--accent-border); }
+.api-docs-page .swagger-ui .btn.authorize svg { fill: var(--color-accent); }
+.api-docs-page .swagger-ui .btn.execute { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+
+/* Focus visibility: Swagger's default focus ring disappears on a dark surface, which
+   makes the whole page unusable by keyboard. */
+.api-docs-page .swagger-ui .btn:focus-visible,
+.api-docs-page .swagger-ui a:focus-visible,
+.api-docs-page .swagger-ui summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.api-docs-page .swagger-ui .dialog-ux .modal-ux {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+.api-docs-page .swagger-ui .dialog-ux .modal-ux-header h3,
+.api-docs-page .swagger-ui .dialog-ux .modal-ux-content h4,
+.api-docs-page .swagger-ui .dialog-ux .modal-ux-content p { color: var(--text-primary); }
+
+.api-docs-page .swagger-ui table tbody tr td { border-color: var(--border-subtle); color: var(--text-secondary); }
+.api-docs-page .swagger-ui .parameter__name.required span { color: #f93e3e; }
+
+.api-docs-page .swagger-ui .model,
+.api-docs-page .swagger-ui .model-toggle,
+.api-docs-page .swagger-ui .prop-type { color: var(--text-secondary); }
+.api-docs-page .swagger-ui .property-primitive { color: var(--text-muted); }
+
+.api-docs-page .swagger-ui svg.arrow { fill: var(--text-secondary); }
+
+/* Swagger renders its own horizontal rules and shadows for a white page. */
+.api-docs-page .swagger-ui hr { border-color: var(--border-subtle); }
+.api-docs-page .swagger-ui .wrapper { padding: 0; max-width: none; }
+.api-docs-page .swagger-ui .information-container { padding: 0; }
+
+@media (max-width: 720px) {
+  .api-docs-note { padding: 1rem; }
+  .api-docs-page .swagger-ui .opblock-summary-path { word-break: break-all; }
+}

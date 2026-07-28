@@ -178,6 +178,11 @@ const EXPECTED = {
   // that answers without a credential, and which API surfaces exist is not something
   // to hand an anonymous caller.
   'GET /api/capabilities': 'auth',
+  // The v2 spec, served to a SESSION so the docs page can render it. It cannot live
+  // on /api/v2 — that surface takes tokens only, and this endpoint exists to be
+  // readable by someone who does not have one yet. 'auth', not 'public': the document
+  // names every route and every admin operation.
+  'GET /api/openapi/v2': 'auth',
   'GET /api/crack-status/cache-info': 'auth',
   'GET /api/game-price/:steamAppId': 'auth',
   'GET /api/games/search': 'auth',

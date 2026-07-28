@@ -424,9 +424,25 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns
-  `{serverVersion, apiVersions[], deprecations[]}`. The LAST route addable to v1 — after the
-  freeze there is no way to tell a client that anything beyond `/api` exists, and the Android
-  app is not a build this repo can update. v2 reports `available` (`V2_MOUNTED`).
+  `{serverVersion, apiVersions[], deprecations[]}`. v2 reports `available` (`V2_MOUNTED`).
+- **Spec discovery**: `GET /api/openapi/v2` (auth tier) serves `openapi/gametracker-v2.yaml`
+  verbatim, so the SPA's API Reference page renders the same contract CI validates.
+
+> **The freeze is about SHAPES, not about the route count.** An earlier revision of this file
+> called `/api/capabilities` "the last route addable to v1", and that was wrong in a way worth
+> recording: it read the freeze as a headcount. What the freeze actually protects is every
+> existing client — no response shape changes, no route disappears, no status moves. A NEW
+> route breaks nothing, because nothing calls it yet.
+>
+> Both exceptions so far exist for the same reason and it is not a coincidence: **v2 cannot
+> bootstrap itself.** `/api/v2` takes personal access tokens only, so the endpoint that says
+> "v2 exists" and the endpoint that hands you the map of it both have to live on the surface a
+> browser session can already reach. Serving the map through the door the map describes is a
+> loop that never starts.
+>
+> That is the bar for a third one. "It would be convenient on v1" is not — new functionality
+> goes in v2, and each of these still has to be recorded in `test/api-surface.test.js` with its
+> tier like any other route.
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.

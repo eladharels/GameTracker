@@ -345,6 +345,38 @@ app.get('/api/capabilities', authRequired, (req, res) => {
   });
 });
 
+// The v2 contract, served to a logged-in session so the SPA can render it.
+//
+// WHY THIS IS A v1 ROUTE. The document describes /api/v2, but it cannot live there:
+// v2 takes personal access tokens only, and the whole point of this endpoint is to
+// be readable by someone who does not have one yet. Serving the map of the API
+// through the door the map tells you how to open is a bootstrap that never starts.
+//
+// WHY NOT A STATIC FILE IN THE FRONTEND IMAGE. nginx would serve it to anyone who
+// asks. `authRequired` is what makes "any logged-in user, read-only" true rather
+// than aspirational — the spec names every route, every admin operation and every
+// field, which is reconnaissance worth one credential check.
+//
+// Read from disk per request, not cached at boot: the file is baked into the image
+// and never changes at runtime, so a cache would only add a way for the two to
+// disagree after a redeploy. It is ~50 KB and this is not a hot path.
+const OPENAPI_V2_PATH = path.join(__dirname, 'openapi', 'gametracker-v2.yaml');
+
+app.get('/api/openapi/v2', authRequired, (req, res) => {
+  fs.promises.readFile(OPENAPI_V2_PATH, 'utf8')
+    .then((yaml) => {
+      // text/yaml, not application/json: this IS the YAML source. Converting it here
+      // would put a second representation of the contract in the response path, and
+      // the renderers all parse YAML.
+      res.type('text/yaml; charset=utf-8').send(yaml);
+    })
+    .catch((err) => {
+      // The path is not caller-controlled, so this means the image was built wrong.
+      console.error('[OpenAPI] Could not read the v2 spec:', err.message);
+      res.status(500).json({ error: 'API specification unavailable' });
+    });
+});
+
 // --- System status last-OK persistence ---
 // Directory for PURELY EPHEMERAL caches (system status, CrackWatch). These are
 // rebuilt from scratch whenever they are missing and have never been persisted --

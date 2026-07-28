@@ -230,7 +230,12 @@ authentication matrix, threat history and operational runbook.
 There are two: **`/api`**, which the web and Android apps use and which is frozen, and
 **`/api/v2`**, a token-only redesign specified by `openapi/gametracker-v2.yaml`.
 
-`GET /api/capabilities` reports which exist, so a client can discover v2 without being
+**In the browser**: log in and open **API Docs** in the sidebar. That page renders the
+live v2 contract with Swagger UI — every operation, every field, every error. Your login
+lets you *read* it; to *call* an endpoint from that page you need a personal access token
+(below), which you paste into **Authorize**.
+
+`GET /api/capabilities` reports which APIs exist, so a client can discover v2 without being
 told about it out of band:
 
 ```json

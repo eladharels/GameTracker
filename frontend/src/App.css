@@ -6279,3 +6279,12 @@ body, html {
   .gdm-meta > div { justify-content: center; }
   .gdm-actions .action-buttons { justify-content: center; }
 }
+
+
+/* Fallback while the API-reference chunk downloads. Lazily loaded because
+   swagger-ui-react is bigger than the rest of this app; see App.jsx. */
+.api-docs-loading {
+  padding: 2rem;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+}
