@@ -25,8 +25,29 @@
 
 const { z } = require('zod');
 const api = require('./api');
+const { GUIDE, CONVENTIONS } = require('./guide');
 
 const STATUSES = ['wishlist', 'playing', 'done', 'backlog', 'unreleased'];
+
+// The SAME shapes openapi/gametracker-v2.yaml constrains (GameRef, Username). Validated
+// here rather than trusted, for two reasons. It stops a malformed value becoming a URL
+// path segment — `..` survives encodeURIComponent and WHATWG URL normalises it away, so
+// `remove_game{gameId:".."}` reached DELETE /library/ rather than /library/games/.. —
+// and it tells the MODEL the id format at the point it is about to get it wrong, which
+// a `z.string().min(1)` cannot.
+const GAME_REF = z.string()
+  .regex(/^(igdb|rawg|thegamesdb)_[A-Za-z0-9_-]+$/,
+    'must be a source-prefixed game id from search_games, e.g. "igdb_1020" — not a title, not a bare number')
+  .max(200);
+
+// Must START alphanumeric. A plain `[a-z0-9._-]+` still matches `..`, which survives
+// encodeURIComponent and is then normalised away by WHATWG URL — so
+// `unshare_library{username:".."}` reached DELETE /shares/ rather than
+// /shares/outgoing/.. . Anchoring the first character costs nothing and closes it.
+const USERNAME = z.string()
+  .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/,
+    'must be an exact lowercase username from list_shareable_users')
+  .max(64);
 
 // Wrap a handler so every tool answers the same way.
 //
@@ -51,10 +72,17 @@ function tool(handler) {
       return {
         content: [{
           type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          // COMPACT. `JSON.stringify(result, null, 2)` cost ~5,300 tokens of pure
+          // indentation on a 200-game listing, measured. No model needs the whitespace.
+          text: typeof result === 'string' ? result : JSON.stringify(result),
         }],
       };
     } catch (err) {
+      // Logged server-side, in full. Without this a bug in a handler — a TypeError, say —
+      // has no `.response`, falls through toolError's last branch, and reaches the agent
+      // as "Could not reach GameTracker": it chases a phantom outage while the operator
+      // has no trace at all. The SENTENCE the model sees is unchanged; only the log gains.
+      console.error('[MCP] tool call failed:', err.stack || err.message);
       return { isError: true, content: [{ type: 'text', text: api.toolError(err) }] };
     }
   };
@@ -62,6 +90,28 @@ function tool(handler) {
 
 // Every tool: name, config, handler. Registered by server.js.
 const TOOLS = [
+  {
+    name: 'read_gametracker_guide',
+    config: {
+      title: 'Read the GameTracker guide',
+      description:
+        'The full explanation of how GameTracker works: the five game statuses and the lifecycle '
+        + 'between them, why the backlog is ordered and what that order means, how games are '
+        + 'identified, what every library field holds and which are stale, how sharing works, and '
+        + 'which failures are worth retrying.\n\n'
+        + 'Read this ONCE at the start of any session that will do more than a single lookup. It '
+        + 'is the same content as the gametracker://guide resource, offered as a tool because many '
+        + 'clients do not surface resources.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    // No token needed — it describes the application, not the account. It still goes
+    // through `tool()` so the no-token path stays uniform across every entry here.
+    handler: async () => ({
+      content: [{ type: 'text', text: `${GUIDE}\n\n---\n\n${CONVENTIONS}` }],
+    }),
+  },
+
   {
     name: 'whoami',
     config: {
@@ -86,8 +136,10 @@ const TOOLS = [
         + 'it — the `id` in each result is what `add_game` takes, and it cannot be guessed or '
         + 'constructed from a title.\n\n'
         + 'Results are merged and de-duplicated across the three providers. If a provider is down, '
-        + 'its results are simply absent — the search still succeeds, so a short result list means '
-        + '"few matches", not necessarily "no such game".',
+        + 'its results are simply absent and the search still SUCCEEDS.\n\n'
+        + '`meta.degraded: true` means at least one provider could not be asked. With few or no '
+        + 'results that means "could not ask", NOT "no such game" — say so rather than telling the '
+        + 'user the game is not in the databases.',
       inputSchema: {
         query: z.string().min(1).describe('Game title to search for. Partial titles work.'),
         limit: z.number().int().min(1).max(20).optional()
@@ -126,20 +178,28 @@ const TOOLS = [
     config: {
       title: 'List my games',
       description:
-        'List the games in this account\'s library, newest first by default. Filter by `status` to '
-        + 'answer questions like "what am I playing" (playing) or "what do I want" (wishlist).\n\n'
+        'List the games in this account\'s library, ALPHABETICALLY BY NAME unless you pass `sort`. '
+        + 'Filter by `status` to answer "what am I playing" (playing) or "what do I want" (wishlist).\n\n'
+        + 'For "what did I add recently" pass sort="addedAt", order="desc". For "what is coming out" '
+        + 'pass sort="releaseDate". Read `meta.total` for the real size of the library — do not count '
+        + 'the rows you received, which are one page.\n\n'
         + 'Statuses: wishlist (want it), playing (in progress), done (finished), backlog (queued to '
         + 'play, and ordered — see get_backlog), unreleased (release date is in the future; the '
         + 'server assigns this automatically and moves the game to wishlist on release).',
       inputSchema: {
         status: z.enum(STATUSES).optional().describe('Only games with this status.'),
+        sort: z.enum(['name', 'releaseDate', 'addedAt', 'backlogOrder']).optional()
+          .describe('Default "name". Use "addedAt" for recently added, "releaseDate" for upcoming. '
+            + '"backlogOrder" is only meaningful together with status="backlog".'),
+        order: z.enum(['asc', 'desc']).optional()
+          .describe('Default "asc". Pair with sort="addedAt" and order="desc" for newest first.'),
         limit: z.number().int().min(1).max(200).optional().describe('Maximum games to return.'),
         cursor: z.string().optional().describe('Pagination cursor from a previous response\'s meta.nextCursor.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    handler: tool(({ status, limit, cursor }, token) =>
-      api.call(token, 'get', '/library/games', { params: { status, limit, cursor } })),
+    handler: tool(({ status, sort, order, limit, cursor }, token) =>
+      api.call(token, 'get', '/library/games', { params: { status, sort, order, limit, cursor } })),
   },
 
   {
@@ -147,22 +207,40 @@ const TOOLS = [
     config: {
       title: 'Add a game to my library',
       description:
-        'Add a game found via search_games. Takes the `id` from a search result — the name and '
-        + 'release date are resolved server-side from that id, never from what you type.\n\n'
+        'Add a game to the library. Two ways, and the second is usually better:\n\n'
+        + '1. `name` — an exact title. The SERVER resolves it against the game databases and '
+        + 'refuses to guess: an ambiguous title returns a conflict listing the candidates, which '
+        + 'you should put to the user rather than choosing for them. One call, and the match rule '
+        + 'is the same one the web app uses.\n'
+        + '2. `gameId` — a source-prefixed id from search_games, when you already searched or the '
+        + 'user picked a specific result.\n\n'
+        + 'Pass exactly one. The stored name, cover and release date are always resolved '
+        + 'server-side, never from what you type.\n\n'
         + 'IMPORTANT: if the game is ALREADY in the library, omitting `status` leaves its current '
         + 'status untouched. Only pass `status` when the user actually asked to set one, or you will '
         + 'demote a game they are playing back to wishlist. A game whose release date is in the '
-        + 'future is stored as `unreleased` whatever you ask for.',
+        + 'future is stored as `unreleased` whatever you ask for.\n\n'
+        + 'Safe to repeat as far as the data goes, but each call notifies the user — do not retry '
+        + 'a call that may already have succeeded just to be sure.',
       inputSchema: {
-        gameId: z.string().min(1)
-          .describe('Source-prefixed id from search_games, e.g. "igdb_1020". Not a bare number, not a title.'),
+        gameId: GAME_REF.optional()
+          .describe('Source-prefixed id from search_games, e.g. "igdb_1020". Exactly one of gameId or name.'),
+        name: z.string().min(1).max(400).optional()
+          .describe('Exact game title, resolved server-side. Exactly one of gameId or name.'),
         status: z.enum(STATUSES).optional()
           .describe('Only set this if the user asked for a specific status. Omit otherwise — see the description.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    handler: tool(({ gameId, status }, token) =>
-      api.call(token, 'post', '/library/games', { data: status ? { gameId, status } : { gameId } })),
+    handler: tool(({ gameId, name, status }, token) => {
+      if (!gameId && !name) throw new Error('Pass either gameId or name.');
+      if (gameId && name) throw new Error('Pass gameId OR name, not both.');
+      const data = gameId ? { gameId } : { name };
+      // `status` only when asked for. Sending it unconditionally is what demotes a game
+      // the user is already playing back to wishlist.
+      if (status) data.status = status;
+      return api.call(token, 'post', '/library/games', { data });
+    }),
   },
 
   {
@@ -176,7 +254,7 @@ const TOOLS = [
         + 'removes its position. `unreleased` is assigned by the server from the release date and '
         + 'should not normally be set by hand.',
       inputSchema: {
-        gameId: z.string().min(1).describe('The game\'s id as it appears in list_library.'),
+        gameId: GAME_REF.describe('The game\'s id as it appears in list_library.'),
         status: z.enum(STATUSES).describe('The new status.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -194,7 +272,7 @@ const TOOLS = [
         + 'discards the entry along with its status, backlog position and stored price. '
         + 'Prefer update_game_status unless the user clearly wants the game gone.',
       inputSchema: {
-        gameId: z.string().min(1).describe('The game\'s id as it appears in list_library.'),
+        gameId: GAME_REF.describe('The game\'s id as it appears in list_library.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
@@ -202,6 +280,24 @@ const TOOLS = [
       await api.call(token, 'delete', `/library/games/${encodeURIComponent(gameId)}`);
       return `Removed ${gameId} from the library.`;
     }),
+  },
+
+  {
+    name: 'get_game',
+    config: {
+      title: 'Get one game from my library',
+      description:
+        'Fetch a single library game by id — its status, backlog position, Steam id, stored price '
+        + 'and DRM status. Use this to answer "is X in my library" or "what status is X" without '
+        + 'listing the whole library, which can be hundreds of games.\n\n'
+        + 'A not-found answer means the game is not in the library at all, under ANY status.',
+      inputSchema: {
+        gameId: GAME_REF.describe('The game\'s id, e.g. "igdb_1020".'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    handler: tool(({ gameId }, token) =>
+      api.call(token, 'get', `/library/games/${encodeURIComponent(gameId)}`)),
   },
 
   {
@@ -223,13 +319,16 @@ const TOOLS = [
     config: {
       title: 'Reorder my backlog',
       description:
-        'Set the full backlog order. Takes EVERY backlogged game id in the desired order — this '
-        + 'replaces the ordering wholesale rather than moving one entry, so call get_backlog first '
-        + 'and send back the complete list with your change applied. Omitting an id does not delete '
-        + 'the game, but its position becomes undefined.',
+        'Set the full backlog order.\n\n'
+        + 'You MUST include EVERY backlogged game id, not just the ones you are moving. A partial '
+        + 'list assigns positions 1..N to the ids you send and leaves every other game\'s stored '
+        + 'position UNCHANGED, producing duplicate positions that silently break the up/down '
+        + 'controls in the GameTracker web app. The damage does not show up in get_backlog, which '
+        + 'renders position by row number — so you will see a clean list and report success.\n\n'
+        + 'Always: call get_backlog, take its full list, apply your change, send all of it back.',
       inputSchema: {
-        order: z.array(z.string().min(1)).min(1).max(1000)
-          .describe('All backlogged game ids, first to last.'),
+        order: z.array(GAME_REF).min(1).max(1000)
+          .describe('EVERY backlogged game id, first to last. Not just the ones you are moving.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -273,7 +372,7 @@ const TOOLS = [
         'Grant one other account read-only access to this library. Additive — it does not affect '
         + 'anyone already shared with. Resolve the username with list_shareable_users first.',
       inputSchema: {
-        username: z.string().min(1).describe('Exact username from list_shareable_users.'),
+        username: USERNAME.describe('Exact username from list_shareable_users.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -291,7 +390,7 @@ const TOOLS = [
         + 'This only affects the named account; everyone else keeps their access. It does not '
         + 'delete anything of theirs, and it can be undone by calling share_library again.',
       inputSchema: {
-        username: z.string().min(1).describe('Exact username currently listed as an outgoing share.'),
+        username: USERNAME.describe('Exact username currently listed as an outgoing share.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
@@ -310,7 +409,7 @@ const TOOLS = [
         + 'Read-only: nothing here can be changed. list_shares shows whose libraries are available. '
         + 'Useful for "what does Dana have that I do not".',
       inputSchema: {
-        username: z.string().min(1).describe('The owner\'s username, from list_shares incoming.'),
+        username: USERNAME.describe('The owner\'s username, from list_shares incoming.'),
         limit: z.number().int().min(1).max(200).optional().describe('Maximum games to return.'),
         cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
       },

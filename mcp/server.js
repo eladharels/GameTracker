@@ -33,6 +33,12 @@ const PORT = Number(process.env.MCP_PORT || 3001);
 // Set MCP_BIND=0.0.0.0 to publish it, and put TLS in front of it when you do.
 const BIND = process.env.MCP_BIND || '127.0.0.1';
 
+// Host header values this server will answer to. Defaults cover the local cases; set
+// MCP_ALLOWED_HOSTS when publishing it under a name.
+const ALLOWED_HOSTS = (process.env.MCP_ALLOWED_HOSTS
+  || `127.0.0.1:${PORT},localhost:${PORT},127.0.0.1,localhost,mcp:${PORT},mcp`)
+  .split(',').map((h) => h.trim()).filter(Boolean);
+
 const SERVER_INFO = {
   name: 'gametracker',
   version: '1.0.0',
@@ -87,7 +93,11 @@ app.use(express.json({ limit: '1mb' }));
 // credential we do not have and make a backend blip look like an MCP outage to an
 // orchestrator that restarts on it.
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'gametracker-mcp', apiBase: api.API_BASE });
+  // Deliberately does NOT report the API base. It used to, and that contradicted
+  // api.js's refusal to name the same address in an error message — where the reason
+  // given is that it is internal topology. In production it resolves to
+  // `http://backend:3000/api/v2`. The compose healthcheck reads the status code only.
+  res.json({ status: 'ok', service: 'gametracker-mcp' });
 });
 
 app.post('/mcp', async (req, res) => {
@@ -110,7 +120,16 @@ app.post('/mcp', async (req, res) => {
   const server = serverForToken(token);
   // sessionIdGenerator: undefined puts the transport in stateless mode — no session
   // store, no session validation, nothing retained between requests.
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    // DNS-rebinding protection. Practically redundant today — the required
+    // Authorization header forces a CORS preflight and there is no CORS middleware, so
+    // a browser cannot reach this — but the README actively tells operators to set
+    // MCP_BIND=0.0.0.0, and this is one option rather than a class of reasoning
+    // somebody has to redo later.
+    enableDnsRebindingProtection: true,
+    allowedHosts: ALLOWED_HOSTS,
+  });
 
   // Torn down when the response ends, whether it ended well or not. Without this each
   // request leaks a server and a transport, and this process is long-lived.

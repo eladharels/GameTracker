@@ -46,15 +46,17 @@ belongs.
 
 ## Tools
 
-Fourteen, shaped around what people ask for rather than around HTTP endpoints. A large
+Sixteen, shaped around what people ask for rather than around HTTP endpoints. A large
 tool list measurably degrades model performance, so this is not one tool per endpoint.
 
 | Tool | |
 |---|---|
+| `read_gametracker_guide` | the full application explanation — call this first |
 | `whoami` | which account, and what the token may do |
 | `search_games` | find a game across IGDB, RAWG and TheGamesDB |
 | `get_game_price` | current Steam price (live, unlike a library row's stored one) |
-| `list_library` | your games, filterable by status |
+| `list_library` | your games, filterable and sortable |
+| `get_game` | one game, without listing the whole library |
 | `add_game` | add one found via `search_games` |
 | `update_game_status` | wishlist / playing / done / backlog |
 | `remove_game` | delete an entry |
@@ -76,6 +78,22 @@ anything in the library surface.
 
 The API still enforces its own scopes. This is a second, narrower boundary on top.
 
+## The application guide
+
+An agent connecting fresh knows nothing about GameTracker. Tool descriptions cannot
+carry that — they describe one call each. So the server also serves a full explanation
+of the application: the five statuses and the lifecycle between them, why the backlog is
+ordered, how games are identified, which fields are stale, how sharing works, and which
+failures are worth retrying.
+
+It is available **both** ways, deliberately:
+
+* as the `read_gametracker_guide` **tool** — because many MCP clients surface tools only
+* as the `gametracker://guide` and `gametracker://conventions` **resources**
+
+The instructions sent on connect stay short and carry only the four defaults an agent
+gets wrong unaided. Everything else is one call away.
+
 ## Configuration
 
 | Variable | Default | |
@@ -83,6 +101,7 @@ The API still enforces its own scopes. This is a second, narrower boundary on to
 | `GAMETRACKER_API_URL` | `http://backend:3000/api/v2` | must include `/api/v2` |
 | `MCP_PORT` | `3001` | |
 | `MCP_BIND` | `127.0.0.1` | `0.0.0.0` in the container; compose publishes to loopback |
+| `MCP_ALLOWED_HOSTS` | localhost/mcp variants | Host header allowlist. Set this when publishing under a name. |
 
 ## Deployment
 
@@ -101,12 +120,16 @@ database and the LDAP bind password within reach.
 
 ```bash
 npm install
-npm test                     # unit tests: tool inventory, credentials, error mapping
-
-# End-to-end against a running backend (both processes must be up):
-GAMETRACKER_API_URL=http://127.0.0.1:3000/api/v2 MCP_PORT=3399 node server.js
-node probe-e2e.js
+npm test    # tool inventory, credentials, error mapping, application documentation
 ```
+
+To try it against a running backend:
+
+```bash
+GAMETRACKER_API_URL=http://127.0.0.1:3000/api/v2 MCP_PORT=3399 node server.js
+```
+
+then point any MCP client at `http://127.0.0.1:3399/mcp` with a token.
 
 `npm test` deliberately touches no network. It pins the exposed tool inventory —
 every tool is reachable by an AI agent acting on a real library, so adding one should

@@ -47,8 +47,30 @@ function toolError(err) {
         + 'Retrying will not help.';
     }
     if (status === 403) {
-      return 'Not permitted: the token is valid but does not carry the scope this needs. '
-        + 'A library-scoped token cannot reach administrative operations. Retrying will not help.';
+      // The BODY, not a lecture about scopes. A 403 here is at least as often
+      // `not_shared` — the other user has not shared their library — as it is a scope
+      // problem, and the first version of this discarded a body that said exactly
+      // which and substituted the scope explanation. A review watched an agent tell a
+      // user to re-issue a perfectly good token because someone had not shared with
+      // them: wrong, unfixable by the user, and advice they would have followed.
+      return `Not permitted: ${describeProblem(status, data)}. `
+        + 'Retrying will not help. If this is a scope problem the token must be re-issued with '
+        + 'the right scope; if it is a sharing problem, the other user has to grant access in '
+        + 'GameTracker — you cannot do it from here.';
+    }
+    if (status === 404) {
+      // Two words ("Not found (not_found)") reads as "this tool does not exist".
+      return `${describeProblem(status, data)}. Nothing matched that identifier. `
+        + 'Check the exact id with list_library (or list_shares for a username) — ids are '
+        + 'source-prefixed strings like "igdb_1020", not titles and not bare numbers.';
+    }
+    if (status === 502) {
+      // 502 from this API means every catalog provider failed or none is configured —
+      // an operator problem, usually permanent. Lumping it with 5xx invited a retry
+      // loop on an instance with no API keys, where EVERY search and every add fails.
+      return `${describeProblem(status, data)}. No game database answered — this instance may be `
+        + 'missing its IGDB/RAWG/TheGamesDB API keys. One retry is reasonable; if it repeats, '
+        + 'tell the user their GameTracker instance cannot reach the game databases.';
     }
     if (status >= 500) {
       return `GameTracker returned a server error (${status}). This may be transient — retrying once is reasonable. `

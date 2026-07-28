@@ -28,10 +28,12 @@ const { GUIDE, CONVENTIONS, RESOURCES } = require('../guide');
 const EXPECTED_TOOLS = [
   'add_game',
   'get_backlog',
+  'get_game',
   'get_game_price',
   'list_library',
   'list_shareable_users',
   'list_shares',
+  'read_gametracker_guide',
   'read_shared_library',
   'remove_game',
   'reorder_backlog',
@@ -190,6 +192,93 @@ check('the documentation contains no credential and no instance detail', () => {
 
 // --- credentials ------------------------------------------------------------------
 
+check('the guide is reachable as a TOOL, not only as a resource', () => {
+  // Resources are the least-implemented part of MCP: many clients and agent frameworks
+  // surface tools only, and almost none read a resource unprompted. If the guide were
+  // resource-only, an agent on such a client would see the four instruction bullets as
+  // the entire application model — and the whole instructions/resource split would
+  // silently invert. So it is BOTH.
+  const t = TOOLS.find((x) => x.name === 'read_gametracker_guide');
+  assert.ok(t, 'the guide is not exposed as a tool');
+  assert.strictEqual(t.config.annotations?.readOnlyHint, true);
+  assert.match(INSTRUCTIONS, /read_gametracker_guide/,
+    'the instructions do not tell the agent to call the guide tool');
+});
+
+checkAsync('the guide tool needs no token and returns the whole document', async () => {
+  const t = TOOLS.find((x) => x.name === 'read_gametracker_guide');
+  const result = await t.handler({}, {});          // deliberately no token
+  assert.ok(!result.isError, 'the guide tool required a credential to read a static document');
+  const text = result.content[0].text;
+  assert.ok(text.length > 8000, `the guide tool returned ${text.length} chars — not the full document`);
+  assert.match(text, /# GameTracker/);
+  assert.match(text, /# Working conventions/, 'the conventions are missing from the guide tool');
+});
+
+check('the reorder warning names the actual consequence', () => {
+  // "its position becomes undefined" read as tolerable, and an agent asked to move one
+  // game sent a one-element list. That assigns 1..N to the ids sent and leaves every
+  // other stored position alone — DUPLICATE positions, which break the web app's
+  // up/down controls and are invisible in get_backlog, since it renders position by
+  // row index. The warning has to say that, not gesture at it.
+  const t = TOOLS.find((x) => x.name === 'reorder_backlog');
+  assert.match(t.config.description, /EVERY backlogged game id/,
+    'the reorder description does not demand the full list');
+  assert.match(t.config.description, /duplicate positions/i,
+    'the reorder description does not name the corruption a partial list causes');
+  assert.match(GUIDE, /DUPLICATE positions/,
+    'the guide does not name the corruption a partial list causes');
+});
+
+check('list_library states the REAL default sort, and exposes sort/order', () => {
+  // It claimed "newest first by default". The API default is name/asc — so an agent
+  // answering "what did I add recently" from the first page was reading an alphabetical
+  // list and reporting it as chronological.
+  const t = TOOLS.find((x) => x.name === 'list_library');
+  assert.ok(!/newest first by default/i.test(t.config.description),
+    'list_library still claims a default sort the API does not have');
+  assert.match(t.config.description, /ALPHABETICALLY BY NAME/,
+    'list_library does not state its real default order');
+  assert.ok(t.config.inputSchema.sort, 'list_library cannot sort, so "recently added" is unanswerable');
+  assert.ok(t.config.inputSchema.order, 'list_library cannot reverse its order');
+});
+
+check('ids and usernames are constrained to the shapes the API accepts', () => {
+  // Loose `z.string().min(1)` let `..` through, and encodeURIComponent does not escape
+  // it — WHATWG URL then normalises the segment away, so remove_game{gameId:".."}
+  // reached DELETE /library/ instead of /library/games/.. . Not exploitable against
+  // today's routes; entirely dependent on nobody adding one at the parent path.
+  const t = TOOLS.find((x) => x.name === 'remove_game');
+  const schema = t.config.inputSchema.gameId;
+  assert.ok(schema.safeParse('igdb_1020').success, 'a legitimate id was rejected');
+  for (const bad of ['..', '../users', 'igdb_1020/../..', '', 'Hades', '1020', 'ftp_9']) {
+    assert.ok(!schema.safeParse(bad).success, `gameId accepted ${JSON.stringify(bad)}`);
+  }
+  const share = TOOLS.find((x) => x.name === 'unshare_library').config.inputSchema.username;
+  for (const bad of ['..', '../admin', 'UPPER', 'a'.repeat(65), '']) {
+    assert.ok(!share.safeParse(bad).success, `username accepted ${JSON.stringify(bad)}`);
+  }
+});
+
+checkAsync('output is compact — indentation is pure cost', async () => {
+  // Measured: pretty-printing a 200-game listing spent ~5,300 tokens on whitespace.
+  // Asserted against what a tool actually EMITS, not against the source — the first
+  // version grepped for the pretty-print call and matched the comment explaining why
+  // it was removed.
+  const realCall = api.call;
+  api.call = async () => ({ data: [{ gameId: 'igdb_1', name: 'A' }], meta: { total: 1 } });
+  try {
+    const t = TOOLS.find((x) => x.name === 'list_library');
+    const out = await t.handler({}, { _gametrackerToken: 'gt_pat_x' });
+    const text = out.content[0].text;
+    assert.ok(!/\n\s\s/.test(text),
+      `tool output is pretty-printed: ${JSON.stringify(text.slice(0, 80))}`);
+    assert.deepStrictEqual(JSON.parse(text).meta, { total: 1 }, 'output is not valid JSON');
+  } finally {
+    api.call = realCall;
+  }
+});
+
 console.log('credential handling:');
 
 check('a token is read ONLY from an Authorization: Bearer header', () => {
@@ -222,6 +311,8 @@ check('this server holds NO ambient credential', () => {
 });
 
 checkAsync('a tool called without a token fails closed, and says why', async () => {
+  // read_gametracker_guide is deliberately exempt: it returns a static document about
+  // the application, not this account's data, so it needs no credential.
   const t = TOOLS.find((x) => x.name === 'whoami');
   const result = await t.handler({}, {});          // no _gametrackerToken
   assert.strictEqual(result.isError, true);

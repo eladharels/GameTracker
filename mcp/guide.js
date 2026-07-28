@@ -28,13 +28,18 @@ Four things an agent gets wrong without being told:
 2. The backlog is ORDERED, and the order is the user's stated intent about what to
    play next. "What should I play?" is answered by the first entry of get_backlog.
    reorder_backlog replaces the whole ordering, so read it before you write it.
-3. A game has exactly one status. A game the user "has" might be under any of five,
-   so check the status before telling someone a game is or is not in their library.
-4. lastPrice on a library game is a weekly snapshot and may be days stale. Use
-   get_game_price when currency matters.
+3. A game has exactly ONE status, out of five: wishlist (wants it), playing (in
+   progress), done (finished), backlog (queued, and ordered), unreleased (release date
+   is in the future — the server assigns this, it is not a choice, and moves the game
+   to wishlist on release). A game the user "has" might be under any of them, so check
+   before saying a game is or is not in their library. get_game answers that for one
+   game without listing everything.
+4. lastPrice on a library game is a weekly snapshot and may be days stale;
+   lastPriceUpdatedAt says how stale. Use get_game_price when currency matters.
 
-Read the gametracker://guide resource before anything consequential — it explains the
-status lifecycle, sharing, and what the fields mean.
+Call read_gametracker_guide once at the start of any session that will do more than a
+single lookup. It explains the status lifecycle, sharing, pagination and what every
+field means. The same content is at the gametracker://guide resource.
 
 This server exposes library, catalog and sharing operations only. Account management,
 server settings and credential administration are deliberately unavailable, whatever
@@ -82,17 +87,28 @@ library rather than a single status filter.
 * \`get_backlog\` returns them in that order. \`list_library(status="backlog")\` does not
   guarantee it — use \`get_backlog\` whenever order could matter, which is most of the time.
 * \`reorder_backlog\` replaces the ENTIRE ordering. It is not a move-one-item operation.
-  Read the current order, apply the change, send the whole list back. A game omitted
-  from the list is not deleted, but its position becomes undefined.
+  **Send every backlogged id, every time.** A partial list assigns positions 1..N to the
+  ids you sent and leaves every other game's stored position unchanged — which produces
+  DUPLICATE positions and silently breaks the up/down controls in the web app. Worse, it
+  does not show: \`get_backlog\` renders position by row number, so the next read looks
+  perfectly clean. Read, apply your change, send the whole list.
 * Moving a game into \`backlog\` puts it at the end. Moving it out drops its position.
 
 ## Adding a game
 
-Two steps, always:
+Two ways, and the shorter one is usually better.
 
-1. \`search_games\` with the title. This queries IGDB, RAWG and TheGamesDB at once and
-   merges the results.
-2. \`add_game\` with the \`id\` from the result you chose.
+**By name, one call.** \`add_game\` accepts \`name\` — an exact title — and the SERVER
+resolves it against the game databases using the same rule the web app uses. It refuses
+to guess: an ambiguous title comes back as a conflict listing the candidates, which you
+should put to the user rather than picking for them. Prefer this when the user named a
+game plainly.
+
+**By id, two calls.** \`search_games\` then \`add_game\` with the \`id\` you chose. Use
+this when the user is browsing, when they need to see options, or when you already
+searched.
+
+Pass exactly one of \`name\` or \`gameId\`, never both.
 
 The id is source-prefixed — \`igdb_1020\`, \`rawg_58175\`, \`thegamesdb_1234\` — because
 the same numeric id means different games at different providers. It cannot be
@@ -117,7 +133,9 @@ guessing. Adding the wrong game is silent: it succeeds, and the user finds out l
 | \`status\` | One of the five above. |
 | \`steamAppId\` | Steam's id, when known. What \`get_game_price\` takes. May be absent. |
 | \`lastPrice\` | **A weekly snapshot, not a live price.** See below. |
+| \`lastPriceUpdatedAt\` | When that snapshot was taken. This is how to answer "how stale?". |
 | \`crackStatus\` | DRM/availability status, refreshed daily. May be \`unknown\`. |
+| \`addedAt\` | When it was added to the library. Sort by this for "what did I add recently". |
 | \`backlogOrder\` | Position, only meaningful when status is \`backlog\`. |
 
 ### Prices are two different things
@@ -133,6 +151,12 @@ could matter.
 A null price is a normal answer, not an error: the game may be free, unreleased, or not
 sold in the requested region. The \`reason\` field distinguishes them. Prices are
 region-specific and carry their own currency symbol.
+
+**There is no "on sale" flag and no bulk price lookup.** For "is anything on my wishlist
+cheap right now", use each row's \`lastPrice\` and \`lastPriceUpdatedAt\` to shortlist a
+handful of candidates, then confirm those few with \`get_game_price\`. Do not call
+\`get_game_price\` once per game in a library — a fifty-game wishlist is fifty calls and
+the user will not thank you for it.
 
 ## Sharing
 
@@ -170,7 +194,14 @@ Deliberately absent, and not reachable even with an administrator's token:
 * minting or revoking credentials
 * triggering instance-wide background jobs
 
-If a user asks for one of these, tell them it has to be done in the GameTracker web
+Two per-user things are also absent, and they are ordinary requests rather than
+administration — so name them plainly rather than looking evasive:
+
+* **Notification settings** (when to be reminded before a release) — web interface only.
+* **Refreshing a game's metadata** from the databases, when cover art or a date is
+  wrong — web interface only.
+
+If a user asks for any of the above, say it has to be done in the GameTracker web
 interface. Do not attempt a workaround.
 
 ## Failure modes worth recognising
@@ -225,8 +256,11 @@ plainly that DRM status is a daily cache.
 ## Pagination
 
 \`list_library\` and \`read_shared_library\` page. When a response carries a
-\`meta.nextCursor\`, there are more results — pass it as \`cursor\` to continue. Do not
-answer "you have 50 games" from a first page that was capped at 50.
+\`meta.nextCursor\`, there are more results — pass it as \`cursor\` to continue.
+
+**\`meta.total\` is the real count.** Use it to answer "how many games do I have"; never
+count the rows you received, which are one page. Answering "you have 50 games" from a
+page that was capped at 50 is the mistake this field exists to prevent.
 `;
 
 const RESOURCES = [
