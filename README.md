@@ -176,8 +176,19 @@ everything, so the backend needs no published port at all:
 
 ### Personal access tokens
 
-For scripts, the terminal, and anything non-interactive — so nothing has to store your
-password. A token is an ordinary bearer credential on the same header a browser session uses.
+For scripts, the terminal, the API Reference page, and anything non-interactive — so
+nothing has to store your password. A token is an ordinary bearer credential on the same
+header a browser session uses.
+
+**In the app**: **My Account → API Tokens → New Token**. Your password is asked for again,
+because a token outlives the twelve-hour session that created it. To call v2 operations from
+the **API Docs** page, paste the token into **Authorize** — the `gt_pat_...` value alone,
+without the `Bearer ` prefix.
+
+Directory (LDAP) accounts work here too: the password is verified against the directory with
+the same bind the login route uses.
+
+**On the server**, for automation with no browser:
 
 ```bash
 docker compose -f docker-compose.yaml exec backend \
@@ -206,13 +217,31 @@ needs to manage users or read API keys — an MCP server tending your library do
 self-describing: unlike a session JWT, revoking one does not mean rotating `JWT_SECRET` and
 signing out the web app and the phone as well.
 
+Your own tokens are listed and revoked under **My Account → API Tokens**, or from a shell:
+
 ```bash
 node create-api-token.js <username> --list
 node create-api-token.js <username> --revoke <token-id>
 ```
 
+**An administrator can revoke someone else's tokens without deleting the account** — the
+deprovisioning path, since blocking new mints is not revoking old ones. A token minted before
+a user lost access keeps working, and has no expiry unless one was set:
+
+```
+GET    /api/v2/users/{id}/tokens            what do they hold?
+DELETE /api/v2/users/{id}/tokens            revoke all of it
+DELETE /api/v2/users/{id}/tokens/{tokenId}  revoke one
+```
+
+These need an `admin`-scoped token; drive them from the API Docs page or curl. A user id that
+does not exist is a `404`, never `{"revoked": 0}` — a mistyped id must not read as "that
+account held nothing".
+
 Privilege is re-read from the database on every request, so demoting or deleting an account
 takes effect on its tokens immediately, and deleting a user removes their tokens with it.
+Revocation takes effect on the token's next request. It does **not** end sessions: a login
+JWT issued beforehand stays valid until it expires, at most twelve hours.
 `--expires-in-days N` adds an optional expiry, but the safety mechanism is revocation, not
 expiry.
 

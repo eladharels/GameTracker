@@ -47,16 +47,23 @@ info:
 
     ## Authentication
 
-    v2 accepts **personal access tokens only**. There is no login endpoint — minting the
-    first credential cannot itself require a credential, so tokens are created with
-    `create-api-token.js` inside the backend container:
+    v2 accepts **personal access tokens only**. There is no login endpoint here — minting
+    the first credential cannot itself require one, so tokens are created on a surface a
+    browser session can already reach.
+
+    **In the app**: My Account → API Tokens → New Token. Your password is asked for
+    again, because a token outlives the session that created it. The secret is shown
+    once and is not recoverable afterwards. Paste it into **Authorize** on the API
+    Reference page to call these operations from the browser.
+
+    **On the server**, for automation that has no browser:
 
     ```
     docker compose -f docker-compose.yaml exec backend \
       node create-api-token.js <username> "mcp" library
     ```
 
-    Send it as `Authorization: Bearer gt_pat_...`.
+    Either way, send it as `Authorization: Bearer gt_pat_...`.
 
     A 12-hour session JWT from v1's `POST /api/auth/login` is **not** accepted here. That
     is deliberate rather than tidiness: a JWT carries no scope, so honouring one would
@@ -1195,9 +1202,12 @@ components:
       scheme: bearer
       bearerFormat: gt_pat_<base64url>
       description: |
-        A personal access token from `create-api-token.js`. v1 session JWTs are not
-        accepted by v2 — a JWT carries no scope, so honouring one would make the admin
-        boundary bypassable by logging in with a password.
+        A personal access token: **My Account → API Tokens**, or `create-api-token.js`
+        on the server. Paste the `gt_pat_...` value alone — the `Bearer ` prefix is added
+        for you.
+
+        v1 session JWTs are not accepted by v2 — a JWT carries no scope, so honouring one
+        would make the admin boundary bypassable by logging in with a password.
 
   responses:
     Unauthorized:
