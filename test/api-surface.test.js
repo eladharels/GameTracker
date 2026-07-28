@@ -287,6 +287,10 @@ const EXPECTED_V2 = {
   'DELETE /api/v2/users/:userId/tokens': 'pat-admin:can_manage_users',
   'DELETE /api/v2/users/:userId/tokens/:tokenId': 'pat-admin:can_manage_users',
   'GET /api/v2/settings': 'pat-admin:can_manage_users',
+  // Live probes of every external dependency. Admin, matching v1: searchCatalog
+  // already tells a library-scoped caller which providers answered, so what this adds
+  // is infrastructure detail — latency, HTTP status, which keys are set.
+  'GET /api/v2/system/status': 'pat-admin:can_manage_users',
   'PATCH /api/v2/settings': 'pat-admin:can_manage_users',
   // Library-scoped on purpose: POST /library/refresh hands back a job, and an
   // operation whose own caller cannot poll the result is not an operation. Ownership,

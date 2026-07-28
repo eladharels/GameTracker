@@ -624,8 +624,9 @@ check('the admin operation set is PINNED, not merely non-empty', () => {
     // deleteUser is: they act on another account's credentials. An admin ACCOUNT
     // presenting a library-scoped token is not an admin here — authorize() has
     // already narrowed can_manage_users before requireAdminScope reads it.
-    ['createUser', 'deleteUser', 'getSettings', 'listUserTokens', 'listUsers',
-      'revokeAllUserTokens', 'revokeUserToken', 'startJob', 'updateSettings', 'updateUser'],
+    ['createUser', 'deleteUser', 'getSettings', 'getSystemStatus', 'listUserTokens',
+      'listUsers', 'revokeAllUserTokens', 'revokeUserToken', 'startJob', 'updateSettings',
+      'updateUser'],
     'the set of admin-scoped operations changed');
 });
 
@@ -666,6 +667,7 @@ check('the operation inventory is pinned', () => {
     'GET /settings getSettings',
     'GET /shares listShares',
     'GET /shares/incoming/{username}/games getSharedLibrary',
+    'GET /system/status getSystemStatus',
     'GET /tokens listTokens',
     'GET /users listUsers',
     'GET /users/directory listDirectory',

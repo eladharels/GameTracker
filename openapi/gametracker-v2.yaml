@@ -810,6 +810,48 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /system/status:
+    get:
+      tags: [admin]
+      operationId: getSystemStatus
+      x-implemented: true
+      x-required-scope: admin
+      summary: External service health
+      description: |
+        Probes every external dependency — the database and the five providers — and
+        reports each one's reachability, latency, and the last time it was known good.
+
+        **Live, not cached.** Each call actually contacts each provider, so it costs
+        real time (up to 8s per probe, run concurrently) and real quota. It is a
+        diagnostic, not something to poll.
+
+        **`unconfigured` is not an error**, and that distinction is most of the value.
+        A missing `THEGAMESDB_API_KEY` means that provider contributes nothing by
+        choice; a failing one means something is broken. `overall` counts unconfigured
+        as healthy, because an instance that deliberately skipped the optional provider
+        is not degraded — and a status endpoint that says otherwise teaches its reader
+        to ignore it.
+
+        Admin-scoped. A library-scoped credential does not need it: `searchCatalog`
+        already reports per-provider status in its own response, so an agent can tell
+        "no matches" from "IGDB is down" without this. What this adds beyond that is
+        infrastructure detail — latency, HTTP status, which keys are configured — which
+        is an operator's business.
+
+        Provider error messages are included but have every URL stripped, because a
+        provider's error body routinely quotes the request and these requests carry API
+        keys in their query strings.
+      responses:
+        '200':
+          description: |
+            The report. `200` even when `overall` is `degraded` — the check succeeded;
+            what it found is in the body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   # ----------------------------------------------------------------- sharing --
   /users/directory:
     get:
@@ -1691,6 +1733,50 @@ components:
           type: array
           items: { type: string, enum: [library, admin] }
         tokenExpiresAt: { type: [string, 'null'], format: date-time, description: Null when the token has no expiry. Revocation, not expiry, is the safety mechanism. }
+      additionalProperties: false
+
+    SystemStatus:
+      type: object
+      required: [overall, services, checkedAt]
+      properties:
+        overall:
+          type: string
+          enum: [ok, degraded]
+          description: |
+            `degraded` when any service is in `error`. `unconfigured` does not degrade
+            it — see the operation description.
+        services:
+          type: array
+          items: { $ref: '#/components/schemas/ServiceHealth' }
+        checkedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ServiceHealth:
+      type: object
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          enum: [database, igdb, rawg, thegamesdb, steam, crackwatch]
+        status:
+          type: string
+          enum: [ok, error, unconfigured]
+        latency:
+          type: [integer, 'null']
+          description: Milliseconds for this probe. Null when nothing was probed.
+        httpStatus:
+          type: [integer, 'null']
+          description: The upstream's status code, when it answered with one.
+        message:
+          type: [string, 'null']
+          description: |
+            Why it is unconfigured, or what it said when it failed. URLs are stripped —
+            a provider's error body quotes the request, and these carry API keys.
+        lastOk:
+          type: [string, 'null']
+          format: date-time
+          description: Last time this service was known good, across restarts.
+        lastOkLatency: { type: [integer, 'null'] }
       additionalProperties: false
 
     DirectoryEntry:

@@ -55,6 +55,7 @@ const sharesService = require('./services/shares');
 const libraryService = require('./services/library');
 const catalogService = require('./services/catalog');
 const jobsService = require('./services/jobs');
+const statusService = require('./services/status');
 const jobRunner = require('./services/job-runner');
 const usersService = require('./services/users');
 const authService = require('./services/auth');
@@ -417,88 +418,29 @@ function saveStatusOkCache() {
 }
 
 // System status endpoint — checks all external API connections
-app.get('/api/system-status', authRequired, requirePermission('can_manage_users'), async (req, res) => {
-  try {
-    // Strip URLs from error messages to prevent API keys in query params leaking back to the client
-    const safeMessage = (err) => {
-      const msg = err.response?.data?.message || err.response?.data?.status_message
-                || (Array.isArray(err.response?.data) && err.response.data[0]?.title)
-                || err.message || 'Unknown error';
-      return String(msg).replace(/https?:\/\/\S*/gi, '[URL redacted]');
-    };
-
-    const check = async (name, fn) => {
-      const start = Date.now();
-      try {
-        const meta = await fn();
-        const latency = Date.now() - start;
-        // Update cache in an isolated try so a file-write error never poisons the service result
-        try {
-          statusOkCache[name] = { lastOk: new Date().toISOString(), latency };
-          saveStatusOkCache();
-        } catch { /* non-fatal */ }
-        return { name, status: 'ok', latency };
-      } catch (err) {
-        return {
-          name,
-          status: 'error',
-          latency: Date.now() - start,
-          httpStatus: err.response?.status || null,
-          message: safeMessage(err),
-        };
-      }
-    };
-
-    const dbCheck = () => new Promise((resolve, reject) => {
-      db.get('SELECT 1', [], (err) => err ? reject(err) : resolve());
+app.get('/api/system-status', authRequired, requirePermission('can_manage_users'), (req, res) => {
+  // A thin adapter now. The six probes, the URL redaction, the unconfigured-is-not-an-
+  // error rule and the last-OK merge all live in services/status.js, because adding a
+  // v2 view of this meant either a second copy of them or one function. The RESPONSE
+  // SHAPE is unchanged and pinned in test/api-contract.test.js — the System Status page
+  // binds to it.
+  statusService.checkAll({
+    // The cache stays here: its file sits beside the other ephemeral caches under
+    // CACHE_DIR, which this file already loads, writes and tmpfs-mounts.
+    okCache: {
+      read: (name) => statusOkCache[name],
+      record: (name, entry) => { statusOkCache[name] = entry; saveStatusOkCache(); },
+    },
+    crackWatchCacheSize: Object.keys(crackWatchCache).length,
+  })
+    .then((report) => res.json(report))
+    .catch((err) => {
+      // checkAll does not reject for a failing provider — every probe has its own
+      // catch — so reaching here is structural. The message is NOT echoed: v1 sent
+      // `err.message`, which could carry provider detail.
+      console.error('[System Status] Unexpected error:', err.message);
+      res.status(500).json({ error: 'System status check failed' });
     });
-
-    const igdbClientId    = resolveApiKey('IGDB_CLIENT_ID');
-    const igdbBearerToken = resolveApiKey('IGDB_BEARER_TOKEN');
-    const rawgApiKey      = resolveApiKey('RAWG_API_KEY');
-    const tgdbApiKey      = resolveApiKey('THEGAMESDB_API_KEY');
-    const cacheSize       = Object.keys(crackWatchCache).length;
-
-    const checks = await Promise.all([
-      check('database', dbCheck),
-
-      (igdbClientId && igdbBearerToken)
-        ? check('igdb', () => axios.post(
-            'https://api.igdb.com/v4/games',
-            'fields id; limit 1;',
-            { headers: { 'Client-ID': igdbClientId, 'Authorization': `Bearer ${igdbBearerToken}`, 'Accept': 'application/json' }, timeout: 8000 }
-          ))
-        : { name: 'igdb', status: 'unconfigured', message: 'IGDB_CLIENT_ID or IGDB_BEARER_TOKEN not set' },
-
-      rawgApiKey
-        ? check('rawg', () => axios.get('https://api.rawg.io/api/games', { params: { key: rawgApiKey, page_size: 1, search: 'tetris' }, timeout: 8000 }))
-        : { name: 'rawg', status: 'unconfigured', message: 'RAWG_API_KEY not set' },
-
-      tgdbApiKey
-        ? check('thegamesdb', () => axios.get('https://api.thegamesdb.net/v1/Games/ByGameName', { params: { apikey: tgdbApiKey, name: 'tetris', 'fields[games]': 'id' }, timeout: 8000 }))
-        : { name: 'thegamesdb', status: 'unconfigured', message: 'THEGAMESDB_API_KEY not set (optional)' },
-
-      check('steam', () => axios.get('https://store.steampowered.com/api/featured', { timeout: 8000 })),
-
-      cacheSize > 0
-        ? Promise.resolve({ name: 'crackwatch', status: 'ok', message: `Cache has ${cacheSize} titles` })
-        : check('crackwatch', () => axios.get('https://api.crackwatch.com/api/games', { params: { page: 0, sort_by: 'release_date' }, timeout: 8000 }))
-            .then(r => ({ ...r, message: r.status === 'ok' ? 'Reachable (cache empty — run a refresh)' : r.message })),
-    ]);
-
-    // Merge persisted last-OK timestamps into each result
-    const enriched = checks.map(c => ({
-      ...c,
-      lastOk:        statusOkCache[c.name]?.lastOk    || null,
-      lastOkLatency: statusOkCache[c.name]?.latency   || null,
-    }));
-
-    const allOk = enriched.every(c => c.status === 'ok' || c.status === 'unconfigured');
-    res.json({ overall: allOk ? 'ok' : 'degraded', services: enriched, checkedAt: new Date().toISOString() });
-  } catch (err) {
-    console.error('[System Status] Unexpected error:', err.message);
-    res.status(500).json({ error: 'System status check failed: ' + err.message });
-  }
 });
 
 // Unified search endpoint: IGDB + RAWG + TheGamesDB
@@ -2210,6 +2152,48 @@ v2Router.post('/library/games', (req, res) => {
 //
 // v1 needs three requests and a directory fetch to build this: one for outgoing, one
 // for incoming, and the whole user list to turn usernames into display names.
+// GET /api/v2/system/status — the same probes the v1 System Status page runs.
+//
+// Admin-scoped, matching v1. A library-scoped credential does not need it:
+// searchCatalog already reports per-provider status in its own response, so an agent
+// can tell "no matches" from "IGDB is down" without this. What this adds is
+// infrastructure detail — latency, HTTP status, which keys are configured — which is
+// an operator's business, not an agent's.
+//
+// 200 even when `overall` is `degraded`: the CHECK succeeded, and what it found is the
+// body. Answering 5xx for a degraded dependency would make a monitoring client unable
+// to distinguish "this endpoint is broken" from "it is working and reporting a
+// problem", which is the whole reason it exists.
+v2Router.get('/system/status', requireAdminScope, (req, res) => {
+  statusService.checkAll({
+    okCache: {
+      read: (name) => statusOkCache[name],
+      record: (name, entry) => { statusOkCache[name] = entry; saveStatusOkCache(); },
+    },
+    crackWatchCacheSize: Object.keys(crackWatchCache).length,
+  })
+    .then((report) => res.json({
+      overall: report.overall,
+      checkedAt: report.checkedAt,
+      // Mapped explicitly rather than spread: this is the v2 wire format, and a field
+      // added to the service's shape must not appear here without someone deciding to
+      // put it in the contract.
+      services: report.services.map((svc) => ({
+        name: svc.name,
+        status: svc.status,
+        latency: svc.latency ?? null,
+        httpStatus: svc.httpStatus ?? null,
+        message: svc.message ?? null,
+        lastOk: svc.lastOk ?? null,
+        lastOkLatency: svc.lastOkLatency ?? null,
+      })),
+    }))
+    // checkAll does not reject for a failing provider — every probe has its own catch —
+    // so reaching here is structural. An uncoded error maps to 500 with its message
+    // withheld, which is what problem.js's `expose: false` on that row is for.
+    .catch((err) => v2.send(res, err, { log: '[v2] system status check failed:' }));
+});
+
 // GET /api/v2/users/directory — who can this library be shared WITH.
 //
 // Library-scoped, not admin. Sharing needs a target, and `listUsers` is admin-only —

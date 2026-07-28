@@ -135,6 +135,12 @@ GameTracker/
 │                                   #   process — a restart loses jobs and a poll for one that
 │                                   #   is gone is the same 404 as another account's. Knows
 │                                   #   nothing about what a job does; jobs.js owns that
+│   ├── status.js                   # The six external-dependency probes behind the System
+│                                   #   Status page and GET /api/v2/system/status. Was 120
+│                                   #   lines inline in a v1 route. `unconfigured` is NOT an
+│                                   #   error — an optional key nobody set is not an outage —
+│                                   #   and every upstream message has its URLs stripped,
+│                                   #   because these requests carry API keys in query strings
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
 │                                   #   dispatch() is the ONE service that never throws — four
 │                                   #   independent outcomes, advisory result. See services/errors.js
@@ -197,7 +203,7 @@ GameTracker/
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
 ├── openapi/
-│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 33 operations, ALL of them
+│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 34 operations, ALL of them
 │                                   #   now live (`x-implemented: true`). It is the SOURCE for
 │                                   #   the routes, not a description of them: the drift gate in
 │                                   #   api-surface.test.js fails if an operation is marked
@@ -258,7 +264,7 @@ GameTracker/
 >
 > The spec is the SOURCE: an operation marked `x-implemented: true` in
 > `openapi/gametracker-v2.yaml` must exist on the router, and every v2 route must be such an
-> operation. Both directions are enforced. All 33 are now implemented, so the practical
+> operation. Both directions are enforced. All 34 are now implemented, so the practical
 > effect is that a NEW v2 route requires a spec change first.
 >
 > **`requireAdminScope` is repeated per admin route, never applied with a path-scoped

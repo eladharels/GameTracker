@@ -1774,6 +1774,101 @@ checkAsync('a LOCAL account is unaffected', async () => {
   }
 });
 
+console.log('status.checkAll — the report the System Status page binds to:');
+{
+  const axiosMod = require('axios');
+  const dbMod = require('../db');
+  const statusSvc = require('../services/status');
+  const store = require('../settings-store');
+
+  const withProbes = async (impl, fn, { keys = true } = {}) => {
+    const realGet = axiosMod.get, realPost = axiosMod.post, realDbGet = dbMod.promises.get;
+    const realResolve = store.resolveApiKey;
+    axiosMod.get = impl; axiosMod.post = impl;
+    dbMod.promises.get = async () => ({ '?column?': 1 });
+    store.resolveApiKey = () => (keys ? 'configured-key' : '');
+    try { return await fn(); } finally {
+      axiosMod.get = realGet; axiosMod.post = realPost;
+      dbMod.promises.get = realDbGet; store.resolveApiKey = realResolve;
+    }
+  };
+
+  checkAsync('every service is reported, and a healthy instance is `ok`', async () => {
+    await withProbes(async () => ({ data: {} }), async () => {
+      const r = await statusSvc.checkAll({ crackWatchCacheSize: 5 });
+      assert.deepStrictEqual(r.services.map((s2) => s2.name).sort(), [...statusSvc.SERVICES].sort(),
+        'the report does not cover every service');
+      assert.strictEqual(r.overall, 'ok');
+      assert.ok(r.checkedAt, 'no checkedAt');
+    });
+  });
+
+  checkAsync('UNCONFIGURED does not degrade the instance', async () => {
+    // An instance that deliberately never set the optional TheGamesDB key is not
+    // broken. A status page that calls it degraded teaches its reader to ignore it.
+    await withProbes(async () => ({ data: {} }), async () => {
+      const r = await statusSvc.checkAll({ crackWatchCacheSize: 1 });
+      const unconfigured = r.services.filter((s2) => s2.status === 'unconfigured');
+      assert.ok(unconfigured.length >= 3, 'expected the keyed providers to be unconfigured');
+      assert.strictEqual(r.overall, 'ok', 'unconfigured providers degraded the instance');
+    }, { keys: false });
+  });
+
+  checkAsync('one failing provider degrades it, and the others still report', async () => {
+    let n = 0;
+    await withProbes(async () => { n++; if (n === 1) throw new Error('down'); return { data: {} }; }, async () => {
+      const r = await statusSvc.checkAll({ crackWatchCacheSize: 5 });
+      assert.strictEqual(r.overall, 'degraded');
+      assert.strictEqual(r.services.filter((s2) => s2.status === 'error').length, 1);
+      // The point of running them concurrently with per-probe catches: one outage must
+      // not cost the report.
+      assert.ok(r.services.filter((s2) => s2.status === 'ok').length >= 1,
+        'one failure suppressed the healthy results');
+    });
+  });
+
+  checkAsync('a provider error message NEVER carries a URL', async () => {
+    // These requests put API keys in query strings, and providers echo the request in
+    // their error bodies. This single substitution is why messages go through
+    // safeMessage rather than being err.message.
+    const leak = 'failed for https://api.rawg.io/api/games?key=SUPERSECRET&page_size=1';
+    await withProbes(async () => { const e = new Error(leak); throw e; }, async () => {
+      const r = await statusSvc.checkAll({ crackWatchCacheSize: 5 });
+      const blob = JSON.stringify(r);
+      assert.ok(!blob.includes('SUPERSECRET'), 'an API key reached the status report');
+      assert.ok(!/https?:\/\//.test(blob), `a URL reached the status report: ${blob.slice(0, 200)}`);
+    });
+    // And directly, including the shapes providers actually use.
+    assert.ok(!statusSvc.safeMessage({ response: { data: { message: 'see http://x/y?key=K' } } }).includes('http'));
+    assert.ok(!statusSvc.safeMessage({ response: { data: [{ title: 'at https://a/b?k=K' }] } }).includes('https'));
+  });
+
+  checkAsync('a populated DRM cache is healthy without contacting crackwatch', async () => {
+    let contacted = false;
+    await withProbes(async (url) => {
+      if (String(url).includes('crackwatch')) contacted = true;
+      return { data: {} };
+    }, async () => {
+      const r = await statusSvc.checkAll({ crackWatchCacheSize: 42 });
+      const cw = r.services.find((s2) => s2.name === 'crackwatch');
+      assert.strictEqual(cw.status, 'ok');
+      assert.match(cw.message, /42/);
+      assert.strictEqual(contacted, false, 'crackwatch was probed despite a populated cache');
+    });
+  });
+
+  checkAsync('a write failure on the last-OK cache does not fail a healthy probe', async () => {
+    // The cache is a convenience; the probe is the answer.
+    await withProbes(async () => ({ data: {} }), async () => {
+      const r = await statusSvc.checkAll({
+        crackWatchCacheSize: 5,
+        okCache: { read: () => null, record: () => { throw new Error('disk full'); } },
+      });
+      assert.strictEqual(r.overall, 'ok', 'a cache write error turned a healthy service into an outage');
+    });
+  });
+}
+
 console.log('jobs.fetchSteamPrice — three outcomes, never collapsed:');
 {
   const axiosMod = require('axios');

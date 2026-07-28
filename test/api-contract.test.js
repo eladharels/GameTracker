@@ -309,6 +309,43 @@ checkAsync('an unrecognised failure is a 500 with a fixed message, never the exc
 // the check with `if (false)` left the whole unit suite green while the endpoint
 // minted a permanent credential for anyone holding a session. That is the one thing
 // this route exists to prevent, so it is asserted against the handler that runs.
+// --- GET /api/system-status: a v1 shape that just moved into a service ------------
+//
+// The 120-line inline handler became a thin adapter over services/status.js so v2
+// could share the probes. The System Status page binds to this shape, and /api is
+// frozen — a field renamed on the way through the refactor breaks it silently.
+console.log('GET /api/system-status (v1 shape, after the extraction):');
+
+checkAsync('the report keeps its published shape', async () => {
+  const statusSvc = require('../services/status');
+  const axiosMod = require('axios');
+  const store = require('../settings-store');
+  const realGet = axiosMod.get, realPost = axiosMod.post, realDbGet = db.promises.get;
+  const realResolve = store.resolveApiKey;
+  axiosMod.get = async () => ({ data: {} });
+  axiosMod.post = async () => ({ data: {} });
+  db.promises.get = async () => ({ ok: 1 });
+  store.resolveApiKey = () => 'k';
+  let report;
+  try {
+    report = await statusSvc.checkAll({
+      crackWatchCacheSize: 3,
+      okCache: { read: () => ({ lastOk: '2026-01-01T00:00:00.000Z', latency: 12 }), record: () => {} },
+    });
+  } finally {
+    axiosMod.get = realGet; axiosMod.post = realPost;
+    db.promises.get = realDbGet; store.resolveApiKey = realResolve;
+  }
+  assertKeys(report, ['overall', 'services', 'checkedAt'], 'system status envelope');
+  // snake_case is deliberately absent and camelCase deliberately present: v1 emits
+  // lastOk/lastOkLatency/httpStatus here, unlike most of its surface.
+  const ok = report.services.find((s2) => s2.status === 'ok');
+  assertKeys(ok, ['name', 'status', 'latency', 'lastOk', 'lastOkLatency'], 'a healthy service row');
+  assert.strictEqual(ok.lastOk, '2026-01-01T00:00:00.000Z');
+  assert.strictEqual(ok.lastOkLatency, 12);
+  assert.ok(['ok', 'degraded'].includes(report.overall));
+});
+
 console.log('POST /api/user/me/tokens (sudo mode):');
 
 // A DISTINCT user id per call by default. The sudo gate is rate limited on user id
