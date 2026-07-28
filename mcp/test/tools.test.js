@@ -17,6 +17,7 @@ const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
 const { TOOLS } = require('../tools');
 const api = require('../api');
 const { tokenFromRequest, INSTRUCTIONS } = require('../server');
+const { GUIDE, CONVENTIONS, RESOURCES } = require('../guide');
 
 // --- the tool inventory, PINNED ---------------------------------------------------
 //
@@ -114,12 +115,77 @@ check('read-only tools are annotated read-only', () => {
   }
 });
 
-check('the instructions tell the model the two things it gets wrong unaided', () => {
-  // Both are failure modes seen in practice: inventing an id from a title, and
-  // rewriting a backlog order without reading it first.
+check('the instructions cover the four defaults an agent gets wrong', () => {
+  // Each is a failure mode that produces a confidently wrong answer rather than an
+  // error: inventing an id from a title, rewriting a backlog order without reading it,
+  // checking one status and declaring a game absent, and reporting a weekly price
+  // snapshot as today's.
   assert.match(INSTRUCTIONS, /igdb_/, 'the instructions do not show the id format');
   assert.match(INSTRUCTIONS, /search_games/, 'the instructions do not say to search before adding');
   assert.match(INSTRUCTIONS, /backlog/i, 'the instructions do not mention backlog ordering');
+  assert.match(INSTRUCTIONS, /exactly one status|one status/i,
+    'the instructions do not warn that a game has exactly one status');
+  assert.match(INSTRUCTIONS, /stale|snapshot/i,
+    'the instructions do not warn that lastPrice is stale');
+  assert.match(INSTRUCTIONS, /gametracker:\/\/guide/,
+    'the instructions do not point at the guide resource');
+});
+
+console.log('application documentation (what an agent needs to reason correctly):');
+
+check('the guide explains the application, not just the tools', () => {
+  // An agent connecting fresh has no idea what GameTracker IS. Tool descriptions
+  // cannot carry that — they describe one call each. These are the concepts a correct
+  // answer depends on, and every one of them has produced a wrong answer when missing.
+  const required = [
+    [/wishlist/, 'the wishlist status'],
+    [/playing/, 'the playing status'],
+    [/\bdone\b/, 'the done status'],
+    [/unreleased/, 'the unreleased status'],
+    [/assigned by the server|not chosen/i, 'that unreleased is assigned, not chosen'],
+    [/ordered/i, 'that the backlog is ordered'],
+    [/replaces the ENTIRE ordering|replaces the whole ordering/i, 'that reorder replaces wholesale'],
+    [/source-prefixed/i, 'the id format'],
+    [/read-only/i, 'that sharing is read-only'],
+    [/lastPrice/, 'the stored price field'],
+    [/weekly/i, 'that the stored price is weekly'],
+    [/crackStatus/, 'the DRM field'],
+    [/steamAppId/, 'the Steam id field'],
+    [/de-duplicated|merged/i, 'that search merges providers'],
+    [/still succeeds/i, 'that search degrades rather than failing'],
+    [/pagination|nextCursor/i, 'pagination'],
+  ];
+  for (const [pattern, what] of required) {
+    assert.match(GUIDE + CONVENTIONS, pattern,
+      `the application documentation does not explain ${what}`);
+  }
+});
+
+check('the guide states what is NOT available and says not to work around it', () => {
+  assert.match(GUIDE, /not reachable even with an administrator|deliberately absent/i,
+    'the guide does not say the admin surface is unavailable');
+  assert.match(GUIDE, /Do not attempt a workaround/i,
+    'the guide does not tell the agent to stop rather than improvise');
+});
+
+check('every resource is readable, described, and non-trivial', () => {
+  assert.ok(RESOURCES.length >= 2, 'expected a guide and a conventions resource');
+  for (const r of RESOURCES) {
+    assert.match(r.uri, /^gametracker:\/\//, `${r.name} has a non-namespaced uri`);
+    assert.ok(r.config.description.length >= 60, `${r.name}'s description is too thin to choose from`);
+    assert.ok(r.config.mimeType, `${r.name} has no mimeType`);
+    assert.ok(r.text.length > 800, `${r.name} is ${r.text.length} chars — too thin to be worth reading`);
+  }
+});
+
+check('the documentation contains no credential and no instance detail', () => {
+  // These are STATIC documents served to any caller. They must describe the
+  // application, never this deployment — a hostname or a key here would be handed to
+  // every agent that connects.
+  const blob = GUIDE + CONVENTIONS + INSTRUCTIONS;
+  assert.ok(!/gt_pat_[A-Za-z0-9]/.test(blob), 'a token-shaped value appears in the documentation');
+  assert.ok(!/https?:\/\/(?!modelcontextprotocol)/.test(blob), 'a URL appears in the documentation');
+  assert.ok(!/password\s*[:=]/i.test(blob), 'something password-shaped appears in the documentation');
 });
 
 // --- credentials ------------------------------------------------------------------

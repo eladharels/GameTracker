@@ -38,24 +38,11 @@ const SERVER_INFO = {
   version: '1.0.0',
 };
 
-// Instructions the client shows the model alongside the tool list. This is the one
-// place to say things that apply across tools rather than to any single one.
-const INSTRUCTIONS = `Tools for a self-hosted GameTracker instance — a personal game library.
-
-Every call acts as the GameTracker account whose token this client is configured with.
-Use whoami if you need to know which account that is.
-
-Two things worth knowing before you write anything:
-
-* Games are identified by a source-prefixed id like "igdb_1020", never by title. Find
-  one with search_games before calling add_game; the id cannot be constructed.
-* The backlog is ORDERED and the order is the user's stated intent about what to play
-  next. get_backlog returns it in that order. reorder_backlog replaces the ordering
-  wholesale, so read it before you write it.
-
-This server exposes library, catalog and sharing operations only. Account management,
-server settings and credential administration are deliberately not available here, even
-if the configured token would permit them.`;
+// The application explanation an agent needs, and the conventions for not destroying
+// anything with it. Both live in guide.js — see the header there for why most of it is
+// a RESOURCE rather than instructions: the instructions are sent on every connection,
+// while the guide is needed only when a question actually turns on it.
+const { INSTRUCTIONS, RESOURCES } = require('./guide');
 
 // Pull the personal access token off the request.
 //
@@ -72,7 +59,7 @@ function tokenFromRequest(req) {
 // Build a server bound to ONE caller's token.
 function serverForToken(token) {
   const server = new McpServer(SERVER_INFO, {
-    capabilities: { tools: {} },
+    capabilities: { tools: {}, resources: {} },
     instructions: INSTRUCTIONS,
   });
   for (const t of TOOLS) {
@@ -80,6 +67,14 @@ function serverForToken(token) {
       // The token travels on `extra`, which is per-invocation, rather than being read
       // from module state. Nothing shared, nothing to race.
       t.handler(args, { ...extra, _gametrackerToken: token }));
+  }
+  // Static documents. They describe the application, not this account's data, so they
+  // need no credential and reveal nothing about the instance — which is why they are
+  // served from a constant rather than fetched.
+  for (const r of RESOURCES) {
+    server.registerResource(r.name, r.uri, r.config, async (uri) => ({
+      contents: [{ uri: uri.href, mimeType: r.config.mimeType, text: r.text }],
+    }));
   }
   return server;
 }
