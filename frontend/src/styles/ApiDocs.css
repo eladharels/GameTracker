@@ -46,18 +46,27 @@
   color: var(--text-muted);
 }
 
-/* Block, not inline: these are shell commands, and a command that wraps mid-flag is
-   a command someone pastes wrong. */
+/* Inline by default. An earlier revision made every `code` a block, which turned the
+   sentence "Use `admin` instead of `library`" into three stacked slabs with the prose
+   between them — the words were all still there and the sentence was unreadable. */
 .api-docs-note code {
+  padding: 0.1rem 0.35rem;
+  background: var(--surface-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  font-size: 0.85em;
+  color: var(--text-primary);
+}
+
+/* Shell commands ARE blocks, and do not wrap: a command broken mid-flag is a command
+   someone pastes wrong. Opted into explicitly rather than applied to every `code`. */
+.api-docs-note code.api-docs-cmd {
   display: block;
   margin: 0.5rem 0;
   padding: 0.6rem 0.8rem;
-  background: var(--surface-0);
-  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
   font-size: 0.82rem;
-  color: var(--text-primary);
   overflow-x: auto;
   white-space: pre;
 }

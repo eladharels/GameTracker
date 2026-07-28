@@ -192,6 +192,13 @@ const EXPECTED = {
   'GET /api/user/me': 'auth',
   'GET /api/user/me/games': 'auth',
   'PUT /api/user/me/settings': 'auth',
+  // Token management, session-authenticated. The BOOTSTRAP surface: /api/v2 takes
+  // tokens only, so the endpoint that mints your first one cannot require one. All
+  // three act on req.user.id — the caller's own row, never a path parameter — so
+  // there is no ownership check to add and nothing an adapter could pass wrongly.
+  'GET /api/user/me/tokens': 'auth',
+  'POST /api/user/me/tokens': 'auth',
+  'DELETE /api/user/me/tokens/:tokenId': 'auth',
   'PUT /api/user/me/sharing': 'auth',
   // Under /api/admin/ but deliberately NOT admin — non-admins use it for the
   // Diagnostics tab to test their own notification channels. Asserted so the

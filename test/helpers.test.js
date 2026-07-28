@@ -1670,6 +1670,77 @@ check('no INSERT into users writes a caller-supplied notification target', () =>
   );
 });
 
+console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
+{
+  const dbMod = require('../db');
+  const bcryptLib = require('bcryptjs');
+  const withRow = async (row, fn) => {
+    const real = dbMod.promises.get;
+    dbMod.promises.get = async () => row;
+    try { return await fn(); } finally { dbMod.promises.get = real; }
+  };
+
+  checkAsync('the right password passes and the wrong one does not', async () => {
+    const hash = await bcryptLib.hash('correct horse', 10);
+    await withRow({ password: hash, origin: 'local' }, async () => {
+      assert.deepStrictEqual(await usersService.verifyPassword(1, 'correct horse'), { ok: true });
+      assert.strictEqual((await usersService.verifyPassword(1, 'wrong')).ok, false);
+      // Case matters, and so does whitespace — no trimming on a password, ever.
+      assert.strictEqual((await usersService.verifyPassword(1, 'Correct Horse')).ok, false);
+      assert.strictEqual((await usersService.verifyPassword(1, ' correct horse ')).ok, false);
+    });
+  });
+
+  checkAsync('a NULL password never reaches bcrypt, and never passes', async () => {
+    // Directory accounts have no local hash. bcrypt.compare REJECTS on a null hash
+    // rather than returning false — and an unhandled rejection in the route's promise
+    // chain takes the process down under Node's default --unhandled-rejections=throw.
+    // The refusal is also the control: "cannot verify" must not degrade to "verified".
+    for (const stored of [null, undefined, '', 0, {}]) {
+      await withRow({ password: stored, origin: 'ldap' }, async () => {
+        const out = await usersService.verifyPassword(1, 'anything at all');
+        assert.strictEqual(out.ok, false, `a stored password of ${JSON.stringify(stored)} was accepted`);
+        assert.strictEqual(out.reason, 'not_local');
+      });
+    }
+  });
+
+  checkAsync('a non-string or empty supplied password is refused before any lookup', async () => {
+    let looked = 0;
+    const real = dbMod.promises.get;
+    dbMod.promises.get = async () => { looked++; return null; };
+    try {
+      for (const bad of [undefined, null, '', 0, 1, {}, [], true]) {
+        const out = await usersService.verifyPassword(1, bad);
+        assert.strictEqual(out.ok, false, `verifyPassword accepted ${JSON.stringify(bad)}`);
+        assert.strictEqual(out.reason, 'missing');
+      }
+      assert.strictEqual(looked, 0, 'a malformed password still hit the database');
+    } finally { dbMod.promises.get = real; }
+  });
+
+  checkAsync('an unknown user id fails closed', async () => {
+    await withRow(undefined, async () => {
+      assert.strictEqual((await usersService.verifyPassword(999, 'x')).ok, false);
+    });
+  });
+
+  checkAsync('the reasons are distinct enough to route, without being an oracle', async () => {
+    // The ADAPTER collapses wrong_password and missing into one 403 so a caller cannot
+    // learn which it was. The service still reports them separately, because
+    // `not_local` has to reach a different message — that is the whole point of
+    // returning a reason rather than a boolean. Both halves are asserted: here, and in
+    // the route, which answers the same 403 for both.
+    const hash = await bcryptLib.hash('pw', 10);
+    await withRow({ password: hash, origin: 'local' }, async () => {
+      assert.strictEqual((await usersService.verifyPassword(1, 'nope')).reason, 'wrong_password');
+    });
+    await withRow({ password: null, origin: 'ldap' }, async () => {
+      assert.strictEqual((await usersService.verifyPassword(1, 'nope')).reason, 'not_local');
+    });
+  });
+}
+
 checkAsync('a duplicate username is CONFLICT, matched on SQLSTATE and not on message text', async () => {
   // The other half of the v1 shim asserted in api-contract.test.js: that shim only
   // fires if create() actually throws CONFLICT here. db.js divergence #11 — match the

@@ -47,10 +47,14 @@ export default function ApiDocsPage() {
           <strong>Authorize</strong>.
         </p>
         <p className="api-docs-hint">
-          Tokens are minted on the server, once, and shown once:
-          <code>docker compose exec backend node create-api-token.js &lt;user&gt; &quot;name&quot; library</code>
-          Use <code>admin</code> instead of <code>library</code> for the user-management and
-          settings operations.
+          Create one under <strong>My Account → API Tokens</strong>. Choose the{' '}
+          <code>library</code> scope for your own games, or <code>admin</code> for the
+          user-management, settings and jobs operations.
+        </p>
+        <p className="api-docs-hint">
+          If your account signs in through a directory, the browser cannot verify your
+          password — mint the token on the server instead:
+          <code className="api-docs-cmd">docker compose exec backend node create-api-token.js &lt;user&gt; &quot;name&quot; library</code>
         </p>
         <p className="api-docs-hint">
           The older <strong>/api</strong> surface — the one this web app itself uses — is frozen

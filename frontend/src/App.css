@@ -6288,3 +6288,216 @@ body, html {
   color: var(--text-secondary);
   font-family: var(--font-sans);
 }
+
+/* ── API tokens (My Account) ──────────────────────────────────────────────────
+   The one-time reveal is the load-bearing piece of this UI: the server stores only
+   a hash, so a user who scrolls past the token has lost it and must mint another.
+   It is therefore a persistent, dismiss-on-purpose panel rather than a toast. */
+
+.token-reveal {
+  margin: 1rem 0 1.25rem;
+  padding: 1rem 1.15rem;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+}
+
+.token-reveal-head {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  margin-bottom: 0.85rem;
+  color: var(--text-primary);
+}
+
+.token-reveal-icon { color: var(--color-accent); flex-shrink: 0; margin-top: 0.15rem; }
+.token-reveal-sub { color: var(--text-secondary); font-size: 0.85rem; margin-top: 0.2rem; }
+
+.token-reveal-value {
+  display: flex;
+  gap: 0.6rem;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+/* The token must be selectable and fully visible — never truncated with an ellipsis.
+   A half-copied credential fails in a way that looks like a server problem. */
+.token-reveal-value code {
+  flex: 1 1 22rem;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-0);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  word-break: break-all;
+  user-select: all;
+}
+
+.token-copy-btn { flex-shrink: 0; }
+
+.token-reveal-dismiss {
+  margin-top: 0.85rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.token-reveal-dismiss:hover { color: var(--text-primary); }
+
+.token-empty {
+  padding: 1.25rem 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.token-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.token-row:last-child { border-bottom: none; }
+.token-row--expired { opacity: 0.55; }
+
+.token-row-main { flex: 1; min-width: 0; }
+
+.token-row-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  color: var(--text-primary);
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.token-row-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.token-row-meta {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.3rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.token-badge {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+}
+.token-badge--library { background: var(--accent-soft); border-color: var(--accent-border); color: var(--text-primary); }
+/* Admin is amber rather than accent-tinted: it is the one scope worth reading twice,
+   and it must not blend into whichever accent preset the user has chosen. */
+.token-badge--admin { background: rgba(252,161,48,0.14); border-color: rgba(252,161,48,0.45); color: #fcbe6b; }
+.token-badge--expired { background: rgba(249,62,62,0.12); border-color: rgba(249,62,62,0.4); color: #f98b8b; }
+
+.token-revoke-btn {
+  flex-shrink: 0;
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.65rem;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.token-revoke-btn:hover:not(:disabled) {
+  background: rgba(249,62,62,0.14);
+  border-color: rgba(249,62,62,0.45);
+  color: #f98b8b;
+}
+.token-revoke-btn:disabled { opacity: 0.5; cursor: default; }
+.token-revoke-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+.token-form {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.token-field { display: flex; flex-direction: column; gap: 0.35rem; border: none; padding: 0; margin: 0; }
+.token-field > span, .token-field > legend {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0;
+}
+.token-field > span em { color: var(--text-muted); font-weight: 400; font-style: normal; }
+.token-field small { color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; }
+
+.token-field input[type=text],
+.token-field input[type=password],
+.token-field input[type=date] {
+  background: var(--surface-0);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.92rem;
+}
+.token-field input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.token-scopes { gap: 0.6rem; }
+
+.token-scope {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.token-scope:hover { border-color: var(--border-strong); }
+.token-scope--active { border-color: var(--accent-border); background: var(--accent-soft); }
+.token-scope input { margin-top: 0.2rem; flex-shrink: 0; accent-color: var(--color-accent); }
+.token-scope span { display: flex; flex-direction: column; gap: 0.15rem; }
+.token-scope strong { color: var(--text-primary); font-size: 0.9rem; }
+.token-scope:focus-within { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+.token-cancel-btn {
+  background: none;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 1.1rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.token-cancel-btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-strong); }
+
+@media (max-width: 640px) {
+  .token-row { flex-wrap: wrap; }
+  .token-reveal-value code { flex-basis: 100%; }
+}

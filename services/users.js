@@ -264,6 +264,50 @@ async function create(fields) {
   return { id: ctx.lastID, username: normalized };
 }
 
+// Re-verify a password for an ALREADY-AUTHENTICATED account.
+//
+// This is the "sudo mode" check: minting a personal access token from the browser
+// must cost more than holding a session cookie, because a stolen 12-hour session
+// would otherwise be upgradeable into a credential that never expires and cannot be
+// read back after it is created. GitHub and GitLab both gate token creation this way.
+//
+// LOCAL ACCOUNTS ONLY, and the refusal for LDAP accounts is deliberate rather than a
+// gap. Verifying a directory password means resolve-the-DN-then-bind-as-the-user,
+// which is steps 1-3 of POST /api/auth/login — a route carrying three separately
+// documented authentication bypasses in its history, two of them in exactly that
+// search-result handling. A second copy of it here would be a second thing to get
+// right forever, and this codebase has repeatedly paid for duplicated logic drifting
+// (the release sweep reached four copies; the metadata refresh, five).
+//
+// So an LDAP account is told to use create-api-token.js on the server, which needs
+// shell access — a higher bar than the browser, not a lower one. This FAILS CLOSED:
+// the alternative shape, "skip the check when we cannot perform it", would silently
+// remove the control for precisely the accounts that are domain identities.
+//
+// Returns a discriminated result rather than a boolean so the adapter can tell "wrong
+// password" from "cannot check here" — they are different answers to the caller.
+async function verifyPassword(userId, password) {
+  if (typeof password !== 'string' || password === '') {
+    return { ok: false, reason: 'missing' };
+  }
+  // `db.promises.get` through the module, not the destructured `get`. A destructured
+  // binding cannot be intercepted, so a test that stubs db.promises.get would install
+  // the stub, never call it, and pass against whatever the real database returned —
+  // the silent false pass CLAUDE.md documents. It happened here on the first run:
+  // the suite reached the live host and failed with ENOTFOUND rather than lying, but
+  // only because there was no database to reach.
+  const row = await db.promises.get('SELECT password, origin FROM users WHERE id = ?', [userId]);
+  if (!row) return { ok: false, reason: 'no_such_user' };
+  // The column is NULL for directory accounts. Checked before bcrypt.compare, which
+  // rejects with "Illegal arguments" on a null hash — an unhandled rejection there
+  // takes the process down under Node's default --unhandled-rejections=throw.
+  if (!row.password || typeof row.password !== 'string') {
+    return { ok: false, reason: 'not_local', origin: row.origin || 'ldap' };
+  }
+  const valid = await bcrypt.compare(password, row.password);
+  return valid ? { ok: true } : { ok: false, reason: 'wrong_password' };
+}
+
 // Delete an account. Refuses self-deletion and the root account.
 //
 // `user_shares` rows go with it via ON DELETE CASCADE, which Postgres now actually
@@ -380,7 +424,7 @@ async function updateNotificationSettings(userId, fields) {
 }
 
 module.exports = {
-  listAll, findById, create, update, remove,
+  listAll, findById, create, update, remove, verifyPassword,
   assertNotUserOwned, ADMIN_LIST_COLUMNS, USER_OWNED_NOTIFICATION_COLUMNS,
   ADMIN_WRITABLE_COLUMNS,
   readNotificationSettings, updateNotificationSettings, NOTIFICATION_DAYS_DEFAULT,

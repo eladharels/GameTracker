@@ -6,6 +6,7 @@ import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSor
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 import GameDetailModal from './GameDetailModal'
+import ApiTokensSection from './ApiTokensSection'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
 // Statically imported it would land in the main chunk and slow every login.
@@ -242,7 +243,7 @@ function App() {
           <Route path="/library" element={<LibraryPage user={user} />} />
           <Route path="/shared-library" element={<SharedLibrary />} />
           <Route path="/calendar" element={<CalendarPage user={user} />} />
-          <Route path="/account" element={<AccountPage />} />
+          <Route path="/account" element={<AccountPage user={user} />} />
           <Route path="/users" element={<UserManagementPage user={user} />} />
           <Route path="/settings" element={<SettingsPage />} />
           {/* Suspense boundary is required by the lazy import above. The fallback is
@@ -1792,7 +1793,7 @@ const NOTIF_DAY_OPTIONS = [
   { days: 60, label: '60 days before' },
 ]
 
-function AccountPage() {
+function AccountPage({ user }) {
   const token = localStorage.getItem('token')
   const authH = { headers: { Authorization: `Bearer ${token}` } }
 
@@ -1939,6 +1940,8 @@ function AccountPage() {
             {error.schedule && <span className="ent-test-error"><FaExclamationCircle /> {error.schedule}</span>}
           </div>
         </div>
+
+        <ApiTokensSection canManageUsers={!!user?.can_manage_users} />
       </div>
     </div>
   )

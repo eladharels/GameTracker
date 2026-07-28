@@ -302,6 +302,88 @@ checkAsync('an unrecognised failure is a 500 with a fixed message, never the exc
   assert.deepStrictEqual(res.body, { error: 'Failed to create user' });
 });
 
+// --- POST /api/user/me/tokens: the sudo-mode gate lives in the ADAPTER ----------
+//
+// services/users.js#verifyPassword is unit-tested, but the DECISION to call it — and
+// to refuse when it says no — is three lines in the route. A mutation that replaced
+// the check with `if (false)` left the whole unit suite green while the endpoint
+// minted a permanent credential for anyone holding a session. That is the one thing
+// this route exists to prevent, so it is asserted against the handler that runs.
+console.log('POST /api/user/me/tokens (sudo mode):');
+
+async function callMintToken(body, { verify, create } = {}) {
+  const usersService = require('../services/users');
+  const authService = require('../services/auth');
+  const realVerify = usersService.verifyPassword;
+  const realCreate = authService.createToken;
+  let created = 0;
+  usersService.verifyPassword = verify || (async () => ({ ok: true }));
+  authService.createToken = async (args) => {
+    created++;
+    return create ? create(args) : { id: 1, token: 'gt_pat_x', hint: 'x', name: args.name, scopes: args.scopes || ['library'] };
+  };
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/user/me/tokens')(
+      { body, user: { id: 7, username: 'someone', can_manage_users: false } }, res);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+  } finally {
+    usersService.verifyPassword = realVerify;
+    authService.createToken = realCreate;
+  }
+  return { res, created };
+}
+
+checkAsync('a wrong password mints NOTHING and answers 403', async () => {
+  const { res, created } = await callMintToken(
+    { name: 'x', password: 'wrong' },
+    { verify: async () => ({ ok: false, reason: 'wrong_password' }) });
+  assert.strictEqual(res.statusCode, 403);
+  assert.strictEqual(created, 0, 'a token was created despite the password check failing');
+});
+
+checkAsync('a MISSING password is the same 403 — not a distinguishable answer', async () => {
+  // Collapsed on purpose. Telling "you sent no password" apart from "that password is
+  // wrong" hands an attacker holding a stolen session a way to probe, and there is
+  // nothing a legitimate caller does differently with the two.
+  const missing = await callMintToken({ name: 'x' }, { verify: async () => ({ ok: false, reason: 'missing' }) });
+  const wrong = await callMintToken({ name: 'x', password: 'no' }, { verify: async () => ({ ok: false, reason: 'wrong_password' }) });
+  assert.strictEqual(missing.res.statusCode, wrong.res.statusCode);
+  assert.deepStrictEqual(missing.res.body, wrong.res.body);
+  assert.strictEqual(missing.created + wrong.created, 0);
+});
+
+checkAsync('a directory account is told where to go, and still mints nothing', async () => {
+  const { res, created } = await callMintToken(
+    { name: 'x', password: 'whatever' },
+    { verify: async () => ({ ok: false, reason: 'not_local', origin: 'ldap' }) });
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(created, 0);
+  assert.match(res.body.error, /create-api-token\.js/,
+    'the LDAP refusal must name the way forward, or it is a dead end');
+});
+
+checkAsync('the scope FLOOR comes from the account, never from the body', async () => {
+  // req.user.can_manage_users is false in this harness, so `grantedScopes` must not
+  // contain admin however the body is decorated. The service refuses to widen beyond
+  // grantedScopes; this asserts the route hands it the right set to begin with.
+  let seen = null;
+  await callMintToken(
+    { name: 'x', password: 'ok', scopes: ['admin'], grantedScopes: ['admin'] },
+    { create: (args) => { seen = args; return { id: 1, token: 't', scopes: args.scopes }; } });
+  assert.deepStrictEqual(seen.grantedScopes, ['library'],
+    'a non-admin session offered admin in grantedScopes — the floor is the account, not the request');
+});
+
+checkAsync('a correct password mints, and answers 201 with the plaintext', async () => {
+  const { res, created } = await callMintToken({ name: 'ok', password: 'right' });
+  assert.strictEqual(res.statusCode, 201);
+  assert.strictEqual(created, 1);
+  // This is the ONE response in the whole API that carries the secret.
+  assert.ok(res.body.token, 'the mint response has no token in it — it is unrecoverable afterwards');
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

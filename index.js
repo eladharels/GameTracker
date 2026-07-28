@@ -2804,6 +2804,93 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
   }
 });
 
+// --- Personal access tokens, managed from the browser ------------------------
+//
+// The BOOTSTRAP surface, and the second (and intended last) documented exception to
+// the v1 freeze — same reason as GET /api/openapi/v2, stated in CLAUDE.md: /api/v2
+// takes tokens only, so the endpoint that MINTS your first token cannot itself
+// require one. `POST /api/v2/tokens` still exists and is the right call for a script
+// that already holds a token; this is how a human gets the first one without a shell
+// on the server, which until now was the only way.
+//
+// All three are session-authenticated and operate on `req.user.id` — the caller's own
+// row, never a path parameter. There is no user to pass wrongly, which is why these
+// need neither ownershipRequired nor selfOnly.
+
+// The caller's own tokens. The secret is not stored in plaintext and cannot be
+// re-derived, so this is a list of what exists, not of what they are.
+app.get('/api/user/me/tokens', authRequired, (req, res) => {
+  authService.listTokens(req.user.id)
+    .then((rows) => res.json({ tokens: rows }))
+    .catch((err) => problem.send(res, err, { log: '[Tokens] List failed:' }));
+});
+
+// Mint one. The plaintext is in this response and nowhere else, ever again.
+app.post('/api/user/me/tokens', authRequired, (req, res) => {
+  const body = req.body || {};
+
+  // SUDO MODE. Holding a session must not be enough to mint a credential that
+  // outlives it: a stolen 12-hour JWT would otherwise be upgradeable into permanent
+  // access, which is a persistence escalation even though it grants nothing the JWT
+  // did not already have for those 12 hours. Re-entering the password is what GitHub
+  // and GitLab both require here, and it is checked BEFORE anything is created.
+  usersService.verifyPassword(req.user.id, body.password)
+    .then((check) => {
+      if (!check.ok) {
+        if (check.reason === 'not_local') {
+          // Directory accounts cannot be verified here — see the comment on
+          // verifyPassword for why a second copy of the LDAP bind is refused rather
+          // than written. 400, not 403: nothing is forbidden, this surface simply
+          // cannot perform the check, and the caller has somewhere else to go.
+          return res.status(400).json({
+            error: 'Your account signs in through the directory, so this page cannot verify '
+              + 'your password. Ask an administrator to mint a token with '
+              + 'create-api-token.js on the server.',
+          });
+        }
+        // One answer for a missing password and a wrong one. Distinguishing them
+        // turns this into an oracle for whether the SESSION is still the right
+        // account's, which is exactly what an attacker holding a stolen JWT probes.
+        return res.status(403).json({ error: 'Incorrect password.' });
+      }
+
+      // The scope FLOOR, applied here rather than trusted from the body: a token may
+      // never carry a privilege the account itself does not hold. The service already
+      // refuses to widen beyond `grantedScopes`; this is what that set is for a
+      // browser session, which — unlike a token — has no scopes of its own to narrow.
+      const granted = req.user.can_manage_users
+        ? [authService.SCOPES.LIBRARY, authService.SCOPES.ADMIN]
+        : [authService.SCOPES.LIBRARY];
+
+      return authService.createToken({
+        userId: req.user.id,
+        name: body.name,
+        scopes: body.scopes,
+        expiresAt: body.expiresAt ?? null,
+        grantedScopes: granted,
+      }).then((result) => {
+        console.log(`[Tokens] '${safeForLog(req.user.username, 64)}' minted a token `
+          + `(scopes: ${result.scopes.join(',')})`);
+        res.status(201).json(result);
+      });
+    })
+    .catch((err) => problem.send(res, err, { log: '[Tokens] Create failed:' }));
+});
+
+// Revocation is the whole point of the design — and the reason the list above is
+// worth rendering at all: a token you did not create is only actionable if you can
+// see it and remove it. Owner-scoped inside the DELETE, so another account's id
+// removes nothing.
+app.delete('/api/user/me/tokens/:tokenId', authRequired, (req, res) => {
+  const id = parseRouteId(req.params.tokenId);
+  if (id === null) return res.status(404).json({ error: 'Token not found' });
+  authService.revokeToken(id, req.user.id)
+    .then(() => res.json({ success: true }))
+    .catch((err) => problem.send(res, err, {
+      log: '[Tokens] Revoke failed:', messages: { [SVC.NOT_FOUND]: 'Token not found' },
+    }));
+});
+
 // --- Get current user's profile/settings ---
 app.get('/api/user/me', authRequired, (req, res) => {
   const userId = req.user.id;
