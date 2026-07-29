@@ -579,6 +579,55 @@ jobs:
           done
           echo "[smoke] Status history + statistics checks PASSED"
 
+      # The statistics route THROUGH EXPRESS, which nothing else exercises.
+      #
+      # Both integration tests above call services directly, so every adapter between
+      # the socket and the service — authRequired, ownershipRequired, withExistingUser,
+      # problem.send — ships unexercised. CLAUDE.md says exactly this about
+      # api-contract.test.js ("it cannot see the Express adapters") and names the smoke
+      # stage as the fix; this is that fix, for the one route added here.
+      #
+      # The 401 is the assertion that matters most. A route silently losing its
+      # authorization middleware still returns 200 to an authenticated caller, so a
+      # happy-path check alone would not notice.
+      - name: Verify the statistics route through Express
+        run: |
+          set -euo pipefail
+          BASE="http://127.0.0.1:${{ env.BACKEND_TEST_PORT }}"
+
+          UNAUTH=$(curl -o /dev/null -sw "%{http_code}" "$BASE/api/user/root/stats")
+          echo "[smoke] unauthenticated GET /api/user/root/stats -> $UNAUTH"
+          [ "$UNAUTH" -eq 401 ] || {
+            echo "[smoke] ERROR: the stats route answered $UNAUTH without a token, expected 401."
+            echo "[smoke] authRequired is not on this route."
+            exit 1
+          }
+
+          TOKEN=$(curl -sf -X POST "$BASE/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d '{"username":"root","password":"smoke-test-root-not-a-real-password"}' \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          [ -n "$TOKEN" ] || { echo "[smoke] ERROR: could not log in as root"; exit 1; }
+
+          STATUS=$(curl -o /tmp/smoke-stats.json -sw "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" "$BASE/api/user/root/stats")
+          echo "[smoke] authenticated GET -> $STATUS: $(head -c 200 /tmp/smoke-stats.json)"
+          [ "$STATUS" -eq 200 ] || {
+            echo "[smoke] ERROR: authenticated stats request returned $STATUS"
+            docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
+            exit 1
+          }
+          # Shape, not just a 200 — an empty body or an HTML error page is also a 200
+          # from some proxies, and the page renders a missing field as a confident zero.
+          for key in coverage completions durations trackingSince; do
+            grep -q "\"$key\"" /tmp/smoke-stats.json || {
+              echo "[smoke] ERROR: stats response is missing \"$key\""
+              exit 1
+            }
+          done
+          rm -f /tmp/smoke-stats.json
+          echo "[smoke] Statistics route check PASSED"
+
       # A real MCP handshake against the real container, on the image's own Node.
       #
       # This is the check that was missing. The MCP server shipped a full deploy cycle

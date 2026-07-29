@@ -94,6 +94,13 @@ regexes = [
   # These are intentionally not real credentials
   '''smoke-test-dummy''',
   '''smoke-test-jwt-secret-not-real''',
+  # The smoke stack's throwaway Postgres and root credentials. Both live only in
+  # docker-compose.test.yml, on an ephemeral database torn down with --volumes and
+  # never published beyond 127.0.0.1. ROOT_PASSWORD is deterministic there on purpose
+  # so the smoke test can log in and exercise a route through Express, which is the
+  # only way the auth middleware gets tested at all.
+  '''smoke-test-not-a-real-password''',
+  '''smoke-test-root-not-a-real-password''',
 
   # 'supersecretkey' is the value index.js REJECTS at boot (the old insecure
   # default). It is a deny-list entry in the JWT_SECRET guard, not a fallback —

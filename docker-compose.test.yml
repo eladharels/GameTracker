@@ -64,6 +64,13 @@ services:
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN:-smoke-test-dummy}
       - RAWG_API_KEY=${RAWG_API_KEY:-smoke-test-dummy}
       - JWT_SECRET=${JWT_SECRET:-smoke-test-jwt-secret-not-real}
+      # Deterministic so the smoke test can LOG IN and exercise a route through
+      # Express. Without it the root seed generates a random password printed once,
+      # which no automated step can use — so every assertion had to call services
+      # directly and the adapters (authRequired, ownershipRequired, withExistingUser,
+      # problem.send) shipped unexercised. Throwaway database, never LAN-reachable,
+      # same class of dummy credential as POSTGRES_PASSWORD above.
+      - ROOT_PASSWORD=smoke-test-root-not-a-real-password
     depends_on:
       db:
         condition: service_healthy
