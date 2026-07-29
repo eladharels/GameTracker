@@ -116,10 +116,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node.js 20
+      # MUST match the major in the Dockerfiles, and test/runtime.test.js fails the
+      # build if it does not. This ran Node 20 while the MCP image ran node:18, so the
+      # suites passed on an interpreter production never used and a server that could
+      # not answer a single request shipped with every job green.
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # --ignore-scripts: the backend depends on sqlite3, which has no prebuilt
       # binary for this platform and compiles from source via node-gyp (~60s). The

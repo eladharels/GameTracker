@@ -360,31 +360,13 @@ checkAsync('a tool called without a token fails closed, and says why', async () 
 //
 // /health kept returning 200 throughout. Liveness is not readiness for a protocol server.
 
-console.log('the runtime the image ships:');
-
-check('the Dockerfile base image satisfies the engines floor', () => {
-  const fs = require('fs');
-  const path = require('path');
-  const root = path.join(__dirname, '..');
-
-  const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
-  const from = /^FROM\s+node:(\d+)/m.exec(dockerfile);
-  assert.ok(from, 'no `FROM node:<major>` in the Dockerfile — cannot verify the runtime');
-
-  const engines = require('../package.json').engines?.node;
-  assert.ok(engines, 'package.json declares no engines.node floor');
-  // Anchored on `>=` rather than the first number in the string. A bare /(\d+)/ would
-  // read "18.x || >=20" as a floor of 18 and pass a node:18 image — failing open on
-  // the exact range shape someone writes when they want to keep 18 working.
-  const floor = /">="?\s*(\d+)|>=\s*(\d+)/.exec(engines);
-  assert.ok(floor, `engines.node must express a >= floor, got: ${engines}`);
-  const floorMajor = floor[1] || floor[2];
-
-  assert.ok(Number(from[1]) >= Number(floorMajor),
-    `Dockerfile runs node:${from[1]} but package.json requires node${engines}. `
-    + 'The SDK transport needs globalThis.crypto (Node 19+); below that EVERY MCP '
-    + 'request fails while /health still answers 200.');
-});
+// The Dockerfile-vs-engines assertion used to live here. It now covers BOTH images
+// from test/runtime.test.js in the repository root, because two copies of it had to
+// agree on a regex that is easy to get wrong: an earlier version accepted
+// "18.x || >=20" as a floor of 20, which reads like a floor while still permitting
+// Node 18. One home, one regex, both images.
+//
+// What stays here is the handshake, which is about the SERVER rather than the image.
 
 checkAsync('a real initialize handshake succeeds over HTTP', async () => {
   // The end-to-end check the inventory assertions cannot make: definitions can all be

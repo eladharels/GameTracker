@@ -1,4 +1,17 @@
-FROM node:18-slim
+# Node 22 (active LTS). Node 18 reached END OF LIFE on 2025-04-30 and receives no
+# security updates.
+#
+# The gate that should have caught that cannot: Trivy reads dpkg metadata, and the Node
+# runtime in the official images is a tarball at /usr/local/bin/node rather than a
+# package. So `trivy-api` is structurally blind to V8/OpenSSL/llhttp CVEs in the
+# interpreter itself, and its green result is not evidence about the Node version. Only
+# this line is. `test/helpers.test.js` pins it against package.json engines.
+#
+# Safe to bump because nothing here is native: every production dependency is pure
+# JavaScript (bcryptjs, not bcrypt), and `sqlite3` — the one package that ever needed a
+# compiler — is a devDependency that `npm ci --omit=dev` never sees. Verified on Node 22
+# before the change: 0 vulnerabilities and ZERO .node binaries in the production tree.
+FROM node:22-slim
 WORKDIR /app
 # Upgrade all OS packages to patch CVEs (gpgv, libgnutls30, libpam, perl-base, etc.).
 #
@@ -10,7 +23,8 @@ WORKDIR /app
 # It is no longer a runtime dependency. The migration to Postgres is done, and the only
 # file that still requires it is scripts/migrate-sqlite-to-postgres.js, a one-shot that
 # has already been run. It now lives in devDependencies, so `npm ci --omit=dev` below
-# never sees it and nothing in this image needs a compiler.
+# never sees it and nothing in this image needs a compiler. That is also what makes the
+# Node bump above cheap: there is no native module to rebuild.
 #
 # `curl` stays: docker-compose.test.yml's backend healthcheck is
 # `curl -sf http://localhost:3000/api/health`.
@@ -18,9 +32,11 @@ RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
-# Use npm@10 for a reliable install on Node 18 (npm@11 dropped Node 18 support).
-# npm is removed again in the install step below, so it never reaches the runtime image.
-RUN npm install -g npm@10
+# The `npm install -g npm@10` that used to be here existed for ONE reason: npm@11 dropped
+# Node 18 support. On Node 22 that constraint is gone and the base image ships a current
+# npm, so the global install was a build-time fetch of a floating tag from the registry
+# for no remaining benefit. npm is still removed below, so it never reaches the runtime
+# image and the CVE-surface rationale for that removal is untouched.
 COPY package*.json ./
 # `npm ci` (not `npm install`): installs exactly what package-lock.json pins, so the
 # image can never contain an unreviewed transitive version that drifted since the
@@ -57,10 +73,10 @@ ENV NODE_ENV=production
 #                   /home/docker/gametracker/data/sent_notifications.json
 # The database itself is no longer a mounted file — it lives in Postgres.
 #
-# The sqlite3 dependency and its build toolchain above are retained solely so
-# scripts/migrate-sqlite-to-postgres.js can read the legacy database during
-# cutover. Once the migration is done and the rollback window has closed, both
-# can be dropped to shrink the image and its CVE surface.
+# (A note here used to say the sqlite3 dependency and its build toolchain were "retained
+# for the cutover". Both are long gone — sqlite3 is a devDependency and the toolchain was
+# deleted — and the top of this file says so. Two contradictory accounts of the same
+# thing in one file is worse than neither.)
 RUN chown -R node:node /app
 USER node
 EXPOSE 3000

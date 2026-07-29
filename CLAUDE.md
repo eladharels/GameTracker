@@ -9,7 +9,8 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 ## Tech Stack
 
 ### Backend
-- **Runtime**: Node.js 18
+- **Runtime**: Node.js 22 (active LTS). Node 18 went EOL 2025-04-30; the floor is
+  pinned in `package.json` engines and enforced by `test/runtime.test.js`
 - **Framework**: Express.js 5.x
 - **Database**: PostgreSQL 16 (`pg` driver, promise-based; `db.js` exposes a node-sqlite3-shaped
   callback shim so the legacy call sites in `index.js` did not have to be rewritten).
@@ -39,13 +40,14 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 
 > **The backend image has NO build toolchain, and must not regain one.** It used to install
 > `python3 make g++ sqlite3` because the `sqlite3` npm package has no prebuilt NAPI binary for
-> `node:18-slim` and compiled from source via `node-gyp` — which made the layer order
+> `node:18-slim` (the base at the time) and compiled from source via `node-gyp` — which made the layer order
 > load-bearing and was documented here as critical.
 >
 > `sqlite3` is now a **devDependency**. The Postgres migration is finished and the only file
 > that still requires it is `scripts/migrate-sqlite-to-postgres.js`, a one-shot that has
-> already been run, so `npm ci --omit=dev` never sees it. Verified: the production install
-> resolves 135 packages and **zero** `.node` binaries.
+> already been run, so `npm ci --omit=dev` never sees it. Verified on **node:22-slim**:
+> the production install resolves 135 packages, 0 vulnerabilities and **zero** `.node`
+> binaries. That is also what made the Node 18 -> 22 bump cheap — nothing to rebuild.
 >
 > This matters beyond tidiness — the toolchain was hundreds of megabytes fetched on every
 > build, and a build failed with `You don't have enough free space in /var/cache/apt/archives/`
@@ -64,7 +66,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 GameTracker/
 ├── index.js                        # Backend: Express server + all API routes + cron jobs
 ├── package.json                    # Backend dependencies
-├── Dockerfile                      # Backend image (node:18-slim)
+├── Dockerfile                      # Backend image (node:22-slim — see test/runtime.test.js)
 ├── docker-compose.yaml             # Production orchestration
 ├── docker-compose.staging.yaml     # Staging orchestration
 ├── docker-compose.test.yml         # CI smoke-test stack (isolated ports/data)
@@ -150,7 +152,20 @@ GameTracker/
 ├── test/
 │   ├── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
 │   │                               #   `npm test`; runs in CI. NO database/directory/network
-│   │                               #   tests here — those belong in the smoke test
+│   │                               #   AND NO FILESYSTEM — those belong in the smoke test
+│   │                               #   or, for repo artifacts, in runtime.test.js
+│   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks every
+│   │                               #   Dockerfile's `FROM node:<major>` against that
+│   │                               #   package's engines floor, that the floor is a
+│   │                               #   SUPPORTED Node, and that CI installs the same
+│   │                               #   major. Static by necessity: the suites run on the
+│   │                               #   RUNNER's Node, never the image's, so no runtime
+│   │                               #   assertion can see this. No scanner covers it
+│   │                               #   either — Trivy reads dpkg and the Node runtime is
+│   │                               #   a tarball, so a green trivy job says NOTHING about
+│   │                               #   the interpreter. engines must be a plain `>=N`:
+│   │                               #   `18.x || >=20` reads like a floor of 20 and still
+│   │                               #   permits 18
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -680,7 +695,7 @@ deploy  (needs: ALL 8 upstream jobs)
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
 | ESLint | `frontend-quality` | Any lint error |
 | Vite build | `frontend-quality` | Build failure |
-| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
+| `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
 | Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
 

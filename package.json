@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "test": "node test/helpers.test.js && node test/api-surface.test.js && node test/api-contract.test.js && node test/openapi.test.js",
+    "test": "node test/helpers.test.js && node test/runtime.test.js && node test/api-surface.test.js && node test/api-contract.test.js && node test/openapi.test.js",
     "lint": "eslint ."
   },
   "keywords": [],
