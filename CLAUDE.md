@@ -213,7 +213,12 @@ GameTracker/
 │                                   #   DELIBERATELY EXCLUDES user management, settings,
 │                                   #   token administration and instance-wide jobs, even
 │                                   #   with an admin token. Tool inventory is PINNED in
-│                                   #   mcp/test/tools.test.js like the route tiers are
+│                                   #   mcp/test/tools.test.js like the route tiers are.
+│                                   #   Runs node:22-slim and REQUIRES >=20 — the SDK's HTTP
+│                                   #   transport calls the GLOBAL crypto.randomUUID(), and
+│                                   #   globalThis.crypto is only exposed from Node 19. On
+│                                   #   node:18-slim /health answered 200 while EVERY MCP
+│                                   #   call returned -32700 for a full deploy cycle
 ├── openapi/
 │   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 34 operations, ALL of them
 │                                   #   now live (`x-implemented: true`). It is the SOURCE for
@@ -629,20 +634,41 @@ push: main
 │
 ├── secret-scan      Gitleaks — full git history scan
 ├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
-├── frontend-quality npm test (backend unit tests) + ESLint + Vite build (= typecheck)
-└── build-images     Build backend + frontend Docker images
+├── frontend-quality npm test (backend + MCP unit tests) + ESLint + Vite build (= typecheck)
+└── build-images     Build backend + frontend + MCP Docker images
     ├── trivy-api    Trivy — backend image  (CRITICAL/HIGH → fail)
-    └── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
+    ├── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
+    └── trivy-mcp    Trivy — MCP image      (CRITICAL/HIGH → fail)
 
 smoke-test  (needs: build-images + all 3 scan jobs)
   └─► docker compose -p gametracker-smoke -f docker-compose.test.yml
-       Backend: GET http://localhost:3099/api/health → {"status":"ok"}
+       Backend:  GET http://localhost:3099/api/health → {"status":"ok"}
        Frontend: GET http://localhost:8099/ → HTTP 200
+       API via the frontend proxy + JSON 404 on an unknown /api route
+       MCP:      POST http://127.0.0.1:3199/mcp → a real `initialize` handshake
        Teardown: if: always() — guaranteed cleanup
 
-deploy  (needs: ALL 7 upstream jobs)
+deploy  (needs: ALL 8 upstream jobs)
   └─► docker compose up + post-deploy health check on :3000/api/health
 ```
+
+> **The smoke test speaks the protocol; it does not ping liveness.** The MCP step asserts
+> an `initialize` RESULT, not HTTP 200 — a JSON-RPC error is delivered with a 200, so a
+> status check proves nothing. This is not hypothetical: the MCP server shipped a full
+> deploy cycle answering `ReferenceError: crypto is not defined` to every call while
+> `/health` returned 200 and the container was healthy by every orchestrator's reckoning.
+>
+> It went unnoticed because **the suites run on the RUNNER's Node, never the image's**.
+> That gap is now covered from both sides: `mcp/test/tools.test.js` asserts the
+> Dockerfile's base major against `package.json` engines (static, so it holds whatever
+> Node the runner has), and this stage exercises the built container itself.
+>
+> **`docker-compose.test.yml` must stay identical in SHAPE to `docker-compose.yaml`** —
+> same `depends_on` conditions, same healthchecks, same env keys. Only ports, credentials
+> and probe timings may differ. Production once lacked a `depends_on` the test stack had,
+> so the smoke test could not have caught it: for six seconds of every deploy nginx served
+> the SPA while the API was still starting, and the library page rendered that failed
+> fetch as an empty library. A user reported their games had been deleted.
 
 ### Security Tools
 
@@ -675,6 +701,7 @@ deploy  (needs: ALL 7 upstream jobs)
 | Compose project | `gametracker-smoke` (separate Docker network) |
 | Backend port | `3099` (no conflict with production `3000`) |
 | Frontend port | `8099` (no conflict with production `8080`) |
+| MCP port | `3199` (no conflict with production `3001`). Published on `127.0.0.1` — unlike production it is never LAN-bound. The host↔container port skew (3199→3001) is deliberate: it forces the EXPLICIT `MCP_ALLOWED_HOSTS` path, while `MCP_PUBLIC_HOST` is also set so the DERIVED path runs on every build too |
 | Data directory | `/tmp/gametracker-smoke-data/` — ephemeral, wiped after test |
 | Production DB | **Never touched** — `/home/docker/gametracker/data/` not mounted |
 

@@ -1,8 +1,17 @@
 // MCP server unit tests. Run with: npm test (inside mcp/)
 //
-// SCOPE RULE, same as the backend suites: no network, no backend, no database. What is
-// asserted here is the tool INVENTORY, the credential handling, and the error mapping —
-// everything that can be checked from the definitions themselves.
+// SCOPE RULE, same as the backend suites: no EXTERNAL network, no backend, no
+// database. What is asserted here is the tool INVENTORY, the credential handling, and
+// the error mapping — everything that can be checked from the definitions themselves.
+//
+// A LOOPBACK listen against the in-process app IS allowed, and the handshake test below
+// uses one. That is not a loosening: the rule exists to keep out things that fail for
+// environmental reasons, and an ephemeral port bound to an app this file already
+// imports has no fixture, no external dependency and no non-determinism. It is also the
+// only way to prove the transport can complete an exchange at all — which it could not,
+// in production, for a full deploy cycle. The header used to read "no network" flat,
+// which this test contradicted; a rule and a test that disagree get one of them deleted
+// by whoever reads them next.
 //
 // The end-to-end proof (a real MCP client against a real backend) is probe-e2e.js, run
 // by hand, because it needs both processes up.
@@ -351,6 +360,8 @@ checkAsync('a tool called without a token fails closed, and says why', async () 
 //
 // /health kept returning 200 throughout. Liveness is not readiness for a protocol server.
 
+console.log('the runtime the image ships:');
+
 check('the Dockerfile base image satisfies the engines floor', () => {
   const fs = require('fs');
   const path = require('path');
@@ -362,10 +373,14 @@ check('the Dockerfile base image satisfies the engines floor', () => {
 
   const engines = require('../package.json').engines?.node;
   assert.ok(engines, 'package.json declares no engines.node floor');
-  const floor = /(\d+)/.exec(engines);
-  assert.ok(floor, `engines.node is not a comparable version range: ${engines}`);
+  // Anchored on `>=` rather than the first number in the string. A bare /(\d+)/ would
+  // read "18.x || >=20" as a floor of 18 and pass a node:18 image — failing open on
+  // the exact range shape someone writes when they want to keep 18 working.
+  const floor = /">="?\s*(\d+)|>=\s*(\d+)/.exec(engines);
+  assert.ok(floor, `engines.node must express a >= floor, got: ${engines}`);
+  const floorMajor = floor[1] || floor[2];
 
-  assert.ok(Number(from[1]) >= Number(floor[1]),
+  assert.ok(Number(from[1]) >= Number(floorMajor),
     `Dockerfile runs node:${from[1]} but package.json requires node${engines}. `
     + 'The SDK transport needs globalThis.crypto (Node 19+); below that EVERY MCP '
     + 'request fails while /health still answers 200.');

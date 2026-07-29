@@ -516,3 +516,60 @@ the environment of a container that is reachable from the internet-facing app. O
 credentials after a leak, backups are about to start being written to disk regularly, and
 option 1's loss of the admin UI is likely to be rejected in practice. This needs sign-off
 before Phase 2 begins; it is not decided by this change.
+
+---
+
+## 11. MCP server — LAN exposure (July 2026)
+
+The MCP server (`mcp/`, a separate container) exposes a narrow subset of `/api/v2` to AI
+clients. This section exists because it defaults to loopback and an operator can move it
+onto a LAN with one variable, and until now this document did not mention it at all.
+
+### The design property that holds regardless
+
+**It holds no credentials.** No token in its environment, no token in a config file.
+Every request must carry its own `Authorization: Bearer gt_pat_...`, which it forwards
+unchanged. Authorization stays the backend's, and reaching the port grants nothing on
+its own. A fresh `McpServer` is built per request with the token closed over, so nothing
+is retained between callers. The alternative — one ambient token in the container's
+environment — would make the port itself a credential.
+
+It also refuses, by construction, every operation an agent has no business performing:
+user management, server settings, credential administration and instance-wide jobs are
+absent from the tool list **even when presented with an admin-scoped token**.
+
+### What changes when `MCP_BIND` is set to a LAN address
+
+`MCP_BIND` defaults to `127.0.0.1`. Setting it to a LAN address (`MCP_BIND=192.168.1.30`)
+publishes the port on that interface. Accepted risks, in order of significance:
+
+1. **The personal access token crosses the network in a cleartext header.** Anyone able
+   to observe traffic on that segment can capture a working credential. On a trusted LAN
+   this may be a reasonable trade; over anything else, terminate TLS in front of it.
+   Revocation is `DELETE /api/v2/users/:id/tokens/:tokenId` or the My Account UI.
+2. **`initialize`, `tools/list` and the `gametracker://` resources are answered BEFORE
+   any token is validated.** They disclose only content committed to this repository —
+   the tool inventory and the application guide, nothing instance-specific — but the
+   response is free to an unauthenticated caller who can reach the port.
+3. **There is no rate limiter on the MCP path.** Each request constructs a server and
+   registers the tool set, so the port is an unauthenticated CPU-work amplifier. The
+   backend's login limiter does not apply; PAT auth deliberately bypasses it.
+4. **DNS-rebinding protection is on and fails CLOSED.** The SDK does an exact match of
+   the `Host` header against `ALLOWED_HOSTS` and 403s otherwise. Two properties worth
+   knowing: the SDK skips validation entirely when the list is EMPTY, which is
+   unreachable here because `mcp/server.js` always seeds six defaults; and
+   `MCP_PUBLIC_HOST=0.0.0.0` is deliberately excluded, so `MCP_BIND=0.0.0.0` publishes
+   the port and then rejects every LAN client — inconvenient, but the safe direction.
+
+### `MCP_ALLOWED_HOSTS` is a security control
+
+It widens the DNS-rebinding allowlist and is read in CI from a **repository variable**,
+so it can be changed with no commit, no diff and none of this repo's enforcement gates.
+The deploy step echoes both `MCP_BIND` and `MCP_ALLOWED_HOSTS` so the effective values
+appear in the deploy record; treat a change to either as a change to a security control.
+
+### Recommended posture
+
+Leave `MCP_BIND` unset (loopback) unless a client genuinely runs on another machine. If
+it must be LAN-reachable, put a TLS-terminating proxy in front and set `MCP_ALLOWED_HOSTS`
+to the proxy's name rather than binding the container to the LAN directly.

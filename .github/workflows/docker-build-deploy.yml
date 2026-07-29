@@ -333,9 +333,16 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 6b: Container Scan — MCP (Trivy)
-  # The MCP image is built from the same node:18-slim base and ships to production
-  # alongside the others, so it is scanned on the same terms. An image in the
-  # deployment that no scan job covers is a hole the pipeline would report as green.
+  # The MCP image ships to production alongside the others, so it is scanned on the
+  # same terms. An image in the deployment that no scan job covers is a hole the
+  # pipeline would report as green.
+  #
+  # It is built from node:22-slim, NOT the node:18-slim the backend still uses — the
+  # MCP SDK requires globalThis.crypto, which Node 18 does not expose. Worth knowing
+  # about this job's green result either way: Trivy reads dpkg metadata, and the Node
+  # runtime in the official images is a tarball rather than a package, so no Trivy job
+  # here sees CVEs in the interpreter itself. Passing is not evidence about the Node
+  # version; only the base tag is.
   # ─────────────────────────────────────────────────────────────────────────────
   trivy-mcp:
     name: Container Scan — MCP (Trivy)
@@ -641,6 +648,15 @@ jobs:
       BACKEND_IMAGE_BASE: local/gametracker-backend
       FRONTEND_IMAGE_BASE: local/gametracker-frontend
       MCP_IMAGE_BASE: local/gametracker-mcp
+      # JOB level, unlike the secrets below, precisely BECAUSE these are not secrets.
+      # They were repeated across three steps to keep them symmetric; repetition is the
+      # weakest way to enforce a symmetry requirement, and a job-level binding makes the
+      # drift structurally impossible instead of conventionally discouraged.
+      #
+      # The secrets stay STEP-scoped on purpose: a job-level env is also visible to
+      # actions/checkout@v4, and a third-party action has no need for JWT_SECRET.
+      MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
+      MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -664,8 +680,6 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
-          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
         run: |
           # NEVER add --volumes here. That would delete gametracker-pgdata,
           # which is now the production database.
@@ -699,15 +713,32 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
-          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
         run: |
-          docker compose -f docker-compose.yaml up -d
+          # The `|| { ... }` is REQUIRED now that frontend and mcp declare
+          # `depends_on: backend: condition: service_healthy`. Before that, `up -d`
+          # returned as soon as the containers were created and a failed migration
+          # surfaced in the NEXT step, which dumps 50 lines of backend log. With the
+          # health gate, `up -d` itself fails and that step never runs — so the deploy
+          # would report one line of compose text where it used to report the actual
+          # error. That diagnostic exists because it once masked a
+          # `password authentication failed`; do not let the ordering fix delete it.
+          docker compose -f docker-compose.yaml up -d || {
+            echo "[deploy] ERROR: stack failed to start (backend never became healthy?)"
+            docker logs --tail 50 gametracker-backend-1 2>&1 || true
+            docker compose -f docker-compose.yaml ps || true
+            exit 1
+          }
           # Print what MCP was actually published on. `docker ps` after a deploy is the
           # only way anyone noticed the default was in force; printing it here means the
           # deploy log answers "which interface?" without a shell on the host.
+          #
+          # ALLOWED_HOSTS is echoed too: it is the DNS-rebinding allowlist, it is now
+          # settable from a repository variable with no commit and no diff, and a
+          # security control that leaves no trace in the deploy record is one nobody
+          # can audit after the fact.
           echo "[deploy] MCP_BIND=${MCP_BIND:-127.0.0.1} (unset => loopback only)"
-          docker compose -f docker-compose.yaml port mcp 3001 || true
+          echo "[deploy] MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-<none, defaults only>}"
+          docker compose -f docker-compose.yaml port mcp "${MCP_PORT:-3001}" || true
 
       # env is needed even though this step starts nothing: the failure path runs
       # `docker compose logs`, which interpolates the compose file. Without it the
@@ -721,8 +752,6 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
-          MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
         run: |
           echo "[deploy] Waiting for production backend to become healthy..."
           MAX_WAIT=90

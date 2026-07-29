@@ -104,9 +104,16 @@ services:
       - GAMETRACKER_API_URL=http://backend:3000/api/v2
       - MCP_PORT=3001
       - MCP_BIND=0.0.0.0
-      # The host port (3199) differs from the container port (3001), so the Host header
-      # a curl sends is `127.0.0.1:3199` — which MCP_PUBLIC_HOST cannot derive, since it
-      # only ever appends the CONTAINER port. This is the case the explicit list is for.
+      # Set even though the explicit list below is what the curl actually matches, so
+      # this stack exercises the DERIVED allowlist path too. Production runs that path
+      # (MCP_PUBLIC_HOST=${MCP_BIND}) and it is the branch that already caused one
+      # incident; without this line the smoke test could not catch a regression in it.
+      - MCP_PUBLIC_HOST=127.0.0.1
+      # The host port (3199) deliberately differs from the container port (3001) — the
+      # stack is port-isolated from production — so the Host header a curl sends is
+      # `127.0.0.1:3199`, which MCP_PUBLIC_HOST cannot derive since it only ever
+      # appends the CONTAINER port. This is the case the explicit list is for, and
+      # keeping the skew means BOTH code paths are covered on every run.
       - MCP_ALLOWED_HOSTS=127.0.0.1:${MCP_TEST_PORT:-3199},localhost:${MCP_TEST_PORT:-3199}
     depends_on:
       backend:

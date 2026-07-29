@@ -134,13 +134,20 @@ services:
       #
       # A personal access token then crosses the network in a cleartext header. On a
       # trusted LAN that may be acceptable; over anything else, put TLS in front.
-      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-3001}:3001"
+      #
+      # MCP_PORT is the host AND container port, deliberately the same number. It used
+      # to vary only on the left: the container was pinned to 3001 while the publish
+      # took ${MCP_PORT}, and server.js builds its Host allowlist from the CONTAINER
+      # port. So MCP_PORT=3002 published correctly and then rejected every request as
+      # a bad Host — the same silent misconfiguration MCP_PUBLIC_HOST exists to stop,
+      # reached by a different route. One variable, one meaning.
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-3001}:${MCP_PORT:-3001}"
     environment:
       - NODE_ENV=production
       # The compose SERVICE name, not the published port: this talks to the backend
       # over the internal network and never leaves it.
       - GAMETRACKER_API_URL=http://backend:3000/api/v2
-      - MCP_PORT=3001
+      - MCP_PORT=${MCP_PORT:-3001}
       # Always 0.0.0.0 INSIDE the container — what decides who can reach it is the
       # ports mapping above, which binds one host interface.
       - MCP_BIND=0.0.0.0
@@ -170,7 +177,10 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:3001/health"]
+      # CMD-SHELL, matching the backend and the smoke stack. A gratuitous spelling
+      # difference between the two compose files is noise in the one diff that is
+      # supposed to be signal.
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MCP_PORT:-3001}/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
