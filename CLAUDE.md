@@ -177,6 +177,13 @@ GameTracker/
 │   │                               #   FailureReason/Job.* vs job-runner.js and jobs.js).
 │   │                               #   The path-to-router comparison lives in
 │   │                               #   api-surface.test.js, which walks the live stack
+│   ├── integration/                # Needs a REAL Postgres, so NOT in `npm test` — the
+│   │                               #   smoke-test job runs it inside the backend
+│   │                               #   container. status-events.test.js proves the five
+│   │                               #   status write paths actually land rows with the
+│   │                               #   right `source`. Stubbing db.promises cannot see
+│   │                               #   that, and a regression is PERMANENTLY destructive:
+│   │                               #   unrecorded history cannot be backfilled
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
 │                                   #   routes exist; this proves what they still RETURN.
 │                                   #   Without it "frozen" is only an intention: a service
@@ -184,7 +191,9 @@ GameTracker/
 │                                   #   green. Two of the three clients (Android, the planned
 │                                   #   MCP) are not in this repo and cannot be grepped
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
-├── migrations/                     # Numbered .sql schema migrations. 003 adds api_tokens. 002 adds the
+├── migrations/                     # Numbered .sql schema migrations. 005 adds
+│                                   #   user_game_status_events. 004 adds user_games.added_at.
+│                                   #   003 adds api_tokens. 002 adds the
 │                                   #   user_games.status CHECK — its `IS NULL` disjunct
 │                                   #   is mandatory (the column is nullable and a failed
 │                                   #   migration takes the backend down)
@@ -414,6 +423,38 @@ GameTracker/
 | last_price_updated | TEXT | ISO timestamp |
 | crack_status | TEXT | `cracked`, `uncracked`, `unknown` |
 | backlog_order | INTEGER | Drag-and-drop position (backlog only) |
+| added_at | TEXT | ISO timestamp, added by migration 004. **Nullable and never backfilled** — NULL means "unknown", not "old". Set on INSERT only; absent from the upsert's `DO UPDATE` list so re-saving does not reset it. Ordered reads must say `NULLS LAST` explicitly |
+
+> **`SELECT *` feeds the frozen v1 library response.** `listGamesWithAliases` selects every
+> column, so a new column on `user_games` lands on the wire automatically — that is how
+> `added_at` joined v1's response without a decision being made. `test/api-contract.test.js`
+> did not catch it because it asserts key equality against a hand-built literal passed to
+> `withAliases`, never a real row. **This is the standing argument against adding columns
+> here**: status history went into its own table (005) partly for this reason.
+
+### `user_game_status_events`
+| Column | Type | Notes |
+|---|---|---|
+| id | PK | Auto-increment |
+| user_id | FK → users.id | `ON DELETE CASCADE` — deleting an account takes its history |
+| game_id | **TEXT** | Same rule as `user_games.game_id`. **Deliberately NO foreign key to `user_games`**: a composite FK would cascade history away when a game is removed, and "I finished 12 games this year" must not become 11 because one was tidied up |
+| from_status | TEXT | NULL = the game was added. The CHECK's `IS NULL` disjunct is **mandatory** — see migration 002 |
+| to_status | TEXT | CHECK-constrained to the same five values |
+| changed_at | TIMESTAMPTZ | Not TEXT, unlike every date on `user_games`: no existing client consumes it, and `date_trunc`/range predicates need a real type |
+| source | TEXT | `user` / `release_sweep` / `metadata_refresh` / `backfill` |
+
+> **`source` is the column the whole feature rests on.** The 08:00 sweep promotes
+> `unreleased → wishlist` when a date passes — **nobody did anything**. One library here has
+> 58 unreleased games, so a single nightly run would otherwise post the largest number on
+> the statistics page. Every achievement query filters `source = 'user'`.
+>
+> **Deliberately not seeded.** There is no honest `changed_at` for pre-existing rows, so the
+> table starts empty and the statistics page states its own coverage. Same reasoning as 004,
+> quoted there: a fabricated timestamp is indistinguishable from a real one afterwards.
+>
+> **Written in ONE place** — `library.js#recordStatusEvent`, called by all five status write
+> paths, which drops no-op re-saves (`from === to`). Callers already inside a transaction
+> pass their `tx` so the event and the write it describes commit together.
 
 ### `user_shares`
 | Column | Type | Notes |

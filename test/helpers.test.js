@@ -1397,6 +1397,42 @@ check('a status the user chose is left alone once released', () => {
   }
 });
 
+console.log('library.statusAfterDateChange (a REFRESH may not overwrite a choice):');
+check('a future date does NOT demote a status the user chose', () => {
+  // The bug this exists for: applyRefreshedMetadata called statusForDate, which
+  // returns 'unreleased' for any future date REGARDLESS of the current status. So a
+  // provider moving a release date forward — a delay, a re-release, a bad record —
+  // demoted a finished game to 'unreleased', and the next 08:00 sweep promoted it to
+  // 'wishlist'. The `done` was unrecoverable and the user's finished count dropped.
+  const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+  const future = iso(30);
+  for (const s of ['done', 'playing', 'backlog']) {
+    assert.strictEqual(libraryService.statusAfterDateChange(future, s), s,
+      `a refresh reassigned '${s}' — a provider's date must never overwrite a user's statement`);
+    // And the old rule must still be the one setStatus uses, where coercion is correct
+    // because a caller ASKED and is told via `coerced`.
+    assert.strictEqual(libraryService.statusForDate(future, s), 'unreleased',
+      'statusForDate changed; setStatus depends on it coercing an unavailable request');
+  }
+});
+check('the unreleased/wishlist pair still tracks the calendar both ways', () => {
+  const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+  // These two are the date-derived pair: swapping them loses nothing, because the
+  // sweep restores it. That is why they are exempt from the rule above.
+  assert.strictEqual(libraryService.statusAfterDateChange(iso(-30), 'unreleased'), 'wishlist');
+  assert.strictEqual(libraryService.statusAfterDateChange(iso(30), 'wishlist'), 'unreleased');
+  assert.strictEqual(libraryService.statusAfterDateChange(iso(30), 'unreleased'), 'unreleased');
+  assert.strictEqual(libraryService.statusAfterDateChange(iso(-30), 'wishlist'), 'wishlist');
+});
+check('an unusable date leaves a chosen status alone rather than defaulting it', () => {
+  // isReleased() is false for null/garbage. Under the old rule that alone was enough
+  // to rewrite the row to 'unreleased'.
+  for (const bad of [null, undefined, '', 'not-a-date', '2024-13-99', 42]) {
+    assert.strictEqual(libraryService.statusAfterDateChange(bad, 'done'), 'done',
+      `${JSON.stringify(bad)} demoted a finished game`);
+  }
+});
+
 console.log('library.isReleased — the rule the two write paths actually share:');
 check('absent, unparseable and future all mean "not released"', () => {
   // This is C1: statusForDate used to skip validReleaseDate, so it and upsertGame

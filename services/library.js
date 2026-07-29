@@ -216,6 +216,35 @@ function isReleaseInFuture(dateStr) {
 // through a transaction.
 //
 // v1's rules, preserved exactly — including the wart in the last line.
+// THE one place that writes status history (migrations/005). Every path that changes
+// user_games.status calls this; nothing else inserts into the table.
+//
+// `db.promises.run` through the MODULE, never the destructured `run` at the top of this
+// file. The SQL text here IS the safety property — the `source` value decides whether a
+// row counts as something the user did, and `user_id` is the whole authorization
+// scoping — so a test has to be able to intercept and assert the statement that was
+// actually issued. A destructured binding is captured at module load and a stub of
+// db.promises.run would never be called: CLAUDE.md records that exact silent false pass
+// happening once already.
+//
+// `tx` is passed by callers already inside a transaction, so the event and the write it
+// describes commit together or not at all. Without it the two would land on different
+// pooled connections (db.js divergence #9) and a crash between them would leave a
+// history entry for a status change that was rolled back.
+async function recordStatusEvent({ userId, gameId, from, to, source }, tx) {
+  // A re-save that changes nothing is not history. The v1 add route passes the body's
+  // status straight into the upsert, so the SPA re-sending a game it already has would
+  // otherwise log an event per save — and decideEvents deliberately still emits ADDED
+  // in that case, so this cannot be inferred from the event list it returns.
+  if (from === to) return;
+  const sql = `INSERT INTO user_game_status_events
+                 (user_id, game_id, from_status, to_status, source)
+               VALUES (?, ?, ?, ?, ?)`;
+  const params = [userId, String(gameId), from ?? null, to, source];
+  if (tx) await tx.query(sql, params);
+  else await db.promises.run(sql, params);
+}
+
 function decideEvents(priorStatus, status) {
   const events = [];
   // A game leaving 'unreleased' for anything else has, by definition of the coercion
@@ -343,6 +372,15 @@ async function upsertGame(userId, fields) {
        fields.steamAppId || null, backlogOrder, new Date().toISOString()]
     );
 
+    // History, in the SAME transaction as the write above. This is the SPA's status
+    // change as well as its add — the frontend has no dedicated status route and posts
+    // the full upsert either way — so `prior` being absent is what distinguishes the
+    // two, and recordStatusEvent drops the no-op re-save.
+    await recordStatusEvent(
+      { userId, gameId, from: prior ? prior.status : null, to: status, source: 'user' },
+      tx
+    );
+
     return { status, requested, coerced: status !== requested, events, created: !prior };
   });
 }
@@ -375,6 +413,31 @@ function statusForDate(releaseDate, currentStatus) {
   return currentStatus === 'unreleased' ? 'wishlist' : currentStatus;
 }
 
+// What a REFRESH does, which is NOT what statusForDate does — and conflating the two
+// destroyed data.
+//
+// statusForDate answers "the caller is asking for this status; is it available?", and
+// coercing a request for `done` on an unreleased game to `unreleased` is right, because
+// a caller asked and gets told (`coerced`). setStatus is its only remaining user.
+//
+// A refresh asks nothing. The comment above has always said "any other status is the
+// user's own and is left alone", and the code did the opposite: `if (!isReleased) return
+// 'unreleased'` fired regardless of the current status. So a provider moving a release
+// date into the future — a delay, a re-release, a bad record — demoted a game the user
+// had marked `done` to `unreleased`, and the next 08:00 sweep promoted it to `wishlist`
+// (jobs.js#checkReleases). The `done` was then gone, unrecoverably, and the user's
+// finished count silently decreased. Verified by deriving this function's own output for
+// each status against a future date.
+//
+// Only the two DATE-DERIVED statuses may be rewritten here. `unreleased` and `wishlist`
+// are the pre-order pair the calendar moves between, and swapping them loses nothing —
+// the sweep restores it. `done`, `playing` and `backlog` are statements a person made,
+// and no provider's metadata may overwrite one.
+function statusAfterDateChange(nextDate, currentStatus) {
+  if (currentStatus !== 'unreleased' && currentStatus !== 'wishlist') return currentStatus;
+  return isReleased(nextDate) ? 'wishlist' : 'unreleased';
+}
+
 // Apply a catalog match to an existing library row.
 //
 // Only fields that actually differ are written, and `changes` names them — v1 built
@@ -385,6 +448,9 @@ function statusForDate(releaseDate, currentStatus) {
 async function applyRefreshedMetadata(userId, game, match) {
   const updates = [];
   const params = [];
+  // Set only when the status actually moves, so the event write below can tell a
+  // metadata-only refresh from a status change.
+  let nextStatus = null;
 
   // FILL AND CORRECT, NEVER ERASE — the same rule the Steam App ID already had.
   //
@@ -405,10 +471,14 @@ async function applyRefreshedMetadata(userId, game, match) {
     params.push(nextDate);
     // Re-sync status to the NEW date. Only on a date change, matching v1: a refresh
     // that leaves the date alone must not quietly reassign a status the user chose.
-    const next = statusForDate(nextDate, game.status);
+    //
+    // statusAfterDateChange, NOT statusForDate — see that function. The latter demoted
+    // `done` to `unreleased` here, and the nightly sweep then finished the job.
+    const next = statusAfterDateChange(nextDate, game.status);
     if (next !== game.status) {
       updates.push('status = ?');
       params.push(next);
+      nextStatus = next;
     }
   }
   if (match.coverUrl && match.coverUrl !== game.cover_url) {
@@ -427,6 +497,15 @@ async function applyRefreshedMetadata(userId, game, match) {
 
   params.push(userId, String(game.game_id));
   await run(`UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`, params);
+  // source = 'metadata_refresh', deliberately neither 'user' nor 'release_sweep'. A
+  // person asked for a refresh, but a PROVIDER's date picked the status — so counting
+  // it as something the user did is wrong, and so is filing it with the nightly cron.
+  // Only reachable now for the unreleased/wishlist pair; statusAfterDateChange refuses
+  // to touch anything else.
+  if (nextStatus) {
+    await recordStatusEvent(
+      { userId, gameId: game.game_id, from: game.status, to: nextStatus, source: 'metadata_refresh' });
+  }
   return { updated: true, changes: updates.map((u) => u.split(' = ')[0]) };
 }
 
@@ -458,13 +537,33 @@ function daysUntilRelease(releaseDate) {
 //
 // Returns whether a row actually moved, so a caller can stop claiming it did.
 async function promoteReleased(username, gameId) {
-  const ctx = await run(
-    `UPDATE user_games SET status = 'wishlist'
-      WHERE user_id = (SELECT id FROM users WHERE username = ?)
-        AND game_id = ?
-        AND status = 'unreleased'`,
+  // ONE statement, with the history written by a CTE off the UPDATE's RETURNING.
+  //
+  // Two properties fall out of that and neither is incidental. The event is atomic
+  // with the update without needing a transaction — these run through the shim on a
+  // pooled connection (db.js divergence #9), so two statements could not be rolled
+  // back together. And the INSERT sees a row ONLY when the UPDATE actually moved one,
+  // which is exactly the existing `promoted` semantics: the WHERE pins status to
+  // 'unreleased', so a game already promoted produces no row and no event.
+  //
+  // source = 'release_sweep', and this is the column the statistics page lives or dies
+  // on. Nobody did anything here — a date passed. One nightly run across a library
+  // with 58 unreleased games would otherwise post 58 "status changes" and dwarf every
+  // real number on the page.
+  const ctx = await db.promises.run(
+    `WITH moved AS (
+       UPDATE user_games SET status = 'wishlist'
+        WHERE user_id = (SELECT id FROM users WHERE username = ?)
+          AND game_id = ?
+          AND status = 'unreleased'
+        RETURNING user_id, game_id
+     )
+     INSERT INTO user_game_status_events
+       (user_id, game_id, from_status, to_status, source)
+     SELECT user_id, game_id, 'unreleased', 'wishlist', 'release_sweep' FROM moved`,
     [norm(username), String(gameId)]
   );
+  // rowCount is now the INSERT's, which equals the number of rows the UPDATE moved.
   return { promoted: ctx.changes > 0 };
 }
 
@@ -679,11 +778,15 @@ async function setStatus(userId, gameId, status) {
       const next = (maxRow && maxRow.maxOrder != null ? Number(maxRow.maxOrder) : 0) + 1;
       await tx.query('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
         [resolved, next, row.id]);
+      await recordStatusEvent(
+        { userId, gameId, from: row.status, to: resolved, source: 'user' }, tx);
     });
   } else {
     backlogOrder = resolved === 'backlog' ? backlogOrder : null;
     await db.promises.run('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
       [resolved, backlogOrder, row.id]);
+    await recordStatusEvent(
+      { userId, gameId, from: row.status, to: resolved, source: 'user' });
   }
 
   const updated = await get('SELECT * FROM user_games WHERE id = ?', [row.id]);
@@ -740,7 +843,7 @@ async function addResolvedGame(userId, game, requestedStatus, deps = {}) {
 module.exports = {
   STATUSES, EVENTS, MAX_GAME_ID, MAX_GAME_NAME,
   isReleaseInFuture, validReleaseDate, decideEvents, upsertGame,
-  isReleased, statusForDate, applyRefreshedMetadata,
+  isReleased, statusForDate, statusAfterDateChange, applyRefreshedMetadata,
   daysUntilRelease, promoteReleased,
   listGamesFor,
   listOwnGames,

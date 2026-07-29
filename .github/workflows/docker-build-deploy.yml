@@ -554,6 +554,29 @@ jobs:
           rm -f /tmp/smoke-404.json
           echo "[smoke] API 404 handling check PASSED"
 
+      # Status history, against the real Postgres, inside the real backend container.
+      #
+      # This cannot be a unit test. The five statements in services/library.js that
+      # write user_games.status are the whole foundation of the statistics feature, and
+      # stubbing db.promises proves only that a statement was issued — not that a row
+      # landed, that the CHECK constraints accept it, that the release sweep's CTE fires
+      # only when it moved something, or that `source` came out right.
+      #
+      # It earns a CI slot rather than being a by-hand script because a regression here
+      # is PERMANENTLY destructive: history that was never written cannot be backfilled,
+      # and migrations 004 and 005 both refuse to invent timestamps. Every silent day
+      # costs data no later fix recovers.
+      - name: Verify status history is recorded (real Postgres)
+        run: |
+          set -euo pipefail
+          docker compose -p gametracker-smoke -f docker-compose.test.yml \
+            exec -T backend node test/integration/status-events.test.js || {
+            echo "[smoke] ERROR: status-history integration test failed"
+            docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
+            exit 1
+          }
+          echo "[smoke] Status history check PASSED"
+
       # A real MCP handshake against the real container, on the image's own Node.
       #
       # This is the check that was missing. The MCP server shipped a full deploy cycle
