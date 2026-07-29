@@ -1148,7 +1148,10 @@ app.get('/api/user/:username/stats', authRequired, ownershipRequired, (req, res)
         console.log(`[Stats] ${normalizedUsername}: ${summary.coverage.recordedCompletions} recorded completions`);
         res.json(summary);
       })
-      .catch((err) => problem.send(res, err, '[Stats]'));
+      // An OBJECT, not a string. problem.send destructures its third argument, so a
+      // bare '[Stats]' yields log === undefined and a 500 on this route writes nothing
+      // to the server log — a silent failure nobody can investigate afterwards.
+      .catch((err) => problem.send(res, err, { log: '[Stats] Summary failed:' }));
   });
 });
 

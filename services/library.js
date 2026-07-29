@@ -496,15 +496,25 @@ async function applyRefreshedMetadata(userId, game, match) {
   if (updates.length === 0) return { updated: false, changes: [] };
 
   params.push(userId, String(game.game_id));
-  await run(`UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`, params);
-  // source = 'metadata_refresh', deliberately neither 'user' nor 'release_sweep'. A
-  // person asked for a refresh, but a PROVIDER's date picked the status — so counting
-  // it as something the user did is wrong, and so is filing it with the nightly cron.
-  // Only reachable now for the unreleased/wishlist pair; statusAfterDateChange refuses
-  // to touch anything else.
+  const sql = `UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`;
   if (nextStatus) {
-    await recordStatusEvent(
-      { userId, gameId: game.game_id, from: game.status, to: nextStatus, source: 'metadata_refresh' });
+    // Transactional only when a STATUS moved, for the same divergence #9 reason as
+    // setStatus. A metadata-only refresh has no event to keep in step, so it stays a
+    // single statement rather than paying for a transaction on the bulk-refresh path
+    // that walks an entire library.
+    //
+    // source = 'metadata_refresh', deliberately neither 'user' nor 'release_sweep'. A
+    // person asked for a refresh, but a PROVIDER's date picked the status — counting it
+    // as something the user did is wrong, and so is filing it with the nightly cron.
+    // Only reachable for the unreleased/wishlist pair; statusAfterDateChange refuses to
+    // touch anything else.
+    await db.withTransaction(async (tx) => {
+      await tx.query(sql, params);
+      await recordStatusEvent(
+        { userId, gameId: game.game_id, from: game.status, to: nextStatus, source: 'metadata_refresh' }, tx);
+    });
+  } else {
+    await run(sql, params);
   }
   return { updated: true, changes: updates.map((u) => u.split(' = ')[0]) };
 }
@@ -783,10 +793,20 @@ async function setStatus(userId, gameId, status) {
     });
   } else {
     backlogOrder = resolved === 'backlog' ? backlogOrder : null;
-    await db.promises.run('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
-      [resolved, backlogOrder, row.id]);
-    await recordStatusEvent(
-      { userId, gameId, from: row.status, to: resolved, source: 'user' });
+    // TRANSACTIONAL, like the backlog branch above. These were two bare statements,
+    // which db.js divergence #9 says run on DIFFERENT pooled connections — so a failure
+    // between them committed the status change and lost the event. This is the busiest
+    // of the five write paths and the one that produces the `to_status='done'` rows the
+    // whole statistics feature counts, and an unwritten event cannot be recovered: a
+    // retry sees `from === to` and correctly drops it, so the completion is gone for
+    // good. The ordering was at least the safe one — you could lose an event, never
+    // invent one — but "safe" is not the same as "atomic".
+    await db.withTransaction(async (tx) => {
+      await tx.query('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
+        [resolved, backlogOrder, row.id]);
+      await recordStatusEvent(
+        { userId, gameId, from: row.status, to: resolved, source: 'user' }, tx);
+    });
   }
 
   const updated = await get('SELECT * FROM user_games WHERE id = ?', [row.id]);

@@ -79,9 +79,14 @@ async function completions(userId) {
       WHERE e.user_id = ?
         AND e.to_status = 'done'
         AND e.source = 'user'
-      ORDER BY e.changed_at ASC
+      -- DESC, then reversed in JS. Ordering ASC and limiting hands back the OLDEST
+      -- rows, so a user past the cap loses their RECENT history and "finished this
+      -- month" reads 0 permanently — a confident number the data does not support,
+      -- which is the one thing this file exists not to do. MAX_ROWS + 1 so the caller
+      -- can tell truncation happened and say so.
+      ORDER BY e.changed_at DESC
       LIMIT ?`,
-    [userId, MAX_ROWS]
+    [userId, MAX_ROWS + 1]
   );
 }
 
@@ -114,9 +119,9 @@ async function durations(userId) {
       WHERE d.user_id = ?
         AND d.to_status = 'done'
         AND d.source = 'user'
-      ORDER BY d.changed_at ASC
+      ORDER BY d.changed_at DESC
       LIMIT ?`,
-    [userId, MAX_ROWS]
+    [userId, MAX_ROWS + 1]
   );
   // snake_case out of SQL, mapped here. Postgres folds unquoted identifiers to lower
   // case (db.js divergence #3), so `AS finishedAt` would arrive as `finishedat` and read
@@ -135,7 +140,7 @@ async function summary(userId) {
     throw serviceError(CODES.VALIDATION, 'a valid user id is required', { field: 'userId' });
   }
 
-  const [counts, done, paired, libraryDone] = await Promise.all([
+  const [countsRaw, doneRaw, pairedRaw, libraryDone] = await Promise.all([
     eventCounts(userId),
     completions(userId),
     durations(userId),
@@ -145,6 +150,13 @@ async function summary(userId) {
     ),
   ]);
 
+  // Both reads come back newest-first and one over the cap. Trim the extra, then
+  // restore chronological order for the page, which buckets left-to-right.
+  const truncated = doneRaw.length > MAX_ROWS || pairedRaw.length > MAX_ROWS;
+  const counts = countsRaw;
+  const done = doneRaw.slice(0, MAX_ROWS).reverse();
+  const paired = pairedRaw.slice(0, MAX_ROWS).reverse();
+
   const MS_PER_DAY = 86400000;
   return {
     trackingSince: counts.firstAt ? new Date(counts.firstAt).toISOString() : null,
@@ -153,6 +165,8 @@ async function summary(userId) {
       recordedCompletions: done.length,
       totalEvents: counts.total,
       userEvents: counts.userEvents,
+      // The page must not present a capped list as a complete one.
+      truncated,
     },
     completions: done.map((r) => ({
       gameId: r.game_id,

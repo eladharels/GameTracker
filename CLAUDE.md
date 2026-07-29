@@ -143,6 +143,15 @@ GameTracker/
 │                                   #   error — an optional key nobody set is not an outage —
 │                                   #   and every upstream message has its URLs stripped,
 │                                   #   because these requests carry API keys in query strings
+│   ├── stats.js                    # The status-event log's answers: WHEN things happened —
+│                                   #   completions and playing->done durations. Deliberately
+│                                   #   returns NOTHING the library response already carries
+│                                   #   (status mix, release years, provider mix), so the page
+│                                   #   never has two sources for one number — and the library
+│                                   #   page computes those same counts client-side already.
+│                                   #   Every query filters source = 'user'; returns `coverage`,
+│                                   #   including `truncated`, so the page can state what the
+│                                   #   log does NOT know
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
 │                                   #   dispatch() is the ONE service that never throws — four
 │                                   #   independent outcomes, advisory result. See services/errors.js
@@ -339,7 +348,7 @@ GameTracker/
 > it would silently demote a game already in the library on every re-add.
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
-> router and asserts the authorization tier of all 42 routes — public / auth / owner-or-admin /
+> router and asserts the authorization tier of all 43 routes — public / auth / owner-or-admin /
 > admin — derived from the middleware chain, not from the path. CI fails on a route that is not
 > in the inventory, on a tier that changed, and on any unauthenticated route outside the
 > two-item allowlist (`GET /api/health`, `POST /api/auth/login`).
@@ -546,6 +555,9 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns
   `{serverVersion, apiVersions[], deprecations[]}`. v2 reports `available` (`V2_MOUNTED`).
+- **Statistics**: `GET /api/user/:username/stats` (auth + owner-or-admin, the same tier as the
+  library it summarises) returns the status-event summary from `services/stats.js`. On v1
+  because the SPA cannot reach v2 — see the freeze note below.
 - **Spec discovery**: `GET /api/openapi/v2` (auth tier) serves `openapi/gametracker-v2.yaml`
   verbatim, so the SPA's API Reference page renders the same contract CI validates.
 
@@ -555,15 +567,31 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 > existing client — no response shape changes, no route disappears, no status moves. A NEW
 > route breaks nothing, because nothing calls it yet.
 >
-> Both exceptions so far exist for the same reason and it is not a coincidence: **v2 cannot
+> The first two exceptions exist for the same reason and it is not a coincidence: **v2 cannot
 > bootstrap itself.** `/api/v2` takes personal access tokens only, so the endpoint that says
 > "v2 exists" and the endpoint that hands you the map of it both have to live on the surface a
 > browser session can already reach. Serving the map through the door the map describes is a
 > loop that never starts.
 >
-> That is the bar for a third one. "It would be convenient on v1" is not — new functionality
-> goes in v2, and each of these still has to be recorded in `test/api-surface.test.js` with its
-> tier like any other route.
+> **The third — `GET /api/user/:username/stats` — generalises that, and the general form is
+> the rule from here on.** The SPA is a first-class client and it holds a session JWT.
+> `/api/v2` is PAT-only BY DESIGN, and that is not a gap to be closed: a JWT carries no scope,
+> so accepting one there would make the admin boundary bypassable by logging in with a
+> password. A feature whose only client is the browser is therefore unreachable on v2 for a
+> reason we intend to keep. It goes on v1.
+>
+> **That is a narrow door, not an open one, and these three conditions are all of it:**
+>   1. The client is the **browser**. "It would be convenient", "the Android app is on v1" and
+>      "a script could use it" are not — a script can hold a PAT, and v2 is where it goes.
+>   2. It is a **new route**. No existing response shape may move; the freeze is about shapes.
+>   3. **The logic lives in a service and the v1 route is an adapter over it**, as
+>      `services/stats.js` is to its route in `index.js`. This is the load-bearing one:
+>      without it the eventual v2 twin is a second implementation, and the whole point of the
+>      service layer is that `/api` and `/api/v2` are two skins over one. A v1 route carrying
+>      its own rules is the thing to reject — not the v1 route itself.
+>
+> Each still has to be recorded in `test/api-surface.test.js` with its tier like any other
+> route.
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.
