@@ -566,16 +566,18 @@ jobs:
       # is PERMANENTLY destructive: history that was never written cannot be backfilled,
       # and migrations 004 and 005 both refuse to invent timestamps. Every silent day
       # costs data no later fix recovers.
-      - name: Verify status history is recorded (real Postgres)
+      - name: Verify status history and statistics (real Postgres)
         run: |
           set -euo pipefail
-          docker compose -p gametracker-smoke -f docker-compose.test.yml \
-            exec -T backend node test/integration/status-events.test.js || {
-            echo "[smoke] ERROR: status-history integration test failed"
-            docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
-            exit 1
-          }
-          echo "[smoke] Status history check PASSED"
+          for t in status-events stats; do
+            docker compose -p gametracker-smoke -f docker-compose.test.yml \
+              exec -T backend node "test/integration/${t}.test.js" || {
+              echo "[smoke] ERROR: ${t} integration test failed"
+              docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
+              exit 1
+            }
+          done
+          echo "[smoke] Status history + statistics checks PASSED"
 
       # A real MCP handshake against the real container, on the image's own Node.
       #

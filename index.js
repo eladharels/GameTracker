@@ -56,6 +56,7 @@ const libraryService = require('./services/library');
 const catalogService = require('./services/catalog');
 const jobsService = require('./services/jobs');
 const statusService = require('./services/status');
+const statsService = require('./services/stats');
 const jobRunner = require('./services/job-runner');
 const usersService = require('./services/users');
 const authService = require('./services/auth');
@@ -1120,6 +1121,34 @@ app.get('/api/user/:username/games', authRequired, ownershipRequired, (req, res)
         console.error('[Library] Error querying games:', err.message);
         res.status(500).json({ error: 'DB error' });
       });
+  });
+});
+
+// Statistics derived from the status-event log (migration 005).
+//
+// A NEW v1 ROUTE, and that is a deliberate exception worth recording rather than a
+// convenience. CLAUDE.md's freeze protects response SHAPES, not the route count, and a
+// new route breaks nothing because nothing calls it yet — but the standing policy is
+// that new functionality goes to v2. It cannot here: /api/v2 is PAT-only by design
+// (patRequired rejects anything not prefixed `gt_pat_`, before verification), and the
+// SPA holds a session JWT. A statistics page for the browser is unreachable on v2 in
+// the same structural way the two existing exceptions were.
+//
+// The LOGIC lives in services/stats.js, so a v2 twin is a thin adapter whenever an
+// agent client wants one, and the two can never disagree.
+//
+// Returns only what the event log can answer. Status mix, release years and provider
+// mix come from the library response the page already fetches; computing them twice
+// would give the page two sources for one number.
+app.get('/api/user/:username/stats', authRequired, ownershipRequired, (req, res) => {
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
+  withExistingUser(res, normalizedUsername, (user) => {
+    statsService.summary(user.id)
+      .then((summary) => {
+        console.log(`[Stats] ${normalizedUsername}: ${summary.coverage.recordedCompletions} recorded completions`);
+        res.json(summary);
+      })
+      .catch((err) => problem.send(res, err, '[Stats]'));
   });
 });
 

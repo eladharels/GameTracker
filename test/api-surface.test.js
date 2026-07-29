@@ -216,6 +216,10 @@ const EXPECTED = {
   'DELETE /api/user/:username/games/:gameId': 'owner-or-admin',
   'GET /api/user/:username/crack-status': 'owner-or-admin',
   'GET /api/user/:username/games': 'owner-or-admin',
+  // Statistics from the status-event log. Same tier as the library it summarises —
+  // authRequired + ownershipRequired — because it is the same data at a different
+  // resolution: "when did you finish things" is exactly as private as "what do you own".
+  'GET /api/user/:username/stats': 'owner-or-admin',
   'POST /api/user/:username/games': 'owner-or-admin',
   'POST /api/user/:username/games/:gameId/crackrelease-status': 'owner-or-admin',
   'POST /api/user/:username/games/:gameId/refresh-metadata': 'owner-or-admin',
