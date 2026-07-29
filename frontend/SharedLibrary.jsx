@@ -79,7 +79,10 @@ function SharedLibrary() {
     Promise.all([
       axios.get(`${API_BASE}/all-users`, { headers: { Authorization: `Bearer ${token}` } }),
       axios.get(`${API_BASE}/user/${user.username}/shared-with-me`, { headers: { Authorization: `Bearer ${token}` } }),
-      axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => ({ data: [] })) // fallback
+      // No `.catch(() => ({ data: [] }))` here any more: it turned a failed request
+      // into "you share with nobody", which is data the user might act on by
+      // re-sharing. Let it reject and be reported with the others below.
+      axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } })
     ]).then(([allUsersRes, sharedWithMeRes, sharedWithRes]) => {
       setAllUsers(allUsersRes.data.filter(u => u.username !== user.username));
       setSharedWithMe(sharedWithMeRes.data.map(s => s.from_user));

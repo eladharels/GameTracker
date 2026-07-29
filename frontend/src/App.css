@@ -138,6 +138,10 @@ html {
   --color-danger: #f43f5e;
   --color-danger-hover: #fb7185;
   --color-success: #34d399;
+  /* Rose-400, deliberately NOT --color-danger (#f43f5e), which is byte-identical to
+     the Rose accent preset. An error signal that can equal --color-accent stops being
+     a signal on that theme. Used by .empty-state-icon--error and .retry-btn. */
+  --color-error-icon: #fb7185;
 
   /* === Glass + shadows === */
   --glass-blur: 16px;
@@ -668,13 +672,49 @@ body, html {
   opacity: 0.22;
   margin-bottom: 0.5rem;
 }
+.empty-state-sub {
+  /* The error copy is ~110 characters and rendered as one ~780px line before this;
+     every earlier sub was short enough to hide the missing constraint. */
+  max-width: 46ch;
+  margin-inline: auto;
+}
+
 /* A failed load is not the same kind of nothing as an empty library, and it must not
    look like it. The neutral icon above is deliberately faint — it says "nothing here
-   yet". This one has to read as a problem, so it takes the danger colour and enough
-   opacity to actually be seen. */
+   yet". This one has to read as a problem, so it needs enough opacity to be seen.
+
+   Its OWN token, not --color-danger: the Rose accent preset is #f43f5e, byte-identical
+   to the danger colour, so on that theme the alarm rendered in the same colour as the
+   buttons around it and the colour channel stopped carrying any signal. An error must
+   not be able to collide with --color-accent, whatever the user picked. */
 .empty-state-icon--error {
-  color: var(--color-danger);
-  opacity: 0.85;
+  color: var(--color-error-icon);
+  opacity: 0.9;
+}
+
+/* A recovery action, not a selected filter. It previously reused `filter-btn active`,
+   which renders identically to the "All" chip a few hundred pixels above it. */
+.retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-error-icon);
+  background: transparent;
+  color: var(--color-error-icon);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.retry-btn:hover:not(:disabled) {
+  background: var(--color-error-icon);
+  color: #0b0b12;
+}
+.retry-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 .empty-state-title {
   font-size: 1.15rem;

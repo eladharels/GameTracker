@@ -202,7 +202,9 @@ function App() {
             <FaCode className="nav-icon" />
             <span className="nav-label">API Docs</span>
           </Link>
-          {user?.can_manage_users && (
+          {/* !! is load-bearing: can_manage_users is INTEGER 0/1, so `0 && …` renders
+              the literal "0" in the sidebar for every non-admin, on every page. */}
+          {!!user?.can_manage_users && (
             <Link to="/system-status" className={location.pathname === '/system-status' ? 'active' : ''}>
               <FaServer className="nav-icon" />
               <span className="nav-label">System Status</span>
@@ -888,8 +890,13 @@ function LibraryPage({ user }) {
   // A FAILED load is not an empty library. Without this the two are indistinguishable
   // on screen, which is how a six-second gap during a deploy read as "all my games
   // were deleted". Never let a fetch failure render as data.
-  const [loadError, setLoadError] = useState(false)
-  const [reloadKey, setReloadKey] = useState(0)
+  //
+  // `responded` distinguishes "the server said nothing" from "the server said no". The
+  // catch is unconditional, so telling a user their server "didn't respond" after a 500
+  // states a cause nothing checked — the same defect as reporting a provider outage and
+  // zero results identically, which services/catalog.js already refuses to do.
+  const [loadError, setLoadError] = useState(null)   // null | { responded, status }
+  const [retrying, setRetrying] = useState(false)
   const [filter, setFilter] = useState('all')
   const [statusError, setStatusError] = useState('')
   const [removeError, setRemoveError] = useState('')
@@ -914,33 +921,53 @@ function LibraryPage({ user }) {
   const pendingDeleteRef = useRef({}) // { [gameId]: { timers, snapshot } }
   const gamesPerPage = 24
 
-  useEffect(() => {
-    if (user) {
-      setLoading(true)
-      setLoadError(false)
-      // Add timestamp to prevent caching
-      const timestamp = Date.now()
-      axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`).then(res => {
-        // Guard the shape too: a reverse proxy answering with an HTML error page
-        // yields a string, and `setUserGames("<html>...")` renders as an empty
-        // library rather than as the failure it is.
-        if (!Array.isArray(res.data)) throw new Error('unexpected library response')
-        setUserGames(res.data)
-        setLoading(false)
-      }).catch(() => {
-        // There was NO catch here at all. A rejected promise left `loading` true
-        // forever — skeleton cards with no error, no retry and an unhandled
-        // rejection in the console — and left any previously loaded games on
-        // screen as though they were current.
-        setUserGames([])
-        setLoadError(true)
-        setLoading(false)
-      })
-    } else {
+  // ONE fetch of the library, called by the mount effect and by "Try again".
+  //
+  // This matches the file's existing idiom (fetchUsers, fetchStatus, fetchSettings) and
+  // replaces a reloadKey counter that was a fourth way of doing the same job. It also
+  // gives the response-shape guard a single home: five other places in this component
+  // refetch the same URL, and a guard that lives in only one of them protects only one.
+  const fetchGames = useCallback(async () => {
+    if (!user) { setUserGames([]); setLoadError(null); return }
+    setLoadError(null)
+    try {
+      // Timestamp to defeat caching.
+      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
+      // Guard the SHAPE: a reverse proxy answering with an HTML error page yields a
+      // string, and setUserGames("<html>...") renders as an empty library rather than
+      // as the failure it is.
+      if (!Array.isArray(res.data)) throw new Error('unexpected library response')
+      setUserGames(res.data)
+      return true
+    } catch (err) {
+      // There was NO catch here at all. A rejected promise left `loading` true forever
+      // — skeleton cards, no error, no retry, an unhandled rejection — and left any
+      // previously loaded games on screen as though they were current.
       setUserGames([])
-      setLoadError(false)
+      setLoadError({ responded: Boolean(err?.response), status: err?.response?.status })
+      return false
     }
-  }, [user, reloadKey])
+  }, [user])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchGames().finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [fetchGames])
+
+  // Retry needs to be VISIBLE. Measured without the floor: on a fast failure the
+  // skeleton showed for a single ~16ms frame, so the button appeared to do nothing —
+  // to precisely the user who already thinks their data is gone.
+  const retryFetchGames = useCallback(async () => {
+    setRetrying(true)
+    const started = Date.now()
+    const ok = await fetchGames()
+    const elapsed = Date.now() - started
+    if (elapsed < 400) await new Promise(r => setTimeout(r, 400 - elapsed))
+    setRetrying(false)
+    if (!ok) showToast('error', 'Still can\'t reach the server.')
+  }, [fetchGames, showToast])
 
   const statusCounts = {
     all:        userGames.length,
@@ -1360,19 +1387,29 @@ function LibraryPage({ user }) {
         // specific fact, and telling someone their library is empty when the request
         // failed is worse than saying nothing. It states that the games are still
         // there, because the alarming reading is that they are not.
-        <div className="empty-state">
-          <FaExclamationCircle className="empty-state-icon empty-state-icon--error" />
+        // role="alert" because without it this entire fix is silent to a screen
+        // reader — the failure would be conveyed only by pixels, to the one user who
+        // cannot see them. ToastContext.jsx already establishes the pattern.
+        <div className="empty-state" role="alert">
+          <FaExclamationCircle className="empty-state-icon empty-state-icon--error" aria-hidden="true" />
           <p className="empty-state-title">Couldn&apos;t load your library</p>
           <p className="empty-state-sub">
-            The server didn&apos;t respond. Your games are safe — this is a connection
-            problem, not a change to your library.
+            {/* Reassurance FIRST: "are my games gone" is the actual worry. The second
+                sentence reports what happened WITHOUT asserting a cause nothing
+                checked — a 500 is the server responding, not failing to. */}
+            Your games are safe — nothing in your library has changed.{' '}
+            {loadError.responded
+              ? `The server returned an error${loadError.status ? ` (${loadError.status})` : ''}.`
+              : 'The server didn’t respond.'}
           </p>
           <button
-            className="filter-btn active"
-            style={{ marginTop: '0.75rem' }}
-            onClick={() => setReloadKey(k => k + 1)}
+            type="button"
+            className="retry-btn"
+            onClick={retryFetchGames}
+            disabled={retrying}
           >
-            <FaSync /> Try again
+            <FaSync className={retrying ? 'spin' : ''} aria-hidden="true" />
+            {retrying ? ' Retrying…' : ' Try again'}
           </button>
         </div>
       ) : filteredUserGames.length === 0 ? (
@@ -1592,17 +1629,30 @@ function formatDateLocal(date) {
 
 function CalendarPage({ user }) {
   const [userGames, setUserGames] = useState([]);
+  // Same defect as the library page had, on the same endpoint: a failed load rendered
+  // an empty month with no releases marked, indistinguishable from "nothing is coming
+  // out", plus an unhandled rejection. Fixing one of two instances would have left the
+  // identical lie one nav click away.
+  const [loadError, setLoadError] = useState(false);
   const [month, setMonth] = useState(() => {
     const today = new Date();
     return { year: today.getFullYear(), month: today.getMonth() };
   });
 
   useEffect(() => {
-    if (user) {
-      axios.get(`${API_BASE}/user/${user.username}/games`).then(res => {
-        setUserGames(res.data);
-      });
-    }
+    if (!user) return;
+    let cancelled = false;
+    setLoadError(false);
+    axios.get(`${API_BASE}/user/${user.username}/games`).then(res => {
+      if (cancelled) return;
+      if (!Array.isArray(res.data)) throw new Error('unexpected library response');
+      setUserGames(res.data);
+    }).catch(() => {
+      if (cancelled) return;
+      setUserGames([]);
+      setLoadError(true);
+    });
+    return () => { cancelled = true; };
   }, [user]);
 
   // Build a map of release dates to games
@@ -1675,6 +1725,13 @@ function CalendarPage({ user }) {
         <span className="calendar-month-label">{monthNames[m]} {year}</span>
         <button className="calendar-nav-btn" onClick={handleNextMonth}>&gt;</button>
       </div>
+      {/* An empty calendar and an unreachable server look the same. Say which. */}
+      {loadError && (
+        <p className="calendar-load-error" role="alert">
+          <FaExclamationCircle aria-hidden="true" /> Couldn&apos;t load your games — release
+          dates below are incomplete. Your library is unchanged.
+        </p>
+      )}
       <div className="calendar-grid calendar-grid-full">
         {weekdayNames.map((wd) => (
           <div key={wd} className="calendar-cell calendar-weekday">{wd}</div>
@@ -1845,6 +1902,11 @@ function AccountPage({ user }) {
   const [saving, setSaving] = useState({})
   const [error, setError] = useState({})
   const [loading, setLoading] = useState(true)
+  // `.catch(() => {})` swallowed the failure and left every field at its blank initial
+  // value. The form then rendered as though the user had configured nothing, and
+  // saveSection would PUT those blanks — a failed READ one click away from destroying
+  // the real settings.
+  const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
     axios.get(`${API_BASE}/user/me`, authH)
@@ -1857,11 +1919,18 @@ function AccountPage({ user }) {
         telegram_chat_id:  res.data.telegram_chat_id || '',
         notification_days: Array.isArray(res.data.notification_days) ? res.data.notification_days : [0, 7, 30],
       }))
-      .catch(() => {})
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
   }, [])
 
   const saveSection = async (section, body) => {
+    // Refuse while the load failed: the fields are blank because the GET never
+    // arrived, not because the user cleared them, and the server has no way to tell
+    // the difference.
+    if (loadError) {
+      setError(p => ({ ...p, [section]: 'Your settings could not be loaded, so saving would overwrite them with blanks. Reload first.' }))
+      return
+    }
     setSaving(p => ({ ...p, [section]: true }))
     setError(p => ({ ...p, [section]: null }))
     setSaved(p => ({ ...p, [section]: null }))
@@ -1886,6 +1955,23 @@ function AccountPage({ user }) {
   }
 
   if (loading) return <div className="ent-settings"><div className="ent-loading">Loading…</div></div>
+  if (loadError) return (
+    <div className="ent-settings">
+      <div className="gt-alert gt-alert--danger gt-alert--page" role="alert">
+        <FaExclamationCircle aria-hidden="true" />
+        <div>
+          <strong>Couldn&apos;t load your account settings.</strong>
+          <br />The form is hidden rather than shown blank, because blank fields here
+          are one click from overwriting what you actually have configured.
+          <div>
+            <button type="button" className="gt-alert-action" onClick={() => window.location.reload()}>
+              Reload page
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div className="ent-settings">
@@ -2203,6 +2289,12 @@ function SettingsPage() {
   // looks exactly like an unconfigured server — so without this the admin would edit
   // a blank page and only discover the refusal on save.
   const [settingsUnreadable, setSettingsUnreadable] = useState(false)
+  // Distinct from settingsUnreadable: that means the SERVER read settings.json and
+  // could not parse it. This means we never heard back at all. Same consequence for
+  // the UI — nothing shown can be trusted and nothing may be saved over it — but a
+  // different sentence, because "restore the file on the server" is wrong advice for
+  // a network failure.
+  const [settingsLoadError, setSettingsLoadError] = useState(false)
 
   // API Keys state (admin-only)
   const [apiKeysMeta, setApiKeysMeta] = useState({})   // { key: { masked, set, source } }
@@ -2247,6 +2339,7 @@ function SettingsPage() {
     axios.get(`${API_BASE}/settings`)
       .then(res => {
         const s = res.data || {}
+        setSettingsLoadError(false)
         setSettingsUnreadable(!!s.unreadable)
         setServerSettings(s)
         setSmtp(s.smtp       || {})
@@ -2254,6 +2347,19 @@ function SettingsPage() {
         setGotify(s.gotify   || {})
         setLdap(s.ldap       || {})
         setTelegram(s.telegram || {})
+      })
+      // There was no catch, and `.finally` below does NOT handle a rejection — it
+      // re-throws. So a failed GET /settings produced an unhandled rejection AND left
+      // every section at its blank initial value, which isConfigured() rendered as
+      // "not configured" for SMTP, LDAP, ntfy, Gotify and Telegram. An admin saw their
+      // whole server config as empty and could re-enter it over the top.
+      //
+      // The server-side degraded read (`s.unreadable`) was already handled carefully,
+      // including refusing saves. A transport failure needed the same treatment: it is
+      // the same "we do not know what is configured" state, reached differently.
+      .catch(() => {
+        setSettingsLoadError(true)
+        setServerSettings({})
       })
   ), [])
 
@@ -2290,6 +2396,15 @@ function SettingsPage() {
   }
 
   const saveSection = async (key) => {
+    // Refuse outright when the load failed. The SERVER rejects saves while
+    // settings.json is unreadable, which is what protects the degraded-read path — but
+    // it cannot protect this one: as far as the server is concerned these are ordinary
+    // valid writes. The fields are blank only because the GET never arrived, so saving
+    // would persist those blanks over a working configuration.
+    if (settingsLoadError) {
+      setSaveError(p => ({ ...p, [key]: 'Settings could not be loaded, so saving would overwrite them with blanks. Reload first.' }))
+      return
+    }
     const data = key === 'smtp' ? smtp : key === 'ntfy' ? ntfy : key === 'gotify' ? gotify : key === 'telegram' ? telegram : ldap
     setSaving(p => ({ ...p, [key]: true }))
     setSaveStatus(p => ({ ...p, [key]: null }))
@@ -2300,7 +2415,7 @@ function SettingsPage() {
       // A save cannot succeed while the file is unreadable, so reaching here with the
       // banner up means it was repaired on disk. Refetch: the other sections are still
       // holding the blank degraded read.
-      if (settingsUnreadable) fetchSettings()
+      if (settingsUnreadable || settingsLoadError) fetchSettings()
       setSaveStatus(p => ({ ...p, [key]: 'saved' }))
       setTimeout(() => setSaveStatus(p => ({ ...p, [key]: null })), 3000)
     } catch (err) {
@@ -2430,7 +2545,7 @@ function SettingsPage() {
           // 'unknown' when settings.json could not be read. Otherwise every section
           // arrives empty and every badge says "not configured" — five confident
           // wrong answers, next to a banner explaining that the blanks are not real.
-          const configured = settingsUnreadable ? 'unknown'
+          const configured = (settingsUnreadable || settingsLoadError) ? 'unknown'
             : (s.data !== null ? isConfigured(s.data) : null)
           const dirty      = s.data !== null ? isDirty(s.key)       : false
           return (
@@ -2466,6 +2581,22 @@ function SettingsPage() {
             on the 409 path it would be a second assertive interruption saying what
             the save-bar alert just said. Moving focus here announces it once and
             puts a keyboard user at the top of the panel. */}
+        {settingsLoadError && (
+          <div className="gt-alert gt-alert--danger gt-alert--page" role="alert">
+            <FaExclamationCircle aria-hidden="true" />
+            <div>
+              <strong>Couldn&apos;t load settings — the server didn&apos;t answer.</strong>
+              <br />The sections below are blank because of that, not because they are
+              unconfigured. Saving is disabled so nothing is overwritten with blanks.
+              <div>
+                <button type="button" className="gt-alert-action" onClick={() => fetchSettings()}>
+                  Try again
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {settingsUnreadable && (
           <div className="gt-alert gt-alert--danger gt-alert--page"
                ref={unreadableRef} tabIndex={-1} role="status">
