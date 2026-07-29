@@ -882,7 +882,14 @@ function SearchPage({ user }) {
 
 function LibraryPage({ user }) {
   const [userGames, setUserGames] = useState([])
-  const [loading, setLoading] = useState(false)
+  // Starts true when there is a user, because the fetch below begins immediately and
+  // `false` here paints "Your library is empty" for one frame before it does.
+  const [loading, setLoading] = useState(Boolean(user))
+  // A FAILED load is not an empty library. Without this the two are indistinguishable
+  // on screen, which is how a six-second gap during a deploy read as "all my games
+  // were deleted". Never let a fetch failure render as data.
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [filter, setFilter] = useState('all')
   const [statusError, setStatusError] = useState('')
   const [removeError, setRemoveError] = useState('')
@@ -910,16 +917,30 @@ function LibraryPage({ user }) {
   useEffect(() => {
     if (user) {
       setLoading(true)
+      setLoadError(false)
       // Add timestamp to prevent caching
       const timestamp = Date.now()
       axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`).then(res => {
+        // Guard the shape too: a reverse proxy answering with an HTML error page
+        // yields a string, and `setUserGames("<html>...")` renders as an empty
+        // library rather than as the failure it is.
+        if (!Array.isArray(res.data)) throw new Error('unexpected library response')
         setUserGames(res.data)
+        setLoading(false)
+      }).catch(() => {
+        // There was NO catch here at all. A rejected promise left `loading` true
+        // forever — skeleton cards with no error, no retry and an unhandled
+        // rejection in the console — and left any previously loaded games on
+        // screen as though they were current.
+        setUserGames([])
+        setLoadError(true)
         setLoading(false)
       })
     } else {
       setUserGames([])
+      setLoadError(false)
     }
-  }, [user])
+  }, [user, reloadKey])
 
   const statusCounts = {
     all:        userGames.length,
@@ -1208,7 +1229,9 @@ function LibraryPage({ user }) {
   return (
     <div className="user-games-section">
       <div className="library-header">
-        <h2 className="library-title">My Library ({userGames.length})</h2>
+        {/* No count while loading or after a failure: "(0)" is the same false claim
+            as the empty state, just smaller. An unknown count shows nothing. */}
+        <h2 className="library-title">My Library{loading || loadError ? '' : ` (${userGames.length})`}</h2>
         <div className="view-controls library-view-controls">
           <button
             className={`toggle-feature-btn${showPrices ? ' toggle-feature-btn--active' : ''}`}
@@ -1331,6 +1354,26 @@ function LibraryPage({ user }) {
               <div className="skeleton-line skeleton-line--short" />
             </div>
           ))}
+        </div>
+      ) : loadError ? (
+        // Checked BEFORE the empty state, deliberately: the failure is the more
+        // specific fact, and telling someone their library is empty when the request
+        // failed is worse than saying nothing. It states that the games are still
+        // there, because the alarming reading is that they are not.
+        <div className="empty-state">
+          <FaExclamationCircle className="empty-state-icon empty-state-icon--error" />
+          <p className="empty-state-title">Couldn&apos;t load your library</p>
+          <p className="empty-state-sub">
+            The server didn&apos;t respond. Your games are safe — this is a connection
+            problem, not a change to your library.
+          </p>
+          <button
+            className="filter-btn active"
+            style={{ marginTop: '0.75rem' }}
+            onClick={() => setReloadKey(k => k + 1)}
+          >
+            <FaSync /> Try again
+          </button>
         </div>
       ) : filteredUserGames.length === 0 ? (
         <div className="empty-state">

@@ -668,6 +668,14 @@ body, html {
   opacity: 0.22;
   margin-bottom: 0.5rem;
 }
+/* A failed load is not the same kind of nothing as an empty library, and it must not
+   look like it. The neutral icon above is deliberately faint — it says "nothing here
+   yet". This one has to read as a problem, so it takes the danger colour and enough
+   opacity to actually be seen. */
+.empty-state-icon--error {
+  color: var(--color-danger);
+  opacity: 0.85;
+}
 .empty-state-title {
   font-size: 1.15rem;
   font-weight: 600;

@@ -94,6 +94,21 @@ services:
       - /tmp
       - /app/cache
     restart: unless-stopped
+    # Production had NO healthcheck, so nothing could wait on this service being ready
+    # — `condition: service_healthy` is not expressible against a service that never
+    # reports health. The smoke stack has had this same probe all along, which is why
+    # its ordering was correct and production's was not.
+    #
+    # /api/health is unauthenticated by design (see test/api-surface.test.js's
+    # two-item allowlist), and `curl` is in the image for exactly this.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      # Generous: on a cold start this waits for the schema migration, which runs
+      # before the server listens and is fatal if it fails.
+      start_period: 30s
 
   # The MCP server: a protocol translator between AI clients and /api/v2.
   #
@@ -138,8 +153,15 @@ services:
       # For anything the above cannot infer — a DNS name, a reverse proxy in front,
       # several addresses. ADDS to the defaults; it cannot lock out localhost.
       - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
+    # service_healthy, matching the frontend and the smoke stack. The list form used
+    # here previously means service_STARTED, which is satisfied the moment the process
+    # exists — so an MCP client connecting during a deploy got tool errors from a
+    # backend that was still migrating. Keeping the two compose files identical in
+    # shape is the point: the frontend's missing ordering survived precisely because
+    # production and the test stack had drifted.
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     # Nothing to write. It reads no config file, keeps no cache and stores no state —
@@ -160,6 +182,21 @@ services:
     pull_policy: never
     ports:
       - "8080:8080"
+    # Without this the frontend came up SECONDS before the backend on every deploy —
+    # measured at 6s on 2026-07-28 (nginx serving at :12, API reachable at :18). In
+    # that window the SPA loads and every /api call fails, which the library page
+    # rendered as an empty library. It reads as "my games were deleted".
+    #
+    # nginx itself does not need this: proxy_pass uses a variable plus
+    # `resolver 127.0.0.11 valid=10s`, so it starts without the upstream and
+    # re-resolves per request. What this fixes is the BROWSER being handed a working
+    # app whose API is not up yet.
+    #
+    # The smoke stack has had this since it was written. Production did not, and the
+    # smoke test therefore could never have caught it.
+    depends_on:
+      backend:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     read_only: true
