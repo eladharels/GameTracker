@@ -2,11 +2,13 @@ import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash, FaCode } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash, FaCode, FaChartBar } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 import GameDetailModal from './GameDetailModal'
 import ApiTokensSection from './ApiTokensSection'
+import StatsPage from './StatsPage'
+import { formatDateLocal } from './dateUtils'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
 // Statically imported it would land in the main chunk and slow every login.
@@ -140,6 +142,7 @@ function App() {
   if (location.pathname.startsWith('/search')) pageTitle = 'Search Games'
   else if (location.pathname.startsWith('/library')) pageTitle = 'My Library'
   else if (location.pathname.startsWith('/calendar')) pageTitle = 'Calendar'
+        else if (location.pathname.startsWith('/stats')) pageTitle = 'Statistics'
   else if (location.pathname.startsWith('/users')) pageTitle = 'User Management'
   else if (location.pathname.startsWith('/account')) pageTitle = 'My Account'
   else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings'
@@ -183,6 +186,10 @@ function App() {
           <Link to="/calendar" className={location.pathname === '/calendar' ? 'active' : ''}>
             <FaRegCalendarAlt className="nav-icon" />
             <span className="nav-label">Calendar</span>
+          </Link>
+          <Link to="/stats" className={location.pathname === '/stats' ? 'active' : ''}>
+            <FaChartBar className="nav-icon" />
+            <span className="nav-label">Statistics</span>
           </Link>
           {(user.can_manage_users || user.can_create_users) && (
             <Link to="/users" className={location.pathname === '/users' ? 'active' : ''}>
@@ -245,6 +252,7 @@ function App() {
           <Route path="/library" element={<LibraryPage user={user} />} />
           <Route path="/shared-library" element={<SharedLibrary />} />
           <Route path="/calendar" element={<CalendarPage user={user} />} />
+          <Route path="/stats" element={<StatsPage user={user} />} />
           <Route path="/account" element={<AccountPage user={user} />} />
           <Route path="/users" element={<UserManagementPage user={user} />} />
           <Route path="/settings" element={<SettingsPage />} />
@@ -1619,13 +1627,8 @@ function LibraryPage({ user }) {
   )
 }
 
-// Helper to format date as YYYY-MM-DD in local time
-function formatDateLocal(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+// formatDateLocal moved to ./dateUtils so the calendar and the statistics page
+// cannot disagree about which local day an instant belongs to.
 
 function CalendarPage({ user }) {
   const [userGames, setUserGames] = useState([]);

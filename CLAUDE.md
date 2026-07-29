@@ -215,6 +215,21 @@ GameTracker/
 │   │   ├── App.jsx                 # Main React app (all pages/views in one file)
 │   │   ├── App.css                 # Global styles (glassmorphism theme, ~6200 lines)
 │   │   ├── GameDetailModal.jsx     # Game detail overlay
+│   │   ├── StatsPage.jsx           # Statistics. Charts are hand-rolled — CSS bars + an
+│   │   │                           #   SVG donut — because the 6 accent presets work by
+│   │   │                           #   mutating --color-accent at RUNTIME and a canvas
+│   │   │                           #   chart cannot inherit that. Bars are flex, NOT SVG:
+│   │   │                           #   a viewBox letterboxes a narrow chart into a wide
+│   │   │                           #   panel. Renders the COVERAGE banner — the event log
+│   │   │                           #   starts empty, so it states how many finished games
+│   │   │                           #   have no recorded date instead of drawing a zero,
+│   │   │                           #   and KPIs show an em dash until something is
+│   │   │                           #   observed: "nothing recorded" is not "zero"
+│   │   ├── dateUtils.js            # formatDateLocal + bucketing, shared with the calendar
+│   │   │                           #   so two pages cannot disagree about which local day
+│   │   │                           #   an instant belongs to, or when a week starts.
+│   │   │                           #   Bucketing is CLIENT-side on purpose: date_trunc
+│   │   │                           #   would bucket in the server's timezone
 │   │   ├── main.jsx                # React entry point
 │   │   ├── contexts/
 │   │   │   └── ToastContext.jsx    # Global toast notification context

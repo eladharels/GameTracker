@@ -6549,3 +6549,97 @@ body, html {
   .token-row { flex-wrap: wrap; }
   .token-reveal-value code { flex-basis: 100%; }
 }
+
+/* === Statistics page === */
+/*
+ * Charts are inline SVG and take their colours from the same --color-status-* tokens
+ * the cards and status dots use, so a "done" bar is the same purple as a "done" card
+ * edge. Never hardcode a hex here: --color-accent is mutated at runtime by the accent
+ * picker and everything derives from it.
+ */
+.stats-page { display: flex; flex-direction: column; gap: 1.25rem; }
+
+.stats-period { margin: 0; }
+
+.stats-coverage { align-items: flex-start; }
+
+.stats-panel { padding-bottom: 1.25rem; }
+
+/* Wide series (52 weeks on a phone) must scroll in their OWN container. The page body
+   cannot: html/body set overflow-x: hidden, which would silently CLIP a too-wide chart
+   rather than reveal it. */
+.stats-chart-scroll { width: 100%; overflow-x: auto; }
+
+/* Flex bars rather than SVG: percentage heights fill any container width without
+   measuring it, where an SVG viewBox letterboxes a narrow chart into a wide panel. */
+.stats-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 180px;
+  width: 100%;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0;
+}
+.stats-bar-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; height: 100%; }
+.stats-bar-track {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  min-height: 0;
+}
+.stats-bar-fill {
+  width: 68%;
+  max-width: 34px;
+  border-radius: 3px 3px 0 0;
+  align-self: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .stats-bar-fill { transition: height var(--transition-med, 0.25s) ease; }
+}
+.stats-bar-num { font-size: 0.68rem; font-weight: 600; color: var(--color-fg); line-height: 1.4; }
+.stats-bar-label {
+  font-size: 0.66rem;
+  color: var(--color-fg-muted);
+  text-align: center;
+  padding-top: 0.3rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.stats-donut { width: 100%; max-width: 180px; height: auto; display: block; margin: 0 auto; }
+.stats-donut-empty { stroke: var(--color-border); }
+.stats-donut-total { fill: var(--color-fg); font-size: 22px; font-weight: 700; }
+.stats-donut-caption { fill: var(--color-fg-muted); font-size: 9px; letter-spacing: 0.04em; }
+
+.stats-legend {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  font-size: 0.82rem;
+  color: var(--color-fg-muted);
+}
+.stats-legend li { display: inline-flex; align-items: center; gap: 0.35rem; }
+.stats-legend b { color: var(--color-fg); font-weight: 600; }
+.stats-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+.stats-card { display: flex; flex-direction: column; min-width: 0; }
+
+.stats-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+  max-width: 70ch;
+}
+.stats-note em { color: var(--color-fg); font-style: normal; font-weight: 600; }
+
+@media (max-width: 700px) {
+  .stats-bars { height: 150px; }
+  .library-header .stats-period { width: 100%; }
+}
