@@ -2250,6 +2250,24 @@ v2Router.post('/library/games', libraryWriteLimit, (req, res) => {
 // body. Answering 5xx for a degraded dependency would make a monitoring client unable
 // to distinguish "this endpoint is broken" from "it is working and reporting a
 // problem", which is the whole reason it exists.
+// Aggregated statistics, the v2 twin of GET /api/user/:username/stats.
+//
+// A THIN ADAPTER over the same service, which was the point of putting the logic there:
+// the page and the agent are two projections of one implementation and cannot drift
+// into disagreeing about how many games someone finished. It aggregates because an
+// agent asking "how many did I finish in March" should not spend its context on a row
+// per completion — see services/stats.js#agentSummary.
+v2Router.get('/stats/summary', (req, res) => {
+  statsService.agentSummary(req.user.id, {
+    period: req.query.period || 'month',
+    timeZone: req.query.timeZone || 'UTC',
+  })
+    // The service already emits camelCase and the shape the spec pins, so there is no
+    // mapper here — unlike the library reads, whose rows are snake_case database rows.
+    .then((data) => res.json({ data }))
+    .catch((err) => v2.send(res, err, { log: '[v2] stats read failed:' }));
+});
+
 v2Router.get('/system/status', requireAdminScope, (req, res) => {
   statusService.checkAll({
     okCache: {

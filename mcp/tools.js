@@ -279,6 +279,39 @@ const TOOLS = [
   },
 
   {
+    name: 'get_statistics',
+    config: {
+      title: 'Play statistics: what was finished when, and how long it took',
+      description:
+        'Aggregated history: how many games the user finished per week/month/year, and how long '
+        + 'games take from starting to finishing. Use this for "how many did I finish this year", '
+        + '"am I finishing more than last year", "how long do games take me".\n\n'
+        + 'ALWAYS REPORT coverage.unrecordedCompletions IF IT IS ABOVE ZERO. History only exists '
+        + 'from `trackingSince`; games finished before that were never recorded and no date could '
+        + 'honestly be invented for them. So a library can show 48 done games while the log knows '
+        + 'about 6 — answering "you have finished 6 games" is then wrong, and answering 48 is wrong '
+        + 'about the charts. Say both: what was recorded, and how many predate tracking.\n\n'
+        + 'Only changes the USER made are counted. The nightly job that moves a released game out '
+        + 'of `unreleased` is excluded, so a big overnight sweep never looks like an achievement.\n\n'
+        + 'timeToFinish.measured is usually LOWER than the number of completions: a game marked '
+        + 'done without ever passing through `playing` has no start to measure from, so it counts '
+        + 'as a completion but has no duration. Do not present the median as covering everything.\n\n'
+        + 'Buckets are cut in `timeZone` (UTC unless you pass one). Pass the user\'s zone when you '
+        + 'know it, or a game finished late in the evening can land in the wrong month.',
+      inputSchema: {
+        period: z.enum(['week', 'month', 'year']).optional()
+          .describe('Bucket size for completedPerPeriod. Defaults to month.'),
+        timeZone: z.string().optional()
+          .describe('IANA name, e.g. "Asia/Jerusalem". Decides which day a completion falls in.'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    handler: tool((args, token) => api.call(token, 'get', '/stats/summary', {
+      params: { period: args.period, timeZone: args.timeZone },
+    })),
+  },
+
+  {
     name: 'get_backlog',
     config: {
       title: 'Get my backlog in order',

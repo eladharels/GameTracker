@@ -29,6 +29,7 @@
 
 const db = require('../db');
 const { serviceError, CODES } = require('./errors');
+const { STATUSES } = require('./library');
 
 // Bounded so a caller cannot ask for an unbounded scan, and so the response stays a
 // size the SPA can hold. Well above any realistic library: ~50 completions a year
@@ -187,4 +188,103 @@ async function summary(userId) {
   };
 }
 
-module.exports = { summary, MAX_ROWS };
+
+
+// --- the agent-facing projection --------------------------------------------------
+//
+// Same data, AGGREGATED. `summary()` returns a row per completion because the SPA draws
+// them; handing that to an LLM is hundreds of rows of JSON to answer "how many did I
+// finish in March", and every one of them costs context it could spend on the answer.
+//
+// This is the whole point of the service layer: /api and /api/v2 are two skins over one
+// implementation, so the agent's view is a different PROJECTION of the same queries
+// rather than a second source that can disagree with the page.
+//
+// It DOES return statusCounts, which summary() deliberately omits. The reasoning that
+// excluded it there — the page already has the library, so a second source would
+// disagree — inverts here: an agent's only alternative is downloading the entire
+// library to count five numbers. Different consumer, different cost, same data.
+
+const PERIODS = Object.freeze(['week', 'month', 'year']);
+
+// IANA names only, and conservatively. The value is interpolated by Postgres as a
+// VALUE (AT TIME ZONE ?), never as SQL text, so this is defence in depth rather than
+// the injection boundary — but an unrecognised zone raises 22023, which would surface
+// as a 500 rather than telling the caller their input was wrong.
+const TZ_RE = /^[A-Za-z][A-Za-z0-9+_-]*(\/[A-Za-z0-9+._-]+){0,2}$/;
+
+async function agentSummary(userId, { period = 'month', timeZone = 'UTC' } = {}) {
+  if (!Number.isInteger(userId) || userId < 1) {
+    throw serviceError(CODES.VALIDATION, 'a valid user id is required', { field: 'userId' });
+  }
+  if (!PERIODS.includes(period)) {
+    throw serviceError(CODES.VALIDATION,
+      `period must be one of: ${PERIODS.join(', ')}`, { field: 'period' });
+  }
+  if (!TZ_RE.test(timeZone)) {
+    throw serviceError(CODES.VALIDATION,
+      'timeZone must be an IANA name such as Asia/Jerusalem', { field: 'timeZone' });
+  }
+
+  // Bucketed in SQL here, unlike the page — and that is a real difference, not an
+  // inconsistency. The page buckets client-side because only the browser knows the
+  // viewer's calendar; an agent has no calendar, so the zone has to be named explicitly
+  // and echoed back. Defaulting to UTC and SAYING so beats bucketing in whatever zone
+  // the server happens to run in and saying nothing.
+  let buckets;
+  try {
+    buckets = await db.promises.all(
+      `SELECT to_char(date_trunc(?, changed_at AT TIME ZONE ?), ?) AS period,
+              COUNT(*)::int AS count
+         FROM user_game_status_events
+        WHERE user_id = ? AND to_status = 'done' AND source = 'user'
+        GROUP BY 1
+        ORDER BY 1`,
+      [period, timeZone, period === 'year' ? 'YYYY' : period === 'month' ? 'YYYY-MM' : 'IYYY-"W"IW',
+       userId]
+    );
+  } catch (err) {
+    // 22023 is Postgres refusing an unrecognised time zone. A caller's bad input is a
+    // 400, not the 500 an unmapped driver error would produce.
+    if (err && err.code === '22023') {
+      throw serviceError(CODES.VALIDATION, `unknown time zone: ${timeZone}`, { field: 'timeZone' });
+    }
+    throw err;
+  }
+
+  const statusRows = await db.promises.all(
+    'SELECT status, COUNT(*)::int AS count FROM user_games WHERE user_id = ? GROUP BY status',
+    [userId]
+  );
+
+  const base = await summary(userId);
+  const days = base.durations.map((d) => d.days).sort((a, b) => a - b);
+  const pct = (p) => (days.length ? days[Math.min(days.length - 1, Math.floor(days.length * p))] : null);
+
+  return {
+    trackingSince: base.trackingSince,
+    timeZone,
+    period,
+    completedPerPeriod: buckets.map((b) => ({ period: b.period, count: b.count })),
+    timeToFinish: {
+      measured: days.length,
+      medianDays: days.length ? pct(0.5) : null,
+      shortestDays: days.length ? days[0] : null,
+      longestDays: days.length ? days[days.length - 1] : null,
+    },
+    // ALL five, zero-filled. An absent key would make a caller decide whether it means
+    // "none" or "unknown", which is the same ambiguity this whole feature refuses.
+    statusCounts: STATUSES.reduce((acc, st) => {
+      acc[st] = statusRows.find((r) => r.status === st)?.count ?? 0;
+      return acc;
+    }, {}),
+    coverage: {
+      ...base.coverage,
+      // Named rather than left as arithmetic. This is the number an agent must state
+      // when answering "how many have I finished" — the log knows fewer than the
+      // library does, and a confident total would be wrong.
+      unrecordedCompletions: Math.max(0, base.coverage.libraryDone - base.coverage.recordedCompletions),
+    },
+  };
+}
+module.exports = { summary, agentSummary, PERIODS, MAX_ROWS };

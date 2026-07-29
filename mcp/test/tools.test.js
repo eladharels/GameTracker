@@ -38,6 +38,7 @@ const EXPECTED_TOOLS = [
   'add_game',
   'get_backlog',
   'get_game',
+  'get_statistics',
   'list_library',
   'list_shareable_users',
   'list_shares',
@@ -117,7 +118,8 @@ check('destructive tools are annotated as destructive', () => {
 
 check('read-only tools are annotated read-only', () => {
   const readOnly = ['whoami', 'search_games', 'list_library', 'get_game',
-    'get_backlog', 'list_shares', 'list_shareable_users', 'read_shared_library'];
+    'get_backlog', 'get_statistics', 'list_shares', 'list_shareable_users',
+    'read_shared_library'];
   for (const name of readOnly) {
     const t = TOOLS.find((x) => x.name === name);
     assert.strictEqual(t.config.annotations?.readOnlyHint, true,

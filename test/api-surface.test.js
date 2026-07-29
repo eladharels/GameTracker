@@ -294,6 +294,7 @@ const EXPECTED_V2 = {
   // Live probes of every external dependency. Admin, matching v1: searchCatalog
   // already tells a library-scoped caller which providers answered, so what this adds
   // is infrastructure detail — latency, HTTP status, which keys are set.
+  'GET /api/v2/stats/summary': 'pat',
   'GET /api/v2/system/status': 'pat-admin:can_manage_users',
   'PATCH /api/v2/settings': 'pat-admin:can_manage_users',
   // Library-scoped on purpose: POST /library/refresh hands back a job, and an

@@ -605,6 +605,55 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /stats/summary:
+    get:
+      tags: [library]
+      operationId: getStatisticsSummary
+      x-implemented: true
+      x-required-scope: library
+      summary: Aggregated play statistics
+      description: |
+        When games were finished and how long they took, AGGREGATED. The equivalent v1
+        route returns one row per completion because the web page draws them; this
+        returns buckets, because an agent asking "how many did I finish in March" should
+        not spend its context on hundreds of rows to count them.
+
+        COVERAGE IS PART OF THE ANSWER. History only exists from `trackingSince` —
+        nothing before that was recorded, and no honest date could be invented for it.
+        `coverage.unrecordedCompletions` is how many finished games the log does not
+        know about, and an answer that ignores it will be confidently wrong.
+
+        Only transitions the USER made are counted. The nightly sweep that moves a
+        released game out of `unreleased` is excluded, as is a status the metadata
+        refresh derived from a provider's date.
+      parameters:
+        - name: period
+          in: query
+          required: false
+          schema: { type: string, enum: [week, month, year], default: month }
+          description: Bucket size for `completedPerPeriod`.
+        - name: timeZone
+          in: query
+          required: false
+          schema: { type: string, default: UTC }
+          description: |
+            IANA name (e.g. `Asia/Jerusalem`) deciding which calendar day a completion
+            falls in. Defaults to UTC and is echoed back, because a bucket is meaningless
+            without knowing the zone it was cut in.
+      responses:
+        '200':
+          description: Aggregated statistics for the calling account.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/StatisticsSummary' }
+                additionalProperties: false
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /library/backlog:
     get:
       tags: [library]
@@ -1650,6 +1699,70 @@ components:
       minProperties: 1
       additionalProperties: false
 
+    StatisticsSummary:
+      type: object
+      required: [trackingSince, timeZone, period, completedPerPeriod, timeToFinish, statusCounts, coverage]
+      properties:
+        trackingSince:
+          type: [string, 'null']
+          format: date-time
+          description: When the first status change was recorded, or null if none has been.
+        timeZone: { type: string }
+        period: { type: string, enum: [week, month, year] }
+        completedPerPeriod:
+          type: array
+          items: { $ref: '#/components/schemas/PeriodCount' }
+        timeToFinish: { $ref: '#/components/schemas/TimeToFinish' }
+        statusCounts: { $ref: '#/components/schemas/StatusCounts' }
+        coverage: { $ref: '#/components/schemas/StatisticsCoverage' }
+      additionalProperties: false
+    StatusCounts:
+      type: object
+      description: |
+        Current library counts per status. Every status is present, so a caller never
+        has to decide whether an absent key means zero or means unknown.
+      required: [wishlist, playing, done, backlog, unreleased]
+      properties:
+        wishlist: { type: integer }
+        playing: { type: integer }
+        done: { type: integer }
+        backlog: { type: integer }
+        unreleased: { type: integer }
+      additionalProperties: false
+    PeriodCount:
+      type: object
+      required: [period, count]
+      properties:
+        period:
+          type: string
+          description: 'Bucket key: YYYY, YYYY-MM, or ISO YYYY-Www.'
+        count: { type: integer }
+      additionalProperties: false
+    TimeToFinish:
+      type: object
+      required: [measured, medianDays, shortestDays, longestDays]
+      description: |
+        Days from a game entering `playing` to reaching `done`. A completion that never
+        passed through `playing` has no start to measure from and is excluded — hence
+        `measured`, which is usually lower than the number of completions.
+      properties:
+        measured: { type: integer }
+        medianDays: { type: [number, 'null'] }
+        shortestDays: { type: [number, 'null'] }
+        longestDays: { type: [number, 'null'] }
+      additionalProperties: false
+    StatisticsCoverage:
+      type: object
+      required: [libraryDone, recordedCompletions, unrecordedCompletions, totalEvents, userEvents, truncated]
+      description: What the log does NOT know. Report this alongside any total.
+      properties:
+        libraryDone: { type: integer, description: Games currently marked done. }
+        recordedCompletions: { type: integer, description: Completions the log actually observed. }
+        unrecordedCompletions: { type: integer, description: Finished before tracking began. }
+        totalEvents: { type: integer }
+        userEvents: { type: integer }
+        truncated: { type: boolean }
+      additionalProperties: false
     BacklogEntry:
       type: object
       required: [gameId, position]

@@ -151,6 +151,28 @@ current price. If someone is deciding whether to buy, say when the snapshot was 
 and let them check the store. An empty \`lastPrice\` usually means the game has no
 Steam id, not that it is free.
 
+## Statistics, and the gap in them
+
+\`get_statistics\` answers "how many did I finish this month/year" and "how long do
+games take me". Two things about it change the answer you should give:
+
+**History starts at \`trackingSince\`.** Status changes were not recorded before that
+date, and no honest date could be invented for games finished earlier — so a library
+can show 48 finished games while the log knows about 6. \`coverage.unrecordedCompletions\`
+is that difference. If it is above zero, SAY SO: "6 recorded since March, plus 42 you
+finished before tracking started" is right; "you have finished 6 games" is wrong.
+
+**Only what the user did is counted.** The nightly job that moves a released game out of
+\`unreleased\` is excluded, so a sweep over dozens of pre-orders never looks like an
+achievement.
+
+\`timeToFinish.measured\` is usually lower than the number of completions: a game marked
+done without ever passing through \`playing\` has no start to measure from. Do not
+present the median as covering every game.
+
+Buckets are cut in whatever \`timeZone\` you pass, UTC by default. Pass the user's zone
+when you know it, or an evening finish can land in the wrong month.
+
 ## Sharing
 
 A user can share their library with specific other accounts. Sharing is:
