@@ -142,7 +142,7 @@ function App() {
   if (location.pathname.startsWith('/search')) pageTitle = 'Search Games'
   else if (location.pathname.startsWith('/library')) pageTitle = 'My Library'
   else if (location.pathname.startsWith('/calendar')) pageTitle = 'Calendar'
-        else if (location.pathname.startsWith('/stats')) pageTitle = 'Statistics'
+  else if (location.pathname.startsWith('/stats')) pageTitle = 'Statistics'
   else if (location.pathname.startsWith('/users')) pageTitle = 'User Management'
   else if (location.pathname.startsWith('/account')) pageTitle = 'My Account'
   else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings'

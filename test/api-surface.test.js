@@ -407,7 +407,29 @@ for (const [path, item] of Object.entries(spec.paths)) {
 }
 
 check('every implemented spec operation exists on the router', () => {
-  const live = new Set(liveRoutes().map((r) => r.key));
+  // The write limiter must stay ON the routes that append to the status-event log.
+//
+// It is not an authorization middleware, so tierOf() ignores it and every tier
+// assertion above passes with it removed — which is exactly why it needs its own pin.
+// The table it protects has no UNIQUE by design (done -> playing -> done must produce
+// two rows), so nothing else bounds an authenticated caller alternating one game's
+// status indefinitely.
+check('every status-write route carries the library write limiter', () => {
+  const MUST_LIMIT = [
+    'POST /api/user/:username/games',
+    'POST /api/v2/library/games',
+    'PATCH /api/v2/library/games/:gameId',
+  ];
+  const byKey = new Map(liveRoutes().map((r) => [r.key, r]));
+  for (const key of MUST_LIMIT) {
+    const route = byKey.get(key);
+    assert.ok(route, `${key} is not a live route — update this list with the rename`);
+    assert.ok(route.names.includes('libraryWriteLimit'),
+      `${key} writes user_game_status_events but has no write limiter. Its chain is: ${route.names.join(' -> ')}`);
+  }
+});
+
+const live = new Set(liveRoutes().map((r) => r.key));
   for (const key of specKeys.keys()) {
     assert.ok(live.has(key),
       `the spec marks '${key}' x-implemented but the router does not serve it — `

@@ -21,7 +21,6 @@ const CODE_INTERNAL = 'internal';
 // a gap: they exist so a client can learn to branch on them before the server can
 // produce them. test/openapi.test.js keeps this list and the spec's enum in step.
 const PLANNED_CODES = Object.freeze({
-  rate_limited: { status: 429, title: 'Too many requests', expose: false },
   settings_unreadable: { status: 409, title: 'Settings could not be read', expose: false },
   internal: { status: 500, title: 'Internal error', expose: false },
 });

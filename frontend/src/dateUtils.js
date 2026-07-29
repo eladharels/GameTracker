@@ -62,15 +62,38 @@ export function bucketRange(from, to, period) {
   return keys;
 }
 
-// Human label for a bucket key.
+// Short label for a bucket key, for a cramped axis.
+//
+// January carries the year, so a series crossing a boundary is not twelve unlabelled
+// months followed by twelve more. Everything else stays short — a 26px slot cannot hold
+// "Aug 2025".
 export function bucketLabel(key, period) {
   if (period === 'year') return key;
   if (period === 'month') {
     const [y, m] = key.split('-');
     const d = new Date(Number(y), Number(m) - 1, 1);
-    return d.toLocaleDateString(undefined, { month: 'short' });
+    const short = d.toLocaleDateString(undefined, { month: 'short' });
+    return m === '01' ? `${short} \u2019${y.slice(2)}` : short;
   }
   const [y, m, day] = key.split('-');
-  return new Date(Number(y), Number(m) - 1, Number(day))
-    .toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  const d = new Date(Number(y), Number(m) - 1, Number(day));
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+// UNAMBIGUOUS label, for the visually-hidden data table.
+//
+// The axis may abbreviate because a sighted reader has the sequence to orient by. A
+// screen-reader user gets a flat list of rows, so three years of monthly buckets read
+// "Aug, Sep, ... Jul, Aug, Sep, ..." with nothing to tell 2024 from 2026 — the one
+// artefact that exists to carry this data to them could not distinguish them.
+export function bucketFullLabel(key, period) {
+  if (period === 'year') return key;
+  if (period === 'month') {
+    const [y, m] = key.split('-');
+    return new Date(Number(y), Number(m) - 1, 1)
+      .toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }
+  const [y, m, day] = key.split('-');
+  const d = new Date(Number(y), Number(m) - 1, Number(day));
+  return `week of ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}`;
 }

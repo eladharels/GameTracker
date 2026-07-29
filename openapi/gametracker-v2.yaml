@@ -1459,7 +1459,10 @@ components:
             not_shared: false
             not_in_backlog: false
             conflict: true
-            rate_limited: false
+            # true, unlike the other promoted codes: the message is "try again in N
+            # minutes", which names nothing internal and is the one piece of information
+            # a rate-limited caller actually needs. v1's login lockout has always said it.
+            rate_limited: true
             provider_unavailable: false
             settings_unreadable: false
             internal: false

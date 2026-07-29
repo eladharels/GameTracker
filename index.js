@@ -1008,7 +1008,7 @@ app.post('/api/settings', authRequired, express.json(), (req, res) => {
 // services/library.js#statusForDate alongside the upsert's copy of the same rule.
 
 // --- Add/update a game status for a user (with notification) ---
-app.post('/api/user/:username/games', authRequired, ownershipRequired, (req, res) => {
+app.post('/api/user/:username/games', authRequired, ownershipRequired, libraryWriteLimit, (req, res) => {
   const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
   const { gameId, gameName, coverUrl, releaseDate, status, steamAppId } = req.body;
 
@@ -1605,6 +1605,60 @@ function trackFailures(keys) {
 
 const clearFailures = (keys) => { for (const key of keys) loginAttempts.delete(key); };
 
+// --- library write limiter --------------------------------------------------------
+//
+// Every status write appends a row to user_game_status_events, and that table has no
+// UNIQUE to bound it — done -> playing -> done must produce two rows, so duplicates are
+// the point. An authenticated caller alternating one game between two statuses
+// therefore inflates it indefinitely, needing no growing working set. Raised by the
+// CISO review of the statistics feature.
+//
+// Deliberately GENEROUS. This bounds abuse; it must not shape normal use. Reorganising
+// a library is a burst of dozens of status changes, and an agent working through a
+// backlog is another — 240 in five minutes is roughly one write every 1.25 seconds
+// sustained, far above either and far below what it takes to matter.
+//
+// Keyed by USER, not IP: the point is to bound one account's writes, and several users
+// behind one NAT must not share a budget. Its own key namespace, like sudo: and
+// sudo-dir:, so it cannot consume or be consumed by the login budget.
+//
+// Built on lockoutMinutes/trackFailures rather than a second counter, for the reason
+// already recorded there: a second copy is how the two drift, and the eviction sweep
+// only knows about this store.
+const LIBRARY_WRITE_KEYS = (userId) => [`libwrite:${userId}`];
+const LIBRARY_WRITE_MAX = 240;
+const LIBRARY_WRITE_WINDOW_MS = 5 * 60 * 1000;
+
+function libraryWriteLimit(req, res, next) {
+  const userId = req.user && req.user.id;
+  // No id means an unauthenticated request, which cannot reach these routes anyway —
+  // fail open here rather than 500, because authRequired is the control that matters
+  // and this middleware always runs after it.
+  if (!userId) return next();
+
+  const keys = LIBRARY_WRITE_KEYS(userId);
+  const lockedFor = lockoutMinutes(keys, LIBRARY_WRITE_MAX, LIBRARY_WRITE_WINDOW_MS);
+  if (lockedFor > 0) {
+    console.warn(`[RateLimit] library writes throttled for user ${userId}`);
+    res.set('Retry-After', String(lockedFor * 60));
+    const err = {
+      code: SVC.RATE_LIMITED,
+      message: `Too many library changes. Try again in ${lockedFor} minute${lockedFor === 1 ? '' : 's'}.`,
+    };
+    // The two surfaces have DIFFERENT wire formats and one renderer cannot serve both:
+    // problem.send emits v1's {error} envelope, v2.send emits problem+json. Branching
+    // on the mount is the honest way to share one limiter between them — the
+    // alternative is two middlewares that must be kept in step.
+    return req.originalUrl.startsWith('/api/v2')
+      ? v2.send(res, err)
+      : problem.send(res, err);
+  }
+  // Counts EVERY write, not just failures — the resource being protected is consumed
+  // by success. Same reasoning as the directory budget above.
+  trackFailures(keys);
+  return next();
+}
+
 // The login limiter, expressed in terms of the shared primitives above. Behaviour is
 // unchanged — same keys, same window, same log line.
 const isLockedOut = (clientIP, username) => lockoutMinutes(attemptKeys(clientIP, username));
@@ -2085,7 +2139,7 @@ v2Router.delete('/library/games/:gameId', (req, res) => {
 // There is deliberately no releaseDate in the body. Accepting one is what let v1 write
 // an already-released game back to `unreleased` and then announce it to every
 // notification channel on the next correct write.
-v2Router.patch('/library/games/:gameId', (req, res) => {
+v2Router.patch('/library/games/:gameId', libraryWriteLimit, (req, res) => {
   const body = req.body || {};
   if (!Object.hasOwn(body, 'status')) {
     return v2.send(res, {
@@ -2153,7 +2207,7 @@ v2Router.get('/catalog/search', (req, res) => {
 // TWO service calls and no rules of its own: catalog decides WHICH game, library
 // decides what storing it means. The name path collapses search-then-add into one
 // call, and an ambiguous name is a 409 carrying the candidates rather than a guess.
-v2Router.post('/library/games', (req, res) => {
+v2Router.post('/library/games', libraryWriteLimit, (req, res) => {
   const body = req.body || {};
   catalogService.resolveGame({ gameId: body.gameId, name: body.name })
     // `status` is passed through UNDEFAULTED. The default — and the rule that omitting

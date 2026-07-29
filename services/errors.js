@@ -60,6 +60,13 @@ const CODES = Object.freeze({
   // Promoted here from the spec's "planned" set when services/catalog.js#search
   // started emitting it.
   PROVIDER_UNAVAILABLE: 'provider_unavailable',
+  // 429. Promoted from the spec's "planned" set when the library write limiter started
+  // emitting it, the same route PROVIDER_UNAVAILABLE took. It exists because every
+  // status write appends a row to user_game_status_events, and that table has no UNIQUE
+  // to bound it — so an authenticated caller alternating one game between two statuses
+  // can inflate it indefinitely. The limit is far above any real use; it bounds abuse,
+  // it does not shape normal behaviour.
+  RATE_LIMITED: 'rate_limited',
 });
 
 const serviceError = (code, message, details) => new ServiceError(code, message, details);

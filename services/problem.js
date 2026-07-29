@@ -38,6 +38,10 @@ const PROBLEMS = Object.freeze({
   // message would otherwise carry which provider failed and how, which is exactly the
   // upstream detail the header of this file says never leaves the server.
   [CODES.PROVIDER_UNAVAILABLE]: Object.freeze({ status: 502, title: 'Upstream provider unavailable', expose: false }),
+  // expose:true, unlike most. The message is "try again in N minutes" — it names no
+  // internal detail, and withholding it would leave a caller retrying blind against a
+  // window it cannot see. v1's login lockout has always said this in plain text.
+  [CODES.RATE_LIMITED]:   Object.freeze({ status: 429, title: 'Too many requests',   expose: true }),
 });
 
 // What the response WOULD be. Returns null when the error is not a ServiceError we

@@ -27,7 +27,7 @@ import {
   FaList, FaRegCalendarAlt, FaHourglassHalf,
 } from 'react-icons/fa';
 import { useToast } from './contexts/ToastContext';
-import { bucketKey, bucketRange, bucketLabel } from './dateUtils';
+import { bucketKey, bucketRange, bucketLabel, bucketFullLabel } from './dateUtils';
 
 const API_BASE = `${window.location.origin}/api`;
 
@@ -35,6 +35,19 @@ const PERIODS = [
   { value: 'week', label: 'Weekly' },
   { value: 'month', label: 'Monthly' },
   { value: 'year', label: 'Yearly' },
+];
+
+// A NEUTRAL categorical ramp for series that are not statuses.
+//
+// --color-status-* may only ever mean its status. Painting providers and release years
+// with them put the same blue on screen meaning "Wishlist" in one legend, "igdb" in
+// another and "a release year" in between — three meanings, one colour, one screenful.
+// These derive from --color-accent so they still follow the theme.
+const CATEGORICAL = [
+  'color-mix(in srgb, var(--color-accent) 85%, white 15%)',
+  'color-mix(in srgb, var(--color-accent) 60%, white 40%)',
+  'color-mix(in srgb, var(--color-accent) 45%, var(--color-fg-muted) 55%)',
+  'color-mix(in srgb, var(--color-accent) 25%, var(--color-fg-muted) 75%)',
 ];
 
 const STATUS_ORDER = ['playing', 'done', 'backlog', 'wishlist', 'unreleased'];
@@ -172,7 +185,17 @@ export default function StatsPage({ user }) {
       // Shape guards: a proxy answering with an HTML error page yields a string, and
       // rendering that as data is how a failure becomes a confident zero.
       if (!Array.isArray(g.data)) throw new Error('unexpected library response');
-      if (!s.data || typeof s.data !== 'object' || !Array.isArray(s.data.completions)) {
+      // EVERY field the render dereferences, not just the arrays. `coverage` is read
+      // unguarded further down, and with no error boundary anywhere in this app a
+      // TypeError during render empties #root — no sidebar, no nav, no route back to
+      // the library, just a white page. That is the deleted-library incident reproduced
+      // by one absent field, and CLAUDE.md documents a six-second window on every
+      // deploy where the SPA is served against an API that is not ready yet.
+      if (!s.data || typeof s.data !== 'object'
+          || !Array.isArray(s.data.completions)
+          || !Array.isArray(s.data.durations)
+          || !s.data.coverage || typeof s.data.coverage !== 'object'
+          || typeof s.data.coverage.libraryDone !== 'number') {
         throw new Error('unexpected stats response');
       }
       setGames(g.data);
@@ -216,7 +239,29 @@ export default function StatsPage({ user }) {
       const k = bucketKey(c.date, period);
       if (counts.has(k)) counts.set(k, counts.get(k) + 1);
     }
-    const series = keys.map((k) => ({ key: k, label: bucketLabel(k, period), value: counts.get(k) }));
+    const series = keys.map((k) => ({
+      key: k, label: bucketLabel(k, period), fullLabel: bucketFullLabel(k, period),
+      value: counts.get(k),
+    }));
+
+    // Games ADDED per period. Unlike completions this has FULL history — added_at has
+    // been on user_games since migration 004 — so on day one it is the one chart with
+    // something in it. Nulls (rows predating 004) are excluded rather than bucketed as
+    // "unknown", and the note under the chart says how many.
+    const added = games
+      .map((g) => (g.added_at ? new Date(g.added_at) : null))
+      .filter((d) => d && !Number.isNaN(d.getTime()));
+    const addedKeys = added.length
+      ? bucketRange(new Date(Math.min(...added)), new Date(), period) : [];
+    const addedCounts = new Map(addedKeys.map((k) => [k, 0]));
+    for (const d of added) {
+      const k = bucketKey(d, period);
+      if (addedCounts.has(k)) addedCounts.set(k, addedCounts.get(k) + 1);
+    }
+    const addedSeries = addedKeys.map((k) => ({
+      key: k, label: bucketLabel(k, period), fullLabel: bucketFullLabel(k, period),
+      value: addedCounts.get(k),
+    }));
 
     const days = stats.durations.map((d) => d.days);
     // Fixed buckets rather than a computed range: "under a day" and "over a year" are
@@ -256,9 +301,7 @@ export default function StatsPage({ user }) {
       .sort((a, b) => (a[0] === 'Unknown' ? 1 : b[0] === 'Unknown' ? -1 : a[0].localeCompare(b[0])))
       .map(([k, v]) => ({
         key: k,
-        // Compact on the axis — this chart lives in a ~280px card and a 4-digit year
-        // per 26px slot overlaps. The full year goes to the data table below it.
-        label: k === 'Unknown' ? '?' : `\u2019${k.slice(2)}`,
+        label: k === 'Unknown' ? 'Unknown' : k,
         fullLabel: k === 'Unknown' ? 'Unknown release date' : k,
         value: v,
       }));
@@ -268,12 +311,9 @@ export default function StatsPage({ user }) {
       const p = String(g.game_id || '').split('_')[0] || 'other';
       providers.set(p, (providers.get(p) || 0) + 1);
     }
-    const providerMix = [...providers.entries()].map(([k, v]) => ({
-      key: k, label: k, value: v,
-      color: k === 'igdb' ? 'var(--color-status-wishlist)'
-        : k === 'rawg' ? 'var(--color-status-playing)'
-          : 'var(--color-status-unreleased)',
-    }));
+    const providerMix = [...providers.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v], i) => ({ key: k, label: k, value: v, color: CATEGORICAL[i % CATEGORICAL.length] }));
 
     const thisBucket = bucketKey(new Date(), period);
     // NOTHING RECORDED YET is not the same fact as ZERO RECORDED THIS MONTH, and the
@@ -282,6 +322,8 @@ export default function StatsPage({ user }) {
     const observed = Boolean(stats.trackingSince);
     return {
       series,
+      addedSeries,
+      addedUnknown: games.length - added.length,
       histogram,
       statusCounts,
       releaseYears,
@@ -299,7 +341,7 @@ export default function StatsPage({ user }) {
   if (loading) {
     return (
       <div className="stats-page">
-        <div className="ss-grid">
+          <div className="ss-grid">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="ss-card">
               <div className="skeleton-line skeleton-line--short" />
@@ -347,6 +389,11 @@ export default function StatsPage({ user }) {
     );
   }
 
+  // stats and derived are set together or not at all, but that invariant lives in a
+  // different function. One line here means a future reordering of the guards above
+  // cannot white-screen the app — there is no error boundary to catch it if it does.
+  if (!stats || !derived) return null;
+
   const cov = stats.coverage;
   const unrecorded = Math.max(0, cov.libraryDone - cov.recordedCompletions);
 
@@ -354,7 +401,7 @@ export default function StatsPage({ user }) {
     <div className="stats-page">
       <div className="library-header">
         <h2 className="library-title">Statistics</h2>
-        <div className="filter-bar stats-period">
+        <div className="filter-bar stats-period" role="group" aria-label="Chart period">
           {PERIODS.map((p) => (
             <button key={p.value} type="button"
               className={`filter-btn ${period === p.value ? 'active' : ''}`}
@@ -369,15 +416,25 @@ export default function StatsPage({ user }) {
           Stating the gap is the difference between an honest empty chart and a page
           that implies you have achieved nothing. */}
       {unrecorded > 0 && (
-        <div className="gt-alert gt-alert--page stats-coverage" role="status">
+        <div className="gt-alert gt-alert--info stats-coverage" role="status">
           <FaExclamationCircle aria-hidden="true" />
           <div>
-            <strong>{unrecorded} of your {cov.libraryDone} finished games have no completion date.</strong>
-            <br />
-            Status history started being recorded
-            {stats.trackingSince ? ` on ${fmtDate(stats.trackingSince)}` : ' recently'}, and there is no
-            honest way to backdate what happened before that. The charts below cover only
-            what has been observed since — they will fill in as you play.
+            {stats.trackingSince ? (
+              <>
+                <strong>Completion tracking started on {fmtDate(stats.trackingSince)}.</strong>
+                <br />
+                {unrecorded} of your {cov.libraryDone} finished games were already done by
+                then, so they have no completion date and do not appear in the charts below.
+                Everything you finish from now on is counted.
+              </>
+            ) : (
+              <>
+                <strong>Completion tracking has just been switched on.</strong>
+                <br />
+                None of your {cov.libraryDone} finished games have a recorded date yet — the
+                charts fill in as you play.
+              </>
+            )}
           </div>
         </div>
       )}
@@ -430,6 +487,32 @@ export default function StatsPage({ user }) {
 
       <div className="ent-section stats-panel">
         <div className="ent-section-header">
+          <span className="ent-section-icon-wrap"><FaRegCalendarAlt aria-hidden="true" /></span>
+          <h3>Games added per {periodNoun}</h3>
+        </div>
+        {/* The one chart with FULL history: added_at has been recorded since migration
+            004, so this is populated on day one while the completion charts are still
+            empty. */}
+        {derived.addedSeries.length ? (
+          <>
+            <BarChart data={derived.addedSeries} color={CATEGORICAL[1]}
+              ariaLabel={`Games added to the library per ${periodNoun}.`} />
+            <ChartData caption={`Games added per ${periodNoun}`} rows={derived.addedSeries} />
+            {derived.addedUnknown > 0 && (
+              <p className="stats-note">
+                {derived.addedUnknown} game{derived.addedUnknown === 1 ? '' : 's'} added before
+                this was recorded {derived.addedUnknown === 1 ? 'is' : 'are'} not shown — their
+                date is unknown, which is not the same as zero.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="stats-note">No games have a recorded date for when they were added.</p>
+        )}
+      </div>
+
+      <div className="ent-section stats-panel">
+        <div className="ent-section-header">
           <span className="ent-section-icon-wrap"><FaHourglassHalf aria-hidden="true" /></span>
           <h3>How long games take</h3>
         </div>
@@ -458,6 +541,22 @@ export default function StatsPage({ user }) {
         )}
       </div>
 
+      <div className="ent-section stats-panel">
+        <div className="ent-section-header">
+          <span className="ent-section-icon-wrap"><FaRegCalendarAlt aria-hidden="true" /></span>
+          <h3>Releases by year</h3>
+        </div>
+        {/* FULL WIDTH, not a card in the grid. In a ~280px cell this chart hid 43-56%
+            of its bars at every breakpoint — worst at 1920 with widescreen on, where
+            .ss-grid lays out five tracks for three cards — with no scrollbar and no
+            affordance, so it presented a truncated distribution as a complete one. A
+            chart that silently lies about its own x-axis is the same defect as a
+            confident zero. */}
+        <BarChart data={derived.releaseYears} color={CATEGORICAL[0]}
+          ariaLabel="Games in the library grouped by release year." />
+        <ChartData caption="Releases by year" rows={derived.releaseYears} />
+      </div>
+
       <div className="ss-grid">
         <div className="ss-card stats-card">
           <div className="ss-card-label">Library by status</div>
@@ -471,13 +570,6 @@ export default function StatsPage({ user }) {
             ))}
           </ul>
           <ChartData caption="Library by status" rows={derived.statusCounts} />
-        </div>
-
-        <div className="ss-card stats-card">
-          <div className="ss-card-label">Releases by year</div>
-          <BarChart data={derived.releaseYears} color="var(--color-status-wishlist)"
-            ariaLabel="Games in the library grouped by release year." />
-          <ChartData caption="Releases by year" rows={derived.releaseYears} />
         </div>
 
         <div className="ss-card stats-card">

@@ -6561,7 +6561,22 @@ body, html {
 
 .stats-period { margin: 0; }
 
-.stats-coverage { align-items: flex-start; }
+/* An INFORMATIONAL variant. `.gt-alert` alone carries only layout — every background,
+   border and colour lives in `.gt-alert--danger` — so the coverage banner rendered
+   fully transparent with no border, giving the most important element on the page less
+   visual weight than the chips beneath it while inheriting the danger palette's pale
+   red `strong`. It is not an error and must not be red: this is the app telling you
+   when it started counting, not something going wrong. */
+.gt-alert--info {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  border-radius: var(--radius-lg);
+  color: var(--color-fg-muted);
+}
+.gt-alert--info strong { color: var(--color-fg); }
+.gt-alert--info > svg { color: var(--color-accent); flex: none; margin-top: 0.15rem; }
+
+.stats-coverage { align-items: flex-start; line-height: 1.55; }
 
 .stats-panel { padding-bottom: 1.25rem; }
 
@@ -6612,7 +6627,7 @@ body, html {
 .stats-donut { width: 100%; max-width: 180px; height: auto; display: block; margin: 0 auto; }
 .stats-donut-empty { stroke: var(--color-border); }
 .stats-donut-total { fill: var(--color-fg); font-size: 22px; font-weight: 700; }
-.stats-donut-caption { fill: var(--color-fg-muted); font-size: 9px; letter-spacing: 0.04em; }
+.stats-donut-caption { fill: var(--color-fg-muted); font-size: 11px; letter-spacing: 0.04em; }
 
 .stats-legend {
   list-style: none;
@@ -6641,5 +6656,8 @@ body, html {
 
 @media (max-width: 700px) {
   .stats-bars { height: 150px; }
-  .library-header .stats-period { width: 100%; }
+  /* .library-header is display:flex with no flex-wrap, so a width:100% child cannot
+     stack — the rule that used to be here looked like it did something and did not.
+     Allow the wrap, then the period toggle drops to its own line as intended. */
+  .stats-page .library-header { flex-wrap: wrap; gap: 0.6rem; }
 }
