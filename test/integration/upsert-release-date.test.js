@@ -96,6 +96,37 @@ const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10
     assert.ok(e.every((x) => x.source === 'user'), 'source is no longer user');
   });
 
+  await check('THE SECOND HALF: asking for `unreleased` on a released game is refused', async () => {
+    // Choosing the right DATE is only half of D7. The first version of this fix still ran
+    // `isReleased(date) ? requested : 'unreleased'`, so a caller could DECLARE a released
+    // game unreleased and get it — the same incoherent row, reached from the other side,
+    // with the phantom RELEASED re-armed for the next write. Reachable on v2, where
+    // LibraryGameCreate.status accepts the whole GameStatus enum.
+    const result = await lib.upsertGame(uid, {
+      gameId: 'igdb_d7', gameName: 'Cyberpunk 2077', status: 'unreleased' });
+    const r = await row('igdb_d7');
+    assert.strictEqual(r.status, 'wishlist',
+      `a released game was stored '${r.status}' because the caller asked for it`);
+    assert.strictEqual(result.coerced, true, 'the coercion was not reported');
+    assert.ok(!(r.status === 'unreleased' && lib.isReleased(r.release_date)),
+      'the row holds a past release date next to status=unreleased');
+  });
+
+  await check('an unreadable stored date does not pin a game to unreleased', async () => {
+    // Rows holding a non-date string exist: validReleaseDate postdates the original
+    // insert path and the SQLite import carried whatever was there. The first version of
+    // this fix let such a value outrank a real request date, so the game was stuck in
+    // 'unreleased' with no way back through the UI — a fresh trap of D7's own shape.
+    await db.promises.run(
+      "INSERT INTO user_games (user_id, game_id, game_name, status, release_date) VALUES (?, 'igdb_junkdate', 'Junk Date', 'unreleased', 'TBA')",
+      [uid]);
+    await lib.upsertGame(uid, {
+      gameId: 'igdb_junkdate', gameName: 'Junk Date', releaseDate: '2001-11-15', status: 'done' });
+    const r = await row('igdb_junkdate');
+    assert.strictEqual(r.status, 'done', `stuck at '${r.status}' — an unreadable date won`);
+    assert.strictEqual(r.release_date, '2001-11-15', 'the unreadable value was not healed');
+  });
+
   console.log('\nthe same disagreement from the other side:');
 
   await check('a row stored WITHOUT a date is filled by the request', async () => {

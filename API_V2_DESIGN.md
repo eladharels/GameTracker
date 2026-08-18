@@ -217,10 +217,19 @@ not accepting one beats accepting it and then declining to use it — and the co
 itself is untouched: a genuinely future-dated game still overrides whatever status the
 caller asked for, and still reports `coerced`.
 
+**D7 had two halves, and the first attempt at this fix only closed one.** Choosing the right
+date still left `isReleased(date) ? requested : 'unreleased'` in the decision, so a caller
+could DECLARE a released game `unreleased` and be given it — the same broken row, reached from
+the other side, with the phantom `RELEASED` re-armed for the next write. Reachable here rather
+than theoretically: `LibraryGameCreate.status` accepts the whole `GameStatus` enum. The
+decision now runs through `statusForDate`, which already encoded that rule for `setStatus`.
+An Architect review found this; it is recorded because "the date is chosen correctly" reads
+like the whole fix and is not.
+
 The v1 fix is a shape-preserving bug fix, so it is not a freeze violation: no field, route
 or status code moved. What changed is which value a stored status is computed from, and the
 old answer produced a row (`release_date` in the past next to `status='unreleased'`) that no
-coherent input to `services/library.js` can otherwise produce.
+coherent input to `services/library.js` can now produce.
 
 ## D8 — Server-side filter, sort and ordering
 

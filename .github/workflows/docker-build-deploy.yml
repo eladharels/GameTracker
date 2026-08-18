@@ -8,16 +8,34 @@ on:
   # only after merge -- so "CI is green" and "it is live in production" were the same
   # event, and the first real exercise of any change was the deploy itself.
   #
-  # Two things make this safe, and neither is optional:
-  #   1. The `deploy` job is guarded on `github.event_name == 'push'` AND the ref.
+  # THREE things make this safe. The first is the one that matters, and the first version
+  # of this trigger shipped without it -- a CISO review caught that before merge.
+  #
+  #   1. EVERY JOB IS GATED TO SAME-REPO PULL REQUESTS. This repository is PUBLIC and the
+  #      runner is self-hosted -- and it is the production host itself: `deploy` brings up
+  #      docker-compose.yaml on it and health-checks localhost:3000. A fork PR that runs
+  #      here reaches the live database, JWT_SECRET, the LDAP bind password and a Docker
+  #      socket, through `npm ci` scripts, a PR-authored Dockerfile's RUN lines, or the
+  #      containers the smoke stack starts. GitHub's approval prompt for first-time
+  #      contributors is not a boundary: one merged typo fix and later fork PRs run
+  #      automatically. A branch INSIDE this repo needs push access, which is already
+  #      enough to deploy, so gating on the head repo keeps the trust boundary where it
+  #      already was rather than widening it.
+  #   2. The `deploy` job is guarded on `github.event_name == 'push'` AND the ref.
   #      It has no guard of its own historically -- it relied ENTIRELY on this trigger
   #      list to never see a non-main event. Adding a trigger without adding that guard
   #      would have deployed every pull request to production.
-  #   2. `build-images` tags PR builds `pr-<number>`, never `latest`. Both compose files
-  #      resolve `local/gametracker-*:latest` on a SELF-HOSTED runner that is the same
-  #      Docker daemon production runs on, so a PR build writing `:latest` would leave
-  #      the next `docker compose up` -- an operator restart, a reboot, the next deploy
-  #      -- silently starting production on unreviewed PR code.
+  #   3. `build-images` tags PR builds `pr-<number>`, never `latest`. Both compose files
+  #      resolve `local/gametracker-*:latest` on the same Docker daemon production runs
+  #      on, so a PR build writing `:latest` would leave the next `docker compose up` --
+  #      an operator restart, a reboot, the next deploy -- silently starting production
+  #      on unreviewed PR code.
+  #
+  # BE PRECISE ABOUT WHAT 2 AND 3 DO: they prevent ACCIDENTS. Both live in a file the pull
+  # request itself controls on a `pull_request` event, so against code that is actively
+  # hostile they are one deleted line each. Only 1 is a boundary against untrusted code,
+  # and even 1 is a stopgap -- the durable answers are making the repository private or
+  # running the PR path on GitHub-hosted runners.
   pull_request:
     branches:
       - main
@@ -25,8 +43,18 @@ on:
 # Prevent concurrent runs from conflicting on the self-hosted runner.
 # cancel-in-progress: false ensures the second push queues instead of
 # cancelling an in-progress run that may hold Docker ports.
+# PARTITIONED BY EVENT. A single group holds at most ONE pending run: with a deploy in
+# flight and a second queued, a third arrival CANCELS the queued one. Once pull requests
+# entered this group that third arrival could be a PR, silently evicting the queued run
+# for a merge commit -- and nothing surfaces it, because `deploy` was never skipped, the
+# run was cancelled before reaching it. A merge that never deployed and never said so.
+#
+# What the single group was really protecting is the runner's fixed resources: the smoke
+# stack's ports (3099/8099/3199) and the `gametracker-smoke` compose project name, plus
+# the production stack itself. That exclusivity moves down to the two jobs that actually
+# contend for them, where it belongs, and PR traffic can no longer displace a deploy.
 concurrency:
-  group: gametracker-pipeline
+  group: gametracker-pipeline-${{ github.event_name == 'push' && 'main' || github.event.number }}
   cancel-in-progress: false
 
 # Least privilege. Without this the default token may be read+write, and
@@ -43,6 +71,16 @@ jobs:
   secret-scan:
     name: Secret Scanning (Gitleaks)
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     steps:
       - name: Checkout repository
@@ -86,6 +124,16 @@ jobs:
   semgrep:
     name: SAST — Semgrep
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     steps:
       - name: Checkout repository
@@ -126,6 +174,16 @@ jobs:
   frontend-quality:
     name: Frontend Lint, Build & Backend Tests
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     steps:
       - name: Checkout repository
@@ -178,7 +236,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ./frontend
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Run ESLint
         working-directory: ./frontend
@@ -196,6 +254,16 @@ jobs:
   build-images:
     name: Build Docker Images
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     env:
       BACKEND_IMAGE_BASE: local/gametracker-backend
@@ -267,6 +335,16 @@ jobs:
   trivy-api:
     name: Container Scan — API / Backend (Trivy)
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     needs: build-images
     steps:
@@ -323,6 +401,16 @@ jobs:
   trivy-web:
     name: Container Scan — Web / Frontend (Trivy)
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     needs: build-images
     steps:
@@ -387,6 +475,16 @@ jobs:
   trivy-mcp:
     name: Container Scan — MCP (Trivy)
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     needs: build-images
     steps:
@@ -450,12 +548,28 @@ jobs:
   smoke-test:
     name: Smoke Test (docker compose)
     runs-on: self-hosted
+    # SAME-REPO ONLY. This repository is PUBLIC and every job here runs on a
+    # SELF-HOSTED runner that is the production host itself -- the deploy job brings up
+    # docker-compose.yaml on it and health-checks localhost:3000. Without this line a
+    # `pull_request` trigger means anyone on the internet can fork, open a PR, and run
+    # code beside the live database, JWT_SECRET and the LDAP bind password. A fork PR
+    # skips every job instead; a branch inside this repo needs push access, which is
+    # already enough to deploy, so this keeps the pre-existing trust boundary exactly
+    # where it was. See the CISO note in CLAUDE.md -- the deploy guard and the image tag
+    # do NOT cover this; they prevent accidents, not attacks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     continue-on-error: false
     needs:
       - build-images
       - secret-scan
       - semgrep
       - frontend-quality
+    # The smoke stack's ports and compose project name are fixed, so two of these must
+    # never overlap on one runner -- this is the half of the old global group that was
+    # doing real work.
+    concurrency:
+      group: gametracker-smoke-stack
+      cancel-in-progress: false
     env:
       BACKEND_TEST_PORT: 3099
       FRONTEND_TEST_PORT: 8099
@@ -465,9 +579,9 @@ jobs:
       # pull request the tag is `pr-<number>` and `:latest` is production's, not ours.
       # Without this the smoke stage would test whatever happened to be tagged latest on
       # the runner -- i.e. the last thing MERGED, not the change under review.
-      BACKEND_IMAGE: ${{ needs.build-images.outputs.backend_image }}
-      FRONTEND_IMAGE: ${{ needs.build-images.outputs.frontend_image }}
-      MCP_IMAGE: ${{ needs.build-images.outputs.mcp_image }}
+      TEST_BACKEND_IMAGE: ${{ needs.build-images.outputs.backend_image }}
+      TEST_FRONTEND_IMAGE: ${{ needs.build-images.outputs.frontend_image }}
+      TEST_MCP_IMAGE: ${{ needs.build-images.outputs.mcp_image }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -769,6 +883,11 @@ jobs:
     # there is no ref check anywhere else in this file. Deleting this line does not fail
     # any test; it deploys pull requests to production.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # One deploy at a time, and never cancel one midway: `docker compose up` on the
+    # production stack is not safe to interrupt.
+    concurrency:
+      group: gametracker-deploy
+      cancel-in-progress: false
     needs:
       - secret-scan
       - semgrep
@@ -782,6 +901,14 @@ jobs:
       BACKEND_IMAGE_BASE: local/gametracker-backend
       FRONTEND_IMAGE_BASE: local/gametracker-frontend
       MCP_IMAGE_BASE: local/gametracker-mcp
+      # PINNED EXPLICITLY, not left to the compose defaults. docker-compose.yaml now reads
+      # ${BACKEND_IMAGE:-...:latest}, and compose picks up a `.env` sitting next to it in
+      # the project directory -- which is exactly where README tells operators to put one.
+      # A stray BACKEND_IMAGE=...:pr-42 there would otherwise send a PR image to
+      # production on the next `up`. Naming them here means the deploy cannot inherit one.
+      BACKEND_IMAGE: local/gametracker-backend:latest
+      FRONTEND_IMAGE: local/gametracker-frontend:latest
+      MCP_IMAGE: local/gametracker-mcp:latest
       # JOB level, unlike the secrets below, precisely BECAUSE these are not secrets.
       # They were repeated across three steps to keep them symmetric; repetition is the
       # weakest way to enforce a symmetry requirement, and a job-level binding makes the
@@ -930,7 +1057,7 @@ jobs:
   cleanup-pr-images:
     name: Clean up PR-tagged images
     runs-on: self-hosted
-    if: always() && github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs:
       - build-images
       - trivy-api

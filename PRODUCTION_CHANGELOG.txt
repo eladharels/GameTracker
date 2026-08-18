@@ -141,6 +141,21 @@ WHAT CHANGED:
     and still reports `coerced`; an unparseable date is still never written; v2's PATCH
     still takes no date at all.
 
+SECOND HALF, added after the Architect review: the status is derived through
+statusForDate, not a bare isReleased(). Choosing the right date is not the whole fix --
+`unreleased` is a conclusion a date licenses, not a status a caller may pick, and without
+this a client could DECLARE a released game unreleased and get the same broken row back.
+v2's LibraryGameCreate.status accepts the whole enum, so an agent reaches it.
+
+>>> PRE-DEPLOY CHECK (from the CISO review). Rows whose release_date is neither NULL nor
+    a readable date are healed by this change only when a request carries a real date;
+    count them first so the number is known rather than discovered:
+      SELECT count(*) FROM user_games
+       WHERE release_date IS NOT NULL AND release_date <> ''
+         AND release_date !~ '^\d{4}-\d{2}-\d{2}';
+    A non-zero count is not a blocker -- those rows are no worse off than before -- but it
+    tells you how many games were previously stuck in 'unreleased' for that reason.
+
 NO OPERATOR ACTION, no migration. Rows already carrying the incoherent combination
 (a past release_date next to status='unreleased') are not repaired by this change — the
 next write to such a row corrects it, and the 08:00 sweep already promotes them to

@@ -166,7 +166,14 @@ GameTracker/
 │   ├── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
 │   │                               #   `npm test`; runs in CI. NO database/directory/network
 │   │                               #   AND NO FILESYSTEM — those belong in the smoke test
-│   │                               #   or, for repo artifacts, in runtime.test.js
+│   │                               #   or, for repo artifacts, in runtime.test.js.
+│   │                               #   "Pure-function" is now approximate: several blocks
+│   │                               #   drive REAL service functions with db.promises.* or
+│   │                               #   db.withTransaction stubbed through the module. The
+│   │                               #   scope rule is unchanged (nothing is reached), but
+│   │                               #   what a stub CANNOT see — ON CONFLICT semantics,
+│   │                               #   CHECK constraints, what a query RETURNS — is why
+│   │                               #   test/integration/ exists
 │   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks the BACKEND
 │   │                               #   and MCP Dockerfiles' `FROM node:<major>` against that
 │   │                               #   package's engines floor, that the floor is a
@@ -482,7 +489,7 @@ GameTracker/
 | game_id | **TEXT** | External API game ID — a STRING like `igdb_12345`, never numeric. Was declared `INTEGER` under SQLite and stored strings anyway |
 | game_name | TEXT | |
 | cover_url | TEXT | Image URL |
-| release_date | TEXT | YYYY-MM-DD. **The row's own date decides its status, never the request's** — that was D7, v1's worst trap. `upsertGame` reads it and derives the status through `effectiveReleaseDate`; the column is in the upsert's `DO UPDATE` list but cannot be overwritten, because the value bound IS the stored date whenever there is one. It only ever FILLS a row that had none. Changing a stored date is the metadata refresh's job, not a re-add's |
+| release_date | TEXT | YYYY-MM-DD. **The row's own date decides its status, never the request's — and `unreleased` is a conclusion that date licenses, never a status a caller may pick** (the decision runs through `statusForDate`; both halves were D7, v1's worst trap). `upsertGame` reads it and derives the status through `effectiveReleaseDate`; the column is in the upsert's `DO UPDATE` list but cannot be overwritten, because the value bound IS the stored date whenever there is one. It only ever FILLS a row that had none. Changing a stored date is the metadata refresh's job, not a re-add's |
 | status | TEXT | `wishlist`, `playing`, `done`, `backlog`, `unreleased`. CHECK-constrained since migration 002; the API also allowlists it. Was unvalidated, which is how a `Done` row reached production |
 | steam_app_id | TEXT | For Steam price lookups |
 | last_price | TEXT | Formatted price string (e.g., "₪59.99") |
@@ -798,8 +805,24 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
   └─► docker rmi local/gametracker-*:pr-<number>     [pull_request only, if: always()]
 ```
 
-> **A pull request runs everything except `deploy`, and TWO things keep it out of
-> production.** Neither is optional and neither is obvious from reading `deploy` alone.
+> **A pull request runs everything except `deploy`, and THREE things keep it out of
+> production.** None is optional and none is obvious from reading `deploy` alone.
+>
+> **0. Every job is gated to SAME-REPO pull requests** —
+> `github.event.pull_request.head.repo.full_name == github.repository`. **This repository is
+> public and the self-hosted runner IS the production host** (`deploy` runs
+> `docker compose -f docker-compose.yaml up -d` on it and health-checks `localhost:3000`).
+> Without this gate a `pull_request` trigger lets anyone on the internet fork, open a PR and
+> execute code beside the live database, `JWT_SECRET` and the LDAP bind password — through
+> `npm ci` lifecycle scripts, a PR-authored Dockerfile's `RUN` lines, or the containers the
+> smoke stack starts. The first version of this trigger shipped without the gate and a CISO
+> review rejected it.
+>
+> **The two below prevent ACCIDENTS, not attacks.** Both live in a file the pull request
+> controls on a `pull_request` event, so hostile code deletes either in one line. Do not read
+> them as a sandbox. Even the gate is a stopgap: the durable answers are making the repository
+> private, or running the PR path on GitHub-hosted runners and keeping self-hosted for
+> `push: main`.
 >
 > **1. `deploy` carries `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`.**
 > Before the `pull_request` trigger existed, that job had NO ref check of any kind — it was

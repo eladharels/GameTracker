@@ -327,11 +327,29 @@ async function upsertGame(userId, fields) {
       [userId, gameId]
     )).rows[0];
 
-    // Decided INSIDE the transaction, because it now depends on the row. Reading the
-    // row and writing it in one transaction is also what makes the decision sound: a
-    // concurrent refresh cannot move release_date between the read and the write.
+    // Decided INSIDE the transaction, because it now depends on the row.
+    //
+    // NOT because that makes the read-then-write atomic -- it does not. The SELECT above
+    // is a plain read and takes no lock, so under READ COMMITTED a concurrent metadata
+    // refresh CAN commit a new release_date in the window, and this upsert will then bind
+    // the value it read and revert it. Do not "fix" that with SELECT ... FOR UPDATE: this
+    // function would take the row lock BEFORE pg_advisory_xact_lock while setStatus takes
+    // them in the opposite order, which is an ABBA deadlock between two writes to the same
+    // game -- a 500 to the user. The revert is self-healing instead: the refresh re-detects
+    // the difference on its next pass, which the COALESCE form of the DO UPDATE below would
+    // NOT do (see there).
     const releaseDate = effectiveReleaseDate(prior ? prior.release_date : null, requestedDate);
-    const status = isReleased(releaseDate) ? requested : 'unreleased';
+    // statusForDate, NOT `isReleased(...) ? requested : 'unreleased'`. The difference is
+    // one input and it is the other half of D7: asking for `unreleased` on a game whose
+    // stored date has passed. The bare form stored exactly that, reproducing the
+    // incoherent row (past release_date next to status='unreleased') from the opposite
+    // direction -- so the next correct write still emitted RELEASED and still wrote two
+    // invented source='user' rows into the event log. `unreleased` is not a status a
+    // caller may choose for a released game; it is a conclusion the date licenses, and
+    // statusForDate is where that was already written down. v2 makes this reachable
+    // rather than theoretical: LibraryGameCreate.status accepts the full GameStatus
+    // enum, `unreleased` included, so an agent can send it.
+    const status = statusForDate(releaseDate, requested);
 
     const events = decideEvents(prior ? prior.status : null, status);
 
@@ -385,10 +403,22 @@ async function upsertGame(userId, fields) {
          -- this assignment is a no-op in that case and only ever FILLS a row that had
          -- none. Writing it is what makes the invariant structural rather than
          -- remembered -- the row's date and its status are now computed from one value
-         -- and stored together, so they cannot disagree. Leaving it out would leave a
+         -- and stored together. That holds only because the status is derived through
+         -- statusForDate: with the bare isReleased() form a caller could still ask for
+         -- 'unreleased' on a released row and be given it. Leaving it out would leave a
          -- game stored before its date was known permanently in 'unreleased': the
          -- status would come from the request's date and the column would stay NULL,
          -- which is D7 again with the two sides swapped.
+         --
+         -- NOT COALESCE(user_games.release_date, excluded.release_date), even though the
+         -- line above is exactly that shape and this looks like the odd one out. DO UPDATE
+         -- re-reads the CURRENT row, so when a metadata refresh commits between this
+         -- statement's prior-row SELECT and this write, the COALESCE form pins the row at
+         -- the refresh's new date while storing the status derived from the OLD one -- and
+         -- the next refresh sees its own date already in place, never re-fires, and the
+         -- disagreement is permanent. The plain assignment reverts the date too, so the
+         -- next refresh re-detects the change and heals the row. Reverting a concurrent
+         -- write is not ideal; silently making it unfixable is worse.
          release_date=excluded.release_date,
          backlog_order=excluded.backlog_order`,
       [userId, gameId, gameName, fields.coverUrl || null, releaseDate, status,
@@ -412,6 +442,12 @@ async function upsertGame(userId, fields) {
 // The date the ROW will hold once the upsert is done — which is the only date allowed
 // to decide its status. THIS IS THE FIX FOR D7, v1's worst trap.
 //
+// D7 had TWO halves and this function is only the first. The second is that the status
+// must be derived through statusForDate rather than a bare isReleased() -- see the call
+// site. Choosing the date correctly and then letting a caller declare a released game
+// `unreleased` reproduces the same broken row, and a reviewer found exactly that in the
+// first version of this fix.
+//
 // The trap: `upsertGame` derived status from the `releaseDate` in the REQUEST. Send
 // `{gameId, gameName, status:'done'}` for a game released in 2020 and omit the date, and
 // validReleaseDate(undefined) is null, isReleased(null) is false, so the row was written
@@ -431,13 +467,28 @@ async function upsertGame(userId, fields) {
 // request only speaks when the row has nothing — a new game, or one stored before its
 // date was known — and then it is what gets written, so the two still agree.
 //
-// Returns the stored value RAW. A stored string that is not a real date stays stored
-// (this function does not clean data) and isReleased treats it as absent, exactly as
-// before. Only the request side is validated, by the caller, so garbage can never be
-// written by this path.
+// ONLY A READABLE STORED DATE WINS. An earlier version of this returned any non-empty
+// stored value, which handed the decision to strings no rule in this file can read: a row
+// holding 'TBA' beat a request carrying a real date, isReleased said false, and the game
+// was pinned to `unreleased` with no way back -- the UI cannot rewrite release_date, and
+// applyRefreshedMetadata only does so when a provider returns a DIFFERENT valid date.
+// Such rows exist: validReleaseDate postdates the original insert path, and the SQLite
+// import carried whatever was there. That was a fresh trap of exactly D7's shape,
+// introduced by the fix for D7.
+//
+// So the precedence is: a stored date the rules can actually read, else the request, else
+// whatever was already there. That last clause is not a formality -- returning null would
+// make the DO UPDATE ERASE an unreadable value rather than leave it alone, and this
+// function's job is to choose between two dates, not to clean up after old ones.
+//
+// The valid branch returns validReleaseDate's CANONICAL form, so a stored '  2020-01-01  '
+// is written back trimmed. That is a normalisation, not a rewrite: same day, same
+// answer from every rule that reads it.
 function effectiveReleaseDate(storedDate, requestedDate) {
-  const stored = storedDate == null ? '' : String(storedDate).trim();
-  return stored !== '' ? stored : (requestedDate ?? null);
+  const stored = validReleaseDate(storedDate);
+  if (stored) return stored;
+  if (requestedDate) return requestedDate;
+  return storedDate ?? null;
 }
 
 // THE shared primitive: may this date be treated as released?
@@ -472,7 +523,9 @@ function statusForDate(releaseDate, currentStatus) {
 //
 // statusForDate answers "the caller is asking for this status; is it available?", and
 // coercing a request for `done` on an unreleased game to `unreleased` is right, because
-// a caller asked and gets told (`coerced`). setStatus is its only remaining user.
+// a caller asked and gets told (`coerced`). Its users are setStatus AND upsertGame --
+// the latter re-joined when the bare isReleased() form there turned out to be the second
+// half of D7.
 //
 // A refresh asks nothing. The comment above has always said "any other status is the
 // user's own and is left alone", and the code did the opposite: `if (!isReleased) return

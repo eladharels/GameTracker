@@ -1486,12 +1486,23 @@ check('a new game (no stored row) uses the request', () => {
   assert.strictEqual(libraryService.effectiveReleaseDate(null, '2001-11-15'), '2001-11-15');
   assert.strictEqual(libraryService.effectiveReleaseDate(null, null), null);
 });
-check('a stored value that is not a date is returned RAW, not cleaned', () => {
-  // This function does not repair data. isReleased treats 'TBA' as absent exactly as
-  // before, so the status is unchanged — but returning null here would make the DO
-  // UPDATE erase a value the user's row already held, which is not this fix's job.
-  assert.strictEqual(libraryService.effectiveReleaseDate('TBA', '2001-11-15'), 'TBA');
+check('an UNREADABLE stored value does not outrank a real request date', () => {
+  // The first version of this fix returned any non-empty stored value, so a row holding
+  // 'TBA' beat a request carrying a real date and the game was pinned to 'unreleased'
+  // with no way back — the UI cannot rewrite release_date, and applyRefreshedMetadata
+  // only does so when a provider returns a DIFFERENT valid date. A fresh trap of D7's
+  // own shape, introduced by the fix for D7.
+  assert.strictEqual(libraryService.effectiveReleaseDate('TBA', '2001-11-15'), '2001-11-15');
   assert.strictEqual(libraryService.isReleased('TBA'), false);
+});
+check('but unreadable junk is LEFT ALONE when the request offers nothing', () => {
+  // Returning null here would make the DO UPDATE erase a value the row already held.
+  // Choosing between two dates is this function's job; cleaning up after old ones is not.
+  assert.strictEqual(libraryService.effectiveReleaseDate('TBA', null), 'TBA');
+  assert.strictEqual(libraryService.effectiveReleaseDate(null, null), null);
+});
+check('a valid stored date is returned in canonical form', () => {
+  assert.strictEqual(libraryService.effectiveReleaseDate('  2020-01-01  ', null), '2020-01-01');
 });
 
 console.log('library.upsertGame (D7, at the level where the bug actually was):');
@@ -1553,6 +1564,22 @@ console.log('library.upsertGame (D7, at the level where the bug actually was):')
     );
     assert.ok(!result.events.includes(EVENTS.RELEASED),
       'a released-game notification fired for a game that was already out');
+  });
+
+  checkAsync('THE SECOND HALF OF D7: asking for `unreleased` on a released game', async () => {
+    // Reported by the Architect review against the first version of this fix. Choosing
+    // the right DATE is not enough: `isReleased(date) ? requested : 'unreleased'` still
+    // let a caller declare a released game `unreleased`, storing the same incoherent row
+    // and re-arming the phantom "has been released!" on the next write. `unreleased` is a
+    // conclusion the date licenses, not a status a caller may pick — statusForDate.
+    // Reachable on v2: LibraryGameCreate.status accepts the whole GameStatus enum.
+    const { result, storedStatus } = await runUpsert(
+      { status: 'playing', backlog_order: null, release_date: '2020-12-10' },
+      { gameId: 'igdb_u', gameName: 'Cyberpunk 2077', status: 'unreleased' }
+    );
+    assert.strictEqual(storedStatus, 'wishlist',
+      'a released game was stored `unreleased` because the caller asked for it');
+    assert.strictEqual(result.coerced, true, 'the coercion was not reported');
   });
 
   checkAsync('a genuinely unreleased game is still coerced', async () => {
