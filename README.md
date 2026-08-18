@@ -293,13 +293,32 @@ not in this repository and cannot be grepped.
 | `DELETE /api/user/:username/games/:gameId` | auth + owner | Remove a game |
 | `PUT /api/user/:username/backlog-reorder` | auth + owner | Reorder the backlog |
 | `POST /api/user/:username/refresh-metadata` | auth + owner | Refresh the whole library (slow) |
+| `GET /api/user/:username/stats` | auth + owner | Statistics from the status-event log |
 | `GET /api/user/me` · `PUT /api/user/me/settings` | auth | Own profile and notification settings |
+| `GET /api/user/me/games` | auth | Own library, five-column projection |
+| `GET`/`POST /api/user/me/tokens` · `DELETE /api/user/me/tokens/:tokenId` | auth | Own personal access tokens (minting re-checks the password) |
 | `GET /api/shared-libraries` · `/api/user/:username/share` | auth | Library sharing |
+| `GET /api/all-users` | auth | Usernames for the sharing picker |
+| `GET /api/capabilities` | auth | Which API versions this server serves |
+| `GET /api/openapi/v2` | auth | The v2 contract, served verbatim as YAML |
+| `GET /api/crack-status/cache-info` | auth | Size of the DRM-status cache (entry count + sample keys) |
 | `GET`/`POST /api/settings` | auth | Server settings — admin-only to write, secrets always masked |
 | `GET`/`POST /api/settings/apikeys` | admin | API-key management (masked) |
 | `GET /api/users` · `POST` · `PUT` · `DELETE /api/users/:id` | admin | User management |
 | `GET /api/system-status` | admin | Live connectivity check for all external services |
+| `GET /api/test/igdb` | admin | IGDB credential check |
 | `POST /api/admin/check-releases` · `/ldap-sync` · `/refresh-crackwatch-cache` | admin | Manual jobs |
+
+Not exhaustive — the enforced inventory is `test/api-surface.test.js`, which asserts the tier of
+every route against the live Express router and fails CI on one that is not recorded there.
+
+Three of these were added *after* the freeze, which is about **shapes**, not about the route
+count: a new route breaks nothing because nothing calls it yet. `GET /api/capabilities` and
+`GET /api/openapi/v2` exist because v2 cannot bootstrap itself — it takes tokens only, so the
+endpoint announcing v2 and the endpoint serving its map both have to sit where a browser session
+can reach them. `GET /api/user/:username/stats` follows the same rule: its only client is the SPA,
+which holds a JWT and therefore cannot call v2 at all. See `CLAUDE.md` for the three conditions
+that door is narrowed to.
 
 Unknown `/api/*` paths return a JSON 404.
 
@@ -331,10 +350,15 @@ account — a library-scoped token held by an administrator is not an administra
 | identity | `GET /api/v2/me`, `GET`/`PATCH /me/notifications` |
 | tokens | `GET`/`POST /tokens`, `DELETE /tokens/{id}` |
 | library | `GET`/`POST /library/games`, `GET`/`PATCH`/`DELETE /library/games/{gameId}`, `GET`/`PUT /library/backlog`, `POST /library/refresh` |
-| catalog | `GET /catalog/search` |
-| sharing | `GET /shares`, `PUT`/`POST /shares/outgoing`, `DELETE /shares/outgoing/{username}`, `GET /shares/incoming/{username}/games` |
-| admin | `GET`/`POST /users`, `PATCH`/`DELETE /users/{id}`, `GET`/`PATCH /settings`, `POST /jobs` |
+| statistics | `GET /stats/summary` |
+| catalog | `GET /catalog/search`, `GET /catalog/prices/{steamAppId}` |
+| sharing | `GET /shares`, `PUT`/`POST /shares/outgoing`, `DELETE /shares/outgoing/{username}`, `GET /shares/incoming/{username}/games`, `GET /users/directory` |
+| admin | `GET`/`POST /users`, `PATCH`/`DELETE /users/{id}`, `GET`/`DELETE /users/{id}/tokens`, `DELETE /users/{id}/tokens/{tokenId}`, `GET`/`PATCH /settings`, `GET /system/status`, `POST /jobs` |
 | jobs | `GET /jobs/{jobId}` |
+
+Thirty-five operations, all live. `GET /users/directory` is in the sharing group rather than the
+admin one on purpose: it needs no admin scope, because you cannot share a library with someone you
+cannot name.
 
 Two rules worth knowing before you write a client:
 
@@ -375,11 +399,21 @@ One job of a kind runs at a time. A user can refresh their own library with
 | `backfill_ldap_display_names.js` | Sync display names from LDAP |
 | `test_ldap_sync.js` | Debug the LDAP connection |
 
-Only `reset-root-password.js` and `run_notifications.js` are ported to PostgreSQL; run them inside
-the backend container so the `PG*` variables are already set. The remaining scripts still target the
-old SQLite file and now **exit 1 with a clear message** rather than silently creating an empty
-database — port them to `./db` (see `reset-root-password.js` for a worked example) before use.
-`DB_PATH` no longer applies.
+**All of them run against PostgreSQL** through `./db`, which takes its connection from the same
+`PG*` variables as the backend. Run them inside the backend container so those variables — and
+`settings.json` — are the ones production uses:
+
+```bash
+docker compose -f docker-compose.yaml exec backend node <script> [args]
+```
+
+`backfill_steam_app_ids.js` and `backfill_ldap_display_names.js` take `--dry-run`;
+`test_ldap_sync.js` is read-only and needs none. `refresh_igdb_token.js` touches no database at
+all — it calls Twitch and writes `settings.json`.
+
+`DB_PATH` no longer applies. It pointed at the SQLite file, and because node-sqlite3 opens with
+`OPEN_CREATE` a script aimed at a missing path silently *created* an empty database, operated on
+it, and reported success while production was never touched.
 
 ---
 

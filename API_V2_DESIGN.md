@@ -1,10 +1,20 @@
 # /api/v2 — contract decisions
 
-**Status:** decided; the first four routes are LIVE. This document gates the OpenAPI
-spec; the spec gates the routes. Nothing under `/api/v2` gets written until the
-decisions below are settled, because every one of them is cheap now and expensive once
-a generated client depends on it — and an operation is not live until it carries
-`x-implemented: true` in the spec AND exists on the router, which CI checks both ways.
+**Status:** decided and BUILT. All **35** operations are live, and so are the docs site
+(step 7) and the MCP server (step 8) — the build order at the bottom is complete. This
+document gates the OpenAPI spec; the spec gates the routes. Nothing under `/api/v2` gets
+written until the decisions below are settled, because every one of them is cheap now and
+expensive once a generated client depends on it — and an operation is not live until it
+carries `x-implemented: true` in the spec AND exists on the router, which CI checks both
+ways.
+
+The decisions below are kept in the tense they were written in, because their value is the
+v1 defect each one names and the argument that settled it — not the status. Where reality
+diverged from the plan it is marked inline rather than rewritten, so the divergence stays
+visible: the spec grew from 28 operations to 35 — live prices, share discovery, system
+status, the three admin token-revocation routes and `GET /stats/summary` were all added
+after this document was written — and step 7 chose a different viewer than the one
+recommended here.
 
 **Audience:** the owner (scripts, terminal), and an MCP server built on the generated
 client. Not a public API. That narrows several decisions — see D1 on scopes.
@@ -341,8 +351,11 @@ pure enough to assert against directly, no database needed.
    `/api/users`, demoting the account revokes admin on the very next request, deleting
    the token 401s it, and deleting the user cascades its tokens away.
 3. ~~The OpenAPI 3.1 document — v2 only, hand-written.~~ `openapi/gametracker-v2.yaml`,
-   **28 operations**. It is the SOURCE for the routes, not a description of them: no v2
-   route exists yet, so every operation in it is a specification to be implemented.
+   originally **28 operations**, now **35**. It is the SOURCE for the routes, not a
+   description of them. Written when no v2 route existed, so every operation in it was a
+   specification to be implemented; all 35 now carry `x-implemented: true` and exist on
+   the router, so the practical effect today is the reverse — a NEW v2 route requires a
+   spec change FIRST.
 4. ~~The drift gate, landed **with the first v2 route**, not after.~~ Done, in
    `test/api-surface.test.js`: every `x-implemented` operation exists on the router,
    every v2 route is an `x-implemented` operation, `x-required-scope` agrees with the
@@ -351,15 +364,17 @@ pure enough to assert against directly, no database needed.
    as `public`, because `router.use(patRequired)` is a separate layer and not part of
    any route's own handler chain — it failed CLOSED, but a gate written afterwards
    would have been written around that rather than fixing it.
-5. v2 routes in slices — library first. **First four live**: `GET /me`,
-   `GET /library/games` (filter/sort/page), `GET /library/games/{gameId}`,
-   `DELETE /library/games/{gameId}`. Remaining 24 to go (that is what the MCP and the terminal both want),
-   admin second. Normalise the shares argument order before the second adapter set exists.
-   Carry into this step, from the spec reviews: split `LibraryGameCreate`'s `oneOf` into
-   named `AddByRef`/`AddByName` branches. Most generators discard a `oneOf` whose branches
+5. ~~v2 routes in slices — library first, admin second.~~ Done, in seven slices:
+   identity/library reads, tokens and own notification settings, library writes (including
+   the fix for v1's D7 trap), catalog search and add-a-game, sharing, the admin surface,
+   and jobs. Then seven operations that were not in the original 28: live prices, share
+   discovery, system status, the three admin token-revocation routes, and
+   `GET /stats/summary`. 28 + 7 = 35.
+   The shares argument order was normalised before the second adapter set existed, as
+   required. `LibraryGameCreate`'s `oneOf` was split into named `AddByRef`/`AddByName`
+   branches, for the reason recorded here: most generators discard a `oneOf` whose branches
    carry only `required`, so the one-or-the-other rule — exactly what an LLM-driven client
-   gets wrong — vanishes from the generated model. Deferred to here rather than done in the
-   spec because the right shape is only knowable once the generator has actually been run.
+   gets wrong — vanishes from the generated model.
 6. ~~**`GET /api/capabilities` on v1**~~ Done — auth-tier, returning
    `{serverVersion, apiVersions[], deprecations[]}`. v2 advertises itself as `planned`
    until `V2_MOUNTED` flips in the same commit that mounts the router, so the endpoint
@@ -368,19 +383,26 @@ pure enough to assert against directly, no database needed.
    tier, NOT on `/api/health`. The one decision with an expiry: it is described as "the
    last change made to v1", and after the freeze it cannot be added. The phone has no way
    to discover v2 exists. It had no build-order slot at all until that was noticed.
-7. The docs site: point Redoc or Scalar at the spec, emit one static file, serve it from
-   the existing nginx. It must be **vendored** — `frontend/nginx.conf` sets
-   `script-src 'self'`, so a CDN-loaded viewer will not run. Two further CSP snags: a
-   Redoc build that spawns its search worker from a `blob:` URL is blocked by
-   `worker-src 'self'`, and Scalar's API client defaults to `proxy.scalar.com`, blocked by
-   `connect-src 'self'` (disable it — a same-origin `/api/v2` needs no proxy). Prefer
-   **Scalar**: it is 3.1-native, while Redoc 2.x does not render JSON-Schema `examples:`.
-   Test the real bundle against the live CSP; do not relax the CSP to suit the viewer.
-   Decide deliberately whether the docs are served unauthenticated — they describe the
-   admin surface and embed the token-minting runbook.
-8. The MCP: a thin wrapper over the generated client, ~10 tools, no domain logic. Tool
-   descriptions, disambiguation prompting, within-session caching of search results so
-   "add the second one" works, and confirm-before-destroy all live here — not in the API.
+7. ~~The docs site.~~ Done, and **not** as specified here: it is a page INSIDE the SPA
+   (`frontend/src/ApiDocsPage.jsx`) rather than one static file beside it, and the viewer
+   is **swagger-ui-react**, not the Scalar this step recommended. Both divergences follow
+   from the last sentence of the original note, which turned out to decide the other two:
+   the docs describe the admin surface and embed the token-minting runbook, so they are
+   served **authenticated**. Once that is settled a page behind the SPA's existing login is
+   simpler than a separate static file plus a second auth mechanism in nginx — and it reads
+   the spec from `GET /api/openapi/v2` (auth tier), so the page and CI validate the same
+   document rather than a copy. Vendored as required; `script-src 'self'` is untouched, and
+   the bundle is lazily imported because it is by far the largest chunk in the build.
+   The Scalar recommendation was made on 3.1 rendering, which is real — this trades some of
+   it for one credential path. Revisit if the spec starts leaning on `examples:`.
+8. ~~The MCP.~~ Done — `mcp/`, a separate container and npm package, **16 tools**, no
+   domain logic. Not a wrapper over a *generated* client: it calls `/api/v2` over plain
+   HTTP, because generating a client to make sixteen fetches is machinery with no second
+   caller. Tool descriptions, disambiguation prompting and confirm-before-destroy live
+   here as planned. Within-session caching of search results does NOT: the server is
+   stateless by design — a fresh `McpServer` per request with the token closed over,
+   nothing retained between callers — so "add the second one" is answered by the model
+   holding the previous tool result in its context, which is where that state already was.
 
 ### Deliberately not doing
 

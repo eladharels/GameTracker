@@ -19,18 +19,27 @@ The system now automatically updates game status from "unreleased" to "wishlist"
 
 ### Code Changes
 
-#### 1. Modified Cron Job (`index.js` — the `cron.schedule('0 8 * * *', …)` block)
-- Added logic to check if `diffDays <= 0` (game has been released)
-- Automatically updates status from "unreleased" to "wishlist"
-- Sends release notification when status is updated
+#### 1. The sweep itself — now `services/jobs.js#checkReleases()`
+- Checks whether `diffDays <= 0` (the game has been released)
+- Updates status from "unreleased" to "wishlist", recording the transition in
+  `user_game_status_events` with `source = 'release_sweep'` — **not** `'user'`, so a nightly run
+  never counts as an achievement on the statistics page
+- Sends a release notification when the status is updated
 - Loads each user's `notification_days` preference before evaluating reminders
+- `index.js` schedules it at `0 8 * * *`; the admin route and `run_notifications.js` call the same
+  function. It existed in **four** copies that had drifted before it was extracted here
 
-#### 2. Updated Manual Script (`run_notifications.js`)
-- Added same release-status logic for manual testing
-- Can be run with: `node run_notifications.js`
-- Note: this script still uses the legacy hardcoded 30/7/0-day reminder thresholds and does
-  **not** read `users.notification_days`. Its release-status transition matches the cron job;
-  only its reminder schedule differs.
+#### 2. Manual Script (`run_notifications.js`)
+- Can be run with: `node run_notifications.js`, inside the backend container
+- **It no longer reimplements the sweep.** It calls `services/jobs.js#checkReleases()` — the same
+  function the cron schedule and `POST /api/admin/check-releases` call, and the only
+  implementation there is. It therefore reads each user's `users.notification_days` like
+  everything else.
+- An earlier revision of this file described the script as carrying its own hardcoded 30/7/0-day
+  thresholds. It did, and the copy had drifted twice: besides ignoring `notification_days` it
+  marked the release-day reminder with a different dedup key than the cron, so running it re-sent
+  a day-0 reminder the cron had already delivered. "This must mirror the cron exactly" is not
+  something a comment can enforce, which is why there is now nothing to mirror.
 
 #### 3. API Endpoint (`POST /api/admin/check-releases`)
 - Manual trigger for testing
@@ -69,12 +78,15 @@ The system will automatically check every day at 8:00 AM.
    (`users.notification_days`), defaulting to the original 0/7/30-day behaviour
 
 ### Configuration
-The cron job runs daily at 8:00 AM. To change the schedule, modify the cron expression in `index.js`:
+The job runs daily at 8:00 AM. To change the schedule, edit the expression in `index.js`:
 ```javascript
-cron.schedule('0 8 * * *', () => {
-  // Your code here
-});
+scheduleWhenServer('0 8 * * *', () => { /* … */ });
 ```
+**`scheduleWhenServer()`, never `cron.schedule()` directly.** `index.js` is `require`d by the
+operator scripts for its exports, and a bare `cron.schedule()` at module scope registered all
+three jobs on import: node-cron's timers keep the event loop alive, so `run_notifications.js`
+printed "complete", closed the pool and then hung forever — and the 04:00 CrackWatch job, which
+needs no database, really did run a full unrequested sweep from a stray process.
 
 ### Troubleshooting
 - Check server logs for `[CRON]` entries to see if the job is running

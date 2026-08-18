@@ -101,19 +101,219 @@ updated. All four now call one function.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
---- PREPARED 2026-07-25 (SQLite -> PostgreSQL migration, PHASE 1) — NOT YET APPLIED ---
+RECORDED RETROACTIVELY 2026-08-18 — the five entries that follow.
+  This file stopped being written on 2026-07-27 and missed everything after it:
+  personal access tokens, the whole of /api/v2, the MCP container, the browser API
+  Reference page and the statistics feature. Reconstructed from the git history
+  (dates are the commit dates, which for this repository are also the deploy dates —
+  every push to main that passes the gauntlet deploys). They are recorded at the
+  granularity this file exists for: what an operator has to know, and what they have
+  to DO. The design reasoning is in API_V2_DESIGN.md and CLAUDE.md, not repeated here.
+
+  Why this matters beyond tidiness: the Android app is a build we do not control and
+  is not in this repository. This file is the only place a change that affects it gets
+  written down, and the 2026-07-27 breaking change at the top of this file is proof
+  the mechanism works when it is used.
+
+--- APPLIED 2026-07-29 (Statistics: the status-event log and its three readers) ---
+Summary: Records WHEN a status changed, which nothing ever has, and adds a Statistics
+         page over it. Also fixes a live bug that was destroying the very history the
+         feature counts.
+
+FIRST, THE LIVE BUG (fixed here, would have existed regardless):
+  • applyRefreshedMetadata called statusForDate, which returns 'unreleased' for any
+    future date REGARDLESS of the current status. A provider moving a release date
+    forward — a delay, a re-release, a bad record — demoted a game the user had marked
+    `done` to `unreleased`, and the next 08:00 sweep promoted it to `wishlist`. The
+    `done` was gone and unrecoverable. A statistics page built on top of that would
+    have reported a finished-game count going DOWN.
+
+SCHEMA:
+  • migrations/005_status_events.sql — user_game_status_events(user_id, game_id,
+    from_status, to_status, changed_at TIMESTAMPTZ, source). Applied automatically at
+    boot by schema-migrate.js; no operator step.
+  • ON DELETE CASCADE from users, but deliberately NO foreign key to user_games: a
+    composite FK would cascade history away when a game is removed, and "I finished 12
+    games this year" must not become 11 because one was tidied up.
+  • DELIBERATELY NOT SEEDED. There is no honest changed_at for pre-existing rows, so
+    the table starts EMPTY and the page states its own coverage. Same rule as 004. A
+    library with 48 finished games therefore reports 0 completions on day one — that is
+    correct, not a fault, and the page says so rather than drawing a zero.
+  • `source` (user / release_sweep / metadata_refresh / backfill) is the column the
+    feature rests on. Every achievement query filters source = 'user'. The 08:00 sweep
+    promotes unreleased -> wishlist when a date passes and nobody did anything; one
+    library here has 58 unreleased games, so a single nightly run would otherwise post
+    the largest number on the page.
+  • Written in ONE place, library.js#recordStatusEvent, called by all five status write
+    paths, inside the caller's transaction so the event and the write commit together.
+
+WHAT CHANGED:
+  • services/stats.js — the event log's answers only: completions and playing->done
+    durations, plus a `coverage` block including `truncated`. Deliberately returns
+    nothing the library response already carries.
+  • GET /api/user/:username/stats — v1, auth + owner-or-admin, a thin adapter over the
+    service. On v1 because its only client is the SPA, which holds a session JWT and
+    therefore cannot call /api/v2 at all. Third and last documented exception to the
+    freeze; see CLAUDE.md for the three conditions.
+  • GET /api/v2/stats/summary — the token-scoped twin over the same service, aggregated
+    so an agent does not spend its context on a row per completion.
+  • MCP tool `get_statistics` (16 tools now, was 15).
+  • frontend/src/StatsPage.jsx + dateUtils.js — hand-rolled CSS/SVG charts (the six
+    accent presets mutate --color-accent at RUNTIME and a canvas chart cannot inherit
+    that). Bucketing is client-side: date_trunc would bucket in the SERVER's timezone.
+  • A failed load renders the error and NOTHING else — no chips reading 0. Same class of
+    failure as the empty-library incident: a confident zero is indistinguishable from a
+    real one.
+  • Library write rate limit — 240 writes per 5 minutes per user id, on the v1 add/status
+    route and the two v2 library writers.
+  • CI: test/integration/stats.test.js and status-events.test.js run inside the backend
+    container during the smoke stage, against a real Postgres. Stubbing db.promises
+    cannot prove the five write paths land rows with the right `source`, and a
+    regression there is PERMANENTLY destructive — unrecorded history cannot be
+    backfilled.
+
+--- APPLIED 2026-07-29 (Backend image to node:22-slim, and a gate that can see it) ---
+Summary: Node 18 went EOL 2026-04-30. The backend image now runs node:22-slim.
+
+WHAT CHANGED:
+  • Dockerfile: node:18-slim -> node:22-slim. The bump was cheap because the build
+    toolchain had already been removed (see the 2026-07-27 entry) — nothing to rebuild.
+  • test/runtime.test.js — cross-checks each image's `FROM node:<major>` against that
+    package's engines floor, that the floor is a SUPPORTED Node, and that CI installs
+    the same major. Static by necessity: the suites run on the RUNNER's Node, never the
+    image's, so no runtime assertion can see this, and Trivy reads dpkg while the Node
+    runtime is a tarball — a green trivy job says NOTHING about the interpreter.
+  • Covers the backend and MCP images. The frontend's node:20 BUILD stage is not
+    covered; frontend/package.json declares no engines floor to check it against, and
+    it produces static assets served by nginx rather than a runtime.
+
+--- APPLIED 2026-07-28 (MCP server — a fourth container) ---
+Summary: Exposes a narrow, task-shaped subset of /api/v2 over the Model Context
+         Protocol so an AI assistant can work with a library. Separate npm package,
+         separate image, separate container.
+
+WHAT CHANGED:
+  • mcp/ — 16 tools shaped around what people ask for rather than one per endpoint.
+    DELIBERATELY EXCLUDES user management, settings, token administration and
+    instance-wide jobs, even when handed an admin-scoped token. The inventory is PINNED
+    in mcp/test/tools.test.js the way route tiers are.
+  • HOLDS NO CREDENTIALS. No token in its environment or config; every request must
+    carry its own Bearer PAT, forwarded unchanged. Authorization stays the backend's and
+    reaching the port grants nothing. Stateless — a fresh McpServer per request.
+  • Published on 127.0.0.1:3001 by default. Runs read_only with no volumes, no database
+    and no secrets, because it needs none of them.
+  • Runs node:22-slim and REQUIRES >=20: the SDK's HTTP transport calls the GLOBAL
+    crypto.randomUUID(), and globalThis.crypto is only exposed from Node 19. On
+    node:18-slim /health answered 200 while EVERY MCP call returned -32700 for a full
+    deploy cycle. The smoke stage now asserts a real `initialize` RESULT rather than
+    HTTP 200 — a JSON-RPC error is delivered with a 200, so a status check proves
+    nothing.
+  • CI: trivy-mcp added; deploy now gates on 8 upstream jobs.
+  >>> OPERATOR NOTE (only if a client runs on another machine):
+      Set MCP_BIND to the LAN address it should answer on. For a CI deploy that must be
+      a repository VARIABLE (Settings -> Secrets and variables -> Actions -> Variables);
+      a .env on the host is NOT read by the deploy job, which checks out into a fresh
+      workspace, and ${MCP_BIND:-127.0.0.1} then quietly falls back to loopback. The
+      token crosses the network in a cleartext header — put TLS in front of anything
+      that is not a trusted LAN. See SECURITY_HARDENING_2026-07.md section 11.
+
+--- APPLIED 2026-07-28 (API tokens in the browser, and admin revocation) ---
+Summary: Completes the token story for humans: My Account -> API Tokens, a browsable
+         API Reference page, and a way for an admin to revoke someone else's tokens
+         without deleting their account.
+
+WHAT CHANGED:
+  • GET/POST /api/user/me/tokens and DELETE /api/user/me/tokens/:tokenId — session
+    authenticated, operating on req.user.id only. THE BOOTSTRAP, and the second
+    exception to the v1 freeze: /api/v2 takes tokens only, so the endpoint that mints
+    your FIRST token cannot itself require one.
+  • SUDO MODE on minting: the password is re-checked, because a token outlives the
+    12-hour session that created it. Local accounts verify with bcrypt, directory
+    accounts with a real LDAP bind through the SAME function the login route uses.
+    ldap.requiredGroup is re-checked here — it is the one authorization signal that
+    lives in the directory and is never mirrored into `users`, so without the re-check a
+    deprovisioned account turns its residual session into a token no admin can see.
+    Rate limited per user id in its own key namespace, plus a second budget (20 per 2
+    minutes) covering every attempt that reaches the directory. A directory FAULT
+    answers 503, never "incorrect password" — you cannot fix an outage by retyping.
+  • KNOWN AND ACCEPTED: this does not constrain a stolen ADMIN session. An admin can
+    reset their own password through PUT /api/users/:id without the old one and then
+    mint. Closing it means adding a required field to a frozen v1 route, so it is
+    recorded rather than done quietly.
+  • GET/DELETE /api/v2/users/:id/tokens (+ /:tokenId) — admin revocation. Blocking new
+    mints is not revoking old ones: a token minted before its holder lost
+    ldap.requiredGroup keeps working, and destroying it used to mean deleting the
+    account and its library. The bulk delete answers 200 with a COUNT, not 204 — zero
+    revoked is a success, and a 204 could not tell "revoked seven" from "revoked none".
+    A user id that does not exist is a 404, never {"revoked": 0}.
+  • API Reference page (frontend/src/ApiDocsPage.jsx) — Swagger UI over GET /api/openapi/v2,
+    so the SPA renders the same contract CI validates. VENDORED, not CDN-loaded:
+    frontend/nginx.conf sets script-src 'self'.
+
+--- APPLIED 2026-07-27 (/api/v2 goes live: contract, tokens, and the drift gate) ---
+Summary: A second API surface for scripts and agents, specified before it was written.
+         v1 is unchanged and stays frozen and supported — the Android app is a build we
+         do not control.
+
+WHAT CHANGED:
+  • migrations/003_api_tokens.sql — personal access tokens. Opaque gt_pat_<base64url>,
+    SHA-256 hashed, so a database dump yields no working credentials. Two scopes,
+    library and admin, and a scope may only ever NARROW the privilege read from `users`:
+    a library-scoped token held by an admin is not an admin, and an admin-scoped token
+    held by a non-admin does not become one.
+  • migrations/004_user_games_added_at.sql — added_at, nullable and deliberately NOT
+    backfilled. NULL means "unknown", not "old"; ordered reads must say NULLS LAST.
+  • v1's authRequired now accepts a PAT alongside a JWT. ADDITIVE — a new credential
+    type, not a shape change, so no route or response shape moved. The login rate
+    limiter lives inside the login route, so token auth never reaches it: 5 retries from
+    a script would otherwise lock the owner out for 15 minutes.
+  • /api/v2 — 35 operations, PAT-ONLY. It refuses a session JWT deliberately: a JWT
+    carries no scope, so accepting one would make the admin boundary bypassable by
+    logging in with a password. Errors are RFC 9457 problem+json with a stable code;
+    mutations return the resource or 204; a DELETE of something absent is a 404, not
+    {"success":true}; long sweeps return 202 and a job to poll.
+  • openapi/gametracker-v2.yaml is the SOURCE for the routes, not a description of them.
+    CI fails if an operation marked x-implemented has no route, or a v2 route is not
+    such an operation, or its x-required-scope disagrees with the router-derived tier.
+  • GET /api/capabilities (auth tier) — version discovery. Added to v1 BEFORE the freeze
+    bit, because after it a client has no way to learn v2 exists.
+  • Build toolchain dropped from the backend image; sqlite3 became a devDependency, used
+    only by the spent one-shot migration script. That was hundreds of megabytes fetched
+    on every build, and had already failed one with "You don't have enough free space in
+    /var/cache/apt/archives/" on the self-hosted runner. Adding a native dependency
+    reinstates all of it.
+  • test/api-surface.test.js now walks the live router across mounted routers and
+    asserts the tier of all 83 routes. An earlier version credited middleware by router
+    membership rather than stack position and reported an UNAUTHENTICATED route as
+    authenticated — it failed in the safe-looking direction, which is the single failure
+    mode that file exists to eliminate.
+
+--- APPLIED, between 2026-07-25 and 2026-07-27 (SQLite -> PostgreSQL migration, PHASE 1) ---
 Summary: Replaces SQLite with a dedicated PostgreSQL container. Phase 1 moves the
          three relational tables (users, user_games, user_shares) ONLY. settings.json
          and sent_notifications.json remain file-backed and are deliberately out of
          scope — see "Phasing" below.
 
-BASE COMMIT WARNING — READ FIRST:
-  This work is branched from claude/codebase-review-hml32s, which is NOT merged into
-  main and is NOT in production. Production currently runs unhardened main (verified:
-  /api/health still returns totalUsers and rootUser, which the hardening removed).
-  Merging this branch therefore ships the security hardening AND the database
-  migration together. If you want them separate, merge and deploy the hardening
-  branch on its own first — it is a clean fast-forward.
+STATUS CORRECTION (2026-08-18):
+  This entry stood for three weeks headed "PREPARED — NOT YET APPLIED", long after it
+  had shipped. It is applied. Everything below describes production as it runs today:
+  Postgres is the only database, schema-migrate.js applies migrations/*.sql at boot,
+  and scripts/migrate-sqlite-to-postgres.js is a spent one-shot kept for the record —
+  which is why sqlite3 is a devDependency and is absent from the backend image.
+
+  THE DATE IS A RANGE BECAUSE IT WAS NOT RECORDED. This repository's git history was
+  squashed and begins on 2026-07-27, by which point db.js, schema-migrate.js and
+  migrations/001-002 were already present; the entry itself was prepared on 2026-07-25.
+  A single invented day would be indistinguishable afterwards from an observed one, so
+  the range stands instead — the same rule migrations 004 and 005 follow in refusing to
+  backfill timestamps they cannot know.
+
+  The "BASE COMMIT WARNING" that used to sit here — that this work was branched from an
+  unmerged claude/codebase-review-hml32s and that production was still running
+  unhardened main — is obsolete and has been removed. Both the section 9 hardening and
+  this migration are in main and in production. The verification it cited (/api/health
+  returning totalUsers and rootUser) now fails as intended: /api/health returns
+  {"status":"ok"} and nothing else.
 
 WHAT CHANGED:
   • New dedicated Postgres service in both compose files:
