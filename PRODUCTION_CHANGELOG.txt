@@ -156,6 +156,22 @@ v2's LibraryGameCreate.status accepts the whole enum, so an agent reaches it.
     A non-zero count is not a blocker -- those rows are no worse off than before -- but it
     tells you how many games were previously stuck in 'unreleased' for that reason.
 
+>>> WHAT HEALING COSTS, IN PUSHES. Read this before deploying, because the number above
+    and the number below are both counts of notifications your users may receive ONCE.
+    A row already holding the incoherent combination (a past release_date next to
+    status='unreleased') is corrected by the next write to it -- and that correction is a
+    real unreleased -> released transition, so it emits a RELEASED event and pushes
+    "<game> has been released!" to that user's email/ntfy/Gotify/Telegram. The push is
+    TRUE (the game is out) and the 08:00 sweep would have sent the same one eventually,
+    but it arrives because of the fix rather than because anything changed for the user.
+    Count them first, so the support question is expected rather than alarming:
+      SELECT count(*) FROM user_games
+       WHERE status = 'unreleased'
+         AND release_date ~ '^\d{4}-\d{2}-\d{2}'
+         AND release_date <= now()::date::text;
+    Only rows a date-omitting client actually touches will fire; the rest wait for the
+    sweep, which is the behaviour they already had.
+
 NO OPERATOR ACTION, no migration. Rows already carrying the incoherent combination
 (a past release_date next to status='unreleased') are not repaired by this change — the
 next write to such a row corrects it, and the 08:00 sweep already promotes them to

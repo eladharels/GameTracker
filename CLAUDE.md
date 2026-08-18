@@ -304,6 +304,12 @@ GameTracker/
 │                                   #   token administration and instance-wide jobs, even
 │                                   #   with an admin token. Tool inventory is PINNED in
 │                                   #   mcp/test/tools.test.js like the route tiers are.
+│                                   #   Transitive pins go in mcp/package.json `overrides`,
+│                                   #   with a CARET not the backend's `>=`: npm overrides
+│                                   #   BYPASS the parent's range silently, so `>=3.1.5` on
+│                                   #   fast-uri resolved 4.1.2 — a major past ajv's ^3.0.1,
+│                                   #   under the SDK's input validator, to fix a URI CVE.
+│                                   #   Pin inside the major the advisory names.
 │                                   #   Runs node:22-slim and REQUIRES >=20 — the SDK's HTTP
 │                                   #   transport calls the GLOBAL crypto.randomUUID(), and
 │                                   #   globalThis.crypto is only exposed from Node 19. On
@@ -489,7 +495,7 @@ GameTracker/
 | game_id | **TEXT** | External API game ID — a STRING like `igdb_12345`, never numeric. Was declared `INTEGER` under SQLite and stored strings anyway |
 | game_name | TEXT | |
 | cover_url | TEXT | Image URL |
-| release_date | TEXT | YYYY-MM-DD. **The row's own date decides its status, never the request's — and `unreleased` is a conclusion that date licenses, never a status a caller may pick** (the decision runs through `statusForDate`; both halves were D7, v1's worst trap). `upsertGame` reads it and derives the status through `effectiveReleaseDate`; the column is in the upsert's `DO UPDATE` list but cannot be overwritten, because the value bound IS the stored date whenever there is one. It only ever FILLS a row that had none. Changing a stored date is the metadata refresh's job, not a re-add's |
+| release_date | TEXT | YYYY-MM-DD. **The row's own date decides its status, never the request's — and `unreleased` is a conclusion that date licenses, never a status a caller may pick** (the decision runs through `statusForDate`; both halves were D7, v1's worst trap). `upsertGame` reads it and derives the status through `effectiveReleaseDate`; the column is in the upsert's `DO UPDATE` list but cannot be overwritten, because the value bound IS the stored date whenever there is one. It only ever FILLS a row that had none -- or replaces a value that is not a readable date at all, which is the single exception and exists because such a row was otherwise pinned to `unreleased` forever. Changing a READABLE stored date is the metadata refresh's job, never a re-add's |
 | status | TEXT | `wishlist`, `playing`, `done`, `backlog`, `unreleased`. CHECK-constrained since migration 002; the API also allowlists it. Was unvalidated, which is how a `Done` row reached production |
 | steam_app_id | TEXT | For Steam price lookups |
 | last_price | TEXT | Formatted price string (e.g., "₪59.99") |
@@ -818,6 +824,15 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 > smoke stack starts. The first version of this trigger shipped without the gate and a CISO
 > review rejected it.
 >
+> **The gate's equivalence is conditional, and the condition is repo configuration nothing
+> enforces.** It matches the pre-existing boundary only while push access here already implies
+> deploy — true today (one admin collaborator, `main` unprotected). Add branch protection to
+> `main`, or a collaborator with push-but-not-merge rights, and a contributor who cannot merge
+> could run code on the production host by opening a PR; at that point the PR path has to move
+> to GitHub-hosted runners or the repo has to go private. Also: a fork PR shows as ten
+> **skipped** checks, and GitHub treats skipped as non-blocking — such a PR can look mergeable
+> having had zero CI. "Skipped" is not "passed".
+>
 > **The two below prevent ACCIDENTS, not attacks.** Both live in a file the pull request
 > controls on a `pull_request` event, so hostile code deletes either in one line. Do not read
 > them as a sandbox. Even the gate is a stopgap: the durable answers are making the repository
@@ -837,11 +852,20 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 > an operator restart, a reboot, the next deploy's own stop/start — silently starts production
 > on unreviewed PR code. The tag is the boundary; the guard alone does not close this.
 >
-> Both compose files take the image as `${BACKEND_IMAGE:-local/gametracker-backend:latest}`
-> (and the same for frontend/mcp), so a by-hand `docker compose up` is unchanged while CI can
-> point the smoke stack at the images THIS run built. Without that, a PR's smoke stage would
-> test whatever was tagged `latest` on the runner — i.e. the last thing merged, not the change
+> Both compose files take the image from an environment variable, so a by-hand
+> `docker compose up` is unchanged (the defaults are today's `:latest`) while CI can point the
+> smoke stack at the images THIS run built. Without that, a PR's smoke stage would test
+> whatever was tagged `latest` on the runner — i.e. the last thing merged, not the change
 > under review.
+>
+> **The two files use DIFFERENT variable names, and that split is itself the control.**
+> Production reads `BACKEND_IMAGE` / `FRONTEND_IMAGE` / `MCP_IMAGE`; the test stack reads
+> `TEST_BACKEND_IMAGE` / `TEST_FRONTEND_IMAGE` / `TEST_MCP_IMAGE`. Shared names would mean an
+> operator who exported one to poke at the smoke stack and then ran `docker compose up` on
+> production in the same shell would start **production on a PR image** — the exact outcome
+> the `pr-<number>` tagging exists to prevent. The `deploy` job also pins all three to
+> `:latest` explicitly, so it cannot inherit a stray value from a `.env` in the project
+> directory, and it logs `compose config --images` so the deploy record says what went live.
 >
 > **`cleanup-pr-images` is a separate job because the Trivy jobs and `smoke-test` run
 > concurrently** (all four depend only on `build-images`), so deleting the images from inside

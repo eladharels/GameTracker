@@ -31,6 +31,21 @@ on:
   #      an operator restart, a reboot, the next deploy -- silently starting production
   #      on unreviewed PR code.
   #
+  # WHAT 1 DEPENDS ON, which is a property of REPOSITORY CONFIGURATION that nothing in
+  # this file enforces. Gating on the head repo is equivalent to the pre-existing trust
+  # boundary only while push access to this repo ALREADY implies deploy. Today that holds:
+  # one collaborator (the owner, admin) and `main` unprotected, so anyone who can push a
+  # branch here can already push to main and deploy. Add branch protection to `main`, or a
+  # collaborator with push-but-not-merge rights, and it STOPS holding -- a contributor who
+  # cannot merge would then be able to run code on the production host by opening a pull
+  # request. At that point the PR path must move to GitHub-hosted runners, or the repo must
+  # go private. Re-read this comment before changing either setting.
+  #
+  # AND: a fork PR renders as ten SKIPPED checks, not as a failure. GitHub treats a skipped
+  # check as non-blocking, so such a PR can look mergeable having had ZERO ci. Merging still
+  # needs write access, so this is not a bypass -- but "skipped" must never be read as
+  # "tested".
+  #
   # BE PRECISE ABOUT WHAT 2 AND 3 DO: they prevent ACCIDENTS. Both live in a file the pull
   # request itself controls on a `pull_request` event, so against code that is actively
   # hostile they are one deleted line each. Only 1 is a boundary against untrusted code,
@@ -52,7 +67,16 @@ on:
 # What the single group was really protecting is the runner's fixed resources: the smoke
 # stack's ports (3099/8099/3199) and the `gametracker-smoke` compose project name, plus
 # the production stack itself. That exclusivity moves down to the two jobs that actually
-# contend for them, where it belongs, and PR traffic can no longer displace a deploy.
+# contend for them, where it belongs.
+#
+# BE PRECISE ABOUT WHAT THIS DOES NOT FIX. A job-level group holds one pending item too, so
+# with PR-A's smoke-test running, a main run's smoke-test queued behind it, and PR-B's
+# arriving, the main run's smoke-test is still cancelled -- and `deploy`, which needs it, is
+# skipped. The same "a merge that never deployed" outcome, one job later and now requiring
+# TWO concurrent PR runs to trigger. It cannot be closed by partitioning this group:
+# docker-compose.test.yml hard-codes container_name: gametracker-*-smoke, so two smoke
+# stacks genuinely cannot coexist on one runner. The durable fix is parameterising the
+# container names and project name off github.run_id; that is a larger change than this one.
 concurrency:
   group: gametracker-pipeline-${{ github.event_name == 'push' && 'main' || github.event.number }}
   cancel-in-progress: false
@@ -1000,6 +1024,14 @@ jobs:
           echo "[deploy] MCP_BIND=${MCP_BIND:-127.0.0.1} (unset => loopback only)"
           echo "[deploy] MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-<none, defaults only>}"
           docker compose -f docker-compose.yaml port mcp "${MCP_PORT:-3001}" || true
+          # WHICH IMAGES production actually started on, for the same reason. The compose
+          # files resolve ${BACKEND_IMAGE:-...:latest}, so the answer is no longer a
+          # constant you can read off the file -- it depends on the environment this job
+          # ran with, and a deploy record that cannot answer "what went live?" is the
+          # thing the pinning above only half fixes. `config --images` is the RESOLVED
+          # answer rather than an echo of what we think we set.
+          echo "[deploy] images (resolved from the compose file, not from intent):"
+          docker compose -f docker-compose.yaml config --images | sed 's/^/[deploy]   /'
 
       # env is needed even though this step starts nothing: the failure path runs
       # `docker compose logs`, which interpolates the compose file. Without it the

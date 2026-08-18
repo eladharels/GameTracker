@@ -237,6 +237,12 @@ async function recordStatusEvent({ userId, gameId, from, to, source }, tx) {
   // otherwise log an event per save — and decideEvents deliberately still emits ADDED
   // in that case, so this cannot be inferred from the event list it returns.
   if (from === to) return;
+  // `source` is the CALLER's claim about who acted, and one case is looser than it looks:
+  // a re-add of an `unreleased` game whose date has passed is promoted by statusForDate and
+  // logged source='user', though the conclusion is the server's and only the request's
+  // timing was the user's. Nothing counts it today -- stats.js counts to_status='done' --
+  // but coverage.userEvents includes it. Left as 'user' because the write WAS user-
+  // initiated; recorded here so the next person reading a suspicious event knows why.
   const sql = `INSERT INTO user_game_status_events
                  (user_id, game_id, from_status, to_status, source)
                VALUES (?, ?, ?, ?, ?)`;
@@ -415,10 +421,13 @@ async function upsertGame(userId, fields) {
          -- re-reads the CURRENT row, so when a metadata refresh commits between this
          -- statement's prior-row SELECT and this write, the COALESCE form pins the row at
          -- the refresh's new date while storing the status derived from the OLD one -- and
-         -- the next refresh sees its own date already in place, never re-fires, and the
-         -- disagreement is permanent. The plain assignment reverts the date too, so the
-         -- next refresh re-detects the change and heals the row. Reverting a concurrent
-         -- write is not ideal; silently making it unfixable is worse.
+         -- the next refresh sees its own date already in place and never re-fires. It is
+         -- not permanent -- an earlier version of this comment claimed that and was wrong.
+         -- The 08:00 sweep heals it the following morning, by promoting the row and
+         -- pushing "has been released!" for a date that passed long ago. That is D7's
+         -- phantom wearing source='release_sweep', which is a worse outcome than a stuck
+         -- row, not a milder one. The plain assignment reverts the date too, so the next
+         -- refresh re-detects the change and heals it quietly instead.
          release_date=excluded.release_date,
          backlog_order=excluded.backlog_order`,
       [userId, gameId, gameName, fields.coverUrl || null, releaseDate, status,
@@ -461,11 +470,17 @@ async function upsertGame(userId, fields) {
 // Android app or an MCP is exactly the client that will not — which is why v2's setStatus
 // does not accept a date at all and reads the stored one instead.
 //
-// STORED WINS, and the asymmetry is deliberate rather than a preference for old data: a
-// re-add cannot change release_date, so the stored value IS what the row will hold and
-// deciding from anything else is how the two got out of step in the first place. The
-// request only speaks when the row has nothing — a new game, or one stored before its
-// date was known — and then it is what gets written, so the two still agree.
+// A READABLE STORED DATE WINS, and the asymmetry is deliberate rather than a preference
+// for old data: a re-add cannot change a date the rules can READ, so that value IS what
+// the row will hold and deciding from anything else is how the two got out of step in the
+// first place. The request speaks when the row has nothing the rules can use — a new game,
+// one stored before its date was known, or one holding a string that is not a date — and
+// then it is what gets written, so the two still agree.
+//
+// Note the exception that carves out, because an earlier version of this comment denied it
+// and the code contradicted the comment: a re-add CAN change release_date, in exactly one
+// direction — replacing an UNREADABLE value with a real one. It can never overwrite a
+// readable date. Changing one of those is still the metadata refresh's job.
 //
 // ONLY A READABLE STORED DATE WINS. An earlier version of this returned any non-empty
 // stored value, which handed the decision to strings no rule in this file can read: a row
@@ -488,7 +503,11 @@ function effectiveReleaseDate(storedDate, requestedDate) {
   const stored = validReleaseDate(storedDate);
   if (stored) return stored;
   if (requestedDate) return requestedDate;
-  return storedDate ?? null;
+  // `|| null`, not `?? null`: a legacy empty-string release_date must keep normalising to
+  // NULL as it did before this function existed. Returned verbatim it passes
+  // jobs.js#checkReleases's `release_date IS NOT NULL` filter and is then skipped on
+  // daysUntilRelease -- harmless, but it makes a row the sweep picks up and cannot use.
+  return storedDate || null;
 }
 
 // THE shared primitive: may this date be treated as released?
@@ -506,16 +525,23 @@ function isReleased(releaseDate) {
 // What a REFRESH does to a status when the release date changes. NOT the same rule as
 // the upsert's, deliberately, and the difference is the point:
 //
-//   upsert   — the caller is choosing a status. An unreleasable date overrides that
-//              choice with 'unreleased'; otherwise the choice stands.
+//   upsert   — the caller is choosing a status, and the date decides whether that choice
+//              is AVAILABLE. An unreleasable date overrides it with 'unreleased'; asking
+//              for 'unreleased' on a released game is overridden the other way, to
+//              'wishlist'. Only a request the date permits stands unchanged. (Both
+//              overrides are reported as `coerced` — the caller is told, never guessed at.)
 //   refresh  — nobody is choosing anything. A game sitting in 'unreleased' whose date
 //              has arrived is promoted to 'wishlist', mirroring the daily cron. Any
 //              other status is the user's own and is left alone.
 //
 // What they share is isReleased(), which is what "shared rule" should have meant.
-function statusForDate(releaseDate, currentStatus) {
+// `requestedStatus`, not `currentStatus`: BOTH call sites pass the status the caller ASKED
+// for -- upsertGame the body's, setStatus the request's -- never the row's current one. The
+// old name described statusAfterDateChange's job, which is the one function this must not
+// be confused with, and that confusion has already destroyed data once (see below).
+function statusForDate(releaseDate, requestedStatus) {
   if (!isReleased(releaseDate)) return 'unreleased';
-  return currentStatus === 'unreleased' ? 'wishlist' : currentStatus;
+  return requestedStatus === 'unreleased' ? 'wishlist' : requestedStatus;
 }
 
 // What a REFRESH does, which is NOT what statusForDate does — and conflating the two
