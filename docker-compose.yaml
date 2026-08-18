@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   backend:
-    image: local/gametracker-backend:latest
+    image: ${BACKEND_IMAGE:-local/gametracker-backend:latest}
     pull_policy: never
     ports:
       # BACKEND_BIND controls which host interface the backend is published on.
@@ -122,7 +122,7 @@ services:
   # `Authorization: Bearer gt_pat_...`, which it forwards to the API unchanged, so
   # authorization stays the backend's and reaching this port grants nothing on its own.
   mcp:
-    image: local/gametracker-mcp:latest
+    image: ${MCP_IMAGE:-local/gametracker-mcp:latest}
     pull_policy: never
     ports:
       # 127.0.0.1 by DEFAULT, unlike the backend. This is an agent-facing surface and
@@ -188,7 +188,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: local/gametracker-frontend:latest
+    image: ${FRONTEND_IMAGE:-local/gametracker-frontend:latest}
     pull_policy: never
     ports:
       - "8080:8080"

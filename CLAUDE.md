@@ -771,27 +771,61 @@ Every push to `main` must pass a full security gauntlet before code reaches the 
 ### Pipeline Job Graph
 
 ```
-push: main
+push: main   |   pull_request -> main
 │
 ├── secret-scan      Gitleaks — full git history scan
 ├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
 ├── frontend-quality npm test (backend + MCP unit tests) + ESLint + Vite build (= typecheck)
 └── build-images     Build backend + frontend + MCP Docker images
+    │                  tag = `latest` on push, `pr-<number>` on a pull request
     ├── trivy-api    Trivy — backend image  (CRITICAL/HIGH → fail)
     ├── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
     └── trivy-mcp    Trivy — MCP image      (CRITICAL/HIGH → fail)
 
-smoke-test  (needs: build-images + all 3 scan jobs)
+smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
   └─► docker compose -p gametracker-smoke -f docker-compose.test.yml
        Backend:  GET http://localhost:3099/api/health → {"status":"ok"}
        Frontend: GET http://localhost:8099/ → HTTP 200
        API via the frontend proxy + JSON 404 on an unknown /api route
        MCP:      POST http://127.0.0.1:3199/mcp → a real `initialize` handshake
+       The three test/integration/ suites against the real Postgres
        Teardown: if: always() — guaranteed cleanup
 
-deploy  (needs: ALL 8 upstream jobs)
+deploy  (needs: ALL 8 upstream jobs)   [push to main ONLY — see the guard below]
   └─► docker compose up + post-deploy health check on :3000/api/health
+
+cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
+  └─► docker rmi local/gametracker-*:pr-<number>     [pull_request only, if: always()]
 ```
+
+> **A pull request runs everything except `deploy`, and TWO things keep it out of
+> production.** Neither is optional and neither is obvious from reading `deploy` alone.
+>
+> **1. `deploy` carries `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`.**
+> Before the `pull_request` trigger existed, that job had NO ref check of any kind — it was
+> protected entirely by the workflow being unable to run on anything else. Adding the trigger
+> without adding the guard deploys every pull request to production, and no test in this repo
+> fails if the guard is deleted.
+>
+> **2. `build-images` tags PR builds `pr-<number>`, never `latest`.** Both compose files
+> resolve `local/gametracker-*:latest` and the runner is **self-hosted** — the same Docker
+> daemon production runs on. A PR build tagged `latest` leaves the RUNNING containers alone
+> (they hold an image ID) but repoints the tag, so the next `docker compose up` on that host —
+> an operator restart, a reboot, the next deploy's own stop/start — silently starts production
+> on unreviewed PR code. The tag is the boundary; the guard alone does not close this.
+>
+> Both compose files take the image as `${BACKEND_IMAGE:-local/gametracker-backend:latest}`
+> (and the same for frontend/mcp), so a by-hand `docker compose up` is unchanged while CI can
+> point the smoke stack at the images THIS run built. Without that, a PR's smoke stage would
+> test whatever was tagged `latest` on the runner — i.e. the last thing merged, not the change
+> under review.
+>
+> **`cleanup-pr-images` is a separate job because the Trivy jobs and `smoke-test` run
+> concurrently** (all four depend only on `build-images`), so deleting the images from inside
+> smoke-test's teardown would pull them out from under a scan still using them. Nothing else
+> removes them: the deploy job's prune is `docker image prune -f`, which is dangling-only, and
+> these carry a tag. This runner has already failed a build once with "You don't have enough
+> free space in /var/cache/apt/archives/".
 
 > **The smoke test speaks the protocol; it does not ping liveness.** The MCP step asserts
 > an `initialize` RESULT, not HTTP 200 — a JSON-RPC error is delivered with a 200, so a

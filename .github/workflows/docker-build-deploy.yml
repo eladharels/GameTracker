@@ -4,6 +4,23 @@ on:
   push:
     branches:
       - main
+  # PRs targeting main run everything EXCEPT deploy. Before this, the pipeline ran
+  # only after merge -- so "CI is green" and "it is live in production" were the same
+  # event, and the first real exercise of any change was the deploy itself.
+  #
+  # Two things make this safe, and neither is optional:
+  #   1. The `deploy` job is guarded on `github.event_name == 'push'` AND the ref.
+  #      It has no guard of its own historically -- it relied ENTIRELY on this trigger
+  #      list to never see a non-main event. Adding a trigger without adding that guard
+  #      would have deployed every pull request to production.
+  #   2. `build-images` tags PR builds `pr-<number>`, never `latest`. Both compose files
+  #      resolve `local/gametracker-*:latest` on a SELF-HOSTED runner that is the same
+  #      Docker daemon production runs on, so a PR build writing `:latest` would leave
+  #      the next `docker compose up` -- an operator restart, a reboot, the next deploy
+  #      -- silently starting production on unreviewed PR code.
+  pull_request:
+    branches:
+      - main
 
 # Prevent concurrent runs from conflicting on the self-hosted runner.
 # cancel-in-progress: false ensures the second push queues instead of
@@ -185,6 +202,7 @@ jobs:
       FRONTEND_IMAGE_BASE: local/gametracker-frontend
       MCP_IMAGE_BASE: local/gametracker-mcp
     outputs:
+      image_tag: ${{ steps.image-tags.outputs.image_tag }}
       backend_image: ${{ steps.image-tags.outputs.backend_image }}
       frontend_image: ${{ steps.image-tags.outputs.frontend_image }}
       mcp_image: ${{ steps.image-tags.outputs.mcp_image }}
@@ -197,30 +215,48 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # THE TAG IS THE SAFETY BOUNDARY between a pull request and production.
+      #
+      # `latest` is what BOTH compose files resolve, and this runner is self-hosted --
+      # the same Docker daemon that runs production. A PR build tagged `latest` does not
+      # disturb the RUNNING containers (they hold an image ID), but it repoints the tag,
+      # so the next `docker compose up` on this host starts production on PR code. That
+      # includes an operator restart and the deploy job's own stop/start.
+      #
+      # So: push to main keeps `latest`, exactly as before. A pull request gets
+      # `pr-<number>`, which nothing in either compose file resolves by default.
       - name: Set image tag outputs
         id: image-tags
         run: |
-          echo "backend_image=${BACKEND_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
-          echo "frontend_image=${FRONTEND_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
-          echo "mcp_image=${MCP_IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TAG="pr-${{ github.event.number }}"
+          else
+            TAG="latest"
+          fi
+          echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "backend_image=${BACKEND_IMAGE_BASE}:${TAG}" >> $GITHUB_OUTPUT
+          echo "frontend_image=${FRONTEND_IMAGE_BASE}:${TAG}" >> $GITHUB_OUTPUT
+          echo "mcp_image=${MCP_IMAGE_BASE}:${TAG}" >> $GITHUB_OUTPUT
+          echo "[build] Tagging images :${TAG} (event=${{ github.event_name }})"
 
       - name: Build backend Docker image
         run: |
           docker build \
             --no-cache \
-            -t ${BACKEND_IMAGE_BASE}:latest \
+            -t ${{ steps.image-tags.outputs.backend_image }} \
             .
 
       - name: Build frontend Docker image
         run: |
           docker build \
-            -t ${FRONTEND_IMAGE_BASE}:latest \
+            -t ${{ steps.image-tags.outputs.frontend_image }} \
             ./frontend
 
       - name: Build MCP Docker image
         run: |
           docker build \
-            -t ${MCP_IMAGE_BASE}:latest \
+            -t ${{ steps.image-tags.outputs.mcp_image }} \
             ./mcp
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -424,6 +460,14 @@ jobs:
       BACKEND_TEST_PORT: 3099
       FRONTEND_TEST_PORT: 8099
       MCP_TEST_PORT: 3199
+      # The images THIS run built. Both compose files default these to `:latest`, so a
+      # by-hand `docker compose up` is unchanged; CI passes them explicitly because on a
+      # pull request the tag is `pr-<number>` and `:latest` is production's, not ours.
+      # Without this the smoke stage would test whatever happened to be tagged latest on
+      # the runner -- i.e. the last thing MERGED, not the change under review.
+      BACKEND_IMAGE: ${{ needs.build-images.outputs.backend_image }}
+      FRONTEND_IMAGE: ${{ needs.build-images.outputs.frontend_image }}
+      MCP_IMAGE: ${{ needs.build-images.outputs.mcp_image }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -720,6 +764,11 @@ jobs:
     name: Deploy to Production
     runs-on: self-hosted
     continue-on-error: false
+    # THE GUARD. Until pull_request was added to the triggers, this job was protected
+    # only by the fact that the workflow could not run on anything but a push to main --
+    # there is no ref check anywhere else in this file. Deleting this line does not fail
+    # any test; it deploys pull requests to production.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - secret-scan
       - semgrep
@@ -860,3 +909,50 @@ jobs:
         run: |
           docker image prune -f
           echo "[deploy] Dangling image prune complete"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 9: Remove the PR-tagged images
+  # PR builds are tagged pr-<number> so they can never be mistaken for production's
+  # :latest. Nothing else ever deletes them: the deploy job's prune is
+  # `docker image prune -f`, which removes DANGLING images only, and these carry a
+  # tag. One set of three images per pull request accumulates on a self-hosted runner
+  # that has already failed a build once with "You don't have enough free space in
+  # /var/cache/apt/archives/".
+  #
+  # A SEPARATE JOB, not a step in smoke-test. The three Trivy jobs and smoke-test all
+  # depend only on build-images, so they run CONCURRENTLY — deleting the images from
+  # inside smoke-test's teardown would pull them out from under a scan that is still
+  # running. This waits for every consumer.
+  #
+  # `if: always()` because a failed run leaves images behind exactly like a passing
+  # one does, and that is the case where nobody comes back to tidy up.
+  # ─────────────────────────────────────────────────────────────────────────────
+  cleanup-pr-images:
+    name: Clean up PR-tagged images
+    runs-on: self-hosted
+    if: always() && github.event_name == 'pull_request'
+    needs:
+      - build-images
+      - trivy-api
+      - trivy-web
+      - trivy-mcp
+      - smoke-test
+    steps:
+      - name: Remove images built for this pull request
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.build-images.outputs.image_tag }}"
+          # Refuse to run without a tag, and NEVER touch latest. If the output is
+          # missing (build-images never ran) an unguarded `docker rmi ...:` would be a
+          # malformed reference at best; `:latest` would be production's image.
+          if [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; then
+            echo "[cleanup] Refusing to remove tag '${TAG}' — expected pr-<number>."
+            exit 0
+          fi
+          for base in local/gametracker-backend local/gametracker-frontend local/gametracker-mcp; do
+            docker rmi "${base}:${TAG}" 2>/dev/null \
+              && echo "[cleanup] Removed ${base}:${TAG}" \
+              || echo "[cleanup] ${base}:${TAG} already gone"
+          done
+          docker image prune -f >/dev/null 2>&1 || true
+          echo "[cleanup] PR image cleanup complete"
