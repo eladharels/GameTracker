@@ -1448,6 +1448,183 @@ check('absent, unparseable and future all mean "not released"', () => {
   assert.strictEqual(libraryService.isReleased(iso(30)), false);
 });
 
+// --- D7: which date decides the status -----------------------------------------
+//
+// The defect: upsertGame derived the status from the releaseDate in the REQUEST, while
+// the row's own release_date was never updated by that write. Omitting the date for a
+// released game therefore stored `release_date='2020-01-01', status='unreleased'` — and
+// the next correct POST saw a prior status of 'unreleased', so decideEvents emitted
+// RELEASED and four channels announced a six-year-old game.
+//
+// Asserted at TWO levels deliberately. The pure function proves the rule; the upsert
+// test proves the rule is the one actually reaching the database, which is the half a
+// pure test cannot see — the bug was never in a rule, it was in which value got passed.
+
+console.log('library.effectiveReleaseDate (D7 — the row decides, not the request):');
+check('a stored date beats an omitted one', () => {
+  // THE D7 INPUT. Before the fix this returned nothing at all: the stored date was
+  // never consulted, so the answer was null and the game was demoted to 'unreleased'.
+  assert.strictEqual(libraryService.effectiveReleaseDate('2020-01-01', null), '2020-01-01');
+  assert.strictEqual(libraryService.effectiveReleaseDate('2020-01-01', undefined), '2020-01-01');
+});
+check('a stored date beats a DIFFERENT one in the request', () => {
+  // Not a preference for old data: the upsert cannot change release_date, so the
+  // stored value is what the row will still hold afterwards. Deciding from the
+  // request's date is what let the column and the status disagree.
+  assert.strictEqual(libraryService.effectiveReleaseDate('2020-01-01', '2099-01-01'), '2020-01-01');
+});
+check('the request fills a row that has no date, and only then', () => {
+  // The same bug with the two sides swapped: without this, a game stored before its
+  // date was known would decide from the request, leave the column NULL, and be pinned
+  // to 'unreleased' by the next write that omitted the date.
+  for (const empty of [null, undefined, '', '   ']) {
+    assert.strictEqual(libraryService.effectiveReleaseDate(empty, '2001-11-15'), '2001-11-15',
+      `a stored ${JSON.stringify(empty)} did not yield to the request`);
+  }
+});
+check('a new game (no stored row) uses the request', () => {
+  assert.strictEqual(libraryService.effectiveReleaseDate(null, '2001-11-15'), '2001-11-15');
+  assert.strictEqual(libraryService.effectiveReleaseDate(null, null), null);
+});
+check('a stored value that is not a date is returned RAW, not cleaned', () => {
+  // This function does not repair data. isReleased treats 'TBA' as absent exactly as
+  // before, so the status is unchanged — but returning null here would make the DO
+  // UPDATE erase a value the user's row already held, which is not this fix's job.
+  assert.strictEqual(libraryService.effectiveReleaseDate('TBA', '2001-11-15'), 'TBA');
+  assert.strictEqual(libraryService.isReleased('TBA'), false);
+});
+
+console.log('library.upsertGame (D7, at the level where the bug actually was):');
+{
+  const dbMod = require('../db');
+  const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+
+  // Drives the REAL upsertGame with the transaction intercepted. db.withTransaction is
+  // called through the MODULE, so a stub here is genuinely reached — the destructured
+  // `get`/`run` at the top of library.js would not have been (CLAUDE.md records that
+  // silent false pass happening once already).
+  //
+  // The fake tx answers the prior-row SELECT and records the INSERT's parameters, which
+  // is the whole point: what this test needs to see is the VALUE BOUND to release_date
+  // and status, not a return value the function could compute correctly and then fail
+  // to write.
+  const runUpsert = async (priorRow, fields) => {
+    const real = dbMod.withTransaction;
+    const issued = [];
+    dbMod.withTransaction = async (fn) => fn({
+      query: async (sql, params) => {
+        issued.push({ sql, params });
+        if (/^\s*SELECT status, backlog_order, release_date/.test(sql)) {
+          return { rows: priorRow ? [priorRow] : [] };
+        }
+        if (/MAX\(backlog_order\)/.test(sql)) return { rows: [{ maxOrder: 3 }] };
+        return { rows: [], rowCount: 1 };
+      },
+    });
+    try {
+      const result = await libraryService.upsertGame(1, fields);
+      const insert = issued.find((q) => /^\s*INSERT INTO user_games/.test(q.sql));
+      // Column order in the INSERT: user_id, game_id, game_name, cover_url,
+      // release_date, status, steam_app_id, backlog_order, added_at.
+      return { result, insert, storedDate: insert.params[4], storedStatus: insert.params[5] };
+    } finally {
+      dbMod.withTransaction = real;
+    }
+  };
+
+  checkAsync('THE D7 CASE: omitting the date does not demote a released game', async () => {
+    const { result, storedDate, storedStatus } = await runUpsert(
+      { status: 'playing', backlog_order: null, release_date: '2020-01-01' },
+      { gameId: 'igdb_1', gameName: 'Cyberpunk 2077', status: 'done' }   // no releaseDate
+    );
+    assert.strictEqual(storedStatus, 'done', 'the status was demoted to unreleased again');
+    assert.strictEqual(result.status, 'done');
+    assert.strictEqual(result.coerced, false, 'a coercion was reported that should not happen');
+    assert.strictEqual(storedDate, '2020-01-01', 'the stored release date was not preserved');
+  });
+
+  checkAsync('and therefore emits no RELEASED event', async () => {
+    // The user-visible half. The demotion above was only the setup; the damage was the
+    // NEXT write seeing prior='unreleased' and pushing "has been released!" for a
+    // six-year-old game to four channels.
+    const { result } = await runUpsert(
+      { status: 'playing', backlog_order: null, release_date: '2020-01-01' },
+      { gameId: 'igdb_1', gameName: 'Cyberpunk 2077', status: 'done' }
+    );
+    assert.ok(!result.events.includes(EVENTS.RELEASED),
+      'a released-game notification fired for a game that was already out');
+  });
+
+  checkAsync('a genuinely unreleased game is still coerced', async () => {
+    // The control this whole path exists to enforce must survive the fix: a future
+    // stored date still overrides whatever the caller asked for.
+    const { result, storedStatus } = await runUpsert(
+      { status: 'unreleased', backlog_order: null, release_date: iso(30) },
+      { gameId: 'igdb_2', gameName: 'Half-Life 3', status: 'playing' }
+    );
+    assert.strictEqual(storedStatus, 'unreleased');
+    assert.strictEqual(result.coerced, true, 'the coercion stopped being reported');
+  });
+
+  checkAsync('a new game still decides from the request, and garbage is not stored', async () => {
+    const fresh = await runUpsert(null,
+      { gameId: 'igdb_3', gameName: 'Halo', releaseDate: '2001-11-15', status: 'done' });
+    assert.strictEqual(fresh.storedStatus, 'done');
+    assert.strictEqual(fresh.storedDate, '2001-11-15');
+
+    const junk = await runUpsert(null,
+      { gameId: 'igdb_4', gameName: 'Halo', releaseDate: 'not-a-date', status: 'done' });
+    assert.strictEqual(junk.storedDate, null, 'an unparseable date was written to the row');
+    assert.strictEqual(junk.storedStatus, 'unreleased');
+  });
+
+  checkAsync('a stored row with no date is FILLED by the request, not ignored', async () => {
+    // D7 with the sides swapped. Without writing release_date here the column stays
+    // NULL, and the next write that omits the date pins the game to 'unreleased'
+    // forever — the same disagreement, arrived at from the other direction.
+    const { storedDate, storedStatus } = await runUpsert(
+      { status: 'unreleased', backlog_order: null, release_date: null },
+      { gameId: 'igdb_5', gameName: 'Halo', releaseDate: '2001-11-15', status: 'playing' }
+    );
+    assert.strictEqual(storedDate, '2001-11-15', 'the row was left without a date');
+    assert.strictEqual(storedStatus, 'playing');
+  });
+
+  checkAsync('the write can never overwrite a stored date', async () => {
+    // The invariant that makes `release_date=excluded.release_date` safe to add to the
+    // DO UPDATE list: the value bound IS the stored date whenever there is one.
+    const { storedDate } = await runUpsert(
+      { status: 'done', backlog_order: null, release_date: '2020-01-01' },
+      { gameId: 'igdb_6', gameName: 'Cyberpunk 2077', releaseDate: '1999-09-09', status: 'done' }
+    );
+    assert.strictEqual(storedDate, '2020-01-01', 'a client rewrote the row\'s release date');
+  });
+
+  checkAsync('the prior-row SELECT still reads release_date', async () => {
+    // The fix is one column in one SELECT away from silently reverting: drop
+    // release_date from the projection and prior.release_date is undefined, so every
+    // decision falls back to the request and D7 returns with all of the above green
+    // except this.
+    const real = dbMod.withTransaction;
+    let priorSql = null;
+    dbMod.withTransaction = async (fn) => fn({
+      query: async (sql) => {
+        if (/FROM user_games WHERE user_id = \? AND game_id = \?/.test(sql) && /^\s*SELECT/.test(sql)) {
+          priorSql = sql;
+        }
+        return { rows: [], rowCount: 1 };
+      },
+    });
+    try {
+      await libraryService.upsertGame(1, { gameId: 'igdb_7', gameName: 'X', status: 'done' });
+    } finally {
+      dbMod.withTransaction = real;
+    }
+    assert.ok(/\brelease_date\b/.test(priorSql || ''),
+      'upsertGame no longer reads the stored release_date, so D7 is back');
+  });
+}
+
 // --- services/users.js: push credentials are not an administrative field ------
 //
 // Both halves of the exposure, asserted from the two places it could come back:

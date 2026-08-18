@@ -101,6 +101,64 @@ updated. All four now call one function.
 APPLIED CHANGES (newest first)
 --------------------------------------------------------------------------------
 
+--- APPLIED 2026-08-18 (D7: the request's release date no longer decides a stored status) ---
+Summary: Fixes v1's worst correctness bug. A POST that omitted releaseDate demoted an
+         already-released game to 'unreleased', and the NEXT correct POST then pushed
+         "has been released!" to four channels for a game that came out years ago.
+
+AFFECTS GameTracker-mobile (Android) AND any script — in their favour. The SPA never
+tripped this because it always resends the date it was given; a client that sends only
+{gameId, gameName, status} is exactly the one that did. No request or response shape
+changes: same fields, same status codes, same routes. What changes is which value the
+stored status is computed from.
+
+THE SEQUENCE, as reproduced against a real Postgres before and after:
+  POST {gameId, gameName, status:'done'}            -- no releaseDate
+    before -> row becomes release_date='2020-12-10', status='unreleased'   (incoherent)
+    after  -> row stays  release_date='2020-12-10', status='done'
+  POST {..., releaseDate:'2020-12-10', status:'done'}   -- the next correct write
+    before -> prior status is 'unreleased', so events = ["release","status"]
+              => "Cyberpunk 2077 has been released!" to email/ntfy/Gotify/Telegram
+    after  -> events = ["add"], nothing announced
+
+AND THE PART THAT OUTLIVED THE NOTIFICATION: both writes landed rows in
+user_game_status_events with source='user' — a playing->unreleased demotion nobody
+performed, and an unreleased->done "completion" on the wrong date. The statistics page
+counts exactly those rows. False history cannot be told from true afterwards, so this
+fix stops the corruption but does not repair what is already recorded.
+
+WHAT CHANGED:
+  • services/library.js — new effectiveReleaseDate(stored, request). The STORED date wins
+    whenever there is one, because a re-add cannot change release_date, so the stored
+    value is what the row will still hold. The request speaks only for a row that has no
+    date.
+  • The same statement now writes release_date in its ON CONFLICT DO UPDATE list, so a
+    row stored before its date was known is FILLED rather than left NULL and pinned to
+    'unreleased' forever. It cannot overwrite: the value bound IS the stored date
+    whenever one exists.
+  • The status decision moved INSIDE the transaction, since it now depends on the row.
+  • Unchanged on purpose: a genuinely future-dated game is still coerced to 'unreleased'
+    and still reports `coerced`; an unparseable date is still never written; v2's PATCH
+    still takes no date at all.
+
+NO OPERATOR ACTION, no migration. Rows already carrying the incoherent combination
+(a past release_date next to status='unreleased') are not repaired by this change — the
+next write to such a row corrects it, and the 08:00 sweep already promotes them to
+'wishlist'. To find them:
+  SELECT user_id, game_id, game_name, release_date FROM user_games
+   WHERE status = 'unreleased'
+     AND release_date ~ '^\d{4}-\d{2}-\d{2}'      -- same rule as validReleaseDate()
+     AND release_date <= now()::date::text;         -- TEXT compare is safe for YYYY-MM-DD
+(The regex is not decoration: release_date is TEXT, and `IS NOT NULL` alone also matches
+the empty string, which then sorts BELOW every real date and reports as affected. Verified
+against a real Postgres with rows holding NULL, '', 'TBA', a past date and a future one —
+only the past-dated row comes back.)
+
+TESTS: test/helpers.test.js gained 12 assertions (the rule, and the values actually bound
+to the INSERT); test/integration/upsert-release-date.test.js is new and runs in the
+smoke job against a real Postgres, because the DO UPDATE half is invisible to a unit test
+— deleting that clause fails the integration test while the entire unit suite stays green.
+
 RECORDED RETROACTIVELY 2026-08-18 — the five entries that follow.
   This file stopped being written on 2026-07-27 and missed everything after it:
   personal access tokens, the whole of /api/v2, the MCP container, the browser API

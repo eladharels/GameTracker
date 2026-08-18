@@ -309,16 +309,29 @@ async function upsertGame(userId, fields) {
   // isReleaseInFuture compares NaN and returns false — so the game kept the status
   // the caller asked for, with a garbage date, and the one control this function
   // exists to enforce never fired. Anything that is not a real YYYY-MM-DD is treated
-  // as ABSENT, which routes it to 'unreleased'. Deliberately not a 400: v1 accepted
-  // these, and the safe default costs the caller nothing.
-  const releaseDate = validReleaseDate(fields.releaseDate);
-  const status = isReleased(releaseDate) ? requested : 'unreleased';
+  // as ABSENT. Deliberately not a 400: v1 accepted these, and the safe default costs
+  // the caller nothing.
+  //
+  // ABSENT no longer means 'unreleased' outright — it means the REQUEST has nothing to
+  // say, and effectiveReleaseDate then lets the stored row answer. For a new game there
+  // is no row and the outcome is 'unreleased' exactly as before.
+  const requestedDate = validReleaseDate(fields.releaseDate);
 
   return db.withTransaction(async (tx) => {
+    // release_date is selected because the STATUS DECISION DEPENDS ON IT — see
+    // effectiveReleaseDate. Deciding from the request's date instead is D7, and the row
+    // it produced (a past release_date next to status='unreleased') is unreachable from
+    // any coherent input, which is what made the phantom "has been released!" possible.
     const prior = (await tx.query(
-      'SELECT status, backlog_order FROM user_games WHERE user_id = ? AND game_id = ?',
+      'SELECT status, backlog_order, release_date FROM user_games WHERE user_id = ? AND game_id = ?',
       [userId, gameId]
     )).rows[0];
+
+    // Decided INSIDE the transaction, because it now depends on the row. Reading the
+    // row and writing it in one transaction is also what makes the decision sound: a
+    // concurrent refresh cannot move release_date between the read and the write.
+    const releaseDate = effectiveReleaseDate(prior ? prior.release_date : null, requestedDate);
+    const status = isReleased(releaseDate) ? requested : 'unreleased';
 
     const events = decideEvents(prior ? prior.status : null, status);
 
@@ -367,6 +380,16 @@ async function upsertGame(userId, fields) {
          -- resolving until backfill_steam_app_ids.js was run -- which is why that
          -- script kept finding work to do. Omitted now means unchanged.
          steam_app_id=COALESCE(excluded.steam_app_id, user_games.steam_app_id),
+         -- release_date is NEW here, and it cannot overwrite a stored date: the value
+         -- bound IS the stored date whenever there is one (effectiveReleaseDate), so
+         -- this assignment is a no-op in that case and only ever FILLS a row that had
+         -- none. Writing it is what makes the invariant structural rather than
+         -- remembered -- the row's date and its status are now computed from one value
+         -- and stored together, so they cannot disagree. Leaving it out would leave a
+         -- game stored before its date was known permanently in 'unreleased': the
+         -- status would come from the request's date and the column would stay NULL,
+         -- which is D7 again with the two sides swapped.
+         release_date=excluded.release_date,
          backlog_order=excluded.backlog_order`,
       [userId, gameId, gameName, fields.coverUrl || null, releaseDate, status,
        fields.steamAppId || null, backlogOrder, new Date().toISOString()]
@@ -385,6 +408,37 @@ async function upsertGame(userId, fields) {
   });
 }
 
+
+// The date the ROW will hold once the upsert is done — which is the only date allowed
+// to decide its status. THIS IS THE FIX FOR D7, v1's worst trap.
+//
+// The trap: `upsertGame` derived status from the `releaseDate` in the REQUEST. Send
+// `{gameId, gameName, status:'done'}` for a game released in 2020 and omit the date, and
+// validReleaseDate(undefined) is null, isReleased(null) is false, so the row was written
+// `unreleased` — while release_date was PRESERVED, because it is not in the ON CONFLICT
+// DO UPDATE list. The row then read `release_date='2020-01-01', status='unreleased'`, a
+// state no rule in this file can produce from a coherent input, and the next correct
+// write made decideEvents emit RELEASED and push "has been released!" to four channels
+// for a six-year-old game.
+//
+// The SPA never tripped it because it always resends the date it was given. A script, the
+// Android app or an MCP is exactly the client that will not — which is why v2's setStatus
+// does not accept a date at all and reads the stored one instead.
+//
+// STORED WINS, and the asymmetry is deliberate rather than a preference for old data: a
+// re-add cannot change release_date, so the stored value IS what the row will hold and
+// deciding from anything else is how the two got out of step in the first place. The
+// request only speaks when the row has nothing — a new game, or one stored before its
+// date was known — and then it is what gets written, so the two still agree.
+//
+// Returns the stored value RAW. A stored string that is not a real date stays stored
+// (this function does not clean data) and isReleased treats it as absent, exactly as
+// before. Only the request side is validated, by the caller, so garbage can never be
+// written by this path.
+function effectiveReleaseDate(storedDate, requestedDate) {
+  const stored = storedDate == null ? '' : String(storedDate).trim();
+  return stored !== '' ? stored : (requestedDate ?? null);
+}
 
 // THE shared primitive: may this date be treated as released?
 //
@@ -746,17 +800,21 @@ async function listPage(userId, opts = {}) {
 
 // Change a game's status, deriving the result from the STORED release date.
 //
-// THIS IS THE FIX FOR v1'S WORST TRAP, expressed as its own function rather than as a
-// flag on upsertGame. There, status was computed from the `releaseDate` in the REQUEST:
-// send `{gameId, gameName, status:'done'}` for a game released in 2020 and omit the
-// date, and validReleaseDate(undefined) is null, isReleased(null) is false, so the row
-// was written `unreleased` — while release_date was PRESERVED, because it is not in the
-// ON CONFLICT DO UPDATE list. The row then read `release_date='2020-01-01',
-// status='unreleased'`, and the next correct write made decideEvents emit RELEASED and
-// push "has been released!" to four channels for a six-year-old game.
+// D7, expressed as its own function rather than as a flag on upsertGame: this route
+// takes no date at all, so there is nothing for a caller to omit and no second source
+// for the answer. The trap it was written against — status computed from the REQUEST's
+// date, leaving `release_date='2020-01-01', status='unreleased'` on the row and a
+// phantom "has been released!" on the next correct write — is described in full at
+// effectiveReleaseDate.
 //
-// The SPA never tripped it because it always resends the date. A script or an MCP is
-// exactly the client that will not, which is why v2 does not accept a date here at all.
+// **v1's upsert no longer carries that trap either.** It derives the status from
+// effectiveReleaseDate, which reads the stored row exactly as this does, so the two
+// write paths now answer the same question the same way. This function is still the
+// better shape and still the one v2 exposes: not accepting a date beats accepting one
+// and then declining to use it. But the comment that used to stand here — that
+// upsertGame was where the bug lived and this was the escape from it — described a
+// state that no longer exists, and the SAME rule holding in two places is not a reason
+// to leave one of them documented as broken.
 async function setStatus(userId, gameId, status) {
   const requested = String(status ?? '').trim().toLowerCase();
   if (!STATUSES.includes(requested)) {
@@ -864,6 +922,7 @@ module.exports = {
   STATUSES, EVENTS, MAX_GAME_ID, MAX_GAME_NAME,
   isReleaseInFuture, validReleaseDate, decideEvents, upsertGame,
   isReleased, statusForDate, statusAfterDateChange, applyRefreshedMetadata,
+  effectiveReleaseDate,
   daysUntilRelease, promoteReleased,
   listGamesFor,
   listOwnGames,

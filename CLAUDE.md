@@ -207,9 +207,15 @@ GameTracker/
 │   │                               #   whole point (finish, replay, finish again) is a
 │   │                               #   property of what Postgres RETURNS — a test asserting
 │   │                               #   the SQL string would pass on a query producing the
-│   │                               #   wrong rows. Both call services directly, so the
-│   │                               #   adapters between the socket and the service are
-│   │                               #   covered by curl steps in the same job instead
+│   │                               #   wrong rows. upsert-release-date.test.js covers D7,
+│   │                               #   and specifically the half no unit test can reach:
+│   │                               #   an ON CONFLICT DO UPDATE clause is invisible in the
+│   │                               #   parameters bound to the INSERT, so only a database
+│   │                               #   says which row came out. Verified by deleting the
+│   │                               #   clause — that test fails, the unit suite stays GREEN.
+│   │                               #   All three call services directly, so the adapters
+│   │                               #   between the socket and the service are covered by
+│   │                               #   curl steps in the same job instead
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
 │                                   #   routes exist; this proves what they still RETURN.
 │                                   #   Without it "frozen" is only an intention: a service
@@ -476,7 +482,7 @@ GameTracker/
 | game_id | **TEXT** | External API game ID — a STRING like `igdb_12345`, never numeric. Was declared `INTEGER` under SQLite and stored strings anyway |
 | game_name | TEXT | |
 | cover_url | TEXT | Image URL |
-| release_date | TEXT | YYYY-MM-DD |
+| release_date | TEXT | YYYY-MM-DD. **The row's own date decides its status, never the request's** — that was D7, v1's worst trap. `upsertGame` reads it and derives the status through `effectiveReleaseDate`; the column is in the upsert's `DO UPDATE` list but cannot be overwritten, because the value bound IS the stored date whenever there is one. It only ever FILLS a row that had none. Changing a stored date is the metadata refresh's job, not a re-add's |
 | status | TEXT | `wishlist`, `playing`, `done`, `backlog`, `unreleased`. CHECK-constrained since migration 002; the API also allowlists it. Was unvalidated, which is how a `Done` row reached production |
 | steam_app_id | TEXT | For Steam price lookups |
 | last_price | TEXT | Formatted price string (e.g., "₪59.99") |
@@ -818,7 +824,7 @@ deploy  (needs: ALL 8 upstream jobs)
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
-| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or either `test/integration/` suite failing against the real Postgres |
+| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the three `test/integration/` suites failing against the real Postgres |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
 
 ### Container Hardening

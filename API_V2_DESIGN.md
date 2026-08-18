@@ -200,7 +200,27 @@ is not in the `ON CONFLICT DO UPDATE SET` list. The row is now
 six-year-old game.
 
 The SPA never trips this because it always resends the date. A script or an MCP is exactly
-the client that will. **This is also worth fixing in v1** — see Service gaps.
+the client that will.
+
+**FIXED IN v1 TOO** (2026-08-18), which this section asked for and the Service gaps table
+tracked. `upsertGame` now derives the status from `effectiveReleaseDate(stored, request)`:
+the stored date wins whenever there is one, because a re-add cannot change `release_date`
+and so the stored value is what the row will still hold afterwards. The request only
+speaks for a row that has no date — and then it is also WRITTEN, via a new
+`release_date=excluded.release_date` in the DO UPDATE list, so the column and the status
+are computed from one value and stored together rather than being kept in agreement by
+remembering to. The clause cannot overwrite anything: the value bound *is* the stored date
+whenever one exists.
+
+Two things that fix did NOT change, deliberately. v2 still takes no date on this route —
+not accepting one beats accepting it and then declining to use it — and the coercion
+itself is untouched: a genuinely future-dated game still overrides whatever status the
+caller asked for, and still reports `coerced`.
+
+The v1 fix is a shape-preserving bug fix, so it is not a freeze violation: no field, route
+or status code moved. What changed is which value a stored status is computed from, and the
+old answer produced a row (`release_date` in the past next to `status='unreleased'`) that no
+coherent input to `services/library.js` can otherwise produce.
 
 ## D8 — Server-side filter, sort and ordering
 
@@ -276,7 +296,7 @@ to build it.
 | ~~No cursor implementation~~ — done. KEYSET, not offset: offset re-runs the query per page, so a row inserted between requests shifts every later page and the reader skips or repeats a game | `services/library.js` | D8 |
 | ~~**`user_games` has no `added_at` column**~~ — done, `migrations/004`. Nullable and deliberately not backfilled: nothing in the table records when an existing row was added, and a migration-time value would be false for every one of them and indistinguishable afterwards from a true one. Set on insert, absent from the upsert's DO UPDATE list so a status change does not reset it | schema | D8 |
 | No catalog fetch-by-id. `searchAll` searches by query string only, so the `gameId` branch of add-a-game has no name, cover or date to store — and `upsertGame` requires a name | `services/catalog.js` | D9 |
-| Status derived from the request's date rather than the stored row | `services/library.js` upsert | D7 |
+| ~~Status derived from the request's date rather than the stored row~~ — done, 2026-08-18. `effectiveReleaseDate(stored, request)`, plus `release_date` added to the upsert's DO UPDATE list so a row stored before its date was known is filled rather than pinned to `unreleased`. The second half is invisible to a unit test — the bound parameter is the same either way — so `test/integration/upsert-release-date.test.js` covers it against a real Postgres | `services/library.js` upsert | D7 |
 | `removeGame` computes `removed` and the adapter discards it | `services/library.js` | D6 |
 | No jobs subsystem at all: no store, no ids, no lifecycle, no single-flight (the 409 needs state that does not exist). Two of the four kinds are inline in `index.js`, not functions | `services/jobs.js` | D11 |
 | `listBacklog` selects `id, game_id, backlog_order` — no name, so `BacklogEntry.name` cannot be served | `services/library.js` | D8 |
@@ -408,8 +428,8 @@ pure enough to assert against directly, no database needed.
 
 - **An OpenAPI spec for v1.** Contested; decided against. A faithful v1 spec produces a
   generated client carrying three naming conventions, `{success:true}` as the return type
-  of every mutation, a degradation flag that lives in a header, and D7's landmine baked
-  into a typed method signature. That client is worse than none, and describing the warts
+  of every mutation, and a degradation flag that lives in a header. (D7's landmine was in
+  this list until it was fixed in v1 on 2026-08-18; the rest stand.) That client is worse than none, and describing the warts
   precisely makes them permanent. v1 keeps the README table, plus the shape assertions
   above. *(Dissent worth recording: the counter-argument is that a v1 spec is ~80%
   derivable from the existing route inventory and would let the docs site and an MCP exist

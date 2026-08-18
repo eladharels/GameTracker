@@ -566,10 +566,17 @@ jobs:
       # is PERMANENTLY destructive: history that was never written cannot be backfilled,
       # and migrations 004 and 005 both refuse to invent timestamps. Every silent day
       # costs data no later fix recovers.
-      - name: Verify status history and statistics (real Postgres)
+      #
+      # upsert-release-date covers D7, and specifically the half of that fix that NO
+      # unit test can reach: `release_date=excluded.release_date` in the ON CONFLICT DO
+      # UPDATE list. The parameter bound to the INSERT is identical whether or not that
+      # clause is present, so only a database can say which row came out. Verified by
+      # deleting the clause: the integration test fails and the whole unit suite stays
+      # green.
+      - name: Verify status history, statistics and the upsert's date rule (real Postgres)
         run: |
           set -euo pipefail
-          for t in status-events stats; do
+          for t in status-events stats upsert-release-date; do
             docker compose -p gametracker-smoke -f docker-compose.test.yml \
               exec -T backend node "test/integration/${t}.test.js" || {
               echo "[smoke] ERROR: ${t} integration test failed"
@@ -577,7 +584,7 @@ jobs:
               exit 1
             }
           done
-          echo "[smoke] Status history + statistics checks PASSED"
+          echo "[smoke] Status history + statistics + upsert date-rule checks PASSED"
 
       # The statistics route THROUGH EXPRESS, which nothing else exercises.
       #
