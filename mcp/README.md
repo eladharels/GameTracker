@@ -46,8 +46,10 @@ belongs.
 
 ## Tools
 
-Fifteen, shaped around what people ask for rather than around HTTP endpoints. A large
+Sixteen, shaped around what people ask for rather than around HTTP endpoints. A large
 tool list measurably degrades model performance, so this is not one tool per endpoint.
+The inventory is PINNED in `mcp/test/tools.test.js`: every tool here is reachable by an
+agent acting on a real library, so adding one should be a deliberate edit.
 
 | Tool | |
 |---|---|
@@ -56,6 +58,7 @@ tool list measurably degrades model performance, so this is not one tool per end
 | `search_games` | find a game across IGDB, RAWG and TheGamesDB |
 | `list_library` | your games, filterable and sortable |
 | `get_game` | one game, without listing the whole library |
+| `get_statistics` | when things happened — completions and how long they took |
 | `add_game` | add one found via `search_games` |
 | `update_game_status` | wishlist / playing / done / backlog |
 | `remove_game` | delete an entry |

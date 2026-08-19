@@ -1638,7 +1638,12 @@ components:
             default, `wishlist`: the neutral landing place, and the one status that
             allocates no backlog position.
 
-            A future-dated game is stored as `unreleased` whatever is asked for here.
+            A future-dated game is stored as `unreleased` whatever is asked for here, and
+            the reverse also holds: `unreleased` is not a status you may choose, it is a
+            conclusion the stored release date licenses. Asking for it on a game that is
+            already out stores `wishlist`. Both corrections are silent on this operation —
+            it returns the resulting resource, so read the `status` you got back rather
+            than assuming the one you sent.
       oneOf:
         - required: [gameId]
         - required: [name]

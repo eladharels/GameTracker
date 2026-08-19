@@ -9,6 +9,14 @@
 > Reminder schedules are per-user too (`users.notification_days`, default `[0, 7, 30]`).
 > For the current design and the July 2026 hardening pass, see
 > **[`SECURITY_HARDENING_2026-07.md`](SECURITY_HARDENING_2026-07.md)** and **[`CLAUDE.md`](CLAUDE.md)**.
+>
+> **The file names below are also historical.** Everything this document attributes to
+> `index.js` has since moved: the send path and the fan-out are `services/notifications.js`,
+> and `getLdapEmail()` is `directory.js` — it lives there rather than in a service so that
+> `services/notifications.js` can require it without a cycle. `getUserEmail()` no longer
+> exists under that name; the database-then-LDAP lookup it describes is `resolveEmail()`
+> inside `services/notifications.js`, and it still caches the result back into `users.email`.
+> The release sweep that sends the reminders is `services/jobs.js#checkReleases()`.
 
 ## Issues Addressed
 

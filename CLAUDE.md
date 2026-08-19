@@ -9,8 +9,10 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 ## Tech Stack
 
 ### Backend
-- **Runtime**: Node.js 22 (active LTS). Node 18 went EOL 2025-04-30; the floor is
-  pinned in `package.json` engines and enforced by `test/runtime.test.js`
+- **Runtime**: the images ship Node.js 22 (active LTS); `package.json` engines declares the
+  FLOOR, `>=20`. The two are deliberately different — the floor is the oldest runtime the code
+  is allowed to run on, not the one it ships. Node 18 went EOL 2025-04-30 and is below the
+  floor. `test/runtime.test.js` enforces the pairing
 - **Framework**: Express.js 5.x
 - **Database**: PostgreSQL 16 (`pg` driver, promise-based; `db.js` exposes a node-sqlite3-shaped
   callback shim so the legacy call sites in `index.js` did not have to be rewritten).
@@ -21,7 +23,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~2400 lines — Express server; the service layer under `services/`
+- **Entry point**: `index.js` (~3500 lines — Express server; the service layer under `services/`
   is progressively taking the logic out of it)
 
 ### Frontend
@@ -30,7 +32,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~2600 lines — single large component)
+- **Entry point**: `frontend/src/App.jsx` (~2900 lines — single large component)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -68,7 +70,9 @@ GameTracker/
 ├── package.json                    # Backend dependencies
 ├── Dockerfile                      # Backend image (node:22-slim — see test/runtime.test.js)
 ├── docker-compose.yaml             # Production orchestration
-├── docker-compose.staging.yaml     # Staging orchestration
+│                                   #   (There is NO docker-compose.staging.yaml here. Staging
+│                                   #   is a SEPARATE checkout, ../GameTracker-stg/, with its
+│                                   #   own compose file — see "Relationship to Other Projects")
 ├── docker-compose.test.yml         # CI smoke-test stack (isolated ports/data)
 ├── .env                            # API credentials (GITIGNORED — never commit)
 ├── settings.example.json           # Template for settings.json (committed, no secrets)
@@ -162,9 +166,16 @@ GameTracker/
 │   ├── helpers.test.js             # Pure-function unit tests (node:assert, no deps).
 │   │                               #   `npm test`; runs in CI. NO database/directory/network
 │   │                               #   AND NO FILESYSTEM — those belong in the smoke test
-│   │                               #   or, for repo artifacts, in runtime.test.js
-│   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks every
-│   │                               #   Dockerfile's `FROM node:<major>` against that
+│   │                               #   or, for repo artifacts, in runtime.test.js.
+│   │                               #   "Pure-function" is now approximate: several blocks
+│   │                               #   drive REAL service functions with db.promises.* or
+│   │                               #   db.withTransaction stubbed through the module. The
+│   │                               #   scope rule is unchanged (nothing is reached), but
+│   │                               #   what a stub CANNOT see — ON CONFLICT semantics,
+│   │                               #   CHECK constraints, what a query RETURNS — is why
+│   │                               #   test/integration/ exists
+│   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks the BACKEND
+│   │                               #   and MCP Dockerfiles' `FROM node:<major>` against that
 │   │                               #   package's engines floor, that the floor is a
 │   │                               #   SUPPORTED Node, and that CI installs the same
 │   │                               #   major. Static by necessity: the suites run on the
@@ -174,7 +185,13 @@ GameTracker/
 │   │                               #   a tarball, so a green trivy job says NOTHING about
 │   │                               #   the interpreter. engines must be a plain `>=N`:
 │   │                               #   `18.x || >=20` reads like a floor of 20 and still
-│   │                               #   permits 18
+│   │                               #   permits 18.
+│   │                               #   NOT the frontend's `node:20` BUILD stage: nothing
+│   │                               #   of it reaches production (nginx serves the emitted
+│   │                               #   assets) and frontend/package.json declares no
+│   │                               #   engines floor to check it against. Add one there and
+│   │                               #   this list should grow to match — the gate is keyed
+│   │                               #   on the pairing, not on the Dockerfile alone
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -187,12 +204,25 @@ GameTracker/
 │   │                               #   The path-to-router comparison lives in
 │   │                               #   api-surface.test.js, which walks the live stack
 │   ├── integration/                # Needs a REAL Postgres, so NOT in `npm test` — the
-│   │                               #   smoke-test job runs it inside the backend
+│   │                               #   smoke-test job runs both inside the backend
 │   │                               #   container. status-events.test.js proves the five
 │   │                               #   status write paths actually land rows with the
 │   │                               #   right `source`. Stubbing db.promises cannot see
 │   │                               #   that, and a regression is PERMANENTLY destructive:
-│   │                               #   unrecorded history cannot be backfilled
+│   │                               #   unrecorded history cannot be backfilled.
+│   │                               #   stats.test.js covers the duration pairing, whose
+│   │                               #   whole point (finish, replay, finish again) is a
+│   │                               #   property of what Postgres RETURNS — a test asserting
+│   │                               #   the SQL string would pass on a query producing the
+│   │                               #   wrong rows. upsert-release-date.test.js covers D7,
+│   │                               #   and specifically the half no unit test can reach:
+│   │                               #   an ON CONFLICT DO UPDATE clause is invisible in the
+│   │                               #   parameters bound to the INSERT, so only a database
+│   │                               #   says which row came out. Verified by deleting the
+│   │                               #   clause — that test fails, the unit suite stays GREEN.
+│   │                               #   All three call services directly, so the adapters
+│   │                               #   between the socket and the service are covered by
+│   │                               #   curl steps in the same job instead
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
 │                                   #   routes exist; this proves what they still RETURN.
 │                                   #   Without it "frozen" is only an intention: a service
@@ -217,12 +247,14 @@ GameTracker/
 ├── .gitleaks.toml                  # Secret-scanning rules + allowlist
 ├── .semgrep.yml                    # Custom SAST rules
 ├── .trivyignore                    # Documented CVE suppressions
+├── eslint.config.mjs               # Backend lint. `no-undef` is the rule that earns its
+│                                   #   keep — see the CI table below
 ├── .github/workflows/
 │   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx                 # Main React app (all pages/views in one file)
-│   │   ├── App.css                 # Global styles (glassmorphism theme, ~6200 lines)
+│   │   ├── App.css                 # Global styles (glassmorphism theme, ~6700 lines)
 │   │   ├── GameDetailModal.jsx     # Game detail overlay
 │   │   ├── StatsPage.jsx           # Statistics. Charts are hand-rolled — CSS bars + an
 │   │   │                           #   SVG donut — because the 6 accent presets work by
@@ -239,11 +271,21 @@ GameTracker/
 │   │   │                           #   an instant belongs to, or when a week starts.
 │   │   │                           #   Bucketing is CLIENT-side on purpose: date_trunc
 │   │   │                           #   would bucket in the server's timezone
+│   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2
+│   │   │                           #   contract from GET /api/openapi/v2, so the page and CI
+│   │   │                           #   validate the SAME document. VENDORED, never CDN-loaded:
+│   │   │                           #   frontend/nginx.conf sets `script-src 'self'`. Lazily
+│   │   │                           #   imported — it is the largest chunk in the build by far
+│   │   ├── ApiTokensSection.jsx    # My Account -> API Tokens. Mint/list/revoke, and the
+│   │   │                           #   password re-prompt (sudo mode); the plaintext is
+│   │   │                           #   shown ONCE and cannot be recovered
 │   │   ├── main.jsx                # React entry point
+│   │   ├── index.css               # Reset + document-level defaults (App.css is the theme)
 │   │   ├── contexts/
 │   │   │   └── ToastContext.jsx    # Global toast notification context
 │   │   └── styles/
-│   │       └── Toast.css
+│   │       ├── Toast.css
+│   │       └── ApiDocs.css         # Swagger UI restyled into the glassmorphism theme
 │   ├── SharedLibrary.jsx           # Shared-library page (NOTE: lives outside src/)
 │   ├── nginx.conf                  # Serves the SPA + proxies /api to the backend
 │   ├── vite.config.js              # Dev server + /api proxy for local development
@@ -251,7 +293,7 @@ GameTracker/
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
 ├── mcp/                            # The MCP server — a SEPARATE container and a separate
-│                                   #   npm package. Exposes 14 task-shaped tools over
+│                                   #   npm package. Exposes 16 task-shaped tools over
 │                                   #   /api/v2 for AI clients. HOLDS NO CREDENTIALS: every
 │                                   #   request must carry its own Bearer PAT, which it
 │                                   #   forwards unchanged, so authorization stays the
@@ -262,13 +304,19 @@ GameTracker/
 │                                   #   token administration and instance-wide jobs, even
 │                                   #   with an admin token. Tool inventory is PINNED in
 │                                   #   mcp/test/tools.test.js like the route tiers are.
+│                                   #   Transitive pins go in mcp/package.json `overrides`,
+│                                   #   with a CARET not the backend's `>=`: npm overrides
+│                                   #   BYPASS the parent's range silently, so `>=3.1.5` on
+│                                   #   fast-uri resolved 4.1.2 — a major past ajv's ^3.0.1,
+│                                   #   under the SDK's input validator, to fix a URI CVE.
+│                                   #   Pin inside the major the advisory names.
 │                                   #   Runs node:22-slim and REQUIRES >=20 — the SDK's HTTP
 │                                   #   transport calls the GLOBAL crypto.randomUUID(), and
 │                                   #   globalThis.crypto is only exposed from Node 19. On
 │                                   #   node:18-slim /health answered 200 while EVERY MCP
 │                                   #   call returned -32700 for a full deploy cycle
 ├── openapi/
-│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 34 operations, ALL of them
+│   └── gametracker-v2.yaml         # The v2 contract, OpenAPI 3.1, 35 operations, ALL of them
 │                                   #   now live (`x-implemented: true`). It is the SOURCE for
 │                                   #   the routes, not a description of them: the drift gate in
 │                                   #   api-surface.test.js fails if an operation is marked
@@ -289,6 +337,7 @@ GameTracker/
 │   └── RELEASE_STATUS_UPDATE.md    # Historical — unreleased→wishlist transition
 └── [Utility scripts]:
     ├── create-local-admin.js
+    ├── create-api-token.js
     ├── reset-root-password.js
     ├── update_library_prices.js
     ├── refresh_igdb_token.js
@@ -329,7 +378,7 @@ GameTracker/
 >
 > The spec is the SOURCE: an operation marked `x-implemented: true` in
 > `openapi/gametracker-v2.yaml` must exist on the router, and every v2 route must be such an
-> operation. Both directions are enforced. All 34 are now implemented, so the practical
+> operation. Both directions are enforced. All 35 are now implemented, so the practical
 > effect is that a NEW v2 route requires a spec change first.
 >
 > **`requireAdminScope` is repeated per admin route, never applied with a path-scoped
@@ -348,10 +397,16 @@ GameTracker/
 > it would silently demote a game already in the library on every re-add.
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
-> router and asserts the authorization tier of all 43 routes — public / auth / owner-or-admin /
-> admin — derived from the middleware chain, not from the path. CI fails on a route that is not
-> in the inventory, on a tier that changed, and on any unauthenticated route outside the
-> two-item allowlist (`GET /api/health`, `POST /api/auth/login`).
+> router and asserts the authorization tier of all 83 routes — public / auth / owner-or-admin /
+> admin / self-only / pat / pat-admin — derived from the middleware chain, not from the path. CI
+> fails on a route that is not in the inventory, on a tier that changed, and on any
+> unauthenticated route outside the two-item allowlist (`GET /api/health`,
+> `POST /api/auth/login`).
+>
+> The seven tiers are not decoration. `pat` is distinct from `auth` because folding them together
+> would hide the fact that `/api/v2` refuses session JWTs, which is the whole admin boundary;
+> `self-only` is distinct from `owner-or-admin` because a shared library is a consent
+> relationship between two accounts and is the one place an administrator gets no bypass.
 >
 > **Call `db.promises.*` through the module when the SQL TEXT is itself the safety property.**
 > `users.js#listAll` (the column allowlist), `library.js#listOwnGames` (the five-column
@@ -440,7 +495,7 @@ GameTracker/
 | game_id | **TEXT** | External API game ID — a STRING like `igdb_12345`, never numeric. Was declared `INTEGER` under SQLite and stored strings anyway |
 | game_name | TEXT | |
 | cover_url | TEXT | Image URL |
-| release_date | TEXT | YYYY-MM-DD |
+| release_date | TEXT | YYYY-MM-DD. **The row's own date decides its status, never the request's — and `unreleased` is a conclusion that date licenses, never a status a caller may pick** (the decision runs through `statusForDate`; both halves were D7, v1's worst trap). `upsertGame` reads it and derives the status through `effectiveReleaseDate`; the column is in the upsert's `DO UPDATE` list but cannot be overwritten, because the value bound IS the stored date whenever there is one. It only ever FILLS a row that had none -- or replaces a value that is not a readable date at all, which is the single exception and exists because such a row was otherwise pinned to `unreleased` forever. Changing a READABLE stored date is the metadata refresh's job, never a re-add's |
 | status | TEXT | `wishlist`, `playing`, `done`, `backlog`, `unreleased`. CHECK-constrained since migration 002; the API also allowlists it. Was unvalidated, which is how a `Done` row reached production |
 | steam_app_id | TEXT | For Steam price lookups |
 | last_price | TEXT | Formatted price string (e.g., "₪59.99") |
@@ -729,27 +784,95 @@ Every push to `main` must pass a full security gauntlet before code reaches the 
 ### Pipeline Job Graph
 
 ```
-push: main
+push: main   |   pull_request -> main
 │
 ├── secret-scan      Gitleaks — full git history scan
 ├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
 ├── frontend-quality npm test (backend + MCP unit tests) + ESLint + Vite build (= typecheck)
 └── build-images     Build backend + frontend + MCP Docker images
+    │                  tag = `latest` on push, `pr-<number>` on a pull request
     ├── trivy-api    Trivy — backend image  (CRITICAL/HIGH → fail)
     ├── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
     └── trivy-mcp    Trivy — MCP image      (CRITICAL/HIGH → fail)
 
-smoke-test  (needs: build-images + all 3 scan jobs)
+smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
   └─► docker compose -p gametracker-smoke -f docker-compose.test.yml
        Backend:  GET http://localhost:3099/api/health → {"status":"ok"}
        Frontend: GET http://localhost:8099/ → HTTP 200
        API via the frontend proxy + JSON 404 on an unknown /api route
        MCP:      POST http://127.0.0.1:3199/mcp → a real `initialize` handshake
+       The three test/integration/ suites against the real Postgres
        Teardown: if: always() — guaranteed cleanup
 
-deploy  (needs: ALL 8 upstream jobs)
+deploy  (needs: ALL 8 upstream jobs)   [push to main ONLY — see the guard below]
   └─► docker compose up + post-deploy health check on :3000/api/health
+
+cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
+  └─► docker rmi local/gametracker-*:pr-<number>     [pull_request only, if: always()]
 ```
+
+> **A pull request runs everything except `deploy`, and THREE things keep it out of
+> production.** None is optional and none is obvious from reading `deploy` alone.
+>
+> **0. Every job is gated to SAME-REPO pull requests** —
+> `github.event.pull_request.head.repo.full_name == github.repository`. **This repository is
+> public and the self-hosted runner IS the production host** (`deploy` runs
+> `docker compose -f docker-compose.yaml up -d` on it and health-checks `localhost:3000`).
+> Without this gate a `pull_request` trigger lets anyone on the internet fork, open a PR and
+> execute code beside the live database, `JWT_SECRET` and the LDAP bind password — through
+> `npm ci` lifecycle scripts, a PR-authored Dockerfile's `RUN` lines, or the containers the
+> smoke stack starts. The first version of this trigger shipped without the gate and a CISO
+> review rejected it.
+>
+> **The gate's equivalence is conditional, and the condition is repo configuration nothing
+> enforces.** It matches the pre-existing boundary only while push access here already implies
+> deploy — true today (one admin collaborator, `main` unprotected). Add branch protection to
+> `main`, or a collaborator with push-but-not-merge rights, and a contributor who cannot merge
+> could run code on the production host by opening a PR; at that point the PR path has to move
+> to GitHub-hosted runners or the repo has to go private. Also: a fork PR shows as ten
+> **skipped** checks, and GitHub treats skipped as non-blocking — such a PR can look mergeable
+> having had zero CI. "Skipped" is not "passed".
+>
+> **The two below prevent ACCIDENTS, not attacks.** Both live in a file the pull request
+> controls on a `pull_request` event, so hostile code deletes either in one line. Do not read
+> them as a sandbox. Even the gate is a stopgap: the durable answers are making the repository
+> private, or running the PR path on GitHub-hosted runners and keeping self-hosted for
+> `push: main`.
+>
+> **1. `deploy` carries `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`.**
+> Before the `pull_request` trigger existed, that job had NO ref check of any kind — it was
+> protected entirely by the workflow being unable to run on anything else. Adding the trigger
+> without adding the guard deploys every pull request to production, and no test in this repo
+> fails if the guard is deleted.
+>
+> **2. `build-images` tags PR builds `pr-<number>`, never `latest`.** Both compose files
+> resolve `local/gametracker-*:latest` and the runner is **self-hosted** — the same Docker
+> daemon production runs on. A PR build tagged `latest` leaves the RUNNING containers alone
+> (they hold an image ID) but repoints the tag, so the next `docker compose up` on that host —
+> an operator restart, a reboot, the next deploy's own stop/start — silently starts production
+> on unreviewed PR code. The tag is the boundary; the guard alone does not close this.
+>
+> Both compose files take the image from an environment variable, so a by-hand
+> `docker compose up` is unchanged (the defaults are today's `:latest`) while CI can point the
+> smoke stack at the images THIS run built. Without that, a PR's smoke stage would test
+> whatever was tagged `latest` on the runner — i.e. the last thing merged, not the change
+> under review.
+>
+> **The two files use DIFFERENT variable names, and that split is itself the control.**
+> Production reads `BACKEND_IMAGE` / `FRONTEND_IMAGE` / `MCP_IMAGE`; the test stack reads
+> `TEST_BACKEND_IMAGE` / `TEST_FRONTEND_IMAGE` / `TEST_MCP_IMAGE`. Shared names would mean an
+> operator who exported one to poke at the smoke stack and then ran `docker compose up` on
+> production in the same shell would start **production on a PR image** — the exact outcome
+> the `pr-<number>` tagging exists to prevent. The `deploy` job also pins all three to
+> `:latest` explicitly, so it cannot inherit a stray value from a `.env` in the project
+> directory, and it logs `compose config --images` so the deploy record says what went live.
+>
+> **`cleanup-pr-images` is a separate job because the Trivy jobs and `smoke-test` run
+> concurrently** (all four depend only on `build-images`), so deleting the images from inside
+> smoke-test's teardown would pull them out from under a scan still using them. Nothing else
+> removes them: the deploy job's prune is `docker image prune -f`, which is dangling-only, and
+> these carry a tag. This runner has already failed a build once with "You don't have enough
+> free space in /var/cache/apt/archives/".
 
 > **The smoke test speaks the protocol; it does not ping liveness.** The MCP step asserts
 > an `initialize` RESULT, not HTTP 200 — a JSON-RPC error is delivered with a 200, so a
@@ -777,11 +900,13 @@ deploy  (needs: ALL 8 upstream jobs)
 | Semgrep | `semgrep` | Any ERROR-severity finding |
 | Trivy | `trivy-api` | CRITICAL or HIGH unfixed CVE in backend image |
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
+| Trivy | `trivy-mcp` | CRITICAL or HIGH unfixed CVE in MCP image |
 | ESLint | `frontend-quality` | Any lint error |
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
-| Smoke test | `smoke-test` | Backend health ≠ 200 or frontend ≠ 200 |
+| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the three `test/integration/` suites failing against the real Postgres |
+| `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
 
 ### Container Hardening
 

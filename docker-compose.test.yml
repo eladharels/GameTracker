@@ -37,7 +37,7 @@ services:
     restart: "no"
 
   backend:
-    image: local/gametracker-backend:latest
+    image: ${TEST_BACKEND_IMAGE:-local/gametracker-backend:latest}
     container_name: gametracker-backend-smoke
     pull_policy: never
     ports:
@@ -98,7 +98,7 @@ services:
   # A liveness probe cannot substitute for a protocol exchange, so the smoke test does
   # a real handshake against this service.
   mcp:
-    image: local/gametracker-mcp:latest
+    image: ${TEST_MCP_IMAGE:-local/gametracker-mcp:latest}
     container_name: gametracker-mcp-smoke
     pull_policy: never
     ports:
@@ -139,11 +139,11 @@ services:
       start_period: 5s
 
   frontend:
-    image: local/gametracker-frontend:latest
+    image: ${TEST_FRONTEND_IMAGE:-local/gametracker-frontend:latest}
     container_name: gametracker-frontend-smoke
     pull_policy: never
     ports:
-      - "${FRONTEND_TEST_PORT:-8099}:8080"
+      - "127.0.0.1:${FRONTEND_TEST_PORT:-8099}:8080"
     security_opt:
       - no-new-privileges:true
     read_only: true
