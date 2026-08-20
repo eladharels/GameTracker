@@ -97,3 +97,52 @@ export function bucketFullLabel(key, period) {
   const d = new Date(Number(y), Number(m) - 1, Number(day));
   return `week of ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}`;
 }
+
+// --- durations ---------------------------------------------------------------------
+//
+// How long something took, in words. Shared for the same reason the bucketing above is:
+// the library card, the detail modal and the statistics page all state the SAME number,
+// and three roundings of "32 days" into "1 month" / "1.1 months" / "4 weeks" is exactly
+// the drift this file exists to prevent.
+//
+// null in, null out. A duration that is not known must reach the page as null and render
+// as an em dash — never as 0, which reads as "finished the same day" and is a different
+// claim entirely. Every caller here has a real "we do not know" case: a game finished
+// without ever passing through `playing`, or one already in progress when tracking began.
+
+// The compact form, for a badge with no room: '3d', '2w', '5mo', '1.4y'.
+export function formatDurationShort(days) {
+  if (days == null || !Number.isFinite(days)) return null;
+  if (days < 1) return '<1d';
+  if (days < 14) return `${Math.round(days)}d`;
+  if (days < 30) return `${Math.round(days / 7)}w`;
+  if (days < 365) return `${Math.round(days / 30)}mo`;
+  return `${(days / 365).toFixed(1)}y`;
+}
+
+// The sentence form, for prose and tooltips: 'about 1 month', '3 weeks', 'the same day'.
+//
+// Deliberately approximate above a fortnight, and it says so with "about". Reporting
+// "1 month and 2 days" implies a precision the source does not have — the event log
+// records when a status CHANGED, not when the person actually stopped playing, and a
+// game marked done a week late is indistinguishable from one finished that morning.
+export function formatDurationLong(days) {
+  if (days == null || !Number.isFinite(days)) return null;
+  if (days < 1) return 'the same day';
+  const n = Math.round(days);
+  if (n === 1) return '1 day';
+  if (days < 14) return `${n} days`;
+  // The month boundary is 30, not 60. A game started in March and finished in April
+  // took "about a month" to everyone who played it; reporting "5 weeks" is arithmetically
+  // defensible and reads as though the app is avoiding the word.
+  if (days < 30) {
+    const w = Math.round(days / 7);
+    return `about ${w} week${w === 1 ? '' : 's'}`;
+  }
+  if (days < 365) {
+    const m = Math.round(days / 30);
+    return `about ${m} month${m === 1 ? '' : 's'}`;
+  }
+  const y = days / 365;
+  return `about ${y.toFixed(1)} years`;
+}

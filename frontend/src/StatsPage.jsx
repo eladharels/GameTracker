@@ -27,7 +27,7 @@ import {
   FaList, FaRegCalendarAlt, FaHourglassHalf,
 } from 'react-icons/fa';
 import { useToast } from './contexts/ToastContext';
-import { bucketKey, bucketRange, bucketLabel, bucketFullLabel } from './dateUtils';
+import { bucketKey, bucketRange, bucketLabel, bucketFullLabel, formatDurationShort, formatDurationLong } from './dateUtils';
 
 const API_BASE = `${window.location.origin}/api`;
 
@@ -263,6 +263,23 @@ export default function StatsPage({ user }) {
       value: addedCounts.get(k),
     }));
 
+    // WHICH games, not just how many. The service has returned these all along and the
+    // page threw them away, which is why it could only ever answer "12" to "what have I
+    // finished". Newest first: the question is almost always about the recent past.
+    const durationByGame = new Map(stats.durations.map((d) => [d.gameId, d]));
+    const finishedList = [...stats.completions].reverse().map((c) => ({
+      ...c,
+      duration: durationByGame.get(c.gameId) || null,
+    }));
+    const playingList = [...(stats.inProgress || [])];
+
+    // Fastest and longest, with the GAME NAMED. "median 14d" tells you about a
+    // distribution; "Hades, 3 days" tells you about your year. The tooltip carries the
+    // name because the chip has room for one number and the number alone is trivia.
+    const byLength = [...stats.durations].sort((a, b) => a.days - b.days);
+    const fastest = byLength[0] || null;
+    const longest = byLength.length > 1 ? byLength[byLength.length - 1] : null;
+
     const days = stats.durations.map((d) => d.days);
     // Fixed buckets rather than a computed range: "under a day" and "over a year" are
     // the two answers people actually want, and a linear axis over one 400-day outlier
@@ -324,6 +341,10 @@ export default function StatsPage({ user }) {
       series,
       addedSeries,
       addedUnknown: games.length - added.length,
+      finishedList,
+      playingList,
+      fastest,
+      longest,
       histogram,
       statusCounts,
       releaseYears,
@@ -460,10 +481,117 @@ export default function StatsPage({ user }) {
           <span>{orDash(derived.inProgress)}</span>
           <small>playing now</small>
         </div>
+        {derived.fastest && (
+          <div className="stats-chip stats-chip--done"
+            title={`Fastest finish: ${derived.fastest.name || derived.fastest.gameId} — ${formatDurationLong(derived.fastest.days)}`}>
+            <FaCheckCircle aria-hidden="true" />
+            <span>{formatDurationShort(derived.fastest.days)}</span>
+            <small>fastest finish</small>
+          </div>
+        )}
+        {derived.longest && (
+          <div className="stats-chip stats-chip--backlog"
+            title={`Longest finish: ${derived.longest.name || derived.longest.gameId} — ${formatDurationLong(derived.longest.days)}`}>
+            <FaHourglassHalf aria-hidden="true" />
+            <span>{formatDurationShort(derived.longest.days)}</span>
+            <small>longest finish</small>
+          </div>
+        )}
         <div className="stats-chip stats-chip--backlog">
           <FaList aria-hidden="true" />
           <span>{orDash(derived.backlogDepth)}</span>
           <small>in backlog</small>
+        </div>
+      </div>
+
+      {/* THE TWO PANELS THAT NAME GAMES. Everything else on this page is a count; these
+          answer "which one, and when" — which is the question the counts provoke and
+          could not answer. Both come from data summary() already returned. */}
+      <div className="ss-grid stats-lists">
+        <div className="ent-section stats-panel">
+          <div className="ent-section-header">
+            <span className="ent-section-icon-wrap"><FaPlay aria-hidden="true" /></span>
+            <h3>Playing now</h3>
+          </div>
+          {derived.playingList.length ? (
+            <ul className="stats-gamelist">
+              {derived.playingList.map((g) => (
+                <li key={g.gameId} className="stats-gamerow">
+                  <span className="stats-gamerow-name" title={g.name || g.gameId}>
+                    {g.name || g.gameId}
+                  </span>
+                  <span className="stats-gamerow-meta">
+                    {g.startedAt ? (
+                      <>
+                        <span className="stats-gamerow-when">
+                          since {new Date(g.startedAt).toLocaleDateString()}
+                        </span>
+                        <span className="stats-dur stats-dur--playing"
+                          title={`Playing for ${formatDurationLong(g.days)}`}>
+                          {formatDurationShort(g.days)}
+                        </span>
+                      </>
+                    ) : (
+                      /* Already playing when tracking began. An em dash, never a 0 —
+                         "we don't know when you started" is not "you started today". */
+                      <span className="stats-gamerow-when stats-gamerow-when--unknown"
+                        title="This game was already in progress before tracking began, so there is no start date to measure from.">
+                        started before tracking &mdash;
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="stats-note">Nothing in progress. Set a game to <em>playing</em> and it appears here.</p>
+          )}
+        </div>
+
+        <div className="ent-section stats-panel">
+          <div className="ent-section-header">
+            <span className="ent-section-icon-wrap"><FaCheckCircle aria-hidden="true" /></span>
+            <h3>Recently finished</h3>
+          </div>
+          {derived.finishedList.length ? (
+            <>
+              <ul className="stats-gamelist">
+                {derived.finishedList.slice(0, 12).map((c) => (
+                  <li key={`${c.gameId}-${c.at}`} className="stats-gamerow">
+                    <span className="stats-gamerow-name" title={c.name || c.gameId}>
+                      {c.name || c.gameId}
+                    </span>
+                    <span className="stats-gamerow-meta">
+                      <span className="stats-gamerow-when">
+                        {new Date(c.at).toLocaleDateString()}
+                      </span>
+                      {c.duration ? (
+                        <span className="stats-dur stats-dur--done"
+                          title={`Took ${formatDurationLong(c.duration.days)} — started ${new Date(c.duration.startedAt).toLocaleDateString()}`}>
+                          {formatDurationShort(c.duration.days)}
+                        </span>
+                      ) : (
+                        <span className="stats-dur stats-dur--none"
+                          title="This game never passed through `playing`, so there is no start to measure from.">
+                          &mdash;
+                        </span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {derived.finishedList.length > 12 && (
+                <p className="stats-note">
+                  Showing the 12 most recent of {derived.finishedList.length} recorded completions.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="stats-note">
+              No completions recorded yet. Mark a game <em>done</em> and it will appear here
+              with the date.
+            </p>
+          )}
         </div>
       </div>
 

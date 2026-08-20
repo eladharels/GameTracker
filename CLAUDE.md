@@ -148,7 +148,9 @@ GameTracker/
 │                                   #   and every upstream message has its URLs stripped,
 │                                   #   because these requests carry API keys in query strings
 │   ├── stats.js                    # The status-event log's answers: WHEN things happened —
-│                                   #   completions and playing->done durations. Deliberately
+│                                   #   completions, playing->done durations, what is in
+│                                   #   progress and since when, and gameHistory() for one
+│                                   #   game's timeline. Deliberately
 │                                   #   returns NOTHING the library response already carries
 │                                   #   (status mix, release years, provider mix), so the page
 │                                   #   never has two sources for one number — and the library
@@ -266,7 +268,9 @@ GameTracker/
 │   │   │                           #   have no recorded date instead of drawing a zero,
 │   │   │                           #   and KPIs show an em dash until something is
 │   │   │                           #   observed: "nothing recorded" is not "zero"
-│   │   ├── dateUtils.js            # formatDateLocal + bucketing, shared with the calendar
+│   │   ├── dateUtils.js            # formatDateLocal, bucketing, and formatDuration{Short,Long}
+│   │   │                           #   — the card, the modal and the stats page must all
+│   │   │                           #   round "32 days" the same way. Shared with the calendar
 │   │   │                           #   so two pages cannot disagree about which local day
 │   │   │                           #   an instant belongs to, or when a week starts.
 │   │   │                           #   Bucketing is CLIENT-side on purpose: date_trunc
@@ -612,7 +616,13 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   `{serverVersion, apiVersions[], deprecations[]}`. v2 reports `available` (`V2_MOUNTED`).
 - **Statistics**: `GET /api/user/:username/stats` (auth + owner-or-admin, the same tier as the
   library it summarises) returns the status-event summary from `services/stats.js`. On v1
-  because the SPA cannot reach v2 — see the freeze note below.
+  because the SPA cannot reach v2 — see the freeze note below. Carries `inProgress` as well
+  as `completions`/`durations`: the library row says a game is `playing`, but only the event
+  log knows since WHEN, which is what the card's elapsed badge reads.
+- **Game history**: `GET /api/user/:username/games/:gameId/history` (same tier) returns one
+  game's transitions for the detail modal. Returns EVERY `source`, unlike the achievement
+  queries — a sweep promoting a game is exactly what a user opening the history wants
+  explained. An unrecorded game is an EMPTY history, never a 404.
 - **Spec discovery**: `GET /api/openapi/v2` (auth tier) serves `openapi/gametracker-v2.yaml`
   verbatim, so the SPA's API Reference page renders the same contract CI validates.
 

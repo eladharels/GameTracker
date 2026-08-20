@@ -294,6 +294,7 @@ not in this repository and cannot be grepped.
 | `PUT /api/user/:username/backlog-reorder` | auth + owner | Reorder the backlog |
 | `POST /api/user/:username/refresh-metadata` | auth + owner | Refresh the whole library (slow) |
 | `GET /api/user/:username/stats` | auth + owner | Statistics from the status-event log |
+| `GET /api/user/:username/games/:gameId/history` | auth + owner | One game's status timeline, and how long it took |
 | `GET /api/user/me` · `PUT /api/user/me/settings` | auth | Own profile and notification settings |
 | `GET /api/user/me/games` | auth | Own library, five-column projection |
 | `GET`/`POST /api/user/me/tokens` · `DELETE /api/user/me/tokens/:tokenId` | auth | Own personal access tokens (minting re-checks the password) |

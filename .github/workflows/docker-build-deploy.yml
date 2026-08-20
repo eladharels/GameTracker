@@ -808,14 +808,41 @@ jobs:
           }
           # Shape, not just a 200 — an empty body or an HTML error page is also a 200
           # from some proxies, and the page renders a missing field as a confident zero.
-          for key in coverage completions durations trackingSince; do
+          for key in coverage completions durations trackingSince inProgress; do
             grep -q "\"$key\"" /tmp/smoke-stats.json || {
               echo "[smoke] ERROR: stats response is missing \"$key\""
               exit 1
             }
           done
           rm -f /tmp/smoke-stats.json
-          echo "[smoke] Statistics route check PASSED"
+
+          # The per-game history, through Express. UNAUTHENTICATED FIRST: this route
+          # returns one user's play history, and a route that loses its middleware still
+          # answers 200 to an authenticated caller -- so a happy-path check alone would
+          # not notice.
+          HUNAUTH=$(curl -o /dev/null -sw "%{http_code}" "$BASE/api/user/root/games/igdb_smoke/history")
+          echo "[smoke] unauthenticated GET .../history -> $HUNAUTH"
+          [ "$HUNAUTH" -eq 401 ] || {
+            echo "[smoke] ERROR: the history route answered $HUNAUTH without a token, expected 401."
+            exit 1
+          }
+          HSTATUS=$(curl -o /tmp/smoke-hist.json -sw "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" "$BASE/api/user/root/games/igdb_smoke/history")
+          echo "[smoke] authenticated GET .../history -> $HSTATUS: $(head -c 160 /tmp/smoke-hist.json)"
+          [ "$HSTATUS" -eq 200 ] || {
+            echo "[smoke] ERROR: history request returned $HSTATUS"
+            exit 1
+          }
+          # A game with no recorded transitions is an EMPTY history, never a 404 -- the
+          # normal case for anything added before migration 005.
+          for key in events daysToFinish gameId; do
+            grep -q "\"$key\"" /tmp/smoke-hist.json || {
+              echo "[smoke] ERROR: history response is missing \"$key\""
+              exit 1
+            }
+          done
+          rm -f /tmp/smoke-hist.json
+          echo "[smoke] Statistics + history route checks PASSED"
 
       # A real MCP handshake against the real container, on the image's own Node.
       #

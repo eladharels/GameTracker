@@ -3013,6 +3013,30 @@ app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_use
   }
 });
 
+// ONE game's status history, for the game detail view.
+//
+// Same tier as the library it describes (auth + owner-or-admin) and the same shape of
+// adapter as GET /api/user/:username/stats: the rules live in services/stats.js, this
+// does authorization and HTTP and nothing else.
+//
+// A NEW v1 route, which the freeze permits -- the freeze is about SHAPES, and nothing
+// calls this yet. It meets the three conditions CLAUDE.md narrows that door to: the
+// client is the BROWSER (the detail modal), it is a new route rather than a changed
+// response, and the logic is in a service so the eventual v2 twin is a second skin
+// rather than a second implementation.
+//
+// An unknown gameId is an EMPTY history, not a 404: a game with no recorded transitions
+// is the normal case for anything added before migration 005, and the modal needs to say
+// "nothing recorded yet" rather than render an error over a game that is plainly there.
+app.get('/api/user/:username/games/:gameId/history', authRequired, ownershipRequired, (req, res) => {
+  const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
+  withExistingUser(res, normalizedUsername, (user) => {
+    statsService.gameHistory(user.id, req.params.gameId)
+      .then((history) => res.json(history))
+      .catch((err) => problem.send(res, err, { log: '[Stats] Game history failed:' }));
+  });
+});
+
 // --- Personal access tokens, managed from the browser ------------------------
 //
 // The BOOTSTRAP surface, and the second (and intended last) documented exception to
