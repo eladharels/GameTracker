@@ -2,10 +2,11 @@ import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import './App.css'
-import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash, FaCode, FaChartBar } from 'react-icons/fa'
+import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash, FaCode, FaChartBar, FaHourglassHalf } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 import GameDetailModal from './GameDetailModal'
+import { formatDurationShort, formatDurationLong } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
 import { formatDateLocal } from './dateUtils'
@@ -964,6 +965,32 @@ function LibraryPage({ user }) {
     return () => { cancelled = true }
   }, [fetchGames])
 
+  // Per-game timings for the card badges, from the SAME endpoint the statistics page
+  // reads. Not folded into the library response on purpose: that shape is frozen and
+  // `SELECT *` already puts every new user_games column on the wire by accident (see
+  // CLAUDE.md). Timings live in the event log, not on the row, so they arrive separately.
+  //
+  // DELIBERATELY NOT AWAITED with the library, and failure is silent. A badge is a
+  // decoration on a card that already rendered; blocking the library on it, or showing an
+  // error over a library that loaded perfectly well, would be the tail wagging the dog.
+  // The map simply stays empty and no badges appear.
+  const [gameTimings, setGameTimings] = useState({ done: {}, playing: {} })
+  useEffect(() => {
+    if (!user) { setGameTimings({ done: {}, playing: {} }); return }
+    let cancelled = false
+    axios.get(`${API_BASE}/user/${user.username}/stats`)
+      .then((res) => {
+        if (cancelled || !res.data) return
+        const done = {}
+        for (const d of res.data.durations || []) done[d.gameId] = d
+        const playing = {}
+        for (const p of res.data.inProgress || []) playing[p.gameId] = p
+        setGameTimings({ done, playing })
+      })
+      .catch(() => { /* badges are optional; the library is not */ })
+    return () => { cancelled = true }
+  }, [user, userGames])
+
   // Retry needs to be VISIBLE. Measured without the floor: on a fast failure the
   // skeleton showed for a single ~16ms frame, so the button appeared to do nothing —
   // to precisely the user who already thinks their data is gone.
@@ -1513,6 +1540,37 @@ function LibraryPage({ user }) {
                     <div>
                       <div className="game-title">{game.game_name}</div>
                       <div className="game-release-date">Release: {game.release_date ? game.release_date : 'Unreleased'}</div>
+                      {/* HOW LONG THIS GAME TOOK, on the card. The event log is the only
+                          place that knows; the library row carries a status but never a
+                          date for when it changed.
+
+                          Rendered ONLY when there is a real measurement. A finished game
+                          that never passed through `playing`, or one already in progress
+                          before tracking began, has no duration — and the card shows
+                          nothing at all rather than a 0 that would read as "finished the
+                          same day". Absent is honest; zero is a claim. */}
+                      {(() => {
+                        const st = normalizeStatus(game.status)
+                        const t = st === 'done' ? gameTimings.done[game.game_id]
+                          : st === 'playing' ? gameTimings.playing[game.game_id]
+                            : null
+                        if (!t || t.days == null) return null
+                        const short = formatDurationShort(t.days)
+                        const long = formatDurationLong(t.days)
+                        return st === 'done' ? (
+                          <div className="game-timing game-timing--done"
+                            title={`Took ${long} — started ${new Date(t.startedAt).toLocaleDateString()}, finished ${new Date(t.finishedAt).toLocaleDateString()}`}>
+                            <FaHourglassHalf aria-hidden="true" />
+                            <span>Took {short}</span>
+                          </div>
+                        ) : (
+                          <div className="game-timing game-timing--playing"
+                            title={`Playing for ${long} — started ${new Date(t.startedAt).toLocaleDateString()}`}>
+                            <FaPlay aria-hidden="true" />
+                            <span>Playing {short}</span>
+                          </div>
+                        )
+                      })()}
                       {showPrices && (
                         <div className="game-price" style={{ margin: '0.5em 0', color: 'var(--color-fg-muted)', fontWeight: 400, fontSize: '0.98em', letterSpacing: 0.1, lineHeight: 1.2 }}>
                           {game.last_price ? (
@@ -1617,11 +1675,15 @@ function LibraryPage({ user }) {
           </div>
         </>
       )}
+      {/* `username` is what turns the history on. The SEARCH page renders this same modal
+          for games that are not in the library yet — those have no history by definition,
+          so it deliberately passes none and the section never appears. */}
       <GameDetailModal
         game={openGame}
         onClose={() => setOpenGame(null)}
         onSetStatus={setGameStatus}
         onRemove={(g) => removeGame(g.game_id)}
+        username={user?.username}
       />
     </div>
   )

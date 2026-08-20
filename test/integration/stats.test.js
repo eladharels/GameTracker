@@ -164,7 +164,109 @@ const shift = (userId, gameId, toStatus, daysAgo) => db.promises.run(
     assert.strictEqual(s.coverage.truncated, false, 'a small fixture reported as truncated');
   });
 
+  console.log('\nwhich game, and when (the page names games, not just counts):');
+
+  await check('inProgress reports a start date and elapsed days', async () => {
+    // The one thing the library response cannot answer: `status='playing'` is on the row,
+    // but WHEN it became playing exists only here.
+    await lib.upsertGame(uid, { gameId: 'igdb_ip', gameName: 'Hades', releaseDate: past, status: 'playing' });
+    await shift(uid, 'igdb_ip', 'playing', 23);
+    const s = await stats.summary(uid);
+    const row = s.inProgress.find((g) => g.gameId === 'igdb_ip');
+    assert.ok(row, 'a game currently playing is missing from inProgress');
+    assert.strictEqual(row.name, 'Hades');
+    assert.ok(Math.abs(row.days - 23) < 0.1, `elapsed was ${row.days}, expected ~23`);
+  });
+
+  await check('a game playing since BEFORE tracking reports null days, not zero', async () => {
+    // The distinction the whole feature rests on. A 0 here would render as "started
+    // today" on a game someone has been playing for a year.
+    await lib.upsertGame(uid, { gameId: 'igdb_old', gameName: 'Old Save', releaseDate: past, status: 'playing' });
+    await db.promises.run("DELETE FROM user_game_status_events WHERE user_id = ? AND game_id = 'igdb_old'", [uid]);
+    const s = await stats.summary(uid);
+    const row = s.inProgress.find((g) => g.gameId === 'igdb_old');
+    assert.ok(row, 'a game with no recorded start was dropped instead of reported');
+    assert.strictEqual(row.startedAt, null);
+    assert.strictEqual(row.days, null, 'an unknown start was reported as a number');
+  });
+
+  await check('a finished game carries the name and date the page shows', async () => {
+    // Creates its own fixture: an earlier test in this file REMOVES a game on purpose,
+    // to prove its history survives with a null name. Depending on what those left
+    // behind would make this pass or fail for reasons unrelated to what it asserts.
+    await lib.upsertGame(uid, { gameId: 'igdb_named', gameName: 'Named Game', releaseDate: past, status: 'playing' });
+    await lib.setStatus(uid, 'igdb_named', 'done');
+    const s = await stats.summary(uid);
+    const done = s.completions.filter((c) => c.name);
+    assert.ok(done.some((c) => c.gameId === 'igdb_named' && c.name === 'Named Game'),
+      'a completion did not carry the game name the page renders');
+    for (const c of done) {
+      assert.ok(c.gameId && c.at, 'a completion is missing its id or date');
+      assert.ok(!Number.isNaN(Date.parse(c.at)), `unparseable completion date: ${c.at}`);
+    }
+  });
+
+  console.log('\ngameHistory (the per-game timeline behind the card and the modal):');
+
+  await check('a played-then-finished game reports its duration and both events', async () => {
+    await lib.upsertGame(uid, { gameId: 'igdb_h1', gameName: 'Elden Ring', releaseDate: past, status: 'playing' });
+    await shift(uid, 'igdb_h1', 'playing', 40);
+    await lib.setStatus(uid, 'igdb_h1', 'done');
+    await shift(uid, 'igdb_h1', 'done', 8);
+    const h = await stats.gameHistory(uid, 'igdb_h1');
+    assert.ok(Math.abs(h.daysToFinish - 32) < 0.1, `daysToFinish was ${h.daysToFinish}, expected ~32`);
+    assert.deepStrictEqual(h.events.map((e) => `${e.from}->${e.to}`), ['null->playing', 'playing->done']);
+    assert.ok(h.events.every((e) => e.source === 'user'));
+  });
+
+  await check('history is ordered oldest-first, which is how a timeline reads', async () => {
+    const h = await stats.gameHistory(uid, 'igdb_h1');
+    const times = h.events.map((e) => Date.parse(e.at));
+    assert.deepStrictEqual(times, [...times].sort((a, b) => a - b), 'history came back out of order');
+  });
+
+  await check('a game with no recorded history is EMPTY, not an error', async () => {
+    const h = await stats.gameHistory(uid, 'igdb_never_touched');
+    assert.deepStrictEqual(h.events, []);
+    assert.strictEqual(h.daysToFinish, null);
+    assert.strictEqual(h.finishedAt, null);
+  });
+
+  await check('history includes SYSTEM transitions, unlike the achievement queries', async () => {
+    // The sweep is excluded from completions because nobody did it; here it is exactly
+    // what the user needs explained — "why did this move on its own?"
+    // Set up the way reality does it: a genuinely future-dated game is stored
+    // `unreleased`, and later its date ARRIVES. Creating it with a past date instead
+    // would be coerced straight to `wishlist` by the D7 rule, leaving the sweep nothing
+    // to promote — which is the fix working, not a fixture problem.
+    await lib.upsertGame(uid, { gameId: 'igdb_sw', gameName: 'Swept', releaseDate: '2099-01-01', status: 'unreleased' });
+    await db.promises.run(
+      "UPDATE user_games SET release_date = ? WHERE user_id = ? AND game_id = 'igdb_sw'", [past, uid]);
+    // promoteReleased takes a USERNAME, not an id — it is the sweep's own signature.
+    const swept = await lib.promoteReleased('statstest', 'igdb_sw');
+    assert.strictEqual(swept.promoted, true, 'the fixture did not actually get swept');
+    const h = await stats.gameHistory(uid, 'igdb_sw');
+    const sys = h.events.filter((e) => e.source !== 'user');
+    assert.ok(sys.length >= 1, 'the release sweep is missing from the game history');
+    assert.strictEqual(sys[0].source, 'release_sweep');
+    // ...and it must NOT be counted as a completion anywhere.
+    const s = await stats.summary(uid);
+    assert.ok(!s.completions.some((c) => c.gameId === 'igdb_sw'),
+      'a swept game was counted as something the user finished');
+  });
+
+  await check('another user\'s history is NEVER visible', async () => {
+    // `WHERE user_id = ?` is the entire authorization boundary for this read.
+    await db.promises.run(
+      "INSERT INTO users (username,password,can_manage_users,origin) VALUES ('statsnoop','x',0,'local') ON CONFLICT (username) DO NOTHING");
+    const other = await db.promises.get("SELECT id FROM users WHERE username='statsnoop'");
+    const h = await stats.gameHistory(other.id, 'igdb_h1');
+    assert.deepStrictEqual(h.events, [], 'one user read another user\'s game history');
+    await db.promises.run('DELETE FROM users WHERE id = ?', [other.id]);
+  });
+
   await db.promises.run('DELETE FROM users WHERE id = ?', [uid]);
+
   console.log(`\n${n - failed}/${n} passed`);
   await db.close?.();
   process.exit(failed ? 1 : 0);

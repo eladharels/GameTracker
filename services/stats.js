@@ -130,6 +130,37 @@ async function durations(userId) {
   return rows.filter((r) => r.started_at);
 }
 
+// Games the user is playing RIGHT NOW, and since when.
+//
+// This is the one thing on the page that the library response genuinely cannot answer.
+// `status = 'playing'` is in every library row; WHEN it became playing exists only in the
+// event log, and "you have been on this for 23 days" is the number people actually want.
+//
+// LEFT-ish by construction: the subquery yields NULL for a game that was already playing
+// before tracking began, and those rows are RETURNED with startedAt null rather than
+// filtered out. Dropping them would make the panel disagree with the library's own
+// "playing" count for no reason the user can see, and "we do not know when you started"
+// is a fact worth showing — the same rule the coverage banner follows.
+//
+// Ordered NULLS LAST so the games with a real start sort first; the unknowns collect at
+// the bottom where they read as a footnote rather than as the headline.
+async function inProgress(userId) {
+  return db.promises.all(
+    `SELECT ug.game_id, ug.game_name, ug.cover_url,
+            (SELECT MAX(e.changed_at)
+               FROM user_game_status_events e
+              WHERE e.user_id   = ug.user_id
+                AND e.game_id   = ug.game_id
+                AND e.to_status = 'playing'
+                AND e.source    = 'user') AS started_at
+       FROM user_games ug
+      WHERE ug.user_id = ? AND ug.status = 'playing'
+      ORDER BY started_at DESC NULLS LAST, ug.game_name ASC
+      LIMIT ?`,
+    [userId, MAX_ROWS]
+  );
+}
+
 // Everything the page needs from the event log, in one round trip.
 //
 // `coverage` exists so the page can state what it does NOT know. `libraryDone` is the
@@ -141,10 +172,11 @@ async function summary(userId) {
     throw serviceError(CODES.VALIDATION, 'a valid user id is required', { field: 'userId' });
   }
 
-  const [countsRaw, doneRaw, pairedRaw, libraryDone] = await Promise.all([
+  const [countsRaw, doneRaw, pairedRaw, playingRaw, libraryDone] = await Promise.all([
     eventCounts(userId),
     completions(userId),
     durations(userId),
+    inProgress(userId),
     db.promises.get(
       "SELECT COUNT(*)::int AS n FROM user_games WHERE user_id = ? AND status = 'done'",
       [userId]
@@ -185,6 +217,77 @@ async function summary(userId) {
         ((new Date(r.finished_at) - new Date(r.started_at)) / MS_PER_DAY) * 10
       ) / 10,
     })),
+    // `days` is computed at READ time against now(), so it is elapsed-so-far rather than
+    // a stored value that would go stale in the client's cache. null when the start is
+    // unknown -- an em dash on the page, never a 0 that reads as "started today".
+    inProgress: playingRaw.map((r) => ({
+      gameId: r.game_id,
+      name: r.game_name || null,
+      coverUrl: r.cover_url || null,
+      startedAt: r.started_at ? new Date(r.started_at).toISOString() : null,
+      days: r.started_at
+        ? Math.round(((Date.now() - new Date(r.started_at)) / MS_PER_DAY) * 10) / 10
+        : null,
+    })),
+  };
+}
+
+// ONE game's history, for the detail view. Not part of summary(): that is a whole-library
+// projection the library page fetches on every load, and carrying a timeline per game
+// would grow it without bound for a panel that shows one game at a time.
+//
+// Returns EVERY source, unlike the achievement queries. Those filter source = 'user'
+// because a nightly sweep is not something the user did; here the sweep IS part of the
+// story -- "this moved to wishlist on its own when the release date passed" is exactly
+// what a person opening the history wants explained. The source travels with each row so
+// the page can label it rather than presenting a system action as the user's.
+async function gameHistory(userId, gameId) {
+  if (!Number.isInteger(userId) || userId < 1) {
+    throw serviceError(CODES.VALIDATION, 'a valid user id is required', { field: 'userId' });
+  }
+  const id = String(gameId ?? '').trim();
+  if (!id) {
+    throw serviceError(CODES.VALIDATION, 'a gameId is required', { field: 'gameId' });
+  }
+
+  // `db.promises.all` through the MODULE: `WHERE user_id = ?` is the entire authorization
+  // boundary for this read, so a test has to be able to intercept and assert the
+  // statement actually issued. See CLAUDE.md on the destructured-binding trap.
+  const rows = await db.promises.all(
+    `SELECT e.from_status, e.to_status, e.changed_at, e.source
+       FROM user_game_status_events e
+      WHERE e.user_id = ? AND e.game_id = ?
+      ORDER BY e.changed_at ASC, e.id ASC
+      LIMIT ?`,
+    [userId, id, MAX_ROWS + 1]
+  );
+  const truncated = rows.length > MAX_ROWS;
+  const events = rows.slice(0, MAX_ROWS).map((r) => ({
+    from: r.from_status || null,
+    to: r.to_status,
+    at: new Date(r.changed_at).toISOString(),
+    source: r.source,
+  }));
+
+  // The headline the card and the modal both want: how long this ONE game took. Derived
+  // from the same pairing rule as durations() -- the latest user `playing` before the
+  // latest user `done` -- so the two cannot disagree about a single game.
+  const userEvents = events.filter((e) => e.source === 'user');
+  const lastDone = [...userEvents].reverse().find((e) => e.to === 'done');
+  const startBefore = lastDone
+    ? [...userEvents].reverse().find((e) => e.to === 'playing' && e.at < lastDone.at)
+    : null;
+
+  return {
+    gameId: id,
+    events,
+    truncated,
+    // null, not 0, for every unknown: no history at all, never played, never finished.
+    daysToFinish: lastDone && startBefore
+      ? Math.round(((new Date(lastDone.at) - new Date(startBefore.at)) / 86400000) * 10) / 10
+      : null,
+    startedAt: startBefore ? startBefore.at : null,
+    finishedAt: lastDone ? lastDone.at : null,
   };
 }
 
@@ -287,4 +390,4 @@ async function agentSummary(userId, { period = 'month', timeZone = 'UTC' } = {})
     },
   };
 }
-module.exports = { summary, agentSummary, PERIODS, MAX_ROWS };
+module.exports = { summary, agentSummary, gameHistory, PERIODS, MAX_ROWS };

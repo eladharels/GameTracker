@@ -1652,6 +1652,90 @@ console.log('library.upsertGame (D7, at the level where the bug actually was):')
   });
 }
 
+// --- services/stats.js: the per-game reads behind the card and the modal ---------
+//
+// `WHERE user_id = ?` is the ENTIRE authorization boundary for a game's history, so the
+// statement actually issued is the safety property — asserted here against a stubbed
+// db.promises.all, the way CLAUDE.md requires for exactly this reason.
+
+const statsService = require('../services/stats');
+
+console.log('stats.gameHistory:');
+checkAsync('scopes the read to the user AND the game, and orders oldest-first', async () => {
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all;
+  let sql = null, params = null;
+  dbMod.promises.all = async (q, p) => { sql = q; params = p; return []; };
+  try {
+    await statsService.gameHistory(7, 'igdb_42');
+  } finally {
+    dbMod.promises.all = realAll;
+  }
+  assert.ok(/WHERE\s+e\.user_id\s*=\s*\?/.test(sql), 'the history read is not scoped to a user');
+  assert.ok(/AND\s+e\.game_id\s*=\s*\?/.test(sql), 'the history read is not scoped to a game');
+  assert.ok(/ORDER BY\s+e\.changed_at\s+ASC/.test(sql), 'a timeline must read oldest-first');
+  assert.strictEqual(params[0], 7);
+  assert.strictEqual(params[1], 'igdb_42', 'game_id must be bound as TEXT, never coerced');
+});
+
+checkAsync('a non-string gameId is stringified, not passed through', async () => {
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all;
+  let params = null;
+  dbMod.promises.all = async (q, p) => { params = p; return []; };
+  try { await statsService.gameHistory(1, 12345); } finally { dbMod.promises.all = realAll; }
+  assert.strictEqual(params[1], '12345', 'game_id is TEXT — see CLAUDE.md');
+});
+
+checkAsync('an absent user id or gameId is a VALIDATION error, not a query', async () => {
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all;
+  let called = 0;
+  dbMod.promises.all = async () => { called++; return []; };
+  try {
+    for (const [uid, gid] of [[0, 'igdb_1'], [null, 'igdb_1'], [1, ''], [1, '   ']]) {
+      let code = null;
+      await statsService.gameHistory(uid, gid).catch((e) => { code = e.code; });
+      assert.strictEqual(code, 'validation', `gameHistory(${uid}, ${JSON.stringify(gid)}) did not refuse`);
+    }
+  } finally { dbMod.promises.all = realAll; }
+  assert.strictEqual(called, 0, 'a rejected request still hit the database');
+});
+
+checkAsync('daysToFinish pairs the LAST playing before the LAST done', async () => {
+  // The replay case, at the level the card reads. A game finished, replayed and finished
+  // again must report the SECOND run's length, not the span since the first start.
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all;
+  const day = (n) => new Date(Date.now() - n * 86400000).toISOString();
+  dbMod.promises.all = async () => ([
+    { from_status: null, to_status: 'playing', changed_at: day(100), source: 'user' },
+    { from_status: 'playing', to_status: 'done', changed_at: day(90), source: 'user' },
+    { from_status: 'done', to_status: 'playing', changed_at: day(30), source: 'user' },
+    { from_status: 'playing', to_status: 'done', changed_at: day(20), source: 'user' },
+  ]);
+  let h;
+  try { h = await statsService.gameHistory(1, 'igdb_replay'); } finally { dbMod.promises.all = realAll; }
+  assert.ok(Math.abs(h.daysToFinish - 10) < 0.2,
+    `daysToFinish was ${h.daysToFinish}; the second run took 10 days, not 80`);
+});
+
+checkAsync('a system-only history reports NO duration', async () => {
+  // The sweep's promotion is not something the user did, so it must not become a
+  // "you finished this in N days" claim on the card.
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all;
+  dbMod.promises.all = async () => ([
+    { from_status: 'unreleased', to_status: 'wishlist',
+      changed_at: new Date().toISOString(), source: 'release_sweep' },
+  ]);
+  let h;
+  try { h = await statsService.gameHistory(1, 'igdb_sys'); } finally { dbMod.promises.all = realAll; }
+  assert.strictEqual(h.daysToFinish, null);
+  assert.strictEqual(h.events.length, 1, 'the system event should still be VISIBLE in the timeline');
+  assert.strictEqual(h.events[0].source, 'release_sweep');
+});
+
 // --- services/users.js: push credentials are not an administrative field ------
 //
 // Both halves of the exposure, asserted from the two places it could come back:

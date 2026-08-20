@@ -220,6 +220,9 @@ const EXPECTED = {
   // authRequired + ownershipRequired — because it is the same data at a different
   // resolution: "when did you finish things" is exactly as private as "what do you own".
   'GET /api/user/:username/stats': 'owner-or-admin',
+  // One game's status history, for the detail modal. Same tier as the library it
+  // describes — the history of a game is as private as the game.
+  'GET /api/user/:username/games/:gameId/history': 'owner-or-admin',
   'POST /api/user/:username/games': 'owner-or-admin',
   'POST /api/user/:username/games/:gameId/crackrelease-status': 'owner-or-admin',
   'POST /api/user/:username/games/:gameId/refresh-metadata': 'owner-or-admin',
