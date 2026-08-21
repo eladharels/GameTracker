@@ -603,6 +603,74 @@ checkAsync('a correct password mints, and answers 201 with the plaintext', async
   assert.ok(res.body.token, 'the mint response has no token in it — it is unrecoverable afterwards');
 });
 
+// --- the statistics shapes three components bind to -------------------------------
+//
+// Neither /api/user/:u/stats nor .../games/:id/history had a single assertion here, so
+// `inProgress` joined a v1 response with nothing covering it and the nested field names
+// were pinned nowhere at all. The smoke test greps TOP-LEVEL keys only, so renaming
+// `days` to `durationDays` broke the card badge, the modal headline and both statistics
+// panels with every job in CI green.
+//
+// Driven through the real services against stubbed db.promises, so these are the shapes
+// the service actually emits rather than a literal restating the intent.
+
+const statsSvc = require('../services/stats');
+
+// EXACT key equality here too — the file's existing `keysOf` does that job.
+
+checkAsync('the statistics summary keeps the shape the page and the card read', async () => {
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all, realGet = dbMod.promises.get;
+  const iso = new Date('2026-03-02T00:00:00Z').toISOString();
+  const started = new Date('2026-03-01T00:00:00Z').toISOString();
+  dbMod.promises.all = async (q) => {
+    if (/FROM user_games ug/.test(q)) {
+      return [{ game_id: 'igdb_1', game_name: 'A', started_at: started }];
+    }
+    if (/d\.changed_at AS finished_at/.test(q)) {
+      return [{ game_id: 'igdb_1', game_name: 'A', started_at: started, finished_at: iso }];
+    }
+    return [{ game_id: 'igdb_1', game_name: 'A', changed_at: iso }];
+  };
+  dbMod.promises.get = async (q) => (/COUNT\(\*\)::int AS n FROM user_games/.test(q)
+    ? { n: 1 }
+    : { total: 2, userEvents: 2, firstAt: iso });
+  let out;
+  try { out = await statsSvc.summary(1); } finally {
+    dbMod.promises.all = realAll; dbMod.promises.get = realGet;
+  }
+
+  assert.deepStrictEqual(keysOf(out),
+    ['completions', 'coverage', 'durations', 'inProgress', 'trackingSince'],
+    'the statistics summary gained or lost a top-level field');
+  assert.deepStrictEqual(keysOf(out.coverage),
+    ['libraryDone', 'recordedCompletions', 'totalEvents', 'truncated', 'userEvents']);
+  assert.deepStrictEqual(keysOf(out.completions[0]), ['at', 'gameId', 'name'],
+    'StatsPage joins completions to durations on gameId + at');
+  assert.deepStrictEqual(keysOf(out.durations[0]),
+    ['days', 'finishedAt', 'gameId', 'name', 'startedAt'],
+    'the card badge and the finished list both read durations[].days');
+  assert.deepStrictEqual(keysOf(out.inProgress[0]), ['days', 'gameId', 'name', 'startedAt'],
+    'inProgress must not regrow coverUrl — nothing reads it');
+});
+
+checkAsync('a game history keeps the shape the modal reads', async () => {
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all;
+  const at = new Date('2026-03-02T00:00:00Z').toISOString();
+  dbMod.promises.all = async (q) => (/WHERE\s+e\.user_id/.test(q)
+    ? [{ from_status: 'playing', to_status: 'done', changed_at: at, source: 'user' }]
+    : [{ game_id: 'igdb_1', started_at: new Date('2026-03-01T00:00:00Z').toISOString(), finished_at: at }]);
+  let out;
+  try { out = await statsSvc.gameHistory(1, 'igdb_1'); } finally { dbMod.promises.all = realAll; }
+
+  assert.deepStrictEqual(keysOf(out),
+    ['daysToFinish', 'events', 'finishedAt', 'gameId', 'startedAt', 'truncated'],
+    'the history response gained or lost a top-level field');
+  assert.deepStrictEqual(keysOf(out.events[0]), ['at', 'from', 'source', 'to'],
+    'the timeline renders every one of these, and labels rows by `source`');
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

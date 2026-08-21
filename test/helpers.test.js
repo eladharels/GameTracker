@@ -1661,76 +1661,139 @@ console.log('library.upsertGame (D7, at the level where the bug actually was):')
 const statsService = require('../services/stats');
 
 console.log('stats.gameHistory:');
-checkAsync('scopes the read to the user AND the game, and orders oldest-first', async () => {
+
+// gameHistory issues TWO statements: the timeline, and durations(userId, gameId) for the
+// headline. A stub that answers both the same way tests neither — it hands event-shaped
+// rows to the pairing query and the resulting `undefined` reads as "no duration", which
+// is indistinguishable from the correct answer for a game that has none. Dispatch on the
+// SQL so each query is answered in its own shape.
+function stubHistoryReads({ events = [], paired = [] } = {}) {
   const dbMod = require('../db');
-  const realAll = dbMod.promises.all;
-  let sql = null, params = null;
-  dbMod.promises.all = async (q, p) => { sql = q; params = p; return []; };
-  try {
-    await statsService.gameHistory(7, 'igdb_42');
-  } finally {
-    dbMod.promises.all = realAll;
+  const real = dbMod.promises.all;
+  const calls = [];
+  dbMod.promises.all = async (q, p) => {
+    calls.push({ sql: q, params: p });
+    return /WHERE\s+e\.user_id/.test(q) ? events : paired;
+  };
+  return { calls, restore() { dbMod.promises.all = real; } };
+}
+
+const evt = (to, at, source = 'user', from = null) =>
+  ({ from_status: from, to_status: to, changed_at: at, source });
+const dayAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+
+checkAsync('BOTH reads are scoped to the user AND the game', async () => {
+  // Two queries now, so two authorization boundaries. Asserting only the one that
+  // happened to be captured last is how this test passed while durations() went
+  // unchecked.
+  const stub = stubHistoryReads();
+  try { await statsService.gameHistory(7, 'igdb_42'); } finally { stub.restore(); }
+
+  assert.strictEqual(stub.calls.length, 2, 'gameHistory no longer issues both reads');
+  for (const { sql, params } of stub.calls) {
+    assert.ok(/WHERE\s+[ed]\.user_id\s*=\s*\?/.test(sql),
+      `a history read is not scoped to a user: ${sql.slice(0, 80)}`);
+    assert.ok(/[ed]\.game_id\s*=\s*\?/.test(sql),
+      `a history read is not scoped to a game: ${sql.slice(0, 80)}`);
+    assert.strictEqual(params[0], 7);
+    assert.strictEqual(params[1], 'igdb_42', 'game_id must be bound as TEXT, never coerced');
   }
-  assert.ok(/WHERE\s+e\.user_id\s*=\s*\?/.test(sql), 'the history read is not scoped to a user');
-  assert.ok(/AND\s+e\.game_id\s*=\s*\?/.test(sql), 'the history read is not scoped to a game');
-  assert.ok(/ORDER BY\s+e\.changed_at\s+ASC/.test(sql), 'a timeline must read oldest-first');
-  assert.strictEqual(params[0], 7);
-  assert.strictEqual(params[1], 'igdb_42', 'game_id must be bound as TEXT, never coerced');
+});
+
+checkAsync('the timeline reads oldest-first while the QUERY takes the newest rows', async () => {
+  // The property the modal binds to is the ORDER OF THE RESULT, so that is what is
+  // asserted — not the SQL text, which now says DESC precisely so that a game past the
+  // cap keeps its RECENT history instead of its first 2000 transitions. Asserting
+  // `ORDER BY ... ASC` in the SQL would have failed this correct implementation.
+  const stub = stubHistoryReads({
+    events: [evt('done', dayAgo(1)), evt('playing', dayAgo(9)), evt('wishlist', dayAgo(30))],
+  });
+  let h;
+  try { h = await statsService.gameHistory(1, 'igdb_order'); } finally { stub.restore(); }
+
+  assert.deepStrictEqual(h.events.map((e) => e.to), ['wishlist', 'playing', 'done'],
+    'the timeline is not oldest-first');
+  assert.ok(/ORDER BY\s+e\.changed_at\s+DESC/.test(stub.calls[0].sql),
+    'the timeline query must take the NEWEST rows, or truncation drops recent history');
+});
+
+checkAsync('truncation drops the OLDEST entries, never the recent ones', async () => {
+  // The half that outlives a wrong ORDER BY: `truncated` is rendered as "older entries
+  // are not shown", so dropping the recent end would make that message false in both
+  // directions.
+  const many = Array.from({ length: statsService.MAX_ROWS + 1 }, (_, i) => evt('done', dayAgo(i)));
+  const stub = stubHistoryReads({ events: many });
+  let h;
+  try { h = await statsService.gameHistory(1, 'igdb_many'); } finally { stub.restore(); }
+
+  assert.strictEqual(h.truncated, true, 'a read over the cap did not report truncation');
+  assert.strictEqual(h.events.length, statsService.MAX_ROWS);
+  assert.strictEqual(h.events[h.events.length - 1].at, many[0].changed_at,
+    'the NEWEST event was truncated away — the timeline lost its recent end');
 });
 
 checkAsync('a non-string gameId is stringified, not passed through', async () => {
-  const dbMod = require('../db');
-  const realAll = dbMod.promises.all;
-  let params = null;
-  dbMod.promises.all = async (q, p) => { params = p; return []; };
-  try { await statsService.gameHistory(1, 12345); } finally { dbMod.promises.all = realAll; }
-  assert.strictEqual(params[1], '12345', 'game_id is TEXT — see CLAUDE.md');
+  const stub = stubHistoryReads();
+  try { await statsService.gameHistory(1, 12345); } finally { stub.restore(); }
+  for (const { params } of stub.calls) {
+    assert.strictEqual(params[1], '12345', 'game_id is TEXT — see CLAUDE.md');
+  }
 });
 
 checkAsync('an absent user id or gameId is a VALIDATION error, not a query', async () => {
-  const dbMod = require('../db');
-  const realAll = dbMod.promises.all;
-  let called = 0;
-  dbMod.promises.all = async () => { called++; return []; };
+  const stub = stubHistoryReads();
   try {
     for (const [uid, gid] of [[0, 'igdb_1'], [null, 'igdb_1'], [1, ''], [1, '   ']]) {
       let code = null;
       await statsService.gameHistory(uid, gid).catch((e) => { code = e.code; });
       assert.strictEqual(code, 'validation', `gameHistory(${uid}, ${JSON.stringify(gid)}) did not refuse`);
     }
-  } finally { dbMod.promises.all = realAll; }
-  assert.strictEqual(called, 0, 'a rejected request still hit the database');
+  } finally { stub.restore(); }
+  assert.strictEqual(stub.calls.length, 0, 'a rejected request still hit the database');
 });
 
-checkAsync('daysToFinish pairs the LAST playing before the LAST done', async () => {
-  // The replay case, at the level the card reads. A game finished, replayed and finished
-  // again must report the SECOND run's length, not the span since the first start.
-  const dbMod = require('../db');
-  const realAll = dbMod.promises.all;
-  const day = (n) => new Date(Date.now() - n * 86400000).toISOString();
-  dbMod.promises.all = async () => ([
-    { from_status: null, to_status: 'playing', changed_at: day(100), source: 'user' },
-    { from_status: 'playing', to_status: 'done', changed_at: day(90), source: 'user' },
-    { from_status: 'done', to_status: 'playing', changed_at: day(30), source: 'user' },
-    { from_status: 'playing', to_status: 'done', changed_at: day(20), source: 'user' },
-  ]);
+checkAsync('daysToFinish reports the LAST run, not the span since the first start', async () => {
+  // The replay case at the level the card reads it. durations() is newest-first, so the
+  // headline must come from its FIRST row.
+  const stub = stubHistoryReads({
+    events: [evt('done', dayAgo(20), 'user', 'playing'), evt('playing', dayAgo(30), 'user', 'done'),
+             evt('done', dayAgo(90), 'user', 'playing'), evt('playing', dayAgo(100))],
+    paired: [
+      { game_id: 'igdb_replay', started_at: dayAgo(30),  finished_at: dayAgo(20) },
+      { game_id: 'igdb_replay', started_at: dayAgo(100), finished_at: dayAgo(90) },
+    ],
+  });
   let h;
-  try { h = await statsService.gameHistory(1, 'igdb_replay'); } finally { dbMod.promises.all = realAll; }
+  try { h = await statsService.gameHistory(1, 'igdb_replay'); } finally { stub.restore(); }
   assert.ok(Math.abs(h.daysToFinish - 10) < 0.2,
     `daysToFinish was ${h.daysToFinish}; the second run took 10 days, not 80`);
+  assert.strictEqual(h.startedAt, dayAgo(30).slice(0, 10) + h.startedAt.slice(10),
+    'startedAt did not come from the last run');
+});
+
+checkAsync('a done with no preceding playing reports a finish but NO duration', async () => {
+  // started_at NULL must stay null, never become 0 — "finished the day it started" is a
+  // claim, and this is an absence of one.
+  const stub = stubHistoryReads({
+    events: [evt('done', dayAgo(5))],
+    paired: [{ game_id: 'igdb_nostart', started_at: null, finished_at: dayAgo(5) }],
+  });
+  let h;
+  try { h = await statsService.gameHistory(1, 'igdb_nostart'); } finally { stub.restore(); }
+  assert.strictEqual(h.daysToFinish, null, 'an unpaired completion invented a duration');
+  assert.strictEqual(h.startedAt, null);
+  assert.ok(h.finishedAt, 'the completion itself should still be reported');
 });
 
 checkAsync('a system-only history reports NO duration', async () => {
   // The sweep's promotion is not something the user did, so it must not become a
   // "you finished this in N days" claim on the card.
-  const dbMod = require('../db');
-  const realAll = dbMod.promises.all;
-  dbMod.promises.all = async () => ([
-    { from_status: 'unreleased', to_status: 'wishlist',
-      changed_at: new Date().toISOString(), source: 'release_sweep' },
-  ]);
+  const stub = stubHistoryReads({
+    events: [evt('wishlist', dayAgo(1), 'release_sweep', 'unreleased')],
+    paired: [],
+  });
   let h;
-  try { h = await statsService.gameHistory(1, 'igdb_sys'); } finally { dbMod.promises.all = realAll; }
+  try { h = await statsService.gameHistory(1, 'igdb_sys'); } finally { stub.restore(); }
   assert.strictEqual(h.daysToFinish, null);
   assert.strictEqual(h.events.length, 1, 'the system event should still be VISIBLE in the timeline');
   assert.strictEqual(h.events[0].source, 'release_sweep');

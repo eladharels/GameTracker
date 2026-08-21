@@ -36,6 +36,13 @@ const { STATUSES } = require('./library');
 // means a decade fits in half of this.
 const MAX_ROWS = 2000;
 
+// One constant and one rounding rule for every duration this file reports. Fractional
+// days to one place: an integer would report every same-day finish as 0, which reads as
+// "finished the moment it started" rather than "took under a day".
+const MS_PER_DAY = 86400000;
+const daysBetween = (from, to) =>
+  Math.round(((new Date(to) - new Date(from)) / MS_PER_DAY) * 10) / 10;
+
 // `::int` on every count. db.js divergence #8: Postgres returns bigint as a STRING, so
 // COUNT(*) yields '12' rather than 12 — and `'3' + '4'` is '34'. The cast is the
 // existing house workaround (services/library.js#countForUser).
@@ -102,7 +109,17 @@ async function completions(userId) {
 // ever starting) yields NULL and is dropped by the caller rather than falling back to
 // `added_at`. Reporting "you took 400 days" because that is when the row appeared would
 // be a fabricated number, which is the thing this whole feature refuses to do.
-async function durations(userId) {
+// completionRuns is the pairing rule itself: every user `done`, each carrying the latest
+// user `playing` that preceded IT, or NULL when there was none. durations() drops the
+// unpaired ones because a duration it cannot measure is not a duration; gameHistory KEEPS
+// them, because "you finished this, we do not know when you started" is still a finish
+// and dropping it would blank the modal's date for a game marked done without ever being
+// marked playing. Same query, same ordering, two honest readings of it.
+async function completionRuns(userId, gameId = null) {
+  // The optional game filter is a fixed SQL fragment with a bound value, so the one
+  // pairing rule serves both the whole-library projection and one game's headline.
+  const gameFilter = gameId == null ? '' : '\n        AND d.game_id = ?';
+  const params = gameId == null ? [userId, MAX_ROWS + 1] : [userId, gameId, MAX_ROWS + 1];
   const rows = await db.promises.all(
     `SELECT d.game_id,
             ug.game_name,
@@ -119,15 +136,22 @@ async function durations(userId) {
               ON ug.user_id = d.user_id AND ug.game_id = d.game_id
       WHERE d.user_id = ?
         AND d.to_status = 'done'
-        AND d.source = 'user'
+        AND d.source = 'user'${gameFilter}
       ORDER BY d.changed_at DESC
       LIMIT ?`,
-    [userId, MAX_ROWS + 1]
+    params
   );
   // snake_case out of SQL, mapped here. Postgres folds unquoted identifiers to lower
   // case (db.js divergence #3), so `AS finishedAt` would arrive as `finishedat` and read
   // as undefined — which already broke backlog ordering once.
-  return rows.filter((r) => r.started_at);
+  return rows;
+}
+
+// Filtered AFTER the limit, deliberately: summary() decides truncation from the row count
+// the database returned, so filtering first would let a page over the cap report itself
+// complete.
+async function durations(userId) {
+  return (await completionRuns(userId)).filter((r) => r.started_at);
 }
 
 // Games the user is playing RIGHT NOW, and since when.
@@ -146,7 +170,7 @@ async function durations(userId) {
 // the bottom where they read as a footnote rather than as the headline.
 async function inProgress(userId) {
   return db.promises.all(
-    `SELECT ug.game_id, ug.game_name, ug.cover_url,
+    `SELECT ug.game_id, ug.game_name,
             (SELECT MAX(e.changed_at)
                FROM user_game_status_events e
               WHERE e.user_id   = ug.user_id
@@ -190,7 +214,6 @@ async function summary(userId) {
   const done = doneRaw.slice(0, MAX_ROWS).reverse();
   const paired = pairedRaw.slice(0, MAX_ROWS).reverse();
 
-  const MS_PER_DAY = 86400000;
   return {
     trackingSince: counts.firstAt ? new Date(counts.firstAt).toISOString() : null,
     coverage: {
@@ -211,11 +234,7 @@ async function summary(userId) {
       name: r.game_name || null,
       startedAt: new Date(r.started_at).toISOString(),
       finishedAt: new Date(r.finished_at).toISOString(),
-      // Fractional days, rounded to one place. An integer would report every
-      // same-day finish as 0 and make the histogram's first bucket meaningless.
-      days: Math.round(
-        ((new Date(r.finished_at) - new Date(r.started_at)) / MS_PER_DAY) * 10
-      ) / 10,
+      days: daysBetween(r.started_at, r.finished_at),
     })),
     // `days` is computed at READ time against now(), so it is elapsed-so-far rather than
     // a stored value that would go stale in the client's cache. null when the start is
@@ -223,11 +242,8 @@ async function summary(userId) {
     inProgress: playingRaw.map((r) => ({
       gameId: r.game_id,
       name: r.game_name || null,
-      coverUrl: r.cover_url || null,
       startedAt: r.started_at ? new Date(r.started_at).toISOString() : null,
-      days: r.started_at
-        ? Math.round(((Date.now() - new Date(r.started_at)) / MS_PER_DAY) * 10) / 10
-        : null,
+      days: r.started_at ? daysBetween(r.started_at, Date.now()) : null,
     })),
   };
 }
@@ -253,41 +269,55 @@ async function gameHistory(userId, gameId) {
   // `db.promises.all` through the MODULE: `WHERE user_id = ?` is the entire authorization
   // boundary for this read, so a test has to be able to intercept and assert the
   // statement actually issued. See CLAUDE.md on the destructured-binding trap.
-  const rows = await db.promises.all(
-    `SELECT e.from_status, e.to_status, e.changed_at, e.source
-       FROM user_game_status_events e
-      WHERE e.user_id = ? AND e.game_id = ?
-      ORDER BY e.changed_at ASC, e.id ASC
-      LIMIT ?`,
-    [userId, id, MAX_ROWS + 1]
-  );
+  // DESC then reversed, NOT `ORDER BY changed_at ASC LIMIT`. completions() states the
+  // rule 170 lines above and this read used to break it: ordering ASC and limiting hands
+  // back the OLDEST rows, so a game past the cap would show its first 2000 transitions
+  // and silently drop everything recent -- while the modal rendered `truncated` as
+  // "older entries are not shown", which would then be false in both directions.
+  //
+  // The headline comes from durations(userId, id) rather than a second scan over these
+  // rows. An earlier version re-derived the pairing here in JS and claimed in a comment
+  // that "the two cannot disagree"; that held only because both happened to use a strict
+  // `<` on the same event set. One rule, one place -- and it is now also immune to the
+  // truncation above, since it is a separate bounded query rather than a read of a
+  // capped list.
+  const [rows, paired] = await Promise.all([
+    db.promises.all(
+      `SELECT e.from_status, e.to_status, e.changed_at, e.source
+         FROM user_game_status_events e
+        WHERE e.user_id = ? AND e.game_id = ?
+        ORDER BY e.changed_at DESC, e.id DESC
+        LIMIT ?`,
+      [userId, id, MAX_ROWS + 1]
+    ),
+    completionRuns(userId, id),
+  ]);
   const truncated = rows.length > MAX_ROWS;
-  const events = rows.slice(0, MAX_ROWS).map((r) => ({
+  const events = rows.slice(0, MAX_ROWS).reverse().map((r) => ({
     from: r.from_status || null,
     to: r.to_status,
     at: new Date(r.changed_at).toISOString(),
     source: r.source,
   }));
 
-  // The headline the card and the modal both want: how long this ONE game took. Derived
-  // from the same pairing rule as durations() -- the latest user `playing` before the
-  // latest user `done` -- so the two cannot disagree about a single game.
-  const userEvents = events.filter((e) => e.source === 'user');
-  const lastDone = [...userEvents].reverse().find((e) => e.to === 'done');
-  const startBefore = lastDone
-    ? [...userEvents].reverse().find((e) => e.to === 'playing' && e.at < lastDone.at)
-    : null;
+  // Newest-first, so [0] is the most recent completion -- the run the card and the modal
+  // both mean by "how long did this take". `started_at` is NULL for a `done` with no
+  // preceding `playing`: the finish is still reported, the duration stays null rather
+  // than becoming 0.
+  const lastRun = paired[0] || null;
 
   return {
     gameId: id,
     events,
     truncated,
     // null, not 0, for every unknown: no history at all, never played, never finished.
-    daysToFinish: lastDone && startBefore
-      ? Math.round(((new Date(lastDone.at) - new Date(startBefore.at)) / 86400000) * 10) / 10
+    daysToFinish: lastRun && lastRun.started_at
+      ? daysBetween(lastRun.started_at, lastRun.finished_at)
       : null,
-    startedAt: startBefore ? startBefore.at : null,
-    finishedAt: lastDone ? lastDone.at : null,
+    startedAt: lastRun && lastRun.started_at
+      ? new Date(lastRun.started_at).toISOString()
+      : null,
+    finishedAt: lastRun ? new Date(lastRun.finished_at).toISOString() : null,
   };
 }
 

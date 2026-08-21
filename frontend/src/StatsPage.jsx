@@ -27,7 +27,7 @@ import {
   FaList, FaRegCalendarAlt, FaHourglassHalf,
 } from 'react-icons/fa';
 import { useToast } from './contexts/ToastContext';
-import { bucketKey, bucketRange, bucketLabel, bucketFullLabel, formatDurationShort, formatDurationLong } from './dateUtils';
+import { bucketKey, bucketRange, bucketLabel, bucketFullLabel, formatDurationShort, formatDurationLong, formatDateReadable } from './dateUtils';
 
 const API_BASE = `${window.location.origin}/api`;
 
@@ -56,8 +56,10 @@ const STATUS_LABEL = {
   wishlist: 'Wishlist', unreleased: 'Unreleased',
 };
 
-const fmtDate = (iso) =>
-  new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+// Was a local arrow duplicating what dateUtils now exports. The coverage banner used it
+// while the game rows below called `toLocaleDateString()` raw, so one page rendered
+// "21 Aug 2026" and "8/21/2026" a few hundred pixels apart.
+const fmtDate = formatDateReadable;
 
 // A number that is not known is not zero. Every KPI renders through this.
 const orDash = (v) => (v === null || v === undefined || Number.isNaN(v) ? '—' : v);
@@ -266,10 +268,22 @@ export default function StatsPage({ user }) {
     // WHICH games, not just how many. The service has returned these all along and the
     // page threw them away, which is why it could only ever answer "12" to "what have I
     // finished". Newest first: the question is almost always about the recent past.
-    const durationByGame = new Map(stats.durations.map((d) => [d.gameId, d]));
+    // Keyed on the COMPLETION, not the game. `durations` carries one row per `done`
+    // event — that is the entire point of the correlated MAX in services/stats.js, whose
+    // comment says pairing to the wrong `playing` would make "a game finished twice
+    // report the second run as having taken as long as both". Keying the map by gameId
+    // alone collapsed those rows to one (last wins = the newest run) and then stamped
+    // that duration onto EVERY completion of that game: a 100-day first playthrough
+    // rendered as the 2-day replay's length, against the first playthrough's date. The
+    // SQL got the replay case right and this join threw the answer away.
+    //
+    // `completions[].at` and `durations[].finishedAt` are the same `changed_at` column,
+    // ISO-stringified by the same code path, so the pair is an exact key.
+    const runKey = (gameId, finishedAt) => `${gameId}\u0000${finishedAt}`;
+    const durationByRun = new Map(stats.durations.map((d) => [runKey(d.gameId, d.finishedAt), d]));
     const finishedList = [...stats.completions].reverse().map((c) => ({
       ...c,
-      duration: durationByGame.get(c.gameId) || null,
+      duration: durationByRun.get(runKey(c.gameId, c.at)) || null,
     }));
     const playingList = [...(stats.inProgress || [])];
 
@@ -352,7 +366,12 @@ export default function StatsPage({ user }) {
       finishedThisPeriod: observed ? (counts.get(thisBucket) ?? 0) : null,
       medianDays: median(days),
       totalFinished: observed ? completions.length : null,
-      inProgress: games.filter((g) => (g.status || '').toLowerCase() === 'playing').length,
+      // Counted from the LIST that is rendered directly below the chip, not from a
+      // second filter over the library payload. Both describe `user_games` rows with
+      // status='playing', but they arrive from two fetches at two moments, so the chip
+      // could read 5 above a panel listing 4 — the second-source-for-one-number that
+      // services/stats.js's header exists to prevent, reintroduced in the UI.
+      inProgress: playingList.length,
       backlogDepth: games.filter((g) => (g.status || '').toLowerCase() === 'backlog').length,
     };
   }, [stats, games, period]);
@@ -514,7 +533,7 @@ export default function StatsPage({ user }) {
             <h3>Playing now</h3>
           </div>
           {derived.playingList.length ? (
-            <ul className="stats-gamelist">
+            <ul className="stats-gamelist" role="list">
               {derived.playingList.map((g) => (
                 <li key={g.gameId} className="stats-gamerow">
                   <span className="stats-gamerow-name" title={g.name || g.gameId}>
@@ -523,9 +542,9 @@ export default function StatsPage({ user }) {
                   <span className="stats-gamerow-meta">
                     {g.startedAt ? (
                       <>
-                        <span className="stats-gamerow-when">
-                          since {new Date(g.startedAt).toLocaleDateString()}
-                        </span>
+                        <time className="stats-gamerow-when" dateTime={g.startedAt}>
+                          since {fmtDate(g.startedAt)}
+                        </time>
                         <span className="stats-dur stats-dur--playing"
                           title={`Playing for ${formatDurationLong(g.days)}`}>
                           {formatDurationShort(g.days)}
@@ -555,19 +574,19 @@ export default function StatsPage({ user }) {
           </div>
           {derived.finishedList.length ? (
             <>
-              <ul className="stats-gamelist">
+              <ul className="stats-gamelist" role="list">
                 {derived.finishedList.slice(0, 12).map((c) => (
                   <li key={`${c.gameId}-${c.at}`} className="stats-gamerow">
                     <span className="stats-gamerow-name" title={c.name || c.gameId}>
                       {c.name || c.gameId}
                     </span>
                     <span className="stats-gamerow-meta">
-                      <span className="stats-gamerow-when">
-                        {new Date(c.at).toLocaleDateString()}
-                      </span>
+                      <time className="stats-gamerow-when" dateTime={c.at}>
+                        {fmtDate(c.at)}
+                      </time>
                       {c.duration ? (
                         <span className="stats-dur stats-dur--done"
-                          title={`Took ${formatDurationLong(c.duration.days)} — started ${new Date(c.duration.startedAt).toLocaleDateString()}`}>
+                          title={`Took ${formatDurationLong(c.duration.days)} — started ${fmtDate(c.duration.startedAt)}`}>
                           {formatDurationShort(c.duration.days)}
                         </span>
                       ) : (
