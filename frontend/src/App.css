@@ -6700,7 +6700,16 @@ body, html {
 .game-card.list-item .game-timing { margin-top: 0.2em; }
 
 /* --- Statistics: the panels that name games ---------------------------------------- */
-.stats-lists { margin-bottom: 1.5rem; }
+/* Its own template, and auto-FIT not auto-FILL. `.ss-grid` was written for the System
+   Status page, which always has six cards; auto-fill CREATES the empty tracks that
+   distinguish it from auto-fit, so two panels sat in tracks 1-2 of a 3- or 4-track row
+   with the rest blank while every other section on this page is full-bleed.
+   margin-bottom removed: .stats-page already supplies a 1.25rem gap, and 1.5 on top of
+   it double-spaced this one section. */
+.ss-grid.stats-lists {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-bottom: 0;
+}
 
 .stats-gamelist {
   list-style: none;
@@ -6715,7 +6724,7 @@ body, html {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.5rem 0.25rem;
-  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.07));
+  border-bottom: 1px solid var(--border-subtle);
 }
 .stats-gamerow:last-child { border-bottom: none; }
 
@@ -6760,11 +6769,47 @@ body, html {
 }
 /* The "no duration" case gets a visible slot rather than nothing, so the column stays
    aligned and the em dash reads as a deliberate "not measured". */
-.stats-dur--none { color: var(--color-fg-subtle); opacity: 0.6; }
+/* No opacity. This em dash is meaningful content — "not measured", the distinction this
+   whole feature is built on — and at --color-fg-subtle x0.6 it rendered at 2.09:1,
+   below even the 3:1 non-text floor. */
+.stats-dur--none { color: var(--color-fg-muted); }
 
 /* --- Game detail modal: the status timeline ---------------------------------------- */
-.gdm-timeline { margin-top: 1rem; }
-.gdm-timeline h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+/* No margin-top: .gdm-info already supplies a 16px gap. */
+.gdm-timeline h3 {
+  font-family: var(--font-display);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+}
+/* M7: `.gdm-body` centres everything under 560px, but the timeline's spine and dots stay
+   pinned left — so the text floated away from its own markers. The new rules did not
+   participate in the existing breakpoint; they do now. */
+@media (max-width: 560px) {
+  .gdm-modal .gdm-timeline,
+  .gdm-modal .gdm-timeline h3 { text-align: left; }
+  .gdm-modal .gdm-timeline h3 { justify-content: flex-start; }
+}
+
+/* The reserved badge slot: occupies the badge's exact box, paints nothing. `visibility`
+   rather than `opacity` so it is also removed from the accessibility tree. It carries a
+   non-breaking space because an EMPTY inline-flex box collapses to its padding — which
+   is not the height it is reserving space for. */
+.game-timing--pending { visibility: hidden; }
+
+/* The direction cue, deliberately quieter than the heading it qualifies. */
+.gdm-timeline-dir {
+  font-family: var(--font-body, inherit);
+  font-size: 0.72rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-fg-muted);
+}
 
 .gdm-timeline-list {
   list-style: none;
@@ -6781,7 +6826,7 @@ body, html {
   top: 0.45rem;
   bottom: 0.45rem;
   width: 2px;
-  background: var(--color-border-subtle, rgba(255, 255, 255, 0.12));
+  background: var(--border-subtle);
 }
 .gdm-timeline-item {
   position: relative;
@@ -6797,13 +6842,17 @@ body, html {
   height: 0.55rem;
   border-radius: 50%;
   background: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-bg-elevated, rgba(0, 0, 0, 0.4));
+  box-shadow: 0 0 0 3px var(--surface-2);
 }
 /* A transition nobody performed is dimmed and labelled. The user needs to be able to
    tell "I did this" from "the nightly sweep did this" at a glance — the same distinction
    `source` enforces in the database. */
+/* Dimmed by COLOUR, not alpha. `opacity: 0.78` compounded with --color-fg-subtle put the
+   source label at 2.66:1 — making "the nightly sweep did this, not you" the least legible
+   text in the modal, which is the opposite of what the distinction is for. The dot keeps
+   the visual difference; the text stays readable. */
 .gdm-timeline-item--system::before { background: var(--color-fg-subtle); }
-.gdm-timeline-item--system { opacity: 0.78; }
+.gdm-timeline-item--system { color: var(--color-fg-muted); }
 
 .gdm-timeline-when {
   color: var(--color-fg-muted);
@@ -6813,10 +6862,13 @@ body, html {
 }
 .gdm-timeline-src {
   margin-left: 0.4em;
-  font-size: 0.74em;
+  font-size: 0.78em;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--color-fg-subtle);
+  color: var(--color-fg-muted);
+  background: color-mix(in srgb, var(--color-fg-muted) 12%, transparent);
+  padding: 0.05em 0.45em;
+  border-radius: 999px;
 }
 .gdm-timeline-headline {
   display: flex;

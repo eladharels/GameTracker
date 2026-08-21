@@ -401,7 +401,7 @@ GameTracker/
 > it would silently demote a game already in the library on every re-add.
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
-> router and asserts the authorization tier of all 83 routes — public / auth / owner-or-admin /
+> router and asserts the authorization tier of all 84 routes — public / auth / owner-or-admin /
 > admin / self-only / pat / pat-admin — derived from the middleware chain, not from the path. CI
 > fails on a route that is not in the inventory, on a tier that changed, and on any
 > unauthenticated route outside the two-item allowlist (`GET /api/health`,

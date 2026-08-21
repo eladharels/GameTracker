@@ -6,10 +6,9 @@ import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSor
 import { useToast } from './contexts/ToastContext'
 import SharedLibrary from '../SharedLibrary'
 import GameDetailModal from './GameDetailModal'
-import { formatDurationShort, formatDurationLong } from './dateUtils'
+import { formatDurationShort, formatDurationLong, formatDateReadable, formatDateLocal } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
-import { formatDateLocal } from './dateUtils'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
 // Statically imported it would land in the main chunk and slow every login.
@@ -926,6 +925,15 @@ function LibraryPage({ user }) {
   const [isDraggingAny, setIsDraggingAny] = useState(false)
   const [keyboardDragId, setKeyboardDragId] = useState(null)
   const [openGame, setOpenGame] = useState(null)
+  // The modal reads LIVE library state, not the object captured on click. `openGame` was
+  // a snapshot and setGameStatus never refreshed it, so changing a status from inside the
+  // modal left the Status pill — and, now, the timeline — showing the value from before
+  // the change until the modal was closed and reopened. Falls back to the snapshot so a
+  // game removed while open does not blank the modal mid-interaction.
+  const modalGame = openGame
+    ? (userGames.find((g) => String(g.game_id) === String(openGame.game_id)) ?? openGame)
+    : null
+
   const { showToast } = useToast()
   const pendingDeleteRef = useRef({}) // { [gameId]: { timers, snapshot } }
   const gamesPerPage = 24
@@ -975,10 +983,27 @@ function LibraryPage({ user }) {
   // error over a library that loaded perfectly well, would be the tail wagging the dog.
   // The map simply stays empty and no badges appear.
   const [gameTimings, setGameTimings] = useState({ done: {}, playing: {} })
+  // Keyed on a counter bumped by SERVER-CONFIRMED writes, never on the `userGames` array.
+  //
+  // The array identity changes on the OPTIMISTIC setState inside setGameStatus — before
+  // `await axios.post` — so an effect depending on it issued this read concurrently with
+  // the write it exists to observe, and nothing refetched afterwards. Marking a game done
+  // therefore left its "Took 12d" badge missing or stale until a full page reload: the
+  // feature failing precisely when used. The same dependency also refired on every
+  // backlog drag-reorder, which cannot change any timing, costing a 5-query aggregate per
+  // drop.
+  // Whether the timings fetch has SETTLED, so the card can reserve the badge's line
+  // instead of growing when it arrives. `.game-info` is space-between inside a grid row
+  // that stretches to its tallest card, so a badge appearing in one card pushes
+  // `.game-card-actions` — the status select, refresh and REMOVE — down in every card of
+  // that row, a few hundred ms after the page looked settled.
+  const [timingsLoaded, setTimingsLoaded] = useState(false)
+  const [timingsVersion, setTimingsVersion] = useState(0)
+  const refreshTimings = useCallback(() => setTimingsVersion((v) => v + 1), [])
   useEffect(() => {
     if (!user) { setGameTimings({ done: {}, playing: {} }); return }
     let cancelled = false
-    axios.get(`${API_BASE}/user/${user.username}/stats`)
+    axios.get(`${API_BASE}/user/${encodeURIComponent(user.username)}/stats`)
       .then((res) => {
         if (cancelled || !res.data) return
         const done = {}
@@ -986,10 +1011,13 @@ function LibraryPage({ user }) {
         const playing = {}
         for (const p of res.data.inProgress || []) playing[p.gameId] = p
         setGameTimings({ done, playing })
+        setTimingsLoaded(true)
       })
-      .catch(() => { /* badges are optional; the library is not */ })
+      // Badges are optional; the library is not. But the reserved slot must still be
+      // released, or a failed fetch leaves an empty line on every done/playing card.
+      .catch(() => { if (!cancelled) setTimingsLoaded(true) })
     return () => { cancelled = true }
-  }, [user, userGames])
+  }, [user, timingsVersion])
 
   // Retry needs to be VISIBLE. Measured without the floor: on a fast failure the
   // skeleton showed for a single ~16ms frame, so the button appeared to do nothing —
@@ -1128,6 +1156,9 @@ function LibraryPage({ user }) {
         releaseDate: game.release_date,
         status,
       })
+      // AFTER the await: this write is what produced the status event, so reading the
+      // stats before it returned would read the state the user just changed away from.
+      refreshTimings()
     } catch (err) {
       // Rollback on failure
       setUserGames(previousGames)
@@ -1169,6 +1200,7 @@ function LibraryPage({ user }) {
       delete pendingDeleteRef.current[gameId]
       try {
         await axios.delete(`${API_BASE}/user/${user.username}/games/${gameId}`)
+        refreshTimings()
       } catch (err) {
         // Server delete failed — restore the game
         setUserGames(prev => {
@@ -1554,18 +1586,25 @@ function LibraryPage({ user }) {
                         const t = st === 'done' ? gameTimings.done[game.game_id]
                           : st === 'playing' ? gameTimings.playing[game.game_id]
                             : null
-                        if (!t || t.days == null) return null
+                        if (!t || t.days == null) {
+                          // Hold the space while the measurement is still unknown; once
+                          // it is known to be absent, collapse it in the SAME commit that
+                          // fills the others, so the row settles once instead of twice.
+                          return (st === 'done' || st === 'playing') && !timingsLoaded
+                            ? <div className="game-timing game-timing--pending" aria-hidden="true"><span>&nbsp;</span></div>
+                            : null
+                        }
                         const short = formatDurationShort(t.days)
                         const long = formatDurationLong(t.days)
                         return st === 'done' ? (
                           <div className="game-timing game-timing--done"
-                            title={`Took ${long} — started ${new Date(t.startedAt).toLocaleDateString()}, finished ${new Date(t.finishedAt).toLocaleDateString()}`}>
+                            title={`Took ${long} — started ${formatDateReadable(t.startedAt)}, finished ${formatDateReadable(t.finishedAt)}`}>
                             <FaHourglassHalf aria-hidden="true" />
                             <span>Took {short}</span>
                           </div>
                         ) : (
                           <div className="game-timing game-timing--playing"
-                            title={`Playing for ${long} — started ${new Date(t.startedAt).toLocaleDateString()}`}>
+                            title={`Playing for ${long} — started ${formatDateReadable(t.startedAt)}`}>
                             <FaPlay aria-hidden="true" />
                             <span>Playing {short}</span>
                           </div>
@@ -1679,7 +1718,7 @@ function LibraryPage({ user }) {
           for games that are not in the library yet — those have no history by definition,
           so it deliberately passes none and the section never appears. */}
       <GameDetailModal
-        game={openGame}
+        game={modalGame}
         onClose={() => setOpenGame(null)}
         onSetStatus={setGameStatus}
         onRemove={(g) => removeGame(g.game_id)}

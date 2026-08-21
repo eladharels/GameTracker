@@ -120,7 +120,7 @@ export function formatDurationShort(days) {
   return `${(days / 365).toFixed(1)}y`;
 }
 
-// The sentence form, for prose and tooltips: 'about 1 month', '3 weeks', 'the same day'.
+// The sentence form, for prose and tooltips: 'about 1 month', '3 weeks', 'less than a day'.
 //
 // Deliberately approximate above a fortnight, and it says so with "about". Reporting
 // "1 month and 2 days" implies a precision the source does not have — the event log
@@ -128,7 +128,9 @@ export function formatDurationShort(days) {
 // game marked done a week late is indistinguishable from one finished that morning.
 export function formatDurationLong(days) {
   if (days == null || !Number.isFinite(days)) return null;
-  if (days < 1) return 'the same day';
+  // 'less than a day', NOT 'the same day': the callers prefix it, and "Playing for the
+  // same day" is not a sentence.
+  if (days < 1) return 'less than a day';
   const n = Math.round(days);
   if (n === 1) return '1 day';
   if (days < 14) return `${n} days`;
@@ -146,3 +148,43 @@ export function formatDurationLong(days) {
   const y = days / 365;
   return `about ${y.toFixed(1)} years`;
 }
+
+// One date format for every surface that shows a recorded instant.
+//
+// This file already exists so two pages cannot disagree about which day an instant
+// belongs to; they were still disagreeing about how to WRITE it. The statistics page
+// rendered "21 Aug 2026" in its coverage banner and "8/21/2026" in the game rows
+// directly below, because the rows called `toLocaleDateString()` raw — as did the card
+// tooltips and the modal timeline. Locale-aware, explicit fields, one implementation.
+export function formatDateReadable(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// The same instant WITH a time, for the timeline.
+//
+// A date alone cannot order two transitions on the same day, and `backlog -> playing ->
+// done` in one sitting is ordinary. Two identical date strings with no tiebreak read as
+// a duplicate row rather than as a sequence.
+export function formatDateTimeReadable(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+// The five statuses as PROSE. The stored values are lowercase database tokens, and the
+// modal's timeline was rendering them raw ("wishlist → playing") beside its own KICKER
+// map and the statistics page's STATUS_LABEL, which both capitalise. Three spellings of
+// five words.
+export const STATUS_PROSE = Object.freeze({
+  wishlist: 'Wishlist',
+  playing: 'Playing',
+  done: 'Done',
+  backlog: 'Backlog',
+  unreleased: 'Unreleased',
+});
+
+export const statusProse = (s) => STATUS_PROSE[s] || s;
