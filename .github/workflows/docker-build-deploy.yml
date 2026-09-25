@@ -324,7 +324,7 @@ jobs:
       # So every build gets a tag nothing resolves by default: `pr-<number>` for a pull
       # request, `sha-<commit>` for a push. The scans and the smoke stack test THAT tag,
       # and only the deploy job, after every gate has passed, promotes it to `latest`.
-      # test/runtime.test.js fails if any job but deploy writes `latest`.
+      # test/runtime.test.js fails if any job but deploy so much as mentions `:latest`.
       - name: Set image tag outputs
         id: image-tags
         run: |
@@ -1035,6 +1035,9 @@ jobs:
               HAS_PREVIOUS=false
             fi
           done
+          # NOTE: re-running a whole workflow that already deployed (same commit) makes
+          # `previous` the image that is already live, so a failure there has nothing
+          # older to roll back to. Harmless, but not a real rollback target.
           echo "has_previous=${HAS_PREVIOUS}" >> "$GITHUB_OUTPUT"
           for base in ${BASES}; do
             docker tag "${base}:${IMAGE_TAG}" "${base}:latest"
@@ -1150,8 +1153,11 @@ jobs:
       # previous backend boots on a newer schema -- but a migration that removes or
       # renames something the previous code reads would break that. Write migrations
       # so the previous release still runs on them.
+      #
+      # `cancelled()` too: a deploy cancelled by hand between promote and a healthy
+      # start would otherwise leave `latest` on the new images, or the stack half-replaced.
       - name: Roll back to the previous images
-        if: failure() && steps.promote.outputs.has_previous == 'true'
+        if: (failure() || cancelled()) && steps.promote.outputs.has_previous == 'true'
         env:
           IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
           IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
@@ -1180,6 +1186,10 @@ jobs:
           done
           echo "::warning::Rolled back: production is healthy on the PREVIOUS images. ${IMAGE_TAG} did NOT go live."
           docker compose -f docker-compose.yaml config --images | sed 's/^/[rollback]   /'
+          # KNOWN LIMIT: if this release changed a NETWORK definition in the compose
+          # file, `up` without `down` fails -- here and in the start step. Recovery is
+          # manual: `docker compose -f docker-compose.yaml down` (never --volumes),
+          # then `up -d`.
 
       - name: Prune dangling Docker images
         run: |
@@ -1187,7 +1197,8 @@ jobs:
           echo "[deploy] Dangling image prune complete"
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 9: Remove the PR-tagged images
+  # JOB 9: Remove this run's image tags (pr-<number>, and since P0-5 sha-<commit>)
+  # The job id is still `cleanup-pr-images`, kept to avoid renaming a check.
   # PR builds are tagged pr-<number> so they can never be mistaken for production's
   # :latest. Nothing else ever deletes them: the deploy job's prune is
   # `docker image prune -f`, which removes DANGLING images only, and these carry a

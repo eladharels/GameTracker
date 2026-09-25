@@ -376,6 +376,11 @@ GameTracker/
 > fresh database and their empty error callbacks swallowed the failures — silently shipping installs
 > missing `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Postgres removes the race,
 > but the swallowing was the real defect. Do not reintroduce a "log and continue" migration path.
+>
+> **Every migration must leave the PREVIOUS release able to run.** A failed deploy rolls back
+> to the previous images automatically, but it cannot roll back a schema. The previous backend
+> boots on the newer schema, because it only applies files it knows. So a migration must ADD:
+> drop or rename a column only in a later release than the one that stopped reading it.
 
 > **`/api/v2` routes go on `v2Router`, BELOW the `v2Router.use(patRequired)` line, and are
 > PAT-only.** "Below" is load-bearing: Express matches layers in stack order, so a route
@@ -886,7 +891,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 > resolve `local/gametracker-*:latest` and the runner is **self-hosted** — the same Docker
 > daemon production runs on. A PR build tagged `latest` leaves the RUNNING containers alone
 > (they hold an image ID) but repoints the tag, so the next `docker compose up` on that host —
-> an operator restart, a reboot, the next deploy's own stop/start — silently starts production
+> an operator restart, a reboot, the next deploy's own `up` — silently starts production
 > on unreviewed PR code. The tag is the boundary; the guard alone does not close this.
 >
 > **The same applies to a push to main, which is why no build writes `latest` at all.** Main

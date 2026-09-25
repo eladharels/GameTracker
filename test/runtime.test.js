@@ -226,15 +226,29 @@ console.log('images reach :latest only through deploy, which can roll back:');
   // Script text with shell comments removed, so a comment ABOUT `latest` is not a use.
   const script = (st) => String(st.run || '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-  check('no job except deploy writes a :latest tag', () => {
+  check('no job except deploy mentions :latest at all', () => {
+    // DELIBERATELY BLUNT. The first version matched `docker tag <arg>:latest` and
+    // `-t <arg>:latest` only, and a CISO review showed it green on
+    // `docker tag x:sha x:latest`, `docker image tag`, `--tag x:latest` — the likeliest
+    // shape of the regression. Nothing outside deploy has a reason to name `:latest`,
+    // so any mention anywhere in the job (run scripts minus shell comments, env,
+    // `with:` inputs such as a build action's `tags`) fails.
     for (const [id, job] of Object.entries(wf.jobs)) {
       if (id === 'deploy') continue;
-      for (const st of job.steps || []) {
-        const text = script(st);
-        assert.ok(!/\bTAG="?latest\b/.test(text) && !/(docker tag|-t)\s+\S*:latest\b/.test(text),
-          `${id} / "${st.name}" writes :latest -- only deploy may, after every gate has passed`);
-      }
+      const stripped = { ...job, steps: (job.steps || []).map((st) => ({ ...st, run: script(st) })) };
+      const hit = /[^\s"']*:latest\b/.exec(JSON.stringify(stripped));
+      assert.ok(!hit, `${id} mentions ${hit && hit[0]} -- only deploy may write :latest, after every gate has passed`);
     }
+  });
+  check('that check fails on the shapes it exists to catch', () => {
+    // Guards the guard: prove the scan would have gone red, on a copy of build-images.
+    for (const line of ['docker tag "${base}:sha" "${base}:latest"', 'docker image tag a:b a:latest',
+      'docker build --tag x:latest .', 'docker build -t local/gametracker-backend:latest .']) {
+      const job = { steps: [{ run: line }] };
+      const stripped = { ...job, steps: job.steps.map((st) => ({ ...st, run: script(st) })) };
+      assert.ok(/[^\s"']*:latest\b/.test(JSON.stringify(stripped)), `the scan misses: ${line}`);
+    }
+    assert.ok(/:latest/.test(JSON.stringify({ with: { tags: 'x:latest' } })), 'the scan misses a with.tags input');
   });
   check('build-images never produces the latest tag, on any event', () => {
     const st = wf.jobs['build-images'].steps.find((x) => x.id === 'image-tags');
@@ -245,8 +259,17 @@ console.log('images reach :latest only through deploy, which can roll back:');
     const steps = wf.jobs.deploy.steps;
     const promote = steps.find((x) => x.id === 'promote');
     assert.ok(promote && /:previous/.test(script(promote)), 'deploy does not save the old :latest as :previous');
-    const rollback = steps.find((x) => /failure\(\)/.test(String(x.if || '')));
-    assert.ok(rollback, 'deploy has no step that runs on failure');
+    const rollback = steps.find((x) => /failure\(\)/.test(String(x.if || '')) && /cancelled\(\)/.test(String(x.if || '')));
+    assert.ok(rollback, 'deploy has no step that runs on failure AND on cancellation');
+    // ORDER matters: the rollback must come after the step that can fail, and the
+    // rollback target must be recorded before `latest` is moved -- otherwise a promote
+    // that fails partway leaves nothing to roll back to.
+    const idx = (st) => steps.indexOf(st);
+    const health = steps.find((x) => /api\/health/.test(script(x)) && x !== rollback);
+    assert.ok(health && idx(rollback) > idx(health), 'the rollback step runs before the health check');
+    const p = script(promote);
+    assert.ok(p.indexOf('has_previous=') >= 0 && p.indexOf('has_previous=') < p.lastIndexOf(':latest'),
+      'promote moves :latest before recording the rollback target');
     assert.ok(/:previous"? "?\S*:latest/.test(script(rollback)) && /docker compose -f docker-compose\.yaml up/.test(script(rollback)),
       'the failure step does not restore :previous and bring the stack back up');
     assert.ok(!steps.some((x) => /docker compose -f docker-compose\.yaml down/.test(script(x))),
@@ -257,6 +280,10 @@ console.log('images reach :latest only through deploy, which can roll back:');
     assert.ok(/pr-\*\|sha-\*\)/.test(text), 'cleanup no longer restricts itself to pr-*/sha-* tags');
     assert.ok((wf.jobs['cleanup-pr-images'].needs || []).includes('deploy'),
       'cleanup can run before deploy has promoted the image it is untagging');
+    // Without always() it never runs after a failed scan; without push it never removes
+    // sha-<commit> tags. Either way the runner's disk fills with rejected images again.
+    const cond = String(wf.jobs['cleanup-pr-images'].if || '');
+    assert.ok(/always\(\)/.test(cond) && /'push'/.test(cond), `cleanup no longer runs on every push run: ${cond}`);
   });
 }
 
