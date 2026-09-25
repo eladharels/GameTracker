@@ -165,17 +165,41 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Semgrep (if not cached on runner)
+      # PINNED and ISOLATED, like Gitleaks and Trivy above (ROADMAP SEC-3). This was an
+      # unversioned `pip3 install semgrep` behind `if ! command -v semgrep` -- so on this
+      # PERSISTENT runner whatever `semgrep` came first on PATH was trusted for ever: a
+      # stale version, or a stub dropped there by anything that ever ran on the host,
+      # would turn SAST green permanently while CI reported success.
+      #
+      # Now the pinned version lives in its own virtualenv, keyed by version, and is
+      # run by ABSOLUTE PATH, never looked up on PATH. The version is verified, and a
+      # mismatch fails the job. Bump SEMGREP_VERSION deliberately -- it must be a real
+      # release on pypi.org/project/semgrep.
+      - name: Install Semgrep (pinned, isolated)
+        env:
+          SEMGREP_VERSION: "1.178.0"
         run: |
-          if ! command -v semgrep &>/dev/null; then
-            echo "[semgrep] Installing via pip3..."
-            pip3 install semgrep --quiet
+          set -euo pipefail
+          VENV="${HOME}/.cache/gametracker-semgrep/${SEMGREP_VERSION}"
+          if [ "$("${VENV}/bin/semgrep" --version 2>/dev/null || true)" != "${SEMGREP_VERSION}" ]; then
+            echo "[semgrep] Installing pinned v${SEMGREP_VERSION} into ${VENV}..."
+            rm -rf "${VENV}"
+            python3 -m venv "${VENV}"
+            "${VENV}/bin/pip" install --quiet --disable-pip-version-check "semgrep==${SEMGREP_VERSION}"
           fi
-          echo "[semgrep] Version: $(semgrep --version)"
+          # Fail closed if the binary we are about to run is not the pinned version.
+          test "$("${VENV}/bin/semgrep" --version)" = "${SEMGREP_VERSION}"
+          echo "SEMGREP_BIN=${VENV}/bin/semgrep" >> "$GITHUB_ENV"
+          echo "[semgrep] Using ${VENV}/bin/semgrep v${SEMGREP_VERSION}"
 
+      # `--config auto` still pulls the registry's CURRENT rules: the binary is pinned,
+      # the auto rule set is not (the registry does not version it). A new registry rule
+      # can therefore fail a build that did not change -- that is the intended direction
+      # for a security gate -- but a rule REMOVED upstream is silent. .semgrep.yml is the
+      # pinned half; put anything this repo depends on there.
       - name: Run Semgrep scan
         run: |
-          semgrep scan \
+          "${SEMGREP_BIN:?SEMGREP_BIN not set by the install step}" scan \
             --config auto \
             --config .semgrep.yml \
             --error \

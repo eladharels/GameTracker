@@ -302,4 +302,29 @@ console.log('images reach :latest only through deploy, which can roll back:');
   });
 }
 
+// SAST must run the PINNED Semgrep, never whatever is on PATH (ROADMAP SEC-3). It was
+// `if ! command -v semgrep; then pip3 install semgrep; fi` -- on a persistent runner, a
+// stale or stubbed binary earlier on PATH turned the gate green for ever.
+console.log('the semgrep gate runs a pinned binary:');
+{
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  const steps = wf.jobs.semgrep.steps;
+  const text = (st) => String(st.run || '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  check('semgrep is installed at a pinned version, verified, into an isolated venv', () => {
+    const install = steps.find((st) => /semgrep==\$\{SEMGREP_VERSION\}/.test(text(st)));
+    assert.ok(install, 'no step installs semgrep==${SEMGREP_VERSION}');
+    assert.match(String(install.env && install.env.SEMGREP_VERSION), /^\d+\.\d+\.\d+$/, 'SEMGREP_VERSION is not an exact version');
+    assert.ok(/python3 -m venv/.test(text(install)), 'semgrep is not isolated in its own venv');
+    assert.ok(/test "\$\("\$\{VENV\}\/bin\/semgrep" --version\)" = "\$\{SEMGREP_VERSION\}"/.test(text(install)),
+      'the installed version is not verified');
+  });
+  check('the scan runs that binary by path, and nothing trusts `semgrep` on PATH', () => {
+    const all = steps.map(text).join('\n');
+    assert.ok(!/command -v semgrep/.test(all), 'a step decides from `command -v semgrep` again');
+    assert.ok(/"\$\{SEMGREP_BIN[^}]*\}" scan/.test(all), 'the scan does not run "${SEMGREP_BIN}"');
+    assert.ok(!/^\s*semgrep\s/m.test(all), 'a step runs a bare `semgrep` from PATH');
+  });
+}
+
 console.log(`\n${n} runtime assertions passed.`);

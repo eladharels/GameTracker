@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 13 | 3 |
+| SEC — Security (medium/low) | 13 | 4 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **24** |
+| **Total** | **64** | **25** |
 
 ---
 
@@ -506,11 +506,22 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `sharesLibrary`, on create and on update, with a 400. v1 keeps its truthy reading, because it
   is frozen and its client sends real booleans. The unit test fails on the old code.
 
-### [ ] SEC-3 Semgrep is unpinned and can be stubbed
+### [x] SEC-3 Semgrep is unpinned and can be stubbed
 - **Where:** `.github/workflows/docker-build-deploy.yml:168-174`: an unversioned
   `pip3 install semgrep` behind a `command -v` guard, with `--config auto`.
 - **Fix:** pin the version and verify it the way Gitleaks and Trivy are verified. Pin the
   rule-set (a registry pack at a fixed version, or vendored rules).
+- **Done (the binary):** Semgrep `1.178.0` (`SEMGREP_VERSION`) is installed into a virtualenv
+  keyed by version, verified by `--version`, and run by absolute path (`SEMGREP_BIN`). Nothing
+  trusts `semgrep` on PATH any more. `runtime.test.js` pins all of this. The repo's own rules
+  (`.semgrep.yml`) run clean on 1.178.0.
+- **Not done (the rule set):** `--config auto` still pulls the registry's current rules,
+  because the registry does not version them. A new rule can fail an unchanged build, which is
+  the safe direction; a rule removed upstream goes unnoticed. Anything this repo depends on
+  belongs in `.semgrep.yml`.
+- **Not verified here:** the `auto` rule set could not be fetched from this environment
+  (`semgrep.dev` is blocked). The first CI run on 1.178.0 is the check that the newer rules
+  still pass.
 
 ### [ ] SEC-4 GitHub Actions pinned by tag, not by commit SHA
 - **Where:** `actions/checkout@v4`, `actions/setup-node@v4`, `docker/setup-buildx-action@v3`.
