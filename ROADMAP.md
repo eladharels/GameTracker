@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 6 |
+| CC — Correctness & concurrency | 16 | 7 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **13** |
+| **Total** | **64** | **14** |
 
 ---
 
@@ -291,13 +291,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   duplicate check still compares names (FE-3), so adding the second one is blocked until FE-3
   is fixed.
 
-### [ ] CC-7 Schema-migration advisory lock is never released
+### [x] CC-7 Schema-migration advisory lock is never released
 - **Where:** `schema-migrate.js:52` (session-level `pg_advisory_lock`). The comment at `:86`
   claims `client.release()` releases it; it does not, because the pooled connection keeps it.
 - **Failure:** during an overlapping deploy or with a second instance, the new process blocks
   on the lock until that pooled connection happens to close.
 - **Fix:** call `pg_advisory_unlock` in a `finally` before `release()`, or use
   `pg_advisory_xact_lock` per transaction. Correct the comment.
+- **Done:** `pg_advisory_unlock` runs in the `finally`. If the unlock fails, the connection is
+  destroyed rather than pooled, and ending the session ends the lock.
+  `test/integration/migration-lock.test.js` checks `pg_locks` after a run and starts a second
+  migrating process. Both checks fail on the old code, and the second reproduced the hang.
 
 ### [ ] CC-8 The single-game metadata refresh still has the bug the bulk refresh fixed
 - **Where:** `index.js:1305-1309` uses `lookup.degraded`, while the bulk route uses

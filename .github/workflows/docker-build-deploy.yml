@@ -771,10 +771,14 @@ jobs:
       # email-resolution proves only DIRECTORY accounts are looked up in LDAP for a
       # missing email: a local account used to be given, and have WRITTEN to its row,
       # the address of whoever held the same username in the directory (CC-5).
+      #
+      # migration-lock asks pg_locks whether the schema-migration advisory lock outlived
+      # its run, and starts a second process migrating: the lock used to stay on a
+      # pooled connection, blocking every later migrator (CC-7).
       - name: Verify status history, statistics and the upsert's date rule (real Postgres)
         run: |
           set -euo pipefail
-          for t in status-events stats upsert-release-date reminders email-resolution; do
+          for t in status-events stats upsert-release-date reminders email-resolution migration-lock; do
             docker compose -p gametracker-smoke -f docker-compose.test.yml \
               exec -T backend node "test/integration/${t}.test.js" || {
               echo "[smoke] ERROR: ${t} integration test failed"

@@ -237,7 +237,10 @@ GameTracker/
 │   │                               #   three (CC-3, CC-4). email-resolution.test.js
 │   │                               #   proves only origin='ldap' accounts reach the
 │   │                               #   directory for a missing email (CC-5).
-│   │                               #   All five call services directly, so the adapters
+│   │                               #   migration-lock.test.js asks pg_locks that the
+│   │                               #   migration lock does not outlive its run, and runs
+│   │                               #   a second migrating PROCESS (CC-7).
+│   │                               #   All six call services directly, so the adapters
 │   │                               #   between the socket and the service are covered by
 │   │                               #   curl steps in the same job instead
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
@@ -872,7 +875,7 @@ smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
        Frontend: GET http://localhost:8099/ → HTTP 200
        API via the frontend proxy + JSON 404 on an unknown /api route
        MCP:      POST http://127.0.0.1:3199/mcp → a real `initialize` handshake
-       The five test/integration/ suites against the real Postgres
+       The six test/integration/ suites against the real Postgres
        Teardown: if: always() — guaranteed cleanup
 
 deploy  (needs: ALL 8 upstream jobs)   [push to main ONLY — see the guard below]
@@ -993,7 +996,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
-| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the five `test/integration/` suites failing against the real Postgres |
+| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the six `test/integration/` suites failing against the real Postgres |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
 
 ### Container Hardening
