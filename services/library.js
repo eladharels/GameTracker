@@ -116,27 +116,35 @@ async function listBacklog(userId) {
 // holding the same backlog_order. The success path is unchanged; only the failure
 // path is now all-or-nothing.
 async function moveBacklogItem(userId, gameId, direction) {
-  const rows = await listBacklog(userId);
-  const idx = rows.findIndex((r) => String(r.game_id) === String(gameId));
-  if (idx === -1) {
-    throw serviceError(CODES.NOT_IN_BACKLOG, 'Game not in backlog');
-  }
-  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-  if (swapIdx < 0 || swapIdx >= rows.length) return { moved: false };
-
-  const game = rows[idx];
-  const swap = rows[swapIdx];
-  await db.withTransaction(async (tx) => {
+  return db.withTransaction(async (tx) => {
     // Same lock the upsert takes. Without it this two-row swap and reorderBacklog's
     // row-by-row rewrite grab the same rows in opposite orders and deadlock —
     // measured at 55 in 60 rounds of four concurrent writers, surfacing to the user
     // as a bare 500 on a drag. Taking one lock first means there is no ordering left
     // to invert.
     await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, userId]);
+    // The positions are read AFTER the lock, in this transaction (ROADMAP CC-10). They
+    // were read before it, so a reorder that committed while this waited on the lock
+    // had its positions overwritten with the stale ones -- two games left holding the
+    // same backlog_order, which makes the up/down move a permanent no-op for them.
+    const rows = (await tx.query(
+      'SELECT id, game_id, backlog_order FROM user_games WHERE user_id = ? AND status = ? '
+      + 'ORDER BY backlog_order ASC NULLS FIRST, id ASC',
+      [userId, 'backlog']
+    )).rows;
+    const idx = rows.findIndex((r) => String(r.game_id) === String(gameId));
+    if (idx === -1) {
+      throw serviceError(CODES.NOT_IN_BACKLOG, 'Game not in backlog');
+    }
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= rows.length) return { moved: false };
+
+    const game = rows[idx];
+    const swap = rows[swapIdx];
     await tx.query('UPDATE user_games SET backlog_order = ? WHERE id = ?', [swap.backlog_order, game.id]);
     await tx.query('UPDATE user_games SET backlog_order = ? WHERE id = ?', [game.backlog_order, swap.id]);
+    return { moved: true };
   });
-  return { moved: true };
 }
 
 // Replace the backlog order wholesale from an ordered list of game ids.

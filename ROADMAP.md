@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 9 |
+| CC — Correctness & concurrency | 16 | 10 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **16** |
+| **Total** | **64** | **17** |
 
 ---
 
@@ -351,11 +351,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - An account deleted mid-request now answers 404 instead of 200. A database error uses
     `problem.send`'s generic wording.
 
-### [ ] CC-10 Backlog swap reads positions before taking the lock
+### [x] CC-10 Backlog swap reads positions before taking the lock
 - **Where:** `services/library.js:119` (`listBacklog`) comes before the advisory lock at `:135`.
 - **Failure:** a concurrent reorder writes stale positions back, and `backlog_order` ends up
   with duplicate values.
 - **Fix:** read the positions after the lock, inside the same transaction.
+- **Done:** `moveBacklogItem` runs entirely inside one transaction: lock, read, then swap. An
+  integration test holds a real reorder open while a move waits. The old code left two games
+  at position 1.
 
 ### [ ] CC-11 CrackRelease status write
 - **Where:** `index.js:740-763`.

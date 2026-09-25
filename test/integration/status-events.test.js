@@ -233,6 +233,34 @@ const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10
     assert.deepStrictEqual({ f: last.from_status, t: last.to_status, s: last.source },
       { f: 'wishlist', t: 'unreleased', s: 'metadata_refresh' });
   });
+  await check('a backlog move waiting on a reorder uses the positions AFTER it (CC-10)', async () => {
+    // A reorder holds the backlog lock and rewrites A,B,C = 1,2,3 to 3,2,1. A move of
+    // A "down" starts meanwhile. It used to read positions BEFORE the lock (A=1, B=2),
+    // then swap those stale values in: A=2, B=1 -- and C also 1. Two games on one slot.
+    for (const [g, n] of [['igdb_b1', 'A'], ['igdb_b2', 'B'], ['igdb_b3', 'C']]) {
+      await lib.upsertGame(rid, { gameId: g, gameName: n, releaseDate: iso(-10), status: 'backlog' });
+    }
+    await lib.reorderBacklog(rid, ['igdb_b1', 'igdb_b2', 'igdb_b3']);
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const other = db.withTransaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, rid]);
+      for (const [g, pos] of [['igdb_b1', 3], ['igdb_b2', 2], ['igdb_b3', 1]]) {
+        await tx.query('UPDATE user_games SET backlog_order = ? WHERE user_id = ? AND game_id = ?', [pos, rid, g]);
+      }
+      await gate;
+    });
+    await sleep(100);
+    const pending = lib.moveBacklogItem(rid, 'igdb_b1', 'down');
+    await sleep(200);
+    release();
+    await other;
+    await pending;
+    const rows = await db.promises.all(
+      "SELECT game_id, backlog_order FROM user_games WHERE user_id = ? AND status = 'backlog'", [rid]);
+    const orders = rows.map((r) => r.backlog_order);
+    assert.strictEqual(new Set(orders).size, orders.length, `duplicate backlog positions: ${JSON.stringify(rows)}`);
+  });
   await db.promises.run('DELETE FROM users WHERE id = ?', [rid]);
 
   console.log(`\n${n - failed}/${n} passed`);
