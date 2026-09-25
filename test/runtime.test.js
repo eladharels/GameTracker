@@ -168,4 +168,47 @@ console.log('the environment the backend reads reaches its container:');
   }
 }
 
+// ...and every variable docker-compose.yaml interpolates must reach it THROUGH CI.
+//
+// The deploy job runs compose from a fresh checkout, so the host's `.env` is never
+// read: a variable the job does not carry silently takes compose's default on every
+// push to main. P0-3 first shipped with the check above only, and the CISO review
+// rejected it — TRUST_PROXY=2 in `.env` would still have redeployed at 1. BACKEND_BIND
+// had been missing from the job the same way since the hardened topology was written.
+console.log('the deploy job carries every variable production compose reads:');
+{
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  const compose = fs.readFileSync(path.join(ROOT, 'docker-compose.yaml'), 'utf8');
+  // Fixed in production on purpose, each with its reason.
+  const FIXED = {
+    // The deploy health-checks localhost:3000 and nginx proxies backend:3000.
+    BACKEND_PORT: 'the deploy health check is hard-wired to :3000',
+    MCP_PORT: 'the deploy prints `compose port mcp` against the default',
+    // Changing either after the first boot points the backend at a database that
+    // does not exist; they are not deploy-time settings.
+    POSTGRES_DB: 'fixed by the existing data volume',
+    POSTGRES_USER: 'fixed by the existing data volume',
+  };
+  const referenced = new Set([...compose.matchAll(/\$\{([A-Z][A-Z0-9_]*)/g)].map((m) => m[1]));
+  const deploy = wf.jobs.deploy;
+  const jobEnv = Object.keys(deploy.env || {});
+  const composeSteps = deploy.steps.filter((st) => /docker compose -f docker-compose\.yaml/.test(st.run || ''));
+
+  check('the scan finds the compose steps and the variables it guards', () => {
+    assert.ok(composeSteps.length >= 2, 'no deploy steps running docker-compose.yaml were found');
+    for (const known of ['TRUST_PROXY', 'BACKEND_BIND', 'JWT_SECRET']) assert.ok(referenced.has(known), known);
+  });
+  for (const st of composeSteps) {
+    check(`deploy step "${st.name}" carries every variable docker-compose.yaml reads`, () => {
+      const have = new Set([...jobEnv, ...Object.keys(st.env || {})]);
+      const missing = [...referenced].filter((v) => !have.has(v) && !FIXED[v]).sort();
+      assert.deepStrictEqual(missing, [],
+        `the deploy step "${st.name}" does not carry ${missing.join(', ')}, so production takes `
+        + "compose's default whatever the host's .env says. Add it to the deploy job's env "
+        + '(non-secret, job level) or the step env (secret), or record in FIXED why not.');
+    });
+  }
+}
+
 console.log(`\n${n} runtime assertions passed.`);

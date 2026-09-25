@@ -122,6 +122,13 @@ Two compose variables control how the backend is exposed:
 | `BACKEND_BIND` | `0.0.0.0` | Host interface the backend port is published on |
 | `TRUST_PROXY` | `1` | Number of reverse-proxy hops in front of the backend |
 
+> **Deploying through CI? Set these as repository variables, not only in `.env`.** The deploy job runs
+> compose from a fresh checkout and never reads the host's `.env`, so a value that lives only there is
+> silently replaced by the default on the next push to `main`. Put `BACKEND_BIND`, `TRUST_PROXY`,
+> `CORS_ORIGINS` and `STEAM_REGION` under **Settings → Secrets and variables → Actions → Variables**
+> (a secret of the same name also works), and `THEGAMESDB_API_KEY` / `IGDB_CLIENT_SECRET` under
+> **Secrets**.
+
 **If your reverse proxy runs on another machine** and points at the backend port directly, leave
 `BACKEND_BIND=0.0.0.0` — a loopback bind would make the API unreachable.
 

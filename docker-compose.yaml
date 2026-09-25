@@ -83,6 +83,8 @@ services:
       # block once omitted TRUST_PROXY, which the README calls MANDATORY in the
       # hardened topology: set to 2 in .env, the backend still ran at 1, so every
       # login shared the proxy's IP and five bad passwords locked out every user.
+      # Through CI, `.env` is NOT read at all — the deploy job carries these itself
+      # from repository variables/secrets; see README "Reverse proxy topology".
       - THEGAMESDB_API_KEY=${THEGAMESDB_API_KEY:-}
       - IGDB_CLIENT_SECRET=${IGDB_CLIENT_SECRET:-}
       - TRUST_PROXY=${TRUST_PROXY:-1}

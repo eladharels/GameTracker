@@ -589,7 +589,9 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   LOCAL password decides. It used to relabel the row `origin='ldap'` and sign a session carrying its
   admin flag. `ldap.requiredGroup` is an EXACT match: the group's full DN, or its bare cn compared
   with the first RDN of each `memberOf` (write a comma escaped exactly as the directory stores it,
-  e.g. `game\, club`). It was a substring test, so `gamers` admitted `cn=gamers-denied`
+  e.g. `game\, club`). It was a substring test, so `gamers` admitted `cn=gamers-denied`.
+  **Prefer the full group DN** where users can create groups: a bare cn matches a same-named
+  group in ANY OU (in FreeIPA that includes roles, privileges and permissions)
 - **Sudo mode**: minting a PAT from the browser re-checks the password, because a token
   outlives the 12-hour session that created it. Local accounts verify with bcrypt; directory
   accounts verify with a real LDAP bind through `ldap-helpers.js#verifyLdapCredentials` — the

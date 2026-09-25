@@ -969,6 +969,16 @@ jobs:
       # actions/checkout@v4, and a third-party action has no need for JWT_SECRET.
       MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
       MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
+      # The backend's non-secret settings, for the same reason: compose runs from this
+      # job's fresh checkout and never sees the host's `.env`. TRUST_PROXY and
+      # BACKEND_BIND are the README's hardened topology — set in `.env` alone, the next
+      # push to main silently redeployed at trust-proxy 1 on 0.0.0.0, the exact
+      # lockout-everyone failure that topology exists to prevent. test/runtime.test.js
+      # fails when a variable docker-compose.yaml interpolates is missing from this job.
+      BACKEND_BIND: ${{ vars.BACKEND_BIND || secrets.BACKEND_BIND }}
+      TRUST_PROXY: ${{ vars.TRUST_PROXY || secrets.TRUST_PROXY }}
+      CORS_ORIGINS: ${{ vars.CORS_ORIGINS || secrets.CORS_ORIGINS }}
+      STEAM_REGION: ${{ vars.STEAM_REGION || secrets.STEAM_REGION }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -992,6 +1002,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          THEGAMESDB_API_KEY: ${{ secrets.THEGAMESDB_API_KEY }}
+          IGDB_CLIENT_SECRET: ${{ secrets.IGDB_CLIENT_SECRET }}
         run: |
           # NEVER add --volumes here. That would delete gametracker-pgdata,
           # which is now the production database.
@@ -1025,6 +1037,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          THEGAMESDB_API_KEY: ${{ secrets.THEGAMESDB_API_KEY }}
+          IGDB_CLIENT_SECRET: ${{ secrets.IGDB_CLIENT_SECRET }}
         run: |
           # The `|| { ... }` is REQUIRED now that frontend and mcp declare
           # `depends_on: backend: condition: service_healthy`. Before that, `up -d`
@@ -1072,6 +1086,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          THEGAMESDB_API_KEY: ${{ secrets.THEGAMESDB_API_KEY }}
+          IGDB_CLIENT_SECRET: ${{ secrets.IGDB_CLIENT_SECRET }}
         run: |
           echo "[deploy] Waiting for production backend to become healthy..."
           MAX_WAIT=90
