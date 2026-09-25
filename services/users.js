@@ -16,7 +16,7 @@ const db = require('../db');
 // so a test can observe the SQL it issues. See listAll.
 const { get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
-const { isValidEmailAddress, validatePassword, sanitizeText, RESERVED_USERNAMES } = require('../user-rules');
+const { isValidEmailAddress, validatePassword, sanitizeText, validateUsername } = require('../user-rules');
 // Required as MODULES, not destructured. The mapping below — which LDAP outcome
 // becomes "wrong password" and which must not — is itself the safety property, so a
 // test has to be able to stub these and observe it. A destructured binding is
@@ -269,13 +269,13 @@ async function create(fields) {
     throw serviceError(CODES.VALIDATION, 'email must be a single valid address, or empty', { field: 'email' });
   }
 
-  const normalized = username.toLowerCase();
-  // `me` collides with the /api/user/me/* routes, which are registered first and would
-  // shadow the account entirely; the rest are reserved to avoid confusion with the
-  // seeded administrator.
-  if (RESERVED_USERNAMES.includes(normalized)) {
-    throw serviceError(CODES.VALIDATION, `'${normalized}' is a reserved username.`, { field: 'username' });
-  }
+  // TRIMMED, then lowercased, then checked by the SHARED rule (ROADMAP CC-14). This
+  // checked `username.trim()` for emptiness but stored the untrimmed value, so " bob"
+  // became an account distinct from "bob"; and it re-implemented the reserved list
+  // rather than calling validateUsername, which create-local-admin.js already used.
+  const normalized = username.trim().toLowerCase();
+  const usernameProblem = validateUsername(normalized);
+  if (usernameProblem) throw serviceError(CODES.VALIDATION, usernameProblem, { field: 'username' });
 
   const hash = await bcrypt.hash(password, 10);
   let ctx;

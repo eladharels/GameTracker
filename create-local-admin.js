@@ -63,12 +63,8 @@ if (usernameError) {
   console.error(usernameError);
   process.exit(1);
 }
-// Anything outside this set is either unreachable in a URL path or invisible in the
-// admin UI. The API has no equivalent charset check; that is tracked separately.
-if (!/^[a-z0-9._-]+$/.test(username)) {
-  console.error('Username may contain only lowercase letters, digits, dot, underscore and hyphen.');
-  process.exit(1);
-}
+// (The charset and length rule that used to be here now lives in validateUsername,
+// so the API enforces it too -- ROADMAP CC-14.)
 
 async function main() {
   console.log('Using database: %s @ %s', process.env.PGDATABASE || 'gametracker', process.env.PGHOST || 'db');

@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 13 |
+| CC — Correctness & concurrency | 16 | 14 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **20** |
+| **Total** | **64** | **21** |
 
 ---
 
@@ -409,7 +409,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   health) is now loud, but the request still hangs until the server timeout. Converting those,
   starting with `withExistingUser`, is part of UP-16.
 
-### [ ] CC-14 `users.create` stores the username untrimmed and duplicates the username rules
+### [x] CC-14 `users.create` stores the username untrimmed and duplicates the username rules
 - **Where:** `services/users.js:272`.
 - **Failure:** `" bob"` becomes an account distinct from `bob`. There is no length or
   character-set bound.
@@ -419,6 +419,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   ignores trailing spaces, so `root ` authenticates as the directory's `root` and gets its own
   unprivileged lookalike row. Deferred to this item because existing untrimmed local accounts
   would become unreachable. Migrate them first.
+- **Done:**
+  - `users.create` trims, lowercases, then calls the shared `validateUsername`.
+  - The charset and length rule moved there from `create-local-admin.js`: `[a-z0-9._-]`, at
+    most 64 characters. The API now enforces it too.
+  - Tests fail on the old code.
+  - The login-username trim noted above is still open. It waits for existing untrimmed rows to
+    be migrated.
+- **Behaviour change:** `POST /api/users` and v2 user creation now refuse names outside that
+  charset, with a 400. Existing accounts are untouched.
 
 ### [ ] CC-15 Forged `backlogOrder` cursor returns 500 instead of 400
 - **Where:** `services/library.js` `listPage`. A non-numeric `lastKey` is bound against an

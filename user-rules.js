@@ -14,11 +14,25 @@
 const RESERVED_USERNAMES = ['me', 'root', 'admin'];
 
 // Returns an error string, or null when the username is acceptable.
-// Expects the already-lowercased form -- callers normalise first.
+// Expects the already-TRIMMED, already-lowercased form -- callers normalise first.
+//
+// The charset and length were enforced by create-local-admin.js alone, with a comment
+// noting the API had no equivalent (ROADMAP CC-14): POST /api/users accepted " bob" as
+// an account distinct from "bob", with no bound at all. A username is a URL path
+// segment (/api/user/:username/...) and is shown in the admin UI, so anything outside
+// this set is either unreachable or invisible. Applies to accounts CREATED here; a
+// directory login provisions its own rows and is not narrowed by it.
+const MAX_USERNAME_LENGTH = 64;
 function validateUsername(normalizedUsername) {
   if (!normalizedUsername) return 'Username is required.';
   if (RESERVED_USERNAMES.includes(normalizedUsername)) {
     return `'${normalizedUsername}' is a reserved username.`;
+  }
+  if (normalizedUsername.length > MAX_USERNAME_LENGTH) {
+    return `Username must be at most ${MAX_USERNAME_LENGTH} characters.`;
+  }
+  if (!/^[a-z0-9._-]+$/.test(normalizedUsername)) {
+    return 'Username may contain only lowercase letters, digits, dot, underscore and hyphen.';
   }
   return null;
 }

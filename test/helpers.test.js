@@ -218,6 +218,12 @@ check('rejects an empty username', () => {
 check('accepts an ordinary username', () => {
   assert.strictEqual(validateUsername('jane'), null);
 });
+check('charset and length are enforced for EVERY caller, not only the CLI (CC-14)', () => {
+  for (const ok of ['jane', 'j.doe', 'j_doe-2', 'a'.repeat(64)]) assert.strictEqual(validateUsername(ok), null, ok);
+  for (const bad of [' bob', 'bob ', 'a b', 'a/b', 'jane%2f', 'Jane', 'a'.repeat(65), 'bob\n']) {
+    assert.ok(validateUsername(bad), `${JSON.stringify(bad)} was accepted`);
+  }
+});
 
 console.log('directoryClaimRefusal (P0-1: an LDAP login must not take over a local account):');
 check('root and me are never the directory\'s, whether or not the row exists', () => {
@@ -495,6 +501,22 @@ function withTransports(behaviour, fn) {
 
 const asyncChecks = [];
 const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
+
+checkAsync('users.create stores the TRIMMED name, so " bob" is bob (CC-14)', async () => {
+  const dbMod = require('../db');
+  const usersSvc = require('../services/users');
+  const realRun = dbMod.promises.run;
+  let inserted = null;
+  dbMod.promises.run = async (sql, params) => { inserted = params[0]; return { lastID: 1, changes: 1 }; };
+  try {
+    const out = await usersSvc.create({ username: '  Bob ', password: 'long-enough-pw' });
+    assert.strictEqual(inserted, 'bob', `stored ${JSON.stringify(inserted)}`);
+    assert.strictEqual(out.username, 'bob');
+    let code = null;
+    await usersSvc.create({ username: 'bo b', password: 'long-enough-pw' }).catch((e) => { code = e.code; });
+    assert.strictEqual(code, 'validation', 'a username with an inner space was created');
+  } finally { dbMod.promises.run = realRun; }
+});
 
 console.log('guardedLookup — the ADDRESS a name resolves to is checked, not just its text (SEC-1):');
 {
