@@ -381,6 +381,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - A release that changes a compose network definition needs a manual `down` / `up`.
   - Re-running a whole workflow for an already-deployed commit leaves no older image to roll
     back to.
+  - `sha-` tags from push runs that never deployed pile up until the next successful deploy.
+    On a runner that has already run out of disk once, consider also removing tags older than N
+    days (CISO note).
 
 ### [ ] SEC-7 Session JWT in localStorage, and `exp` is never checked on the client
 - **Where:** `frontend/src/App.jsx:38,295,94-99`, `ApiTokensSection.jsx:52`.

@@ -292,6 +292,11 @@ console.log('images reach :latest only through deploy, which can roll back:');
     assert.ok(/needs\.deploy\.result/.test(JSON.stringify(step.env || {}))
       && /DEPLOY_RESULT.*!=\s*"success"/.test(script(step)),
       'cleanup removes a push run\'s images even when it never deployed');
+    // The deploy-time sweep must filter on `:sha-` and nothing wider: a `grep -v latest`
+    // or a bare `docker images <base>` would take :previous -- the rollback target.
+    const sweep = script(step).split('\n').filter((l) => /docker images/.test(l));
+    assert.ok(sweep.length > 0 && sweep.every((l) => /grep ':sha-'/.test(l)),
+      'the cleanup sweep no longer restricts itself to :sha-* tags');
     const cond = String(wf.jobs['cleanup-pr-images'].if || '');
     assert.ok(/always\(\)/.test(cond) && /'push'/.test(cond), `cleanup no longer runs on every push run: ${cond}`);
   });
