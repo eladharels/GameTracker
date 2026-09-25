@@ -581,9 +581,6 @@ function statusAfterDateChange(nextDate, currentStatus) {
 async function applyRefreshedMetadata(userId, game, match) {
   const updates = [];
   const params = [];
-  // Set only when the status actually moves, so the event write below can tell a
-  // metadata-only refresh from a status change.
-  let nextStatus = null;
 
   // FILL AND CORRECT, NEVER ERASE — the same rule the Steam App ID already had.
   //
@@ -599,20 +596,12 @@ async function applyRefreshedMetadata(userId, game, match) {
   // refused. validReleaseDate is applied so garbage is treated as absent rather than
   // stored verbatim, matching upsertGame.
   const nextDate = validReleaseDate(match.releaseDate);
-  if (nextDate && nextDate !== game.release_date) {
+  const dateChanges = Boolean(nextDate && nextDate !== game.release_date);
+  if (dateChanges) {
     updates.push('release_date = ?');
     params.push(nextDate);
-    // Re-sync status to the NEW date. Only on a date change, matching v1: a refresh
-    // that leaves the date alone must not quietly reassign a status the user chose.
-    //
-    // statusAfterDateChange, NOT statusForDate — see that function. The latter demoted
-    // `done` to `unreleased` here, and the nightly sweep then finished the job.
-    const next = statusAfterDateChange(nextDate, game.status);
-    if (next !== game.status) {
-      updates.push('status = ?');
-      params.push(next);
-      nextStatus = next;
-    }
+    // The STATUS that goes with the new date is decided later, inside the
+    // transaction, from the row as it is THEN -- not from `game`. See below.
   }
   if (match.coverUrl && match.coverUrl !== game.cover_url) {
     updates.push('cover_url = ?');
@@ -628,28 +617,52 @@ async function applyRefreshedMetadata(userId, game, match) {
 
   if (updates.length === 0) return { updated: false, changes: [] };
 
-  params.push(userId, String(game.game_id));
-  const sql = `UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`;
-  if (nextStatus) {
-    // Transactional only when a STATUS moved, for the same divergence #9 reason as
-    // setStatus. A metadata-only refresh has no event to keep in step, so it stays a
-    // single statement rather than paying for a transaction on the bulk-refresh path
-    // that walks an entire library.
-    //
-    // source = 'metadata_refresh', deliberately neither 'user' nor 'release_sweep'. A
-    // person asked for a refresh, but a PROVIDER's date picked the status — counting it
-    // as something the user did is wrong, and so is filing it with the nightly cron.
-    // Only reachable for the unreleased/wishlist pair; statusAfterDateChange refuses to
-    // touch anything else.
-    await db.withTransaction(async (tx) => {
-      await tx.query(sql, params);
-      await recordStatusEvent(
-        { userId, gameId: game.game_id, from: game.status, to: nextStatus, source: 'metadata_refresh' }, tx);
-    });
-  } else {
-    await run(sql, params);
+  if (!dateChanges) {
+    // Metadata only: no status can move, so there is no event to keep in step and no
+    // transaction to pay for on the bulk path that walks an entire library.
+    params.push(userId, String(game.game_id));
+    await run(`UPDATE user_games SET ${updates.join(', ')} WHERE user_id = ? AND game_id = ?`, params);
+    return { updated: true, changes: updates.map((u) => u.split(' = ')[0]) };
   }
-  return { updated: true, changes: updates.map((u) => u.split(' = ')[0]) };
+
+  // The date moves, so the status may move with it. That decision is made from the
+  // row READ AND LOCKED HERE, never from `game` (ROADMAP CC-1): `game` is a snapshot
+  // the bulk refresh took at the start of a sweep that runs for minutes. With the
+  // snapshot, a game that was `wishlist` then, and which the user has since moved to
+  // `playing`, was rewritten to `unreleased` by a delayed date -- overwriting a status
+  // a person chose, and logging a `wishlist -> unreleased` event that never happened.
+  //
+  // Re-sync status to the NEW date only on a date change, matching v1: a refresh that
+  // leaves the date alone must not quietly reassign a status the user chose. And
+  // statusAfterDateChange, NOT statusForDate -- the latter demoted `done` to
+  // `unreleased` here, and the nightly sweep then finished the job.
+  //
+  // source = 'metadata_refresh', deliberately neither 'user' nor 'release_sweep'. A
+  // person asked for a refresh, but a PROVIDER's date picked the status -- counting it
+  // as something the user did is wrong, and so is filing it with the nightly cron.
+  const changed = await db.withTransaction(async (tx) => {
+    const current = (await tx.query(
+      'SELECT status FROM user_games WHERE user_id = ? AND game_id = ? FOR UPDATE',
+      [userId, String(game.game_id)]
+    )).rows[0];
+    if (!current) return null;   // removed since the snapshot: nothing to refresh
+    const sets = [...updates];
+    const values = [...params];
+    const next = statusAfterDateChange(nextDate, current.status);
+    if (next !== current.status) {
+      sets.push('status = ?');
+      values.push(next);
+    }
+    values.push(userId, String(game.game_id));
+    await tx.query(`UPDATE user_games SET ${sets.join(', ')} WHERE user_id = ? AND game_id = ?`, values);
+    if (next !== current.status) {
+      await recordStatusEvent(
+        { userId, gameId: game.game_id, from: current.status, to: next, source: 'metadata_refresh' }, tx);
+    }
+    return sets;
+  });
+  if (!changed) return { updated: false, changes: [] };
+  return { updated: true, changes: changed.map((u) => u.split(' = ')[0]) };
 }
 
 
@@ -900,56 +913,61 @@ async function setStatus(userId, gameId, status) {
     throw serviceError(CODES.VALIDATION,
       `status must be one of: ${STATUSES.join(', ')}`, { field: 'status' });
   }
-  const row = await get(
-    'SELECT id, release_date, status, backlog_order FROM user_games WHERE user_id = ? AND game_id = ?',
-    [userId, String(gameId)]
-  );
-  if (!row) throw serviceError(CODES.NOT_FOUND, 'no such game in your library');
+  // ONE transaction, and the row is read INSIDE it, locked. It used to be read first
+  // and written afterwards by id, in a separate statement (ROADMAP CC-2), so:
+  //   - a concurrent status change in between left a WRONG `from_status` in the event
+  //     log, which is permanent -- history cannot be corrected afterwards; and
+  //   - a game deleted in between made the UPDATE hit nothing, the event was STILL
+  //     inserted, and the function returned `game: undefined`.
+  // Now the event records the status the row actually had when it changed, and a row
+  // that vanished is a NOT_FOUND with nothing written.
+  //
+  // The backlog advisory lock is taken FIRST, before the row lock, on every path. Every
+  // other writer of backlog_order takes the advisory lock and then touches rows; taking
+  // the row lock first here and the advisory lock second would deadlock against them.
+  // Serialising one user's status changes behind that lock costs nothing measurable.
+  const outcome = await db.withTransaction(async (tx) => {
+    await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, userId]);
+    const row = (await tx.query(
+      'SELECT id, release_date, status, backlog_order FROM user_games WHERE user_id = ? AND game_id = ? FOR UPDATE',
+      [userId, String(gameId)]
+    )).rows[0];
+    if (!row) throw serviceError(CODES.NOT_FOUND, 'no such game in your library');
 
-  // The stored date decides whether `unreleased` is even available. Asking for it on a
-  // game that is already out is a contradiction the server resolves rather than stores.
-  const resolved = statusForDate(row.release_date, requested);
+    // The stored date decides whether `unreleased` is even available. Asking for it on
+    // a game that is already out is a contradiction the server resolves rather than
+    // stores.
+    const resolved = statusForDate(row.release_date, requested);
 
-  // Entering the backlog needs a position; leaving it must give one up, or the row
-  // keeps a stale slot that the reorder then has to reason about.
-  let backlogOrder = row.backlog_order;
-  if (resolved === 'backlog' && row.status !== 'backlog') {
-    await db.withTransaction(async (tx) => {
-      // Same lock every other writer of backlog_order takes. Without it this read of
-      // MAX and the reorder's row-by-row rewrite interleave and produce duplicate
-      // positions, which make the up/down move a permanent no-op.
-      await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, userId]);
+    // Entering the backlog needs a position; leaving it must give one up, or the row
+    // keeps a stale slot that the reorder then has to reason about. The MAX read is
+    // safe because the advisory lock above is held -- without it this read and the
+    // reorder's row-by-row rewrite interleave and produce duplicate positions, which
+    // make the up/down move a permanent no-op.
+    let backlogOrder;
+    if (resolved === 'backlog' && row.status !== 'backlog') {
       const maxRow = (await tx.query(
         'SELECT MAX(backlog_order) AS "maxOrder" FROM user_games WHERE user_id = ?', [userId]
       )).rows[0];
-      const next = (maxRow && maxRow.maxOrder != null ? Number(maxRow.maxOrder) : 0) + 1;
-      await tx.query('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
-        [resolved, next, row.id]);
-      await recordStatusEvent(
-        { userId, gameId, from: row.status, to: resolved, source: 'user' }, tx);
-    });
-  } else {
-    backlogOrder = resolved === 'backlog' ? backlogOrder : null;
-    // TRANSACTIONAL, like the backlog branch above. These were two bare statements,
-    // which db.js divergence #9 says run on DIFFERENT pooled connections — so a failure
-    // between them committed the status change and lost the event. This is the busiest
-    // of the five write paths and the one that produces the `to_status='done'` rows the
-    // whole statistics feature counts, and an unwritten event cannot be recovered: a
-    // retry sees `from === to` and correctly drops it, so the completion is gone for
-    // good. The ordering was at least the safe one — you could lose an event, never
-    // invent one — but "safe" is not the same as "atomic".
-    await db.withTransaction(async (tx) => {
-      await tx.query('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
-        [resolved, backlogOrder, row.id]);
-      await recordStatusEvent(
-        { userId, gameId, from: row.status, to: resolved, source: 'user' }, tx);
-    });
-  }
+      backlogOrder = (maxRow && maxRow.maxOrder != null ? Number(maxRow.maxOrder) : 0) + 1;
+    } else {
+      backlogOrder = resolved === 'backlog' ? row.backlog_order : null;
+    }
+    // In the same transaction as the event, because db.js divergence #9 runs bare
+    // statements on DIFFERENT pooled connections: a failure between them committed
+    // the status change and lost the event, and a lost `to_status='done'` is gone for
+    // good -- a retry sees `from === to` and correctly drops it.
+    await tx.query('UPDATE user_games SET status = ?, backlog_order = ? WHERE id = ?',
+      [resolved, backlogOrder, row.id]);
+    await recordStatusEvent(
+      { userId, gameId, from: row.status, to: resolved, source: 'user' }, tx);
+    return { id: row.id, resolved };
+  });
 
-  const updated = await get('SELECT * FROM user_games WHERE id = ?', [row.id]);
+  const updated = await get('SELECT * FROM user_games WHERE id = ?', [outcome.id]);
   // `coerced` tells the caller the server resolved their request to something else,
   // rather than silently storing a different value than they asked for.
-  return { game: updated, coerced: resolved !== requested };
+  return { game: updated, coerced: outcome.resolved !== requested };
 }
 
 // v2's add, given a game the catalog has already resolved.
