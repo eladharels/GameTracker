@@ -823,7 +823,8 @@ push: main   |   pull_request -> main
 ├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
 ├── frontend-quality npm test (backend + MCP unit tests) + ESLint + Vite build (= typecheck)
 └── build-images     Build backend + frontend + MCP Docker images
-    │                  tag = `latest` on push, `pr-<number>` on a pull request
+    │                  tag = `sha-<commit>` on push, `pr-<number>` on a pull request —
+    │                  NEVER `latest` (only deploy promotes, after every gate)
     ├── trivy-api    Trivy — backend image  (CRITICAL/HIGH → fail)
     ├── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
     └── trivy-mcp    Trivy — MCP image      (CRITICAL/HIGH → fail)
@@ -838,10 +839,13 @@ smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
        Teardown: if: always() — guaranteed cleanup
 
 deploy  (needs: ALL 8 upstream jobs)   [push to main ONLY — see the guard below]
-  └─► docker compose up + post-deploy health check on :3000/api/health
+  └─► promote sha-<commit> -> :latest (old :latest kept as :previous)
+      └─► docker compose up -d (no `down` first) + health check on :3000/api/health
+          └─► on failure: :previous -> :latest, up again — the job stays FAILED
 
-cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
-  └─► docker rmi local/gametracker-*:pr-<number>     [pull_request only, if: always()]
+cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy)
+  └─► docker rmi local/gametracker-*:<pr-N|sha-X>   [every run, if: always();
+                                                     never latest/previous]
 ```
 
 > **A pull request runs everything except `deploy`, and THREE things keep it out of
@@ -885,6 +889,17 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 > an operator restart, a reboot, the next deploy's own stop/start — silently starts production
 > on unreviewed PR code. The tag is the boundary; the guard alone does not close this.
 >
+> **The same applies to a push to main, which is why no build writes `latest` at all.** Main
+> builds were tagged `latest` BEFORE Trivy and the smoke test ran, so a build that failed a
+> HIGH CVE skipped deploy with `latest` already repointed at it. Builds are now `sha-<commit>`,
+> and the deploy job's promote step is the only writer of `latest`. It keeps the old one as
+> `previous`, and a failure step restores it (ROADMAP P0-5, SEC-6). `test/runtime.test.js`
+> fails if another job writes `latest`, if deploy loses its rollback, or if a
+> `docker compose down` comes back before `up`. That `down` stopped the whole stack, database
+> included, before the new one existed. Every deploy was an outage, and a failed deploy stayed
+> one. **A rollback cannot undo a migration:** write each migration so the PREVIOUS release
+> still runs on it.
+>
 > Both compose files take the image from an environment variable, so a by-hand
 > `docker compose up` is unchanged (the defaults are today's `:latest`) while CI can point the
 > smoke stack at the images THIS run built. Without that, a PR's smoke stage would test
@@ -900,7 +915,8 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 > `:latest` explicitly, so it cannot inherit a stray value from a `.env` in the project
 > directory, and it logs `compose config --images` so the deploy record says what went live.
 >
-> **`cleanup-pr-images` is a separate job because the Trivy jobs and `smoke-test` run
+> **`cleanup-pr-images` (which now also removes a push run's `sha-<commit>` tags, after
+> deploy has promoted them) is a separate job because the Trivy jobs and `smoke-test` run
 > concurrently** (all four depend only on `build-images`), so deleting the images from inside
 > smoke-test's teardown would pull them out from under a scan still using them. Nothing else
 > removes them: the deploy job's prune is `docker image prune -f`, which is dangling-only, and

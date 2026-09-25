@@ -211,4 +211,53 @@ console.log('the deploy job carries every variable production compose reads:');
   }
 }
 
+// ONLY the deploy job may write `:latest`, and it must be able to roll back (P0-5, SEC-6).
+//
+// A main push used to be built straight to `:latest` before Trivy and the smoke test ran,
+// so a build that failed a HIGH CVE skipped deploy with `:latest` already pointing at it --
+// and the next restart of this host (it IS production) ran the rejected image. Every
+// build now gets a tag nothing resolves by default, and deploy promotes it after every
+// gate. Deploy also used to stop production before starting the new stack, with no way
+// back: a bad image was an outage until someone intervened.
+console.log('images reach :latest only through deploy, which can roll back:');
+{
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  // Script text with shell comments removed, so a comment ABOUT `latest` is not a use.
+  const script = (st) => String(st.run || '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+
+  check('no job except deploy writes a :latest tag', () => {
+    for (const [id, job] of Object.entries(wf.jobs)) {
+      if (id === 'deploy') continue;
+      for (const st of job.steps || []) {
+        const text = script(st);
+        assert.ok(!/\bTAG="?latest\b/.test(text) && !/(docker tag|-t)\s+\S*:latest\b/.test(text),
+          `${id} / "${st.name}" writes :latest -- only deploy may, after every gate has passed`);
+      }
+    }
+  });
+  check('build-images never produces the latest tag, on any event', () => {
+    const st = wf.jobs['build-images'].steps.find((x) => x.id === 'image-tags');
+    assert.ok(st, 'build-images has no image-tags step');
+    assert.ok(!/\blatest\b/.test(script(st)), 'the build tag step can still produce `latest`');
+  });
+  check('deploy keeps a rollback target and restores it on failure', () => {
+    const steps = wf.jobs.deploy.steps;
+    const promote = steps.find((x) => x.id === 'promote');
+    assert.ok(promote && /:previous/.test(script(promote)), 'deploy does not save the old :latest as :previous');
+    const rollback = steps.find((x) => /failure\(\)/.test(String(x.if || '')));
+    assert.ok(rollback, 'deploy has no step that runs on failure');
+    assert.ok(/:previous"? "?\S*:latest/.test(script(rollback)) && /docker compose -f docker-compose\.yaml up/.test(script(rollback)),
+      'the failure step does not restore :previous and bring the stack back up');
+    assert.ok(!steps.some((x) => /docker compose -f docker-compose\.yaml down/.test(script(x))),
+      'deploy stops production before starting the new stack -- every deploy is an outage again');
+  });
+  check('the cleanup job never removes latest or previous', () => {
+    const text = wf.jobs['cleanup-pr-images'].steps.map(script).join('\n');
+    assert.ok(/pr-\*\|sha-\*\)/.test(text), 'cleanup no longer restricts itself to pr-*/sha-* tags');
+    assert.ok((wf.jobs['cleanup-pr-images'].needs || []).includes('deploy'),
+      'cleanup can run before deploy has promoted the image it is untagging');
+  });
+}
+
 console.log(`\n${n} runtime assertions passed.`);
