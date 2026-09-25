@@ -1484,6 +1484,41 @@ check('case-insensitive, but a near miss is not a match', () => {
   assert.strictEqual(catalog.findExactMatch([], 'x'), null);
 });
 
+console.log('db callback shim — a throwing callback is reported, never silent (CC-13):');
+{
+  const dbMod = require('../db');
+  const withFakePool = async (fn) => {
+    const realQuery = dbMod.pool.query;
+    const realErr = console.error;
+    const logged = [];
+    const rejections = [];
+    const onRej = (r) => rejections.push(r);
+    dbMod.pool.query = async () => ({ rows: [{ id: 1 }], rowCount: 1 });
+    console.error = (...a) => logged.push(a.map(String).join(' '));
+    process.on('unhandledRejection', onRej);
+    try { await fn(); await new Promise((r) => setTimeout(r, 20)); } finally {
+      dbMod.pool.query = realQuery; console.error = realErr; process.off('unhandledRejection', onRej);
+    }
+    return { logged, rejections };
+  };
+  checkAsync('a SYNC throw in a callback is logged with its query, not left as a bare rejection', async () => {
+    let calls = 0;
+    const { logged, rejections } = await withFakePool(async () => {
+      dbMod.get('SELECT id FROM users WHERE id = ?', [1], () => { calls++; throw new TypeError('row.x is undefined'); });
+    });
+    assert.strictEqual(calls, 1, 'the callback was invoked more than once');
+    assert.strictEqual(rejections.length, 0, 'the throw still escaped as an unhandled rejection');
+    assert.ok(logged.some((l) => l.includes('query CALLBACK threw') && l.includes('SELECT id FROM users')), logged.join('\n'));
+  });
+  checkAsync('an ASYNC callback that rejects is reported the same way', async () => {
+    const { logged, rejections } = await withFakePool(async () => {
+      dbMod.run('UPDATE users SET x = ? WHERE id = ?', [1, 2], async () => { throw new Error('later'); });
+    });
+    assert.strictEqual(rejections.length, 0);
+    assert.ok(logged.some((l) => l.includes('query CALLBACK threw')), logged.join('\n'));
+  });
+}
+
 console.log('catalog — a name is not an identity (CC-6):');
 {
   const doom93 = { id: 'igdb_1', name: 'Doom', releaseDate: '1993-12-10', coverUrl: 'd93.png', steamAppId: '2280' };

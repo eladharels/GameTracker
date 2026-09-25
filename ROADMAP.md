@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 12 |
+| CC — Correctness & concurrency | 16 | 13 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **19** |
+| **Total** | **64** | **20** |
 
 ---
 
@@ -391,12 +391,23 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   without refusing a login the directory approved. The P0-1 login test helper now records
   `db.promises.run` too; before this, its "relabelled" check would have become vacuous.
 
-### [ ] CC-13 Errors thrown inside `db.*` callbacks never reach Express
+### [x] CC-13 Errors thrown inside `db.*` callbacks never reach Express
 - **Where:** the `db.js` shim runs callbacks inside `.then`, so a throw becomes an unhandled
   rejection (`index.js:3466` only logs it).
 - **Failure:** a TypeError in any of the 18 inline callbacks leaves the request hanging.
 - **Fix:** move the callback call out of the promise chain in the shim (for example with
   `process.nextTick`), or migrate the remaining call sites to `db.promises`.
+- **Done (partly; the rest belongs to UP-16):**
+  - The shim now catches a callback that throws or rejects, invokes it exactly once as
+    before, and logs it loudly with the query. Before, it was a bare unhandled rejection.
+  - `GET /api/user/me` and `PUT /api/user/me/sharing` are async with `db.promises`, so a throw
+    there reaches Express 5 as a 500.
+  - Unit tests fail on the old code.
+- **Still open:** the shim cannot answer a request, because it has no `res`. So a throwing
+  callback at the remaining ~12 call sites (`findUser`/`withExistingUser`, `getOrCreateUser`,
+  `authRequired`, the login fallback, LDAP sync, the crack-status routes, the root seed,
+  health) is now loud, but the request still hangs until the server timeout. Converting those,
+  starting with `withExistingUser`, is part of UP-16.
 
 ### [ ] CC-14 `users.create` stores the username untrimmed and duplicates the username rules
 - **Where:** `services/users.js:272`.

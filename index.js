@@ -3265,15 +3265,20 @@ app.delete('/api/user/me/tokens/:tokenId', authRequired, (req, res) => {
 });
 
 // --- Get current user's profile/settings ---
-app.get('/api/user/me', authRequired, (req, res) => {
+// ASYNC with db.promises (ROADMAP CC-13): a throw here reaches Express 5's error handler
+// as a 500, instead of vanishing inside the callback shim with the request left open.
+app.get('/api/user/me', authRequired, async (req, res) => {
   const userId = req.user.id;
-  db.get('SELECT id, username, email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id, notification_days, display_name, shares_library FROM users WHERE id = ?', [userId], (err, row) => {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    if (!row) return res.status(404).json({ error: 'User not found' });
-    let notificationDays = [0, 7, 30];
-    try { notificationDays = JSON.parse(row.notification_days); } catch {}
-    res.json({ ...row, notification_days: notificationDays });
-  });
+  let row;
+  try {
+    row = await db.promises.get('SELECT id, username, email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id, notification_days, display_name, shares_library FROM users WHERE id = ?', [userId]);
+  } catch {
+    return res.status(500).json({ error: 'DB error' });
+  }
+  if (!row) return res.status(404).json({ error: 'User not found' });
+  let notificationDays = [0, 7, 30];
+  try { notificationDays = JSON.parse(row.notification_days); } catch {}
+  res.json({ ...row, notification_days: notificationDays });
 });
 
 // --- Per-user settings endpoint ---
@@ -3317,16 +3322,19 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
 
 // --- Per-user sharing toggle endpoint ---
 // Authenticated user can update their own shares_library
-app.put('/api/user/me/sharing', authRequired, (req, res) => {
+app.put('/api/user/me/sharing', authRequired, async (req, res) => {
   const userId = req.user.id;
   const { shares_library } = req.body;
   if (typeof shares_library === 'undefined') {
     return res.status(400).json({ error: 'Missing shares_library value' });
   }
-  db.run('UPDATE users SET shares_library = ? WHERE id = ?', [shares_library ? 1 : 0, userId], function (err) {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json({ success: true });
-  });
+  // Awaited for the same reason as GET /api/user/me above (CC-13).
+  try {
+    await db.promises.run('UPDATE users SET shares_library = ? WHERE id = ?', [shares_library ? 1 : 0, userId]);
+  } catch {
+    return res.status(500).json({ error: 'DB error' });
+  }
+  res.json({ success: true });
 });
 
 // --- List all users who share their library ---
