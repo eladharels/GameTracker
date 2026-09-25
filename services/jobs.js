@@ -327,7 +327,8 @@ async function refreshMetadata({ userId }) {
     result.processed++;
     try {
       const lookup = await catalog.searchAll(game.game_name, { limit: catalog.LIMIT_REFRESH });
-      const match = catalog.findExactMatch(lookup.results, game.game_name);
+      // matchForRow, not findExactMatch: id first, then year — see catalog.js (CC-6).
+      const match = catalog.matchForRow(lookup.results, game);
       if (!match) {
         result.failed++;
         // "Nobody has this game" and "we could not ask" are different facts and a user

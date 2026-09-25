@@ -1236,7 +1236,7 @@ app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired
         try {
           const lookup = await catalogService.searchAll(game.game_name,
             { limit: catalogService.LIMIT_REFRESH });
-          const match = catalogService.findExactMatch(lookup.results, game.game_name);
+          const match = catalogService.matchForRow(lookup.results, game);
           if (!match) {
             // "Not found" and "we could not look it up" are different sentences, and
             // a user acts on them differently. During a provider outage every game in
@@ -1304,7 +1304,7 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
       const results = { total: 1, updated: 0, errors: [], details: [] };
       const lookup = await catalogService.searchAll(game.game_name,
         { limit: catalogService.LIMIT_REFRESH });
-      const match = catalogService.findExactMatch(lookup.results, game.game_name);
+      const match = catalogService.matchForRow(lookup.results, game);
 
       if (!match) {
         // See the bulk route: an outage must not read as "this game does not exist".

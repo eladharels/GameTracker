@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 5 |
+| CC — Correctness & concurrency | 16 | 6 |
 | SEC — Security (medium/low) | 13 | 1 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **11** |
+| **Total** | **64** | **12** |
 
 ---
 
@@ -259,7 +259,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   Check `SELECT username, email FROM users WHERE origin <> 'ldap' AND email <> '';` against
   what those users expect, or ask them to re-check My Account.
 
-### [ ] CC-6 Search merges different games that share a name
+### [x] CC-6 Search merges different games that share a name
 - **Where:** `services/catalog.js:297` (dedupe on lower-cased name, preferring the undated
   result), `catalog.js:584` (`resolveGame` matches by name), and `:275-282` (Steam App ID
   borrowed by name). `refreshMetadata` has the same problem.
@@ -270,6 +270,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** dedupe on `(name, release year)` and prefer provider-id matches. Make
   `resolveGame` return CONFLICT whenever more than one candidate shares the name. Only borrow
   a Steam App ID when the years agree.
+- **Done:**
+  - `mergeResults` keeps same-named results from different years apart.
+  - A Steam App ID is borrowed only within the same year. A cover may still be borrowed when
+    one side is undated.
+  - `findExactMatch` returns nothing when a name is ambiguous, and `resolveGame` answers
+    CONFLICT listing just the collided games.
+  - The refresh uses a new `catalog.matchForRow` (provider id, then the row's year, else skip)
+    in all three places: `jobs.refreshMetadata` and both v1 refresh routes.
+  - Unit tests fail on the old code.
+- **Behaviour change:** a v1 search can now show two results with the same name. The SPA's
+  duplicate check still compares names (FE-3), so adding the second one is blocked until FE-3
+  is fixed.
 
 ### [ ] CC-7 Schema-migration advisory lock is never released
 - **Where:** `schema-migrate.js:52` (session-level `pg_advisory_lock`). The comment at `:86`

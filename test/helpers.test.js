@@ -1404,6 +1404,43 @@ check('case-insensitive, but a near miss is not a match', () => {
   assert.strictEqual(catalog.findExactMatch([], 'x'), null);
 });
 
+console.log('catalog — a name is not an identity (CC-6):');
+{
+  const doom93 = { id: 'igdb_1', name: 'Doom', releaseDate: '1993-12-10', coverUrl: 'd93.png', steamAppId: '2280' };
+  const doom16 = { id: 'rawg_2', name: 'DOOM', releaseDate: '2016-05-13', coverUrl: null, steamAppId: null };
+  check('same-named games from different years stay two results', () => {
+    const merged = catalog.mergeResults([doom93], [doom16], []);
+    assert.strictEqual(merged.length, 2, 'Doom (1993) and Doom (2016) were collapsed into one');
+    assert.deepStrictEqual(merged.map((g) => g.releaseDate.slice(0, 4)).sort(), ['1993', '2016']);
+  });
+  check('a Steam App ID is never borrowed across years (it drives the price)', () => {
+    const d16 = catalog.mergeResults([doom93], [doom16], []).find((g) => g.releaseDate.startsWith('2016'));
+    assert.strictEqual(d16.steamAppId, null, "Doom (2016) was given Doom (1993)'s Steam App ID");
+    assert.strictEqual(d16.coverUrl, null, "Doom (2016) was given Doom (1993)'s cover");
+  });
+  check('findExactMatch refuses a name that several results carry', () => {
+    assert.strictEqual(catalog.findExactMatch([doom93, doom16], 'doom'), null, 'one of two Dooms was picked');
+    assert.strictEqual(catalog.findExactMatch([doom93], 'doom'), doom93);
+  });
+  check('matchForRow: provider id first, then the row\'s year, else nothing', () => {
+    const rs = [doom93, doom16];
+    assert.strictEqual(catalog.matchForRow(rs, { game_id: 'rawg_2', game_name: 'Doom', release_date: null }), doom16);
+    assert.strictEqual(catalog.matchForRow(rs, { game_id: 'igdb_99', game_name: 'Doom', release_date: '2016-01-01' }), doom16);
+    assert.strictEqual(catalog.matchForRow(rs, { game_id: 'igdb_99', game_name: 'Doom', release_date: null }), null,
+      'an ambiguous row was refreshed from a guess');
+    assert.strictEqual(catalog.matchForRow([doom93], { game_id: 'x', game_name: 'doom', release_date: null }), doom93);
+  });
+  checkAsync('resolveGame by an ambiguous name is CONFLICT carrying exactly the collided games', async () => {
+    let err = null;
+    await catalog.resolveGame({ name: 'Doom' },
+      { search: async () => ({ results: [doom93, doom16, { id: 'igdb_3', name: 'Doom Eternal' }] }) })
+      .catch((e) => { err = e; });
+    assert.ok(err, 'an ambiguous name resolved to one game');
+    assert.strictEqual(err.code, 'conflict');
+    assert.deepStrictEqual(err.details.candidates.map((g) => g.id), ['igdb_1', 'rawg_2']);
+  });
+}
+
 console.log('catalog.theGamesDbCover:');
 check('front boxart wins, then first, then a bare object', () => {
   const base = 'https://cdn/';

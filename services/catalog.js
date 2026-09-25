@@ -258,12 +258,26 @@ function parseLooseDate(value) {
 
 // --- Merge -----------------------------------------------------------------
 
-// Fill each result's gaps from same-named results, then collapse to one per name.
+// The release year of a normalised result, or null when it has no readable date.
+const yearOf = (g) => (typeof g?.releaseDate === 'string' && /^\d{4}/.test(g.releaseDate)
+  ? g.releaseDate.slice(0, 4) : null);
+
+// Fill each result's gaps from same-named results, then collapse duplicates.
 //
 // releaseDate is DELIBERATELY never cross-filled. Different games genuinely share a
 // name — "Judas" (2017) and the unreleased "Judas" — and borrowing a date by name
 // alone dates one of them wrongly, which then drives the unreleased/released status
-// coercion. Cover art and Steam App IDs are cosmetic enough to borrow; a date is not.
+// coercion.
+//
+// A NAME IS NOT AN IDENTITY (ROADMAP CC-6). This collapsed to one result per name, so
+// Doom (1993) and Doom (2016) came back as ONE entry, and whichever survived was what
+// an add-by-name stored and what a metadata refresh wrote onto the row — date, cover,
+// status and Steam App ID of the other game. Now:
+//   - same-named results whose release YEARS differ are different games, and each is
+//     kept. Only when a name carries at most one year does it collapse as before.
+//   - a Steam App ID is borrowed only from a same-named result in the SAME year (or
+//     both undated): it drives the price, and a price is not cosmetic.
+//   - a cover may still be borrowed when one side is undated — it is cosmetic.
 function mergeResults(igdb, rawg, thegamesdb) {
   const all = [...igdb, ...rawg, ...thegamesdb];
   // String(x ?? '') rather than x.toLowerCase(): this runs AFTER Promise.all, so
@@ -272,29 +286,48 @@ function mergeResults(igdb, rawg, thegamesdb) {
   // now filter these out; this is the belt to that pair of braces.
   const sameName = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
 
+  const sameYear = (a, b) => yearOf(a) === yearOf(b);
+  const yearsAgree = (a, b) => !yearOf(a) || !yearOf(b) || sameYear(a, b);
+
   const filled = all.map((game) => {
     let out = game;
     if (!out.steamAppId) {
-      const donor = igdb.find((g) => sameName(g.name, out.name) && g.steamAppId)
-        || rawg.find((g) => sameName(g.name, out.name) && g.steamAppId);
+      const donor = igdb.find((g) => sameName(g.name, out.name) && sameYear(g, out) && g.steamAppId)
+        || rawg.find((g) => sameName(g.name, out.name) && sameYear(g, out) && g.steamAppId);
       if (donor) out = { ...out, steamAppId: donor.steamAppId };
     }
     if (!out.coverUrl) {
-      const donor = all.find((g) => sameName(g.name, out.name) && g.coverUrl);
+      const donor = all.find((g) => sameName(g.name, out.name) && yearsAgree(g, out) && g.coverUrl);
       if (donor) out = { ...out, coverUrl: donor.coverUrl };
     }
     return out;
   });
 
-  // One entry per name, preferring the one with NO release date — an unreleased
-  // entry is the more useful answer when a title appears both ways.
   const byName = new Map();
   for (const game of filled) {
     const key = String(game.name ?? '').toLowerCase();
     if (!byName.has(key)) byName.set(key, []);
     byName.get(key).push(game);
   }
-  return [...byName.values()].map((group) => group.find((g) => !g.releaseDate) || group[0]);
+  const out = [];
+  for (const group of byName.values()) {
+    const years = new Set(group.map(yearOf).filter(Boolean));
+    if (years.size <= 1) {
+      // One game as far as we can tell: collapse, preferring the entry with NO
+      // release date — an unreleased entry is the more useful answer when a title
+      // appears both ways.
+      out.push(group.find((g) => !g.releaseDate) || group[0]);
+      continue;
+    }
+    // Several years: one entry per year, plus one for any undated entries.
+    const byYear = new Map();
+    for (const g of group) {
+      const y = yearOf(g) || '';
+      if (!byYear.has(y)) byYear.set(y, g);
+    }
+    out.push(...byYear.values());
+  }
+  return out;
 }
 
 // Search every provider. Never rejects: an unavailable provider contributes nothing.
@@ -325,10 +358,36 @@ async function searchAll(query, { limit = LIMIT_SEARCH } = {}) {
 // The best candidate for an EXISTING library entry: an exact, case-insensitive title
 // match. Deliberately strict — a fuzzy match here silently rewrites the user's game
 // with a different game's date and cover.
+// The ONE result with exactly this name (case-insensitive), or null — including when
+// SEVERAL results carry it. It returned the first of several, which is how an
+// add-by-name of "Doom" silently picked one of two games (ROADMAP CC-6).
 function findExactMatch(results, name) {
+  const matches = exactNameMatches(results, name);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function exactNameMatches(results, name) {
   const target = String(name ?? '').toLowerCase();
-  if (!target) return null;
-  return results.find((g) => String(g.name ?? '').toLowerCase() === target) || null;
+  if (!target) return [];
+  return results.filter((g) => String(g.name ?? '').toLowerCase() === target);
+}
+
+// The search result that IS this library row, or null. For the metadata refresh,
+// which used findExactMatch and so took the first same-named game — writing another
+// game's date, cover, status and Steam App ID onto the row (ROADMAP CC-6).
+//   1. The row's own provider id, when the search returned it: that is identity.
+//   2. Otherwise the one exact-name result — or, among several, the one released in
+//      the year the row already records.
+//   3. Anything still ambiguous is null: refreshing nothing beats refreshing wrongly.
+function matchForRow(results, row) {
+  const byId = results.find((g) => g.id && g.id === String(row?.game_id ?? ''));
+  if (byId) return byId;
+  const named = exactNameMatches(results, row?.game_name);
+  if (named.length === 1) return named[0];
+  const rowYear = yearOf({ releaseDate: row?.release_date });
+  if (!rowYear) return null;
+  const sameYear = named.filter((g) => yearOf(g) === rowYear);
+  return sameYear.length === 1 ? sameYear[0] : null;
 }
 
 // --- The v2 surface ---------------------------------------------------------
@@ -583,9 +642,12 @@ async function resolveGame({ gameId, name } = {}, deps = {}) {
   const result = await doSearch(name);
   const match = findExactMatch(result.results, name);
   if (match) return match;
+  // Several games with exactly this name: the candidates are THOSE, not every fuzzy
+  // hit, so the caller is choosing between the games that actually collided.
+  const exact = exactNameMatches(result.results, name);
   throw serviceError(CODES.CONFLICT,
     `"${sanitizeText(name, 80)}" did not resolve to exactly one game`,
-    { candidates: result.results });
+    { candidates: exact.length > 1 ? exact : result.results });
 }
 
 // Shared by the RAWG search detail lookup and the RAWG by-id fetch.
@@ -599,7 +661,7 @@ module.exports = {
   TIMEOUT_MS, LIMIT_SEARCH, LIMIT_REFRESH, MAX_QUERY,
   searchIgdb, searchRawg, searchTheGamesDb,
   igdbDate, parseLooseDate, theGamesDbCover,
-  mergeResults, searchAll, findExactMatch,
+  mergeResults, searchAll, findExactMatch, matchForRow,
   search, fetchById, resolveGame, parseGameRef, boundedLimit, steamAppIdFromStores,
   igdbByIdQuery, GAME_REF_PATTERN, nobodyAnswered,
 };
