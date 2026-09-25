@@ -798,6 +798,9 @@ checkAsync('a directory login for a directory account still signs in (P0-1 contr
   // CC-12: the profile sync is issued, ONCE, and before the session is answered.
   assert.strictEqual(writes.filter((w) => /UPDATE users SET display_name/.test(w)).length, 1,
     `profile sync writes: ${JSON.stringify(writes)}`);
+  // ...and the write itself refuses a row that holds a local password hash.
+  assert.ok(writes.some((w) => /UPDATE users SET display_name[\s\S]*AND password IS NULL/.test(w)),
+    'the profile sync can relabel a row that has a local password');
 });
 
 checkAsync('a failed profile sync is logged, and does not refuse the login (CC-12)', async () => {

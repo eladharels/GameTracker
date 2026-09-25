@@ -1975,7 +1975,10 @@ app.post('/api/auth/login', (req, res) => {
       // does not refuse the login: the directory has authenticated this person, and the
       // profile sync is not what authorizes them.
       try {
-        await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ?`, params);
+        // `AND password IS NULL` makes the WRITE re-check directoryClaimRefusal's rule: a
+        // local password hash set on this row after the claim check must not have the
+        // row relabelled origin='ldap' (from the CISO review of CC-12).
+        await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ? AND password IS NULL`, params);
       } catch (syncErr) {
         console.error('[LDAP] Could not sync profile for', safeForLog(normalizedUsername, 64), '-', syncErr.message);
       }
