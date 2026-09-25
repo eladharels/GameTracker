@@ -489,10 +489,14 @@ async function updateNotificationSettings(userId, fields) {
     // A NUMBER is converted, not dropped: a Telegram chat id IS a number, and the v1
     // route stored whatever it was sent, so a client posting `telegram_chat_id: 12345`
     // would otherwise get a 200 with its chat id silently wiped -- and its Telegram
-    // reminders turned off. Anything else that is not text still becomes ''.
+    // reminders turned off. Any OTHER non-text value is refused rather than blanked:
+    // success that destroys the stored value is the one answer a client cannot act on.
     const value = fields[key];
-    params.push(value === null ? '' : sanitizeText(
-      typeof value === 'number' && Number.isFinite(value) ? String(value) : value, 200));
+    const isNumber = typeof value === 'number' && Number.isFinite(value);
+    if (value !== null && typeof value !== 'string' && !isNumber) {
+      throw serviceError(CODES.VALIDATION, `${key} must be text`, { field: key });
+    }
+    params.push(value === null ? '' : sanitizeText(isNumber ? String(value) : value, 200));
   }
   if (has('notificationDays')) {
     const days = fields.notificationDays;

@@ -3269,12 +3269,13 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
     .catch((err) => {
       if (err && err.code === SVC.VALIDATION) {
         let message = err.message === 'no settings to update' ? 'No settings to update' : err.message;
-        // Safe ONLY because every VALIDATION message from updateNotificationSettings is
-        // a fixed string. A service message must never interpolate user input, or this
-        // renaming would reflect it (and could rewrite it) into the response.
-        for (const [v1Key, key] of Object.entries(V1_NOTIFICATION_FIELDS)) {
-          message = message.split(key).join(v1Key);
-        }
+        // Rename ONLY the leading field name, and only the field this error is about
+        // (err.details.field) -- never a substring anywhere in the message. Every
+        // VALIDATION message from updateNotificationSettings is a fixed string that
+        // starts with its field's name; this must not become a way to rewrite prose.
+        const field = err.details && err.details.field;
+        const v1Key = Object.keys(V1_NOTIFICATION_FIELDS).find((k) => V1_NOTIFICATION_FIELDS[k] === field);
+        if (v1Key && message.startsWith(`${field} `)) message = v1Key + message.slice(field.length);
         return res.status(400).json({ error: message });
       }
       return problem.send(res, err, { log: '[Settings] notification settings write failed:' });

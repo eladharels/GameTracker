@@ -302,6 +302,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   destroyed rather than pooled, and ending the session ends the lock.
   `test/integration/migration-lock.test.js` checks `pg_locks` after a run and starts a second
   migrating process. Both checks fail on the old code, and the second reproduced the hang.
+- **Follow-up (CISO note):** `pg_advisory_lock` has no timeout, so a session that crashed while
+  holding it would block startup indefinitely. Consider `SET lock_timeout` around the
+  acquisition, with a clear fatal message.
 
 ### [x] CC-8 The single-game metadata refresh still has the bug the bulk refresh fixed
 - **Where:** `index.js:1305-1309` uses `lookup.degraded`, while the bulk route uses
@@ -315,6 +318,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   The v1 routes keep their exact wording through a small `recordV1Refresh` formatter. A
   contract test drives the real single-game route with no API keys configured, and it fails on
   the old code.
+- **Behaviour change:** when one provider is down, another answered, and nothing matched, the
+  single-game refresh now says "Not found", as the bulk route always did. Before, it said
+  "Lookup unavailable".
 
 ### [x] CC-9 v1 `PUT /api/user/me/settings` has its own copy of the rules
 - **Where:** `index.js:3210-3269` versus `services/users.js#updateNotificationSettings`.
@@ -326,10 +332,22 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Done:** the v1 route maps its snake_case keys onto `users.updateNotificationSettings`, the
   same rules `PATCH /api/v2/me/notifications` applies. It still answers `{success:true}`, and a
   refusal is still `400 {error}`, worded with v1's field names.
-- **Behaviour changes:**
+- **Review fixes:**
+  - A numeric channel id (a Telegram chat id is a number) is converted to text instead of being
+    silently wiped. The Architect rejected the first version for this and the CISO flagged it
+    too.
+  - Any other non-text value is refused with a 400, never blanked with a 200.
+  - v1 error wording renames only the leading field name of the field in error.
+- **Behaviour changes (v1 and v2 share them now):**
   - `notification_days` above the cap is now refused, and duplicates are removed.
-  - Channel text fields are sanitised and capped at 200 characters. A non-string becomes empty.
-  - The `notification_days` refusal message now names the upper bound.
+  - Channel text fields are sanitised and capped at 200 characters. A number is kept as text,
+    and any other non-text value gets a 400.
+  - The `notification_days` refusal message now names the upper bound, and the URL messages end
+    "…or empty to clear".
+  - `null` for `email` or a URL clears it. It used to be stored as the string "null" and
+    refused.
+  - An account deleted mid-request now answers 404 instead of 200. A database error uses
+    `problem.send`'s generic wording.
 
 ### [ ] CC-10 Backlog swap reads positions before taking the lock
 - **Where:** `services/library.js:119` (`listBacklog`) comes before the advisory lock at `:135`.
@@ -738,6 +756,10 @@ Reviews for P0-5 and SEC-6: **Architect approved. CISO rejected** (the `:latest`
 `docker tag x:sha x:latest`), **then approved** after `cf46533`. Workflow-only change, so no UI/UX
 review was needed. Exercised with a stubbed `docker`, but **not yet run on the real runner**.
 The first push to `main` after merging is the real test.
+
+Reviews for the CC-6 follow-up and CC-7 to CC-9: **CISO approved. Architect rejected CC-9**
+(a numeric channel id was wiped with a 200). Fixed in `6919d03` plus the next commit: numbers
+become text, other non-text is refused, and the field rename is safer.
 
 Reviews for CC-5, CC-6 and SEC-1: **Architect approved. CISO approved on one condition**:
 `proxy: false` on the guarded calls, which is done and tested. The other notes were acted on as

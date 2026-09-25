@@ -567,11 +567,15 @@ checkAsync('notification_days is capped and de-duplicated, as on v2', async () =
 });
 checkAsync('free-text channel fields are bounded and must be text', async () => {
   // v1 stored ntfy_topic, gotify_token and telegram_chat_id verbatim, any size or type.
-  const { res, writes } = await putSettings({ ntfy_topic: 'x'.repeat(5000), telegram_chat_id: { $gt: '' } });
-  assert.strictEqual(res.statusCode, 200);
-  const params = writes[0].params;
-  assert.ok(params.every((p) => typeof p !== 'object'), 'an object reached the UPDATE');
-  assert.ok(params.every((p) => typeof p !== 'string' || p.length <= 200), 'a 5000-char topic was stored');
+  const long = await putSettings({ ntfy_topic: 'x'.repeat(5000) });
+  assert.strictEqual(long.res.statusCode, 200);
+  assert.ok(long.writes[0].params.every((p) => typeof p !== 'string' || p.length <= 200), 'a 5000-char topic was stored');
+  // A non-text value is REFUSED, never blanked with a 200 -- that would destroy the
+  // stored value while reporting success.
+  const obj = await putSettings({ telegram_chat_id: { $gt: '' } });
+  assert.strictEqual(obj.res.statusCode, 400);
+  assert.deepStrictEqual(obj.res.body, { error: 'telegram_chat_id must be text' });
+  assert.strictEqual(obj.writes.length, 0, 'an object reached the UPDATE');
 });
 checkAsync('a NUMERIC telegram_chat_id is stored as text, not silently wiped', async () => {
   // v1 stored whatever it was sent, and a chat id is a number. Wiping it would 200 and
