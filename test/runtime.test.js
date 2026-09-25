@@ -226,6 +226,10 @@ console.log('images reach :latest only through deploy, which can roll back:');
   // Script text with shell comments removed, so a comment ABOUT `latest` is not a use.
   const script = (st) => String(st.run || '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
+  // ONE matcher, used by the check and by its self-test, so narrowing it narrows both.
+  const latestIn = (job) => /[^\s"']*:latest\b/.exec(JSON.stringify(
+    { ...job, steps: (job.steps || []).map((st) => ({ ...st, run: script(st) })) }));
+
   check('no job except deploy mentions :latest at all', () => {
     // DELIBERATELY BLUNT. The first version matched `docker tag <arg>:latest` and
     // `-t <arg>:latest` only, and a CISO review showed it green on
@@ -235,8 +239,7 @@ console.log('images reach :latest only through deploy, which can roll back:');
     // `with:` inputs such as a build action's `tags`) fails.
     for (const [id, job] of Object.entries(wf.jobs)) {
       if (id === 'deploy') continue;
-      const stripped = { ...job, steps: (job.steps || []).map((st) => ({ ...st, run: script(st) })) };
-      const hit = /[^\s"']*:latest\b/.exec(JSON.stringify(stripped));
+      const hit = latestIn(job);
       assert.ok(!hit, `${id} mentions ${hit && hit[0]} -- only deploy may write :latest, after every gate has passed`);
     }
   });
@@ -244,11 +247,12 @@ console.log('images reach :latest only through deploy, which can roll back:');
     // Guards the guard: prove the scan would have gone red, on a copy of build-images.
     for (const line of ['docker tag "${base}:sha" "${base}:latest"', 'docker image tag a:b a:latest',
       'docker build --tag x:latest .', 'docker build -t local/gametracker-backend:latest .']) {
-      const job = { steps: [{ run: line }] };
-      const stripped = { ...job, steps: job.steps.map((st) => ({ ...st, run: script(st) })) };
-      assert.ok(/[^\s"']*:latest\b/.test(JSON.stringify(stripped)), `the scan misses: ${line}`);
+      assert.ok(latestIn({ steps: [{ run: line }] }), `the scan misses: ${line}`);
     }
-    assert.ok(/:latest/.test(JSON.stringify({ with: { tags: 'x:latest' } })), 'the scan misses a with.tags input');
+    assert.ok(latestIn({ steps: [{ uses: 'docker/build-push-action', with: { tags: 'x:latest' } }] }),
+      'the scan misses a with.tags input');
+    assert.ok(latestIn({ env: { IMAGE: 'local/x:latest' } }), 'the scan misses a job env');
+    assert.ok(!latestIn({ steps: [{ run: '# a comment about :latest' }] }), 'a shell comment counts as a use');
   });
   check('build-images never produces the latest tag, on any event', () => {
     const st = wf.jobs['build-images'].steps.find((x) => x.id === 'image-tags');

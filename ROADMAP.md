@@ -37,12 +37,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 | Section | Items | Done |
 |---|---|---|
-| P0 — Fix first | 6 | 4 |
+| P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 0 |
-| SEC — Security (medium/low) | 13 | 0 |
+| SEC — Security (medium/low) | 13 | 1 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **4** |
+| **Total** | **64** | **6** |
 
 ---
 
@@ -133,7 +133,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   lookup. That covers the cron, `runJob`, the v1 `/api/game-price`, the v2 `/catalog/prices`
   default and `update_library_prices.js`. An invalid value falls back to `il` with one warning.
 
-### [ ] P0-5 `:latest` is retagged before Trivy and the smoke test pass (push to main)
+### [x] P0-5 `:latest` is retagged before Trivy and the smoke test pass (push to main)
 - **Where:** `.github/workflows/docker-build-deploy.yml:320-352`. Trivy is at `:411-418` and
   runs later, as does smoke-test.
 - **Failure:** a push to main fails Trivy on a HIGH CVE, so deploy is skipped. But `:latest`
@@ -145,6 +145,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Point the scans and the smoke stack at the immutable tag.
 - **Test:** add a check in the workflow, or a static test, that no job before `deploy`
   writes a `:latest` tag.
+- **Done** (`8fd5a87`, `cf46533`), together with SEC-6:
+  - Builds are tagged `sha-<commit>` or `pr-<number>`, and the scans and the smoke stack test
+    that tag.
+  - Only deploy's promote step writes `:latest`, and it keeps the old one as `:previous`.
+  - The cleanup job also removes a push run's `sha-` tags, after deploy, and never touches
+    `latest` or `previous`.
+  - `runtime.test.js` fails on any mention of `:latest` in a job other than deploy.
 
 ### [ ] P0-6 ✔ Frontend: a 403 deletes the token but the app stays "logged in"
 - **Where:** `frontend/src/App.jsx:388-392` (UserManagementPage) and
@@ -353,7 +360,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** replace the path allowlists with regex or stopword allowlists for the specific
   example strings.
 
-### [ ] SEC-6 Deploy stops production before starting the new version, with no rollback
+### [x] SEC-6 Deploy stops production before starting the new version, with no rollback
 - **Where:** `docker-build-deploy.yml:982-998`, then `:1037`.
 - **Failure:** a new image fails its healthcheck and production stays down until someone
   steps in. There is also downtime on every deploy.
@@ -361,6 +368,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Keep the previous image tagged `:previous`.
   - `up -d` without an explicit stop.
   - On a failed health check, retag `:previous` → `:latest` and `up -d` again.
+- **Done** (`8fd5a87`, `cf46533`): no `docker compose down`, so the database keeps running.
+  On failure or cancellation, a rollback step restores `:previous` and brings it back up, and
+  the job stays failed.
+- **Known limits:**
+  - A rollback cannot undo a schema migration. CLAUDE.md now requires every migration to leave
+    the previous release able to run.
+  - A release that changes a compose network definition needs a manual `down` / `up`.
+  - Re-running a whole workflow for an already-deployed commit leaves no older image to roll
+    back to.
 
 ### [ ] SEC-7 Session JWT in localStorage, and `exp` is never checked on the client
 - **Where:** `frontend/src/App.jsx:38,295,94-99`, `ApiTokensSection.jsx:52`.
@@ -618,7 +634,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 Reviews for P0-1 to P0-4: **Architect approved. CISO rejected P0-3** (the deploy job didn't
 carry the variables), **then approved** after `6248d0f`. A `/code-review` of the branch then
 found two problems in the P0-1 rule, fixed in `2ef5fd9`. The CISO approved that fix, on
-condition that `JWT_SECRET` is rotated at deploy and SEC-13 is carried out. No frontend changes, so no UI/UX
+condition that `JWT_SECRET` is rotated at deploy and SEC-13 is carried out.
+
+Reviews for P0-5 and SEC-6: **Architect approved. CISO rejected** (the `:latest` check missed
+`docker tag x:sha x:latest`), **then approved** after `cf46533`. Workflow-only change, so no UI/UX
+review was needed. Exercised with a stubbed `docker`, but **not yet run on the real runner**.
+The first push to `main` after merging is the real test. No frontend changes, so no UI/UX
 review was needed. **Not yet validated on GameTracker-stg.**
 
 | ID | PR | Date | Summary |
@@ -627,3 +648,5 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | P0-2 | `3c81bb6` | 2026-09-25 | `requiredGroup` is an exact full-DN or first-RDN cn match |
 | P0-3 | `3c81bb6`, `6248d0f` | 2026-09-25 | Backend settings reach the container through both compose files and the deploy job |
 | P0-4 | `3c81bb6`, `4160735` | 2026-09-25 | `jobs.js#steamRegion` is the one reader of `STEAM_REGION` |
+| P0-5 | `8fd5a87`, `cf46533` | 2026-09-25 | Builds are `sha-<commit>`/`pr-<n>`, and only deploy promotes to `:latest` |
+| SEC-6 | `8fd5a87`, `cf46533` | 2026-09-25 | No `down` before `up`, and deploy rolls back to `:previous` on failure or cancel |
