@@ -726,7 +726,7 @@ checkAsync('an UNRECOGNISED verification result never issues a session', async (
 // P0-1. Drives the real login handler with the directory stubbed to say YES, and the
 // users table stubbed to hold a LOCAL administrator of the same name. The local row's
 // bcrypt hash is real, so the fallback genuinely checks it.
-async function ldapLoginAs(username, row, ip) {
+async function ldapLoginAs(username, row, ip, opts = {}) {
   const ldapHelpers = require('../ldap-helpers');
   const settingsStore = require('../settings-store');
   const realVerify = ldapHelpers.verifyLdapCredentials;
@@ -734,7 +734,15 @@ async function ldapLoginAs(username, row, ip) {
   const realGet = db.get;
   const realRun = db.run;
   const realPGet = db.promises.get;
+  const realPRun = db.promises.run;
   const writes = [];
+  // BOTH write paths are recorded: the profile sync moved to db.promises.run (CC-12),
+  // and a helper that only watched db.run would make the "relabelled" check vacuous.
+  db.promises.run = async (sql) => {
+    if (opts.syncFails) throw new Error('connection terminated');
+    writes.push(sql);
+    return { changes: 1 };
+  };
   settingsStore.loadSettings = () => ({
     ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' },
   });
@@ -758,6 +766,7 @@ async function ldapLoginAs(username, row, ip) {
     db.get = realGet;
     db.run = realRun;
     db.promises.get = realPGet;
+    db.promises.run = realPRun;
   }
   return { res, writes };
 }
@@ -783,9 +792,21 @@ checkAsync('a directory login named after a LOCAL admin does not sign in as it (
 checkAsync('a directory login for a directory account still signs in (P0-1 control)', async () => {
   // Without this, the assertion above would pass for a route that refused every LDAP login.
   const row = { id: 5, username: 'jane', can_manage_users: 0, origin: 'ldap', password: null };
-  const { res } = await ldapLoginAs('jane', row, '203.0.113.23');
+  const { res, writes } = await ldapLoginAs('jane', row, '203.0.113.23');
   assert.strictEqual(res.statusCode, 200);
   assert.ok(res.body && typeof res.body.token === 'string', 'a legitimate directory login got no session');
+  // CC-12: the profile sync is issued, ONCE, and before the session is answered.
+  assert.strictEqual(writes.filter((w) => /UPDATE users SET display_name/.test(w)).length, 1,
+    `profile sync writes: ${JSON.stringify(writes)}`);
+});
+
+checkAsync('a failed profile sync is logged, and does not refuse the login (CC-12)', async () => {
+  const row = { id: 6, username: 'joe', can_manage_users: 0, origin: 'ldap', password: null };
+  const errLog = console.error; console.error = () => {};
+  let out;
+  try { out = await ldapLoginAs('joe', row, '203.0.113.25', { syncFails: true }); } finally { console.error = errLog; }
+  assert.strictEqual(out.res.statusCode, 200, 'a profile-sync failure refused a login the directory approved');
+  assert.ok(typeof out.res.body.token === 'string');
 });
 
 checkAsync('a directory account outside requiredGroup CANNOT mint', async () => {

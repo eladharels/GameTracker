@@ -275,13 +275,10 @@ function getOrCreateUser(username, cb, opts = {}) {
     // creating a local account of the same name in between must not have it claimed.
     const refusal = directoryClaimRefusal(normalizedUsername, user || null);
     if (refusal) return cb(Object.assign(new Error('directory may not claim this username'), { directoryClaimRefused: refusal }));
-    if (user) {
-      // Optionally update display_name/origin if provided
-      if (opts.display_name || opts.origin) {
-        db.run('UPDATE users SET display_name = COALESCE(?, display_name), origin = COALESCE(?, origin) WHERE username = ?', [opts.display_name, opts.origin, normalizedUsername]);
-      }
-      return cb(null, user);
-    }
+    // No write for an EXISTING row here. There used to be a fire-and-forget UPDATE of
+    // display_name/origin, which the login route then repeated -- awaited, with the
+    // email -- straight after this callback (ROADMAP CC-12). One write, in one place.
+    if (user) return cb(null, user);
     // Use CN if provided and non-empty, otherwise fallback to username
     const displayNameToUse = (typeof opts.display_name === 'string' && opts.display_name.trim() !== '' ? opts.display_name : normalizedUsername);
     console.log('Creating user:', { username: safeForLog(normalizedUsername, 64), display_name: safeForLog(displayNameToUse, 64), origin: opts.origin });
@@ -1949,7 +1946,7 @@ app.post('/api/auth/login', (req, res) => {
     console.log('[DEBUG] Final displayName:', safeForLog(displayName));
     console.log('[DEBUG] User email from LDAP:', safeForLog(userEmail));
 
-    getOrCreateUser(normalizedUsername, (err, user) => {
+    getOrCreateUser(normalizedUsername, async (err, user) => {
       if (err && err.directoryClaimRefused) {
         console.warn(`[LDAP] Username '${safeForLog(normalizedUsername, 64)}' stopped being claimable during login (${err.directoryClaimRefused}). Using local authentication instead.`);
         return fallbackLocalAuth();
@@ -1973,7 +1970,15 @@ app.post('/api/auth/login', (req, res) => {
         console.warn('[LDAP] Ignoring malformed email from directory:', safeForLog(userEmail));
       }
       params.push(normalizedUsername);
-      db.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ?`, params);
+      // AWAITED (ROADMAP CC-12). It was fire-and-forget, so a failure vanished and the
+      // account's display_name and email silently stayed stale. A failure is logged but
+      // does not refuse the login: the directory has authenticated this person, and the
+      // profile sync is not what authorizes them.
+      try {
+        await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ?`, params);
+      } catch (syncErr) {
+        console.error('[LDAP] Could not sync profile for', safeForLog(normalizedUsername, 64), '-', syncErr.message);
+      }
 
       const token = jwt.sign({
         id: user.id,

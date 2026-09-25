@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 11 |
+| CC — Correctness & concurrency | 16 | 12 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **18** |
+| **Total** | **64** | **19** |
 
 ---
 
@@ -382,10 +382,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     text. The same applies to the admin CrackWatch refresh.
   - Contract tests fail on the old code.
 
-### [ ] CC-12 Unawaited writes on the LDAP login path
+### [x] CC-12 Unawaited writes on the LDAP login path
 - **Where:** `index.js:275` and `:1910`.
 - **Failure:** a failed write is silently lost, so `display_name` and `email` go stale.
 - **Fix:** await both and log failures. This largely goes away once P0-1 and UP-16 are done.
+- **Done:** the duplicate fire-and-forget UPDATE in `getOrCreateUser` is gone. The login
+  route's own profile sync (display name, origin, email) is awaited, and a failure is logged
+  without refusing a login the directory approved. The P0-1 login test helper now records
+  `db.promises.run` too; before this, its "relabelled" check would have become vacuous.
 
 ### [ ] CC-13 Errors thrown inside `db.*` callbacks never reach Express
 - **Where:** the `db.js` shim runs callbacks inside `.then`, so a throw becomes an unhandled
