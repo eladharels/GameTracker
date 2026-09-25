@@ -1018,9 +1018,9 @@ jobs:
             *) echo "[deploy] Refusing to promote '${IMAGE_TAG}': expected sha-<commit>."; exit 1 ;;
           esac
           BASES="${BACKEND_IMAGE_BASE} ${FRONTEND_IMAGE_BASE} ${MCP_IMAGE_BASE}"
-          # All three must exist BEFORE anything is retagged. They can be missing when
-          # only this job is re-run after the cleanup job removed the run's tags --
-          # re-run the whole workflow instead.
+          # All three must exist BEFORE anything is retagged. The cleanup job keeps a
+          # push run's tags until a deploy succeeds, so "Re-run failed jobs" finds them;
+          # if they are gone anyway, re-run the whole workflow.
           for base in ${BASES}; do
             docker image inspect "${base}:${IMAGE_TAG}" >/dev/null 2>&1 || {
               echo "[deploy] ${base}:${IMAGE_TAG} not found. Re-run the WHOLE workflow, not only this job."
@@ -1215,11 +1215,10 @@ jobs:
   # one does, and that is the case where nobody comes back to tidy up.
   # ─────────────────────────────────────────────────────────────────────────────
   #
-  # PUSH RUNS TOO, since P0-5: a main build is tagged `sha-<commit>` now, and a run that
-  # fails a scan would otherwise leave those images behind for ever. It waits for
-  # `deploy` as well, so it never untags an image before promotion has read it. After a
-  # successful deploy the image is also tagged `latest`, so removing `sha-<commit>`
-  # only drops that tag; the image itself stays.
+  # PUSH RUNS TOO, since P0-5: a main build is tagged `sha-<commit>` now. It waits for
+  # `deploy`, so it never untags an image before promotion has read it. A push run that
+  # did NOT deploy keeps its tags (so "Re-run failed jobs" still has images to scan and
+  # promote); the next successful deploy sweeps every leftover sha-* tag.
   cleanup-pr-images:
     name: Clean up this run's image tags
     runs-on: self-hosted
@@ -1232,22 +1231,48 @@ jobs:
       - smoke-test
       - deploy
     steps:
-      - name: Remove images built for this pull request
+      - name: Remove this run's image tags
+        env:
+          TAG: ${{ needs.build-images.outputs.image_tag }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
         run: |
           set -euo pipefail
-          TAG="${{ needs.build-images.outputs.image_tag }}"
-          # Only this run's own tags: pr-<number> or sha-<commit>. NEVER latest or
-          # previous -- those are production and its rollback target. If the output is
-          # missing (build-images never ran) an unguarded `docker rmi ...:` would be a
-          # malformed reference at best.
+          BASES="local/gametracker-backend local/gametracker-frontend local/gametracker-mcp"
+          # Only pr-<number> or sha-<commit>. NEVER latest or previous -- those are
+          # production and its rollback target. If the output is missing (build-images
+          # never ran) an unguarded `docker rmi ...:` would be a malformed reference.
           case "${TAG}" in
             pr-*|sha-*) ;;
             *) echo "[cleanup] Refusing to remove tag '${TAG}' — expected pr-<number> or sha-<commit>."; exit 0 ;;
           esac
-          for base in local/gametracker-backend local/gametracker-frontend local/gametracker-mcp; do
-            docker rmi "${base}:${TAG}" 2>/dev/null \
-              && echo "[cleanup] Removed ${base}:${TAG}" \
-              || echo "[cleanup] ${base}:${TAG} already gone"
-          done
+          if [ "${TAG#sha-}" != "${TAG}" ]; then
+            # A PUSH run keeps its images unless it DEPLOYED. "Re-run failed jobs" re-runs
+            # the scans and deploy but not build-images, so removing sha-<commit> after a
+            # transient scan failure (a rate-limited Trivy DB download, say) made the
+            # re-run fail on a missing image and forced a full rebuild.
+            if [ "${DEPLOY_RESULT}" != "success" ]; then
+              echo "[cleanup] Deploy result '${DEPLOY_RESULT}': keeping :${TAG} so 'Re-run failed jobs' still works."
+              echo "[cleanup] The next successful deploy removes it."
+              exit 0
+            fi
+            # Deployed: remove EVERY sha-* tag, not only ours. Whole main runs are
+            # serialised by the workflow concurrency group, so no other main run is in
+            # flight -- any other sha-* tag was left by an earlier run that never
+            # deployed. After promotion this run's image is also :latest, so removing
+            # its sha tag drops the tag and keeps the image.
+            for base in ${BASES}; do
+              for ref in $(docker images --format '{{.Repository}}:{{.Tag}}' "${base}" | grep ':sha-' || true); do
+                docker rmi "${ref}" >/dev/null 2>&1 \
+                  && echo "[cleanup] Removed ${ref}" \
+                  || echo "[cleanup] Could not remove ${ref} (in use?)"
+              done
+            done
+          else
+            for base in ${BASES}; do
+              docker rmi "${base}:${TAG}" 2>/dev/null \
+                && echo "[cleanup] Removed ${base}:${TAG}" \
+                || echo "[cleanup] ${base}:${TAG} already gone"
+            done
+          fi
           docker image prune -f >/dev/null 2>&1 || true
           echo "[cleanup] Image tag cleanup complete"

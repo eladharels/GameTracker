@@ -851,6 +851,8 @@ deploy  (needs: ALL 8 upstream jobs)   [push to main ONLY — see the guard belo
 cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy)
   └─► docker rmi local/gametracker-*:<pr-N|sha-X>   [every run, if: always();
                                                      never latest/previous]
+      a push run that did NOT deploy KEEPS its sha-X tags ("Re-run failed jobs" does
+      not rebuild); a successful deploy sweeps every leftover sha-* tag
 ```
 
 > **A pull request runs everything except `deploy`, and THREE things keep it out of

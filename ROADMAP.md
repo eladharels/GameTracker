@@ -371,6 +371,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Done** (`8fd5a87`, `cf46533`): no `docker compose down`, so the database keeps running.
   On failure or cancellation, a rollback step restores `:previous` and brings it back up, and
   the job stays failed.
+- **Review fix** (after `/code-review`): cleanup deleted a push run's `sha-` images even when
+  the run never deployed. "Re-run failed jobs" does not rebuild, so a transient scan failure
+  could only be recovered by a full rebuild. A push run now keeps its tags until a deploy
+  succeeds, and a successful deploy removes every leftover `sha-` tag.
 - **Known limits:**
   - A rollback cannot undo a schema migration. CLAUDE.md now requires every migration to leave
     the previous release able to run.
@@ -648,5 +652,5 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | P0-2 | `3c81bb6` | 2026-09-25 | `requiredGroup` is an exact full-DN or first-RDN cn match |
 | P0-3 | `3c81bb6`, `6248d0f` | 2026-09-25 | Backend settings reach the container through both compose files and the deploy job |
 | P0-4 | `3c81bb6`, `4160735` | 2026-09-25 | `jobs.js#steamRegion` is the one reader of `STEAM_REGION` |
-| P0-5 | `8fd5a87`, `cf46533` | 2026-09-25 | Builds are `sha-<commit>`/`pr-<n>`, and only deploy promotes to `:latest` |
+| P0-5 | `8fd5a87`, `cf46533`, review fix | 2026-09-25 | Builds are `sha-<commit>`/`pr-<n>`, and only deploy promotes to `:latest` |
 | SEC-6 | `8fd5a87`, `cf46533` | 2026-09-25 | No `down` before `up`, and deploy rolls back to `:previous` on failure or cancel |

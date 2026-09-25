@@ -286,6 +286,12 @@ console.log('images reach :latest only through deploy, which can roll back:');
       'cleanup can run before deploy has promoted the image it is untagging');
     // Without always() it never runs after a failed scan; without push it never removes
     // sha-<commit> tags. Either way the runner's disk fills with rejected images again.
+    // A push run that did not deploy must KEEP its sha-* tags: "Re-run failed jobs"
+    // does not rebuild, so removing them after a transient scan failure breaks the re-run.
+    const step = wf.jobs['cleanup-pr-images'].steps.find((st) => /docker rmi/.test(script(st)));
+    assert.ok(/needs\.deploy\.result/.test(JSON.stringify(step.env || {}))
+      && /DEPLOY_RESULT.*!=\s*"success"/.test(script(step)),
+      'cleanup removes a push run\'s images even when it never deployed');
     const cond = String(wf.jobs['cleanup-pr-images'].if || '');
     assert.ok(/always\(\)/.test(cond) && /'push'/.test(cond), `cleanup no longer runs on every push run: ${cond}`);
   });
