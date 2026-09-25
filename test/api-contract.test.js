@@ -745,7 +745,7 @@ async function ldapLoginAs(username, row, ip, opts = {}) {
   db.promises.run = async (sql) => {
     if (opts.syncFails) throw new Error('connection terminated');
     writes.push(sql);
-    return { changes: 1 };
+    return { changes: opts.syncChanges ?? 1 };
   };
   settingsStore.loadSettings = () => ({
     ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' },
@@ -805,6 +805,18 @@ checkAsync('a directory login for a directory account still signs in (P0-1 contr
   // ...and the write itself refuses a row that holds a local password hash.
   assert.ok(writes.some((w) => /UPDATE users SET display_name[\s\S]*AND password IS NULL/.test(w)),
     'the profile sync can relabel a row that has a local password');
+});
+
+checkAsync('a row that gained a local password DURING login gets no directory session', async () => {
+  // The claim check saw a passwordless directory row; by the profile sync, a local hash
+  // was set, so the guarded UPDATE matched nothing. Signing the token anyway would be a
+  // directory session on a local account. The local password decides instead -- and the
+  // directory password is not it.
+  const row = { id: 8, username: 'kim', can_manage_users: 1, origin: 'ldap', password: null };
+  const warn = console.warn; console.warn = () => {};
+  let out;
+  try { out = await ldapLoginAs('kim', row, '203.0.113.26', { syncChanges: 0 }); } finally { console.warn = warn; }
+  assert.ok(!out.res.body || !out.res.body.token, 'a directory session was signed for a row that now has a local password');
 });
 
 checkAsync('a failed profile sync is logged, and does not refuse the login (CC-12)', async () => {

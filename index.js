@@ -1982,7 +1982,15 @@ app.post('/api/auth/login', (req, res) => {
         // `AND password IS NULL` makes the WRITE re-check directoryClaimRefusal's rule: a
         // local password hash set on this row after the claim check must not have the
         // row relabelled origin='ldap' (from the CISO review of CC-12).
-        await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ? AND password IS NULL`, params);
+        const synced = await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ? AND password IS NULL`, params);
+        // ZERO rows means the row stopped being the directory's since the claim check
+        // (a local password was set, or the account is gone). Refusing the write is not
+        // enough: the session below would still be signed for it. Hand the decision to
+        // the LOCAL password instead, exactly as the claim check would now.
+        if (synced.changes === 0) {
+          console.warn(`[LDAP] '${safeForLog(normalizedUsername, 64)}' stopped being a directory account during login. Using local authentication instead.`);
+          return fallbackLocalAuth();
+        }
       } catch (syncErr) {
         console.error('[LDAP] Could not sync profile for', safeForLog(normalizedUsername, 64), '-', syncErr.message);
       }

@@ -386,6 +386,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Where:** `index.js:275` and `:1910`.
 - **Failure:** a failed write is silently lost, so `display_name` and `email` go stale.
 - **Fix:** await both and log failures. This largely goes away once P0-1 and UP-16 are done.
+- **Review fix (`/code-review`):** the guarded sync write (`AND password IS NULL`) refused
+  the relabel, but the login still signed a session for the row. A sync that matches no rows
+  now falls back to LOCAL authentication, as the claim check would.
 - **Done:** the duplicate fire-and-forget UPDATE in `getOrCreateUser` is gone. The login
   route's own profile sync (display name, origin, email) is awaited, and a failure is logged
   without refusing a login the directory approved. The P0-1 login test helper now records
