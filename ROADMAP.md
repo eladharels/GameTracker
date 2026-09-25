@@ -873,6 +873,16 @@ Reviews for P0-5 and SEC-6: **Architect approved. CISO rejected** (the `:latest`
 review was needed. Exercised with a stubbed `docker`, but **not yet run on the real runner**.
 The first push to `main` after merging is the real test.
 
+Reviews for SEC-2 to SEC-5 (plus the CC-12 zero-row fix): **both rejected once**, on the
+branch failing its own secret scan, and the CISO also on `GIT_CONFIG_*` being ignored for
+`safe.directory` by git < 2.38. After `7a9be5a`, **both approve**.
+
+**MERGE PRECONDITION (CISO): a green `secret-scan` job on the self-hosted runner.** That the
+runner's git 2.34.1 honours `safe.directory` from `GIT_CONFIG_GLOBAL` comes from git's source
+and docs; it was reproduced only on git 2.43 here. If that is wrong, the step fails red rather
+than passing, so it would block deploys but hide nothing. A pull request from this branch runs
+the whole pipeline except deploy and is the way to get that evidence.
+
 Reviews for CC-10 to CC-16 (plus the `refreshOne` review fix): **CISO approved. Architect
 approved.** The notes acted on:
 - The LDAP profile sync write now requires `password IS NULL`.
