@@ -93,21 +93,27 @@ function isBlockedHost(hostname) {
     // dotted form: it normalizes ::ffff:169.254.169.254 to ::ffff:a9fe:a9fe, so the
     // two 16-bit hex groups have to be decoded back to octets before the checks
     // below can see it. (Verified against Node's WHATWG URL parser.)
-    const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    //
+    // The same unwrapping for the other two forms that carry an IPv4 address in the
+    // low 32 bits: the deprecated IPv4-COMPATIBLE `::a.b.c.d`, and NAT64's
+    // `64:ff9b::a.b.c.d`, which a NAT64 gateway on the path translates straight to
+    // that IPv4 address. Defence in depth, from the CISO review of SEC-1.
+    const embedded = /^(?:::ffff:|::|64:ff9b::)/i;
+    const mappedHex = host.match(/^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
     if (mappedHex) {
       const hi = parseInt(mappedHex[1], 16);
       const lo = parseInt(mappedHex[2], 16);
       host = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
-    } else {
-      const mappedDotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+    } else if (embedded.test(host)) {
+      const mappedDotted = host.match(/^(?:::ffff:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/i);
       if (mappedDotted) host = mappedDotted[1];
     }
     if (METADATA_HOSTS.includes(host)) return true;
     // IPv4 link-local (169.254.0.0/16) covers the AWS/Azure/GCP metadata range.
     // new URL() already normalizes decimal/octal/hex IPv4 forms to dotted quads.
     if (/^169\.254\./.test(host)) return true;
-    // IPv6 link-local
-    if (/^fe80:/i.test(host)) return true;
+    // IPv6 link-local is fe80::/10 -- fe80 through febf -- not just `fe80:`.
+    if (/^fe[89ab][0-9a-f]:/i.test(host)) return true;
     return false;
   } catch {
     return true; // unparseable -> refuse
@@ -137,9 +143,13 @@ function guardedLookup(hostname, options, callback) {
     return callback(null, addresses[0].address, addresses[0].family);
   });
 }
+// `proxy: false` is part of the guard, not a preference: axios honours HTTP(S)_PROXY,
+// and through a proxy the agent would resolve and check the PROXY's host while the
+// proxy fetched the user's URL -- the guard silently checking the wrong name.
 const GUARDED_AGENTS = Object.freeze({
   httpAgent: new http.Agent({ lookup: guardedLookup }),
   httpsAgent: new https.Agent({ lookup: guardedLookup }),
+  proxy: false,
 });
 
 // The refusal code, wherever it ended up: a refusal raised inside `lookup` reaches the
@@ -370,13 +380,12 @@ async function resolveEmail(username, knownEmail) {
   const name = username ? String(username).toLowerCase() : '';
   // `knownEmail` lets a caller that has already SELECTed the row skip a second
   // round-trip; undefined means "look it up".
-  const cached = knownEmail !== undefined
-    ? knownEmail
-    : (await get('SELECT email FROM users WHERE username = ?', [name]))?.email;
+  // One read covers both: the address, and whether the directory may supply one.
+  const row = knownEmail !== undefined && knownEmail ? null
+    : await get('SELECT email, origin FROM users WHERE username = ?', [name]);
+  const cached = knownEmail !== undefined ? knownEmail : row?.email;
   if (cached) return cached;
-
-  const account = await get('SELECT origin FROM users WHERE username = ?', [name]);
-  if (!account || account.origin !== 'ldap') return null;
+  if (!row || row.origin !== 'ldap') return null;
 
   let fromLdap = null;
   try {

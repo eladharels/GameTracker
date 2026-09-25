@@ -355,9 +355,8 @@ async function searchAll(query, { limit = LIMIT_SEARCH } = {}) {
   };
 }
 
-// The best candidate for an EXISTING library entry: an exact, case-insensitive title
-// match. Deliberately strict — a fuzzy match here silently rewrites the user's game
-// with a different game's date and cover.
+// Deliberately strict — a fuzzy match silently rewrites a user's game with a
+// different game's date and cover. For an EXISTING library row use matchForRow below.
 // The ONE result with exactly this name (case-insensitive), or null — including when
 // SEVERAL results carry it. It returned the first of several, which is how an
 // add-by-name of "Doom" silently picked one of two games (ROADMAP CC-6).
@@ -383,8 +382,14 @@ function matchForRow(results, row) {
   const byId = results.find((g) => g.id && g.id === String(row?.game_id ?? ''));
   if (byId) return byId;
   const named = exactNameMatches(results, row?.game_name);
-  if (named.length === 1) return named[0];
   const rowYear = yearOf({ releaseDate: row?.release_date });
+  // A single same-named result is still refused when BOTH years are known and differ:
+  // a refresh search is capped (LIMIT_REFRESH), so the one Doom it returned may be
+  // 2016 for a row that is 1993. A delayed release moves the date, but rarely across a
+  // year boundary for a game already in someone's library -- and refreshing nothing
+  // beats refreshing wrongly.
+  const agrees = (g) => !rowYear || !yearOf(g) || yearOf(g) === rowYear;
+  if (named.length === 1) return agrees(named[0]) ? named[0] : null;
   if (!rowYear) return null;
   const sameYear = named.filter((g) => yearOf(g) === rowYear);
   return sameYear.length === 1 ? sameYear[0] : null;

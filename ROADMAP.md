@@ -279,6 +279,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - The refresh uses a new `catalog.matchForRow` (provider id, then the row's year, else skip)
     in all three places: `jobs.refreshMetadata` and both v1 refresh routes.
   - Unit tests fail on the old code.
+- **Review fix:** `matchForRow` also refuses a lone same-named result whose year contradicts
+  the row's. A capped refresh search may have returned only the other game.
+- **Residual:** the v1 refresh routes report an ambiguous name as "Game not found in API search
+  results". That is misleading, but a new message would be a v1 change. Revisit with CC-8.
 - **Behaviour change:** a v1 search can now show two results with the same name. The SPA's
   duplicate check still compares names (FE-3), so adding the second one is blocked until FE-3
   is fixed.
@@ -388,8 +392,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - The test button is limited to 10 per user per 5 minutes.
   - Unit tests stub `dns.lookup` and drive a real ntfy send through `dispatch`. They fail on
     the old code.
-- **Residual:** a 10-second timeout versus an instant refusal is still a timing signal. The
-  limiter bounds it, and it doesn't remove it.
+- **Review fixes:**
+  - `proxy: false` on both calls (a CISO condition for approval): axios honours
+    `HTTP(S)_PROXY`, and through a proxy the guard would check the proxy's host. Docker injects
+    those variables into every container when the host's `~/.docker/config.json` sets
+    `proxies`. A test now sets `HTTP_PROXY` and the block still holds.
+  - All of `fe80::/10` is blocked, and so are the IPv4-compatible (`::a9fe:a9fe`) and NAT64
+    (`64:ff9b::…`) embeddings of the metadata address.
+- **Residual:**
+  - A 10-second timeout versus an instant refusal is still a timing signal. The limiter bounds
+    it, and it doesn't remove it.
+  - The refusal message confirms that a name resolves to a link-local address, and nothing
+    more.
 
 ### [ ] SEC-2 ✔ v2 user writes accept string booleans for `canManageUsers`
 - **Where:** `services/v2.js` `userWrite` (no type check), `services/users.js:152-157`, `:287`.
@@ -704,6 +718,11 @@ Reviews for P0-5 and SEC-6: **Architect approved. CISO rejected** (the `:latest`
 `docker tag x:sha x:latest`), **then approved** after `cf46533`. Workflow-only change, so no UI/UX
 review was needed. Exercised with a stubbed `docker`, but **not yet run on the real runner**.
 The first push to `main` after merging is the real test.
+
+Reviews for CC-5, CC-6 and SEC-1: **Architect approved. CISO approved on one condition**:
+`proxy: false` on the guarded calls, which is done and tested. The other notes were acted on as
+well: fe80::/10 plus the NAT64 and IPv4-compatible forms, the year check in `matchForRow`,
+`resolveEmail` reading `email` and `origin` in one query, and a stale comment.
 
 Reviews for CC-1 to CC-4: **CISO approved. Architect approved.** Both sets of non-blocking notes
 were acted on: a stale comment, a real concurrent-delete test, the read-back inside the

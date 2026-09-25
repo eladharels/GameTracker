@@ -397,6 +397,18 @@ check('blocks every instance-metadata endpoint', () => {
   assert.strictEqual(isBlockedNotificationHost('http://[fd00:ec2::254]/'), true);
   assert.strictEqual(isBlockedNotificationHost('http://[fe80::1]/'), true);
 });
+check('every IPv6 form carrying the metadata address, and all of fe80::/10, is blocked', () => {
+  // From the CISO review of SEC-1: only `fe80:` was matched, and the IPv4-compatible
+  // and NAT64 embeddings of 169.254.169.254 were not unwrapped at all.
+  for (const host of ['[::169.254.169.254]', '[::a9fe:a9fe]', '[64:ff9b::169.254.169.254]',
+    '[64:ff9b::a9fe:a9fe]', '[fe90::1]', '[febf::1]']) {
+    assert.strictEqual(isBlockedNotificationHost(`http://${host}/`), true, `${host} passed`);
+  }
+  // ...and ordinary addresses are not caught by the wider patterns.
+  for (const host of ['[::1]', '[fec0::1]', '[2001:db8::1]', '192.168.1.20']) {
+    assert.strictEqual(isBlockedNotificationHost(`http://${host}/`), false, `${host} was blocked`);
+  }
+});
 check('IPv4-mapped IPv6 and a trailing dot cannot slip past', () => {
   // Both of these were allowed by a version of this function that an extraction
   // silently reverted to. The assertions that existed at the time passed against the
@@ -523,6 +535,20 @@ console.log('guardedLookup — the ADDRESS a name resolves to is checked, not ju
       const all = await lookup('ntfy.lan', { all: true });
       assert.deepStrictEqual(all.a, [{ address: '192.168.1.20', family: 4 }]);
     });
+  });
+  checkAsync('an HTTP(S)_PROXY in the environment cannot route around the guard', async () => {
+    // Through a proxy, the agent would resolve the PROXY's name, not the user's.
+    const realProxy = process.env.HTTP_PROXY;
+    process.env.HTTP_PROXY = 'http://proxy.example:3128';
+    try {
+      await withDns({ 'rebind.example': ['169.254.169.254'], 'proxy.example': ['10.0.0.9'] }, async () => {
+        const res = await notif.dispatch({ ntfy_topic: 't', ntfy_url: 'http://rebind.example:9' },
+          { subject: 's', text: 't', title: 't', message: 'm' }, { only: ['ntfy'] });
+        assert.strictEqual(res.ntfy.code, 'blocked_host', `through a proxy: ${JSON.stringify(res.ntfy)}`);
+      });
+    } finally {
+      if (realProxy === undefined) delete process.env.HTTP_PROXY; else process.env.HTTP_PROXY = realProxy;
+    }
   });
   checkAsync('end to end: an ntfy send to such a name is refused before any socket opens', async () => {
     // Through dispatch, axios and the real agents. The refusal happens inside lookup, so
@@ -1483,6 +1509,9 @@ console.log('catalog — a name is not an identity (CC-6):');
     assert.strictEqual(catalog.matchForRow(rs, { game_id: 'igdb_99', game_name: 'Doom', release_date: null }), null,
       'an ambiguous row was refreshed from a guess');
     assert.strictEqual(catalog.matchForRow([doom93], { game_id: 'x', game_name: 'doom', release_date: null }), doom93);
+    // A capped refresh search that returned only the OTHER Doom must not refresh this row.
+    assert.strictEqual(catalog.matchForRow([doom16], { game_id: 'x', game_name: 'Doom', release_date: '1993-12-10' }), null,
+      'a 1993 row was refreshed from the only Doom the search returned, 2016');
   });
   checkAsync('resolveGame by an ambiguous name is CONFLICT carrying exactly the collided games', async () => {
     let err = null;
