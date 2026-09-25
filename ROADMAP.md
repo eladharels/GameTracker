@@ -408,9 +408,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `SELECT username, can_manage_users FROM users WHERE origin='ldap' AND password IS NOT NULL;`.
   For each row, decide what it is:
   - A real directory account: clear the hash.
-  - A local account that was taken over: set `origin='local'`, rotate its password, and
-    revoke its tokens.
+  - A local account that was taken over: set `origin='local'` and rotate its password.
+  - **Either way, revoke that account's API tokens.** A token minted during a takeover
+    survives everything else here. Use `DELETE /api/v2/users/:id/tokens`.
   - Record the outcome here.
+- **At the P0-1 deploy, rotate `JWT_SECRET`** (a CISO condition for leaving the minting gap
+  open until this audit is done). That ends every session from before the deploy, so none can
+  reach the minting endpoint. Everyone has to sign in again.
+- **Follow-up:** make `services/users.js#verifyPassword` decide by the hash alone, as
+  `directoryClaimRefusal` does: a row with a hash is checked locally, a row without one goes to
+  the directory. Then login and minting follow one rule instead of two that disagree about
+  `origin='ldap'` rows that still hold a hash.
 
 ---
 
@@ -608,12 +616,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 ## Fix log
 
 Reviews for P0-1 to P0-4: **Architect approved. CISO rejected P0-3** (the deploy job didn't
-carry the variables), **then approved** after `6248d0f`. No frontend changes, so no UI/UX
+carry the variables), **then approved** after `6248d0f`. A `/code-review` of the branch then
+found two problems in the P0-1 rule, fixed in `2ef5fd9`. The CISO approved that fix, on
+condition that `JWT_SECRET` is rotated at deploy and SEC-13 is carried out. No frontend changes, so no UI/UX
 review was needed. **Not yet validated on GameTracker-stg.**
 
 | ID | PR | Date | Summary |
 |---|---|---|---|
-| P0-1 | `3c81bb6`, review fix | 2026-09-25 | LDAP login can no longer claim `root`/`me` or any row holding a password hash |
+| P0-1 | `3c81bb6`, `2ef5fd9` | 2026-09-25 | LDAP login can no longer claim `root`/`me` or any row holding a password hash |
 | P0-2 | `3c81bb6` | 2026-09-25 | `requiredGroup` is an exact full-DN or first-RDN cn match |
 | P0-3 | `3c81bb6`, `6248d0f` | 2026-09-25 | Backend settings reach the container through both compose files and the deploy job |
 | P0-4 | `3c81bb6`, `4160735` | 2026-09-25 | `jobs.js#steamRegion` is the one reader of `STEAM_REGION` |
