@@ -26,25 +26,33 @@ function validateUsername(normalizedUsername) {
 // May a successful DIRECTORY authentication sign in as this account?
 //
 // `row` is the existing users row for the name, or null when there is none yet (the
-// login then provisions one). Returns null when the directory may claim the name,
-// else a short reason for the server log — never for the client.
+// login then provisions one). Returns null when it may, else a short reason for the
+// server log — never for the client.
 //
 // The LDAP login used to take whatever row carried the name, relabel it
 // origin='ldap' and sign a session with that row's can_manage_users. Anyone able to
 // create a directory account named `root`, or named after a local administrator,
 // therefore signed in AS that administrator without its local password ever being
-// asked for. A username belongs to the directory only when:
-//   - it is not reserved (`root` is the seeded local administrator), and
-//   - the row is a directory account already, or carries no local password at all.
-// The second half keeps legacy rows working: an account created by an LDAP login
-// before `origin` was recorded defaults to 'local' but has no hash, so there is no
-// local credential for the directory to bypass.
+// asked for. The rule:
+//   - `root` and `me` are never the directory's. `root` is the seeded LOCAL
+//     administrator; a `me` row is shadowed by the /api/user/me/* routes and unusable.
+//     NOT the whole RESERVED_USERNAMES list: `admin` is reserved against LOCAL
+//     creation only, and it is FreeIPA's default administrator — refusing it locked
+//     a directory user out and charged every attempt to the lockout counter.
+//   - A row holding a local password hash is a LOCAL account, whatever its `origin`
+//     says. Keyed on the hash, not on origin, because the old login left every account
+//     it took over as origin='ldap' WITH its hash: an origin test would have kept every
+//     takeover that happened before this fix in force. A directory account never holds
+//     a hash — users.update refuses to give one a password.
+//   - Anything else — no row yet, or a row with no hash — is the directory's. That
+//     includes legacy rows an LDAP login provisioned before `origin` was recorded,
+//     which default to 'local' but have no local credential for the directory to bypass.
+const DIRECTORY_REFUSED_USERNAMES = ['root', 'me'];
+
 function directoryClaimRefusal(normalizedUsername, row) {
-  if (RESERVED_USERNAMES.includes(normalizedUsername)) return 'reserved username';
-  if (!row) return null;
-  if (row.origin === 'ldap') return null;
-  if (!row.password) return null;
-  return 'local account';
+  if (DIRECTORY_REFUSED_USERNAMES.includes(normalizedUsername)) return 'reserved username';
+  if (row && row.password) return 'local account';
+  return null;
 }
 
 // Email validation lives here too: it is a rule about a user field, it is needed by
@@ -100,6 +108,6 @@ function sanitizeText(value, maxLength = 200) {
 
 module.exports = {
   sanitizeText,
-  RESERVED_USERNAMES, validateUsername, directoryClaimRefusal, isValidEmailAddress,
+  RESERVED_USERNAMES, validateUsername, DIRECTORY_REFUSED_USERNAMES, directoryClaimRefusal, isValidEmailAddress,
   MIN_PASSWORD_LENGTH, validatePassword,
 };

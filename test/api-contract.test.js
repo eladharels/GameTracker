@@ -598,8 +598,11 @@ checkAsync('a directory login named after a LOCAL admin does not sign in as it (
   // origin='ldap' and signed a session carrying can_manage_users. Now the directory's
   // YES is ignored for these names and the LOCAL password decides — and it is wrong.
   const hash = require('bcryptjs').hashSync('the-local-password', 4);
-  for (const [name, ip] of [['root', '203.0.113.21'], ['boss', '203.0.113.22']]) {
-    const row = { id: 1, username: name, can_manage_users: 1, origin: 'local', password: hash };
+  // `taken` is a takeover that already happened under the old code: origin='ldap',
+  // hash kept. It must be refused too, or the fix undoes nothing already done.
+  for (const [name, ip, origin] of [['root', '203.0.113.21', 'local'], ['boss', '203.0.113.22', 'local'],
+    ['taken', '203.0.113.24', 'ldap']]) {
+    const row = { id: 1, username: name, can_manage_users: 1, origin, password: hash };
     const { res, writes } = await ldapLoginAs(name, row, ip);
     assert.ok(!res.body || !res.body.token, `a directory login took over local account '${name}'`);
     assert.strictEqual(res.statusCode, 401, `'${name}': expected the local password to be checked`);

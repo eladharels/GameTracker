@@ -220,19 +220,27 @@ check('accepts an ordinary username', () => {
 });
 
 console.log('directoryClaimRefusal (P0-1: an LDAP login must not take over a local account):');
-check('a reserved name is never the directory\'s, whether or not the row exists', () => {
+check('root and me are never the directory\'s, whether or not the row exists', () => {
   // A directory account named `root` signed in AS the seeded administrator.
-  for (const name of RESERVED_USERNAMES) {
+  for (const name of ['root', 'me']) {
     assert.ok(directoryClaimRefusal(name, null), `${name} (no row) was claimable`);
     assert.ok(directoryClaimRefusal(name, { origin: 'local', password: '$2a$hash' }), `${name} was claimable`);
     assert.ok(directoryClaimRefusal(name, { origin: 'ldap', password: null }), `${name} (ldap row) was claimable`);
   }
 });
-check('a local account WITH a password is refused', () => {
+check('`admin` is NOT refused — it is FreeIPA\'s default administrator', () => {
+  // Reserved against LOCAL creation only. Refusing it at login locked a directory user
+  // out and charged every attempt to the lockout counter.
+  assert.strictEqual(directoryClaimRefusal('admin', { origin: 'ldap', password: null }), null);
+  assert.strictEqual(directoryClaimRefusal('admin', null), null);
+});
+check('any row holding a password hash is refused, whatever its origin', () => {
   // The admin-takeover case: same name in the directory, local row holds the privilege.
   assert.strictEqual(directoryClaimRefusal('alice', { origin: 'local', password: '$2a$hash' }), 'local account');
-  // An absent origin is not a directory account either.
   assert.strictEqual(directoryClaimRefusal('alice', { origin: null, password: '$2a$hash' }), 'local account');
+  // A takeover that happened BEFORE the fix: the old login relabelled the row
+  // origin='ldap' and kept its hash. An origin test would leave it claimable forever.
+  assert.strictEqual(directoryClaimRefusal('alice', { origin: 'ldap', password: '$2a$hash' }), 'local account');
 });
 check('a directory account, a new name, and a legacy passwordless row are claimable', () => {
   assert.strictEqual(directoryClaimRefusal('alice', { origin: 'ldap', password: null }), null);

@@ -92,8 +92,8 @@ GameTracker/
 ├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
 │                                   #   API and create-local-admin.js; directoryClaimRefusal()
 │                                   #   — the ONE rule for which accounts an LDAP login may
-│                                   #   sign in as (never a reserved name, never a local
-│                                   #   account holding a password)
+│                                   #   sign in as (never root/me, never a row holding a
+│                                   #   password hash, whatever its origin)
 ├── directory.js                    # getLdapEmail() — the directory read that is NOT part of
 │                                   #   authentication. Lives here, not in a service, so
 │                                   #   services/notifications.js can require it without a cycle;
@@ -584,7 +584,8 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 
 - **Local auth**: bcrypt-hashed passwords stored in Postgres
 - **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure.
-  **A directory login never claims a reserved name (`root`) or a local account that has a password**
+  **A directory login never claims `root`, `me`, or any row holding a local password hash — whatever
+  its `origin`**
   (`user-rules.js#directoryClaimRefusal`) — for those names the directory's answer is ignored and the
   LOCAL password decides. It used to relabel the row `origin='ldap'` and sign a session carrying its
   admin flag. `ldap.requiredGroup` is an EXACT match: the group's full DN, or its bare cn compared

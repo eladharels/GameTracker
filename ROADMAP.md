@@ -68,10 +68,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   before the group test and before the lockout counter is cleared, and again inside
   `getOrCreateUser`. A refused claim falls back to the LOCAL password. Legacy passwordless
   rows stay claimable.
-- **Operator action after deploy:** accounts taken over before this fix already have
-  `origin='ldap'` and stay claimable. Audit them with
-  `SELECT username, can_manage_users FROM users WHERE origin='ldap' AND password IS NOT NULL;`
-  and review every row it returns. See SEC-13.
+- **Review fix** (after `/code-review`): the rule is now keyed on the password hash, not on
+  `origin`. The first version still let the directory claim rows the OLD code had taken over,
+  because those rows kept their hash but had been relabelled `origin='ldap'`. It also narrows
+  the refused names to `root` and `me`: `admin` is FreeIPA's default administrator, and
+  refusing it locked a legitimate directory user out.
+- **Operator follow-up:** rows the old code took over are no longer claimable, but they are
+  still inconsistent (`origin='ldap'` with a hash). See SEC-13.
 - **Behaviour change:** a local account with a password can no longer sign in with the
   directory password of a same-named directory entry. Only its local password works.
 
@@ -396,12 +399,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ### [ ] SEC-13 Audit accounts taken over before P0-1 (operator action)
 - **Why:** before P0-1, an LDAP login relabelled a same-named local account `origin='ldap'` and
-  kept its password hash. The new rule treats `origin='ldap'` as a directory account, so such a
-  row stays claimable.
+  kept its password hash. P0-1 now refuses directory claims on any hashed row, so login is
+  safe. Two things remain:
+  - Such a row signs in with its LOCAL password, which skips `requiredGroup`.
+  - Sudo-mode minting (`services/users.js#verifyPassword`) still sends `origin='ldap'` rows to
+    the directory. So a session that existed before the deploy can still mint a token.
 - **Action:** on staging and then production, run
   `SELECT username, can_manage_users FROM users WHERE origin='ldap' AND password IS NOT NULL;`.
-  For each row, confirm the account is really a directory account and not a local admin that
-  was taken over. Record the outcome here.
+  For each row, decide what it is:
+  - A real directory account: clear the hash.
+  - A local account that was taken over: set `origin='local'`, rotate its password, and
+    revoke its tokens.
+  - Record the outcome here.
 
 ---
 
@@ -604,7 +613,7 @@ review was needed. **Not yet validated on GameTracker-stg.**
 
 | ID | PR | Date | Summary |
 |---|---|---|---|
-| P0-1 | `3c81bb6` | 2026-09-25 | LDAP login can no longer claim a reserved name or a local account with a password |
+| P0-1 | `3c81bb6`, review fix | 2026-09-25 | LDAP login can no longer claim `root`/`me` or any row holding a password hash |
 | P0-2 | `3c81bb6` | 2026-09-25 | `requiredGroup` is an exact full-DN or first-RDN cn match |
 | P0-3 | `3c81bb6`, `6248d0f` | 2026-09-25 | Backend settings reach the container through both compose files and the deploy job |
 | P0-4 | `3c81bb6`, `4160735` | 2026-09-25 | `jobs.js#steamRegion` is the one reader of `STEAM_REGION` |
