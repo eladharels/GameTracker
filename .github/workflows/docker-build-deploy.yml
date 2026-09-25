@@ -169,7 +169,7 @@ jobs:
             --exit-code 1 2>&1 | tee "${LOG}"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then exit "$status"; fi
-          if grep -Eq 'ERR|failed to scan' "${LOG}"; then
+          if grep -Eq '\bERR\b|failed to scan' "${LOG}"; then
             echo "::error::gitleaks reported an error -- the scan did not run. Refusing to pass."
             exit 1
           fi
@@ -181,7 +181,13 @@ jobs:
           expected=$(git rev-list --count --no-merges HEAD -- .)
           : "${expected:?could not count the history -- refusing to pass}"
           echo "[gitleaks] ${scanned} commits scanned; HEAD has ${expected} non-merge commits"
-          if [ "${scanned}" -lt 1 ] || [ "${scanned}" -lt "${expected}" ]; then
+          # A FLOOR, not equality: gitleaks' own count runs a couple below the number of
+          # commits with a diff (measured: consistently 2 fewer -- commits it has nothing
+          # to scan in, e.g. only allowlisted paths or binaries). What this guards is a
+          # scan that silently covered little or nothing -- an error (caught above), a
+          # shallow checkout, a wrong --source -- and 90% separates those from a real run
+          # by a wide margin.
+          if [ "${scanned}" -lt 1 ] || [ $((scanned * 10)) -lt $((expected * 9)) ]; then
             echo "::error::gitleaks scanned ${scanned} of ${expected} commits. Refusing to pass."
             exit 1
           fi

@@ -363,9 +363,11 @@ console.log('the secret scan scans, and fails closed when it cannot:');
     assert.ok(!/GIT_CONFIG_(COUNT|KEY_0)/.test(JSON.stringify(step)), 'command-line scope is ignored for safe.directory on git < 2.38');
   });
   check('the scan step refuses to pass on an error or a short commit count', () => {
-    assert.ok(step.run.includes("grep -Eq 'ERR|failed to scan'"), 'an errored scan can pass again');
-    assert.ok(/commits scanned/.test(step.run) && /rev-list --count --no-merges HEAD/.test(step.run),
+    assert.ok(/grep -Eq '[^']*ERR[^']*\|failed to scan'/.test(step.run), 'an errored scan can pass again');
+    assert.ok(/commits scanned/.test(step.run) && step.run.includes('rev-list --count --no-merges HEAD -- .'),
       'the scanned-commit count is no longer checked against the history');
+    assert.ok(step.run.includes('$((scanned * 10)) -lt $((expected * 9))'),
+      'the scanned-commit floor (90% of the history) is gone');
   });
   check('no documentation file is exempt from the secret scan (SEC-5)', () => {
     const start = toml.indexOf('paths = [');

@@ -817,6 +817,8 @@ checkAsync('a row that gained a local password DURING login gets no directory se
   let out;
   try { out = await ldapLoginAs('kim', row, '203.0.113.26', { syncChanges: 0 }); } finally { console.warn = warn; }
   assert.ok(!out.res.body || !out.res.body.token, 'a directory session was signed for a row that now has a local password');
+  // 401 from LOCAL auth: the row's password decided, and the directory's was not it.
+  assert.strictEqual(out.res.statusCode, 401);
 });
 
 checkAsync('a failed profile sync is logged, and does not refuse the login (CC-12)', async () => {

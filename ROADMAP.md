@@ -536,6 +536,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - `runtime.test.js` fails on any unpinned `uses:` or a missing version comment.
   - I kept the current majors on purpose; newer majors (checkout v7, setup-node v7, buildx
     v4) are an upgrade to test separately.
+  - **Follow-up:** all three pinned releases target Node 20, which GitHub has deprecated. CI
+    already warns and forces Node 24. Move to releases that target Node 24 (checkout/setup-node
+    v5+) in a separate, tested change.
 - **Decision for you: no Dependabot yet.** Dependabot opens branches inside this repository,
   and the CI gate trusts same-repo pull requests only because push access here already implies
   deploy. A bot author breaks that assumption: its PRs would run CI on the production host.
@@ -554,10 +557,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   logging "failed to scan Git repository", then "no leaks found" and exit 0. So secret-scan
   has been green without reading a commit, for as long as the runner has had that ownership
   mismatch.
-  - The step now sets `safe.directory` for itself (via `GIT_CONFIG_*`, not the runner's global
-    config).
-  - It fails unless gitleaks logged no error AND scanned as many commits as
-    `git rev-list --count --no-merges HEAD`.
+  - The step now sets `safe.directory` for itself, through a throwaway global config in
+    `$RUNNER_TEMP` (`GIT_CONFIG_GLOBAL`). That leaves the runner's real config alone.
+  - The first version used `GIT_CONFIG_*`, which git before 2.38 ignores for
+    `safe.directory`. The runner has 2.34.1, so the CISO rejected it.
+  - Reproduced here: a checkout owned by another user gives exactly CI's "dubious
+    ownership / failed to scan / no leaks found". With the fix it scans.
+  - It fails unless gitleaks logged no error AND scanned at least 90% of the non-merge commits
+    that change something (`git rev-list --count --no-merges HEAD -- .`).
+  - It is a floor rather than equality, because gitleaks' own count runs about 2 below that
+    number. A shallow or failed scan is far under it.
 - **And the custom `gametracker-config-password` rule captured the KEY, not the value.**
   - Its reported "secret" was the word `password`, so `--redact` hid the key and printed the
     value into CI logs.
@@ -569,6 +578,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Pinned:** `runtime.test.js` checks the `safe.directory` env, the fail-closed checks, the
   absence of doc path allowlists, and the rule's capture group. Each check fails on the old
   files.
+- **Review fix:** this commit's own ROADMAP text contained a sample `bindPass` value, which
+  the corrected rule flagged, so the branch failed its own scan. Both reviewers caught it. The
+  commit was amended and force-pushed; it was on this unmerged branch only, so no text was
+  allowlisted.
 - **Operator note:** CI never scanned while this was broken, so the scan's first real run will
   be the first real scan of the history. It passes locally on exactly the same history.
 
