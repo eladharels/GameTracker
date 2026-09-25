@@ -90,7 +90,10 @@ GameTracker/
 ├── igdb-helpers.js                 # escapeIgdbSearch() — the ONLY way to interpolate a
 │                                   #   value into an APIcalypse `search "..."` literal
 ├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
-│                                   #   API and create-local-admin.js
+│                                   #   API and create-local-admin.js; directoryClaimRefusal()
+│                                   #   — the ONE rule for which accounts an LDAP login may
+│                                   #   sign in as (never a reserved name, never a local
+│                                   #   account holding a password)
 ├── directory.js                    # getLdapEmail() — the directory read that is NOT part of
 │                                   #   authentication. Lives here, not in a service, so
 │                                   #   services/notifications.js can require it without a cycle;
@@ -193,7 +196,10 @@ GameTracker/
 │   │                               #   assets) and frontend/package.json declares no
 │   │                               #   engines floor to check it against. Add one there and
 │   │                               #   this list should grow to match — the gate is keyed
-│   │                               #   on the pairing, not on the Dockerfile alone
+│   │                               #   on the pairing, not on the Dockerfile alone.
+│   │                               #   ALSO: every env var the backend reads must be in the
+│   │                               #   backend `environment:` of BOTH compose files, or in
+│   │                               #   its NOT_PASSED table with a reason
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -577,7 +583,13 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 ## Authentication & Security
 
 - **Local auth**: bcrypt-hashed passwords stored in Postgres
-- **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure
+- **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure.
+  **A directory login never claims a reserved name (`root`) or a local account that has a password**
+  (`user-rules.js#directoryClaimRefusal`) — for those names the directory's answer is ignored and the
+  LOCAL password decides. It used to relabel the row `origin='ldap'` and sign a session carrying its
+  admin flag. `ldap.requiredGroup` is an EXACT match: the group's full DN, or its bare cn compared
+  with the first RDN of each `memberOf` (write a comma escaped exactly as the directory stores it,
+  e.g. `game\, club`). It was a substring test, so `gamers` admitted `cn=gamers-denied`
 - **Sudo mode**: minting a PAT from the browser re-checks the password, because a token
   outlives the 12-hour session that created it. Local accounts verify with bcrypt; directory
   accounts verify with a real LDAP bind through `ldap-helpers.js#verifyLdapCredentials` — the

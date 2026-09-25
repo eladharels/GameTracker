@@ -39,11 +39,17 @@ const STEAM_TIMEOUT_MS = 10000;
 //
 // A value that is not a two-letter code falls back to 'il' LOUDLY, rather than being
 // sent to Steam as-is, where it silently answers "not in this region" for everything.
+// Warned once per bad value, not per call: this is the default parameter of every
+// price lookup, so a sweep would otherwise log the same line once per game.
+let warnedRegion = null;
 function steamRegion(env = process.env) {
   const raw = String(env.STEAM_REGION ?? '').trim().toLowerCase();
   if (raw === '') return 'il';
   if (/^[a-z]{2}$/.test(raw)) return raw;
-  console.warn(`[Jobs] Ignoring STEAM_REGION=${safe(raw, 20)}: not a two-letter country code. Using 'il'.`);
+  if (warnedRegion !== raw) {
+    warnedRegion = raw;
+    console.warn(`[Jobs] Ignoring STEAM_REGION=${safe(raw, 20)}: not a two-letter country code. Using 'il'.`);
+  }
   return 'il';
 }
 

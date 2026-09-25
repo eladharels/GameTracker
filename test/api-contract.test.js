@@ -578,7 +578,10 @@ async function ldapLoginAs(username, row, ip) {
   try {
     await handlerFor('post', '/api/auth/login')(
       { body: { username, password: 'the-directory-password' }, ip }, res);
-    await new Promise((r) => setTimeout(r, 150));
+    // Polled, not a fixed sleep: the local fallback runs a real bcrypt compare, and a
+    // slow runner must not turn "no answer yet" into a pass for the no-token assertion.
+    for (let i = 0; i < 200 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(res.headersSent, `the login route never answered for '${username}'`);
   } finally {
     ldapHelpers.verifyLdapCredentials = realVerify;
     settingsStore.loadSettings = realLoad;
