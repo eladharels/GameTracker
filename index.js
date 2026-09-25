@@ -3269,6 +3269,9 @@ app.put('/api/user/me/settings', authRequired, (req, res) => {
     .catch((err) => {
       if (err && err.code === SVC.VALIDATION) {
         let message = err.message === 'no settings to update' ? 'No settings to update' : err.message;
+        // Safe ONLY because every VALIDATION message from updateNotificationSettings is
+        // a fixed string. A service message must never interpolate user input, or this
+        // renaming would reflect it (and could rewrite it) into the response.
         for (const [v1Key, key] of Object.entries(V1_NOTIFICATION_FIELDS)) {
           message = message.split(key).join(v1Key);
         }

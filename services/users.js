@@ -486,7 +486,13 @@ async function updateNotificationSettings(userId, fields) {
     ['telegramChatId', 'telegram_chat_id']]) {
     if (!has(key)) continue;
     updates.push(`${column} = ?`);
-    params.push(fields[key] === null ? '' : sanitizeText(fields[key], 200));
+    // A NUMBER is converted, not dropped: a Telegram chat id IS a number, and the v1
+    // route stored whatever it was sent, so a client posting `telegram_chat_id: 12345`
+    // would otherwise get a 200 with its chat id silently wiped -- and its Telegram
+    // reminders turned off. Anything else that is not text still becomes ''.
+    const value = fields[key];
+    params.push(value === null ? '' : sanitizeText(
+      typeof value === 'number' && Number.isFinite(value) ? String(value) : value, 200));
   }
   if (has('notificationDays')) {
     const days = fields.notificationDays;

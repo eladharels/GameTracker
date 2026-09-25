@@ -573,6 +573,13 @@ checkAsync('free-text channel fields are bounded and must be text', async () => 
   assert.ok(params.every((p) => typeof p !== 'object'), 'an object reached the UPDATE');
   assert.ok(params.every((p) => typeof p !== 'string' || p.length <= 200), 'a 5000-char topic was stored');
 });
+checkAsync('a NUMERIC telegram_chat_id is stored as text, not silently wiped', async () => {
+  // v1 stored whatever it was sent, and a chat id is a number. Wiping it would 200 and
+  // quietly turn that user's Telegram reminders off.
+  const { res, writes } = await putSettings({ telegram_chat_id: 123456789 });
+  assert.strictEqual(res.statusCode, 200);
+  assert.ok(writes[0].params.includes('123456789'), `stored ${JSON.stringify(writes[0].params)}`);
+});
 checkAsync('an empty body keeps v1 wording, and an unknown key is ignored', async () => {
   const { res, writes } = await putSettings({ can_manage_users: 1 });
   assert.strictEqual(res.statusCode, 400);
