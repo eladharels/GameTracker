@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 10 |
+| CC — Correctness & concurrency | 16 | 11 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **17** |
+| **Total** | **64** | **18** |
 
 ---
 
@@ -360,7 +360,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   integration test holds a real reorder open while a move waits. The old code left two games
   at position 1.
 
-### [ ] CC-11 CrackRelease status write
+### [x] CC-11 CrackRelease status write
 - **Where:** `index.js:740-763`.
 - **Problem:**
   - The UPDATE is fire-and-forget.
@@ -372,6 +372,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Keep the last known status on fetch errors.
   - Map values onto `cracked|uncracked|unknown`.
   - Return a generic error.
+- **Done:**
+  - The scraper reports whether the page was actually read, and only a read page changes the
+    stored value, so an outage no longer erases known statuses.
+  - Only `cracked` and `uncracked` are stored as themselves; anything else is `unknown`. The
+    response still carries `unreleased`.
+  - The write is awaited, and a failure is logged.
+  - The `error`/`details` fields keep their shape but carry our own wording, never upstream
+    text. The same applies to the admin CrackWatch refresh.
+  - Contract tests fail on the old code.
 
 ### [ ] CC-12 Unawaited writes on the LDAP login path
 - **Where:** `index.js:275` and `:1910`.

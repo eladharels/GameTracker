@@ -616,6 +616,38 @@ checkAsync('a PARTIAL outage with no match is "unavailable" too, not "not found"
     `a partial outage was reported as ${res.body.results.details[0].error}`);
 });
 
+console.log('POST /api/user/:username/games/:gameId/crackrelease-status (CC-11):');
+
+async function crackRelease(fetchImpl) {
+  const axiosMod = require('axios');
+  const real = { axiosGet: axiosMod.get, get: db.get, run: db.promises.run };
+  const writes = [];
+  axiosMod.get = fetchImpl;
+  db.get = (sql, params, cb) => cb(null, /FROM user_games/.test(sql) ? { game_name: 'Halo' } : { id: 7, username: 'jane' });
+  db.promises.run = async (sql, params) => { writes.push(params); return { changes: 1 }; };
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/user/:username/games/:gameId/crackrelease-status')(
+      { params: { username: 'jane', gameId: 'igdb_1' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+  } finally { axiosMod.get = real.axiosGet; db.get = real.get; db.promises.run = real.run; }
+  return { res, writes };
+}
+
+checkAsync('a CrackRelease outage leaves the stored status alone and leaks no upstream text', async () => {
+  const { res, writes } = await crackRelease(async () => { throw new Error('connect ECONNREFUSED 10.0.0.7:443'); });
+  assert.strictEqual(writes.length, 0, 'an outage overwrote the stored crack status');
+  assert.strictEqual(res.body.status, 'unknown');
+  assert.ok(!JSON.stringify(res.body).includes('10.0.0.7'), 'the upstream error reached the caller');
+});
+checkAsync('a page that WAS read is stored -- and only as a documented value', async () => {
+  const cracked = await crackRelease(async () => ({ data: '<span> CRACKED </span>' }));
+  assert.deepStrictEqual(cracked.writes.map((p) => p[0]), ['cracked']);
+  const unreleased = await crackRelease(async () => ({ data: '<b>UNRELEASED</b>' }));
+  assert.strictEqual(unreleased.res.body.status, 'unreleased', 'the response lost the scraped answer');
+  assert.deepStrictEqual(unreleased.writes.map((p) => p[0]), ['unknown'], 'an undocumented value reached the column');
+});
+
 console.log('POST /api/admin/test-notification (SEC-1 per-user limiter):');
 
 checkAsync('the 11th test notification in the window is 429, keyed per user', async () => {

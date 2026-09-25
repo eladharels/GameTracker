@@ -692,7 +692,8 @@ app.post('/api/admin/refresh-crackwatch-cache', authRequired, requirePermission(
     await refreshCrackWatchCache();
     res.json({ success: true, message: 'CrackWatch cache refreshed', count: Object.keys(crackWatchCache).length });
   } catch (err) {
-    res.status(500).json({ error: 'Refresh failed', details: err.message });
+    console.error('[CrackWatch] manual refresh failed:', err.message);
+    res.status(500).json({ error: 'Refresh failed', details: 'Internal error' });
   }
 });
 
@@ -707,10 +708,16 @@ function slugifyForCrackRelease(name) {
     .replace(/-+/g, '-');
 }
 
+// Returns the v1 response body. `scrapeCrackRelease` below also says whether the page
+// was actually READ, which the response cannot carry without changing its shape.
 async function getCrackReleaseStatus(gameName) {
+  return (await scrapeCrackRelease(gameName)).result;
+}
+
+async function scrapeCrackRelease(gameName) {
   const slug = slugifyForCrackRelease(gameName);
   if (!slug) {
-    return { status: 'unknown', url: null, slug, gameName };
+    return { fetched: false, result: { status: 'unknown', url: null, slug, gameName } };
   }
   const url = `https://crackrelease.com/${slug}/`;
   try {
@@ -722,12 +729,21 @@ async function getCrackReleaseStatus(gameName) {
     if (raw === 'CRACKED') status = 'cracked';
     else if (raw === 'UNCRACKED') status = 'uncracked';
     else if (raw === 'UNRELEASED') status = 'unreleased';
-    return { status, url, slug, gameName };
+    return { fetched: true, result: { status, url, slug, gameName } };
   } catch (err) {
-    console.warn('[CrackRelease] Error fetching status for', gameName, '-', err.message);
-    return { status: 'unknown', url, slug, gameName, error: err.message };
+    console.warn('[CrackRelease] Error fetching status for', safeForLog(gameName, 80), '-', err.message);
+    // `error` stays in the body (v1 shape) but is OUR sentence, not the upstream's:
+    // err.message named hosts and ports, and this reaches non-admin callers.
+    return {
+      fetched: false,
+      result: { status: 'unknown', url, slug, gameName, error: 'Could not reach CrackRelease' },
+    };
   }
 }
+
+// What may be STORED in user_games.crack_status: the documented three. The scraper can
+// also answer `unreleased`, which the response still carries, but the column does not.
+const STORABLE_CRACK_STATUS = Object.freeze({ cracked: 'cracked', uncracked: 'uncracked' });
 
 // Admin: check CrackRelease status for a specific game name (used only for testing in staging UI)
 app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_manage_users'), async (req, res) => {
@@ -739,7 +755,8 @@ app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_
     const result = await getCrackReleaseStatus(gameName);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: err.message });
+    console.error('[CrackRelease] status lookup failed:', err.message);
+    res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: 'Internal error' });
   }
 });
 
@@ -755,15 +772,26 @@ app.post('/api/user/:username/games/:gameId/crackrelease-status', authRequired, 
       if (err) return res.status(500).json({ error: 'DB error' });
       if (!row) return res.status(404).json({ error: 'Game not found for this user' });
       try {
-        const result = await getCrackReleaseStatus(row.game_name);
-        db.run('UPDATE user_games SET crack_status = ? WHERE user_id = ? AND game_id = ?', [result.status, user.id, gameId], (updateErr) => {
-          if (updateErr) {
-            console.error('[CrackRelease] Failed to update crack_status in DB:', updateErr);
+        const { fetched, result } = await scrapeCrackRelease(row.game_name);
+        // ROADMAP CC-11. This wrote fire-and-forget, wrote `unknown` over a KNOWN status
+        // whenever the fetch failed (a CrackRelease outage erased every status it
+        // touched), and stored `unreleased`, which the column does not document.
+        //   - Only a page that was actually read may change the stored value.
+        //   - Only the documented values are stored; anything else read is `unknown`.
+        //   - AWAITED: a failed write is logged, and the caller still gets the answer.
+        if (fetched) {
+          try {
+            await db.promises.run(
+              'UPDATE user_games SET crack_status = ? WHERE user_id = ? AND game_id = ?',
+              [STORABLE_CRACK_STATUS[result.status] || 'unknown', user.id, gameId]);
+          } catch (updateErr) {
+            console.error('[CrackRelease] Failed to update crack_status in DB:', updateErr.message);
           }
-        });
+        }
         res.json(result);
       } catch (e) {
-        res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: e.message });
+        console.error('[CrackRelease] status update failed:', e.message);
+        res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: 'Internal error' });
       }
     });
   });
