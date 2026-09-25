@@ -336,12 +336,16 @@ async function refreshOne(userId, game) {
   // matchForRow, not findExactMatch: id first, then year — see catalog.js (CC-6).
   const match = catalog.matchForRow(lookup.results, game);
   if (!match) {
-    // nobodyAnswered, not `degraded`: an instance with no API keys configured reports
-    // every provider `skipped`, which is not degraded and still asked nobody.
-    return {
-      outcome: catalog.nobodyAnswered(lookup.providers) ? 'provider_unavailable' : 'not_found',
-      changes: [],
-    };
+    // "Not found" only when every provider that could have had it ANSWERED. Two ways
+    // that fails, and both mean "we could not ask", not "it does not exist":
+    //   - `degraded`: a provider FAILED, so the game may be exactly where we could not
+    //     look (IGDB down, RAWG answered without an exact match);
+    //   - nobodyAnswered: no provider was even asked -- an instance with no API keys
+    //     reports every one `skipped`, which is not degraded.
+    // The bulk route had swapped the first test for the second rather than adding it,
+    // and refreshOne inherited that; the single-game route had only the first.
+    const couldNotAsk = lookup.degraded || catalog.nobodyAnswered(lookup.providers);
+    return { outcome: couldNotAsk ? 'provider_unavailable' : 'not_found', changes: [] };
   }
   const applied = await library.applyRefreshedMetadata(userId, game, match);
   return { outcome: applied.updated ? 'updated' : 'unchanged', changes: applied.changes };

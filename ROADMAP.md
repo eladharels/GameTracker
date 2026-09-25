@@ -318,9 +318,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   The v1 routes keep their exact wording through a small `recordV1Refresh` formatter. A
   contract test drives the real single-game route with no API keys configured, and it fails on
   the old code.
-- **Behaviour change:** when one provider is down, another answered, and nothing matched, the
-  single-game refresh now says "Not found", as the bulk route always did. Before, it said
-  "Lookup unavailable".
+- **Review fix (`/code-review`):** `refreshOne` answers "unavailable" when a provider FAILED
+  (`degraded`) OR nobody was asked (`nobodyAnswered`). The bulk route had replaced the first
+  check with the second instead of adding it, and the merged function inherited that. So a
+  partial outage with no match read as "not found". That also corrects the bulk route and the
+  v2 job's `reason`.
 
 ### [x] CC-9 v1 `PUT /api/user/me/settings` has its own copy of the rules
 - **Where:** `index.js:3210-3269` versus `services/users.js#updateNotificationSettings`.

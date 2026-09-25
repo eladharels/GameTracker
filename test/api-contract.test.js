@@ -591,6 +591,31 @@ checkAsync('an empty body keeps v1 wording, and an unknown key is ignored', asyn
   assert.strictEqual(writes.length, 0);
 });
 
+checkAsync('a PARTIAL outage with no match is "unavailable" too, not "not found"', async () => {
+  // IGDB down, RAWG answered without an exact match: the game may be exactly where we
+  // could not look. From the code review of CC-8.
+  const catalog = require('../services/catalog');
+  const libraryService = require('../services/library');
+  const real = { search: catalog.searchAll, find: libraryService.findGame, get: db.get };
+  catalog.searchAll = async () => ({
+    results: [{ id: 'rawg_1', name: 'Something Else' }],
+    providers: { igdb: 'failed', rawg: 'ok', thegamesdb: 'skipped' },
+    counts: { igdb: 0, rawg: 1, thegamesdb: 0 }, degraded: true,
+  });
+  libraryService.findGame = async () => ({ game_id: 'igdb_1', game_name: 'Halo', release_date: null });
+  db.get = (sql, params, cb) => cb(null, { id: 7, username: 'jane' });
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/user/:username/games/:gameId/refresh-metadata')(
+      { params: { username: 'jane', gameId: 'igdb_1' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+  } finally {
+    catalog.searchAll = real.search; libraryService.findGame = real.find; db.get = real.get;
+  }
+  assert.strictEqual(res.body.results.details[0].error, 'Lookup unavailable',
+    `a partial outage was reported as ${res.body.results.details[0].error}`);
+});
+
 console.log('POST /api/admin/test-notification (SEC-1 per-user limiter):');
 
 checkAsync('the 11th test notification in the window is 429, keyed per user', async () => {
