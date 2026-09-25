@@ -104,4 +104,68 @@ check('CI runs the same Node major the images do', () => {
   }
 });
 
+// Every environment variable the backend READS must reach the backend CONTAINER.
+//
+// A variable the code reads but compose does not pass is worse than a missing one: an
+// operator sets it in .env, nothing complains, and the default quietly stays in force.
+// That shipped: TRUST_PROXY — which the README calls MANDATORY once the backend port is
+// closed — was never in the backend's `environment:` block, so the hardened topology
+// ran at trust-proxy 1, every login shared the frontend container's IP, and five bad
+// passwords from anyone locked out every user. CORS_ORIGINS, THEGAMESDB_API_KEY,
+// IGDB_CLIENT_SECRET and STEAM_REGION were silently ignored the same way.
+//
+// Static because it has to be: inside the container the variable is simply absent, and
+// absent is exactly what "unset, use the default" looks like at runtime.
+console.log('the environment the backend reads reaches its container:');
+{
+  const yaml = require('js-yaml');
+  const SOURCES = ['index.js', 'db.js', 'settings-store.js', 'directory.js', 'ldap-helpers.js',
+    'schema-migrate.js', 'user-rules.js', 'igdb-helpers.js',
+    ...fs.readdirSync(path.join(ROOT, 'services')).filter((f) => f.endsWith('.js')).map((f) => `services/${f}`)];
+  // Deliberately NOT passed, each with its reason. Adding a name here is a decision,
+  // not a way to turn the check green.
+  const NOT_PASSED = {
+    // Pool tuning with sane defaults in db.js; exposed only if someone needs to tune.
+    PG_POOL_MAX: 'both', PG_CONNECT_TIMEOUT_MS: 'both', PG_IDLE_TIMEOUT_MS: 'both', PG_STATEMENT_TIMEOUT_MS: 'both',
+    // Only read on a FRESH database. Production does not keep it in the container's
+    // environment (where `docker inspect` would show it for the life of the container);
+    // the random password printed once at first boot is the Docker path. The smoke
+    // stack sets a throwaway one so CI can log in.
+    ROOT_PASSWORD: 'docker-compose.yaml',
+  };
+
+  const read = new Set();
+  for (const f of SOURCES) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    for (const re of [/process\.env\.([A-Z][A-Z0-9_]*)/g, /\benv\.([A-Z][A-Z0-9_]*)/g,
+      /(?:resolveApiKey|apiKeyStatus)\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g]) {
+      for (const m of src.matchAll(re)) read.add(m[1]);
+    }
+  }
+
+  const passed = (file) => {
+    const doc = yaml.load(fs.readFileSync(path.join(ROOT, file), 'utf8'));
+    const env = doc.services.backend.environment || [];
+    return new Set((Array.isArray(env) ? env : Object.keys(env)).map((e) => String(e).split('=')[0]));
+  };
+
+  check('the scan actually finds the variables it is guarding', () => {
+    // Guards the guard: a regex that matches nothing would pass every file below.
+    for (const known of ['JWT_SECRET', 'TRUST_PROXY', 'CORS_ORIGINS', 'THEGAMESDB_API_KEY', 'STEAM_REGION']) {
+      assert.ok(read.has(known), `the source scan no longer finds ${known}`);
+    }
+  });
+
+  for (const file of ['docker-compose.yaml', 'docker-compose.test.yml']) {
+    check(`${file}: every variable the backend reads is passed to it`, () => {
+      const env = passed(file);
+      const missing = [...read].filter((v) => !env.has(v)
+        && NOT_PASSED[v] !== 'both' && NOT_PASSED[v] !== file).sort();
+      assert.deepStrictEqual(missing, [],
+        `${file} does not pass ${missing.join(', ')} to the backend, so setting it in .env does `
+        + 'nothing. Add it to services.backend.environment, or record in NOT_PASSED why not.');
+    });
+  }
+}
+
 console.log(`\n${n} runtime assertions passed.`);

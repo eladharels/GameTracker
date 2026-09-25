@@ -48,7 +48,10 @@ JWT_SECRET=at_least_16_characters_of_random_junk
 
 # Optional
 PORT=3000
-ROOT_PASSWORD=            # password for the seeded `root` user on a FRESH database
+ROOT_PASSWORD=            # password for the seeded `root` user on a FRESH database (not passed
+                          #   into the Docker container — there, the printed-once password is used)
+STEAM_REGION=il           # Steam storefront (two-letter country code) every price is quoted in
+IGDB_CLIENT_SECRET=       # only for "Refresh IGDB Token"; can also be set in Settings → API Keys
 CORS_ORIGINS=             # comma-separated cross-origin allowlist; empty for a same-origin deploy
 TRUST_PROXY=1             # reverse-proxy hop count used by the login rate limiter
 BACKEND_BIND=0.0.0.0      # host interface the backend port is published on (Docker only)

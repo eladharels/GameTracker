@@ -553,6 +553,65 @@ checkAsync('an UNRECOGNISED verification result never issues a session', async (
     'an unrecognised verification reason authenticated the caller');
 });
 
+// P0-1. Drives the real login handler with the directory stubbed to say YES, and the
+// users table stubbed to hold a LOCAL administrator of the same name. The local row's
+// bcrypt hash is real, so the fallback genuinely checks it.
+async function ldapLoginAs(username, row, ip) {
+  const ldapHelpers = require('../ldap-helpers');
+  const settingsStore = require('../settings-store');
+  const realVerify = ldapHelpers.verifyLdapCredentials;
+  const realLoad = settingsStore.loadSettings;
+  const realGet = db.get;
+  const realRun = db.run;
+  const realPGet = db.promises.get;
+  const writes = [];
+  settingsStore.loadSettings = () => ({
+    ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' },
+  });
+  ldapHelpers.verifyLdapCredentials = async () => ({
+    ok: true, entry: { dn: `uid=${username},dc=x`, cn: username, memberOf: [] },
+  });
+  db.promises.get = async () => row;
+  db.get = (sql, params, cb) => cb(null, row);
+  db.run = (sql, params, cb) => { writes.push(sql); if (typeof cb === 'function') cb.call({ lastID: 99 }, null); };
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/auth/login')(
+      { body: { username, password: 'the-directory-password' }, ip }, res);
+    await new Promise((r) => setTimeout(r, 150));
+  } finally {
+    ldapHelpers.verifyLdapCredentials = realVerify;
+    settingsStore.loadSettings = realLoad;
+    db.get = realGet;
+    db.run = realRun;
+    db.promises.get = realPGet;
+  }
+  return { res, writes };
+}
+
+checkAsync('a directory login named after a LOCAL admin does not sign in as it (P0-1)', async () => {
+  // The directory authenticated `root` / `boss`, but the rows are local administrators
+  // whose passwords are something else. The old route returned the row, relabelled it
+  // origin='ldap' and signed a session carrying can_manage_users. Now the directory's
+  // YES is ignored for these names and the LOCAL password decides — and it is wrong.
+  const hash = require('bcryptjs').hashSync('the-local-password', 4);
+  for (const [name, ip] of [['root', '203.0.113.21'], ['boss', '203.0.113.22']]) {
+    const row = { id: 1, username: name, can_manage_users: 1, origin: 'local', password: hash };
+    const { res, writes } = await ldapLoginAs(name, row, ip);
+    assert.ok(!res.body || !res.body.token, `a directory login took over local account '${name}'`);
+    assert.strictEqual(res.statusCode, 401, `'${name}': expected the local password to be checked`);
+    assert.ok(!writes.some((w) => /origin/i.test(w)), `'${name}' was relabelled as a directory account`);
+  }
+});
+
+checkAsync('a directory login for a directory account still signs in (P0-1 control)', async () => {
+  // Without this, the assertion above would pass for a route that refused every LDAP login.
+  const row = { id: 5, username: 'jane', can_manage_users: 0, origin: 'ldap', password: null };
+  const { res } = await ldapLoginAs('jane', row, '203.0.113.23');
+  assert.strictEqual(res.statusCode, 200);
+  assert.ok(res.body && typeof res.body.token === 'string', 'a legitimate directory login got no session');
+});
+
 checkAsync('a directory account outside requiredGroup CANNOT mint', async () => {
   // The blocker a review reproduced: ldap.requiredGroup is the only authorization
   // signal that lives in the directory and is never mirrored into `users`, so the

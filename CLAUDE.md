@@ -700,6 +700,8 @@ NODE_ENV=production
 # ROOT_PASSWORD=<fresh-DB root password; random-printed-once if unset>
 # CORS_ORIGINS=<comma-separated cross-origin allowlist; usually empty (same-origin app)>
 # TRUST_PROXY=<reverse-proxy hop count for the login rate limiter; default 1>
+# STEAM_REGION=<Steam storefront country code for ALL prices; default il. Read ONLY via
+#   services/jobs.js#steamRegion — the cron, the v2 job and the script once disagreed>
 # BACKEND_BIND=<host interface the backend port publishes on; default 0.0.0.0>
 #   0.0.0.0 is required when the reverse proxy is on ANOTHER machine. It also leaves the
 #   backend directly reachable, which lets a client spoof X-Forwarded-For past the login
@@ -707,6 +709,12 @@ NODE_ENV=production
 #   proxies /api) and then set BACKEND_BIND=127.0.0.1 AND TRUST_PROXY=2 — the extra hop
 #   makes the TRUST_PROXY bump mandatory. See README "Reverse proxy topology".
 ```
+> **Every variable the backend reads must be listed in the backend's `environment:` in BOTH
+> compose files** — `test/runtime.test.js` fails otherwise, and a deliberate omission goes in its
+> `NOT_PASSED` table with the reason. Compose passes nothing implicitly: `TRUST_PROXY`,
+> `CORS_ORIGINS`, `THEGAMESDB_API_KEY`, `IGDB_CLIENT_SECRET` and `STEAM_REGION` were all
+> documented here and silently ignored in Docker until that check existed.
+>
 > In deployment `JWT_SECRET` (and the API keys) come from **GitHub Actions secrets** injected into the
 > compose env; the compose uses `${JWT_SECRET:?...}` (fail-fast). `.env` is gitignored and excluded from
 > images via `.dockerignore`.

@@ -70,7 +70,7 @@ const problem = require('./services/problem');
 // RESERVED_USERNAMES and validatePassword are no longer imported here: the last route
 // that applied them by hand (POST /api/users) now calls services/users.js#create,
 // which holds both rules for BOTH surfaces.
-const { sanitizeText: sanitizeDirectoryText, isValidEmailAddress } = require('./user-rules');
+const { sanitizeText: sanitizeDirectoryText, isValidEmailAddress, directoryClaimRefusal } = require('./user-rules');
 
 // Upper bound on PUT /api/user/:username/backlog-reorder.
 const MAX_BACKLOG_REORDER = 1000;
@@ -269,6 +269,12 @@ function getOrCreateUser(username, cb, opts = {}) {
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username ? username.toLowerCase() : '';
   db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername], (err, user) => {
+    if (err) return cb(err);
+    // The login route has already asked this before the group check; asked AGAIN here
+    // because the row it saw may not be the row that exists now — an administrator
+    // creating a local account of the same name in between must not have it claimed.
+    const refusal = directoryClaimRefusal(normalizedUsername, user || null);
+    if (refusal) return cb(Object.assign(new Error('directory may not claim this username'), { directoryClaimRefused: refusal }));
     if (user) {
       // Optionally update display_name/origin if provided
       if (opts.display_name || opts.origin) {
@@ -818,7 +824,7 @@ app.get('/api/game-price/:steamAppId', authRequired, async (req, res) => {
     const response = await axios.get(`https://store.steampowered.com/api/appdetails`, {
       params: {
         appids: steamAppId,
-        cc: 'il', // Israeli store
+        cc: jobsService.steamRegion(), // the instance's store — see jobs.js#steamRegion
         l: 'en',
       },
     });
@@ -1791,7 +1797,7 @@ app.post('/api/auth/login', (req, res) => {
   // there is deliberately one implementation. What stays here is everything that is
   // specific to logging IN: the fallback policy, the group check, the user sync and
   // the session token.
-  ldapHelpers.verifyLdapCredentials(ldapSettings, normalizedUsername, password).then((result) => {
+  ldapHelpers.verifyLdapCredentials(ldapSettings, normalizedUsername, password).then(async (result) => {
     if (authCompleted) return;
 
     // FALL BACK on 'unreachable' and 'not_found', exactly as before. A directory
@@ -1850,6 +1856,22 @@ app.post('/api/auth/login', (req, res) => {
     const foundUser = result.entry;
     console.log('[LDAP] User password authentication succeeded.');
 
+    // 3b. Is this username the DIRECTORY's to sign in as? A local account — `root`
+    // above all — is not, whatever the directory says about a same-named entry. See
+    // user-rules.js#directoryClaimRefusal. Asked BEFORE the group test and before the
+    // failed-attempt counter is cleared: a directory account named after a local
+    // admin must not be able to reset that admin's lockout between password guesses.
+    // Falling back is right here, and is not the fail-open the .catch below guards
+    // against: local auth demands the LOCAL password, so it grants nothing the
+    // directory's answer could have granted.
+    const existing = await db.promises.get(
+      'SELECT origin, password FROM users WHERE username = ?', [normalizedUsername]);
+    const claimRefusal = directoryClaimRefusal(normalizedUsername, existing || null);
+    if (claimRefusal) {
+      console.warn(`[LDAP] Directory authenticated '${safeForLog(normalizedUsername, 64)}', but that username is not a directory account (${claimRefusal}). Using local authentication instead.`);
+      return fallbackLocalAuth();
+    }
+
     // 4. Check group membership (Authorization).
     // The failed-attempt counter is deliberately NOT cleared yet: a user who
     // authenticates but is outside the required group is not authorized, so clearing
@@ -1888,6 +1910,10 @@ app.post('/api/auth/login', (req, res) => {
     console.log('[DEBUG] User email from LDAP:', safeForLog(userEmail));
 
     getOrCreateUser(normalizedUsername, (err, user) => {
+      if (err && err.directoryClaimRefused) {
+        console.warn(`[LDAP] Username '${safeForLog(normalizedUsername, 64)}' stopped being claimable during login (${err.directoryClaimRefused}). Using local authentication instead.`);
+        return fallbackLocalAuth();
+      }
       if (err) {
         if (authCompleted) return;
         authCompleted = true;
@@ -2336,7 +2362,7 @@ v2Router.get('/catalog/prices/:steamAppId', (req, res) => {
   if (!/^[0-9]{1,10}$/.test(steamAppId)) {
     return v2.send(res, { code: SVC.VALIDATION, message: 'steamAppId must be a Steam application id' });
   }
-  const region = req.query.region === undefined ? 'il' : String(req.query.region);
+  const region = req.query.region === undefined ? jobsService.steamRegion() : String(req.query.region);
   if (!/^[a-z]{2}$/.test(region)) {
     return v2.send(res, { code: SVC.VALIDATION, message: 'region must be a two-letter country code' });
   }
@@ -3470,10 +3496,10 @@ process.on('unhandledRejection', (reason) => {
 // --- Scheduled Weekly Price Update for User Libraries ---
 scheduleWhenServer('0 3 * * 1', () => {   // Every Monday at 3:00 AM
   console.log('[CRON] Starting weekly Steam price update for all user libraries...');
-  // STEAM_REGION passed through: the cron used to hardcode 'il' while
-  // update_library_prices.js honoured the variable, so the two produced prices in
-  // different currencies for the same library.
-  jobsService.updatePrices({ region: process.env.STEAM_REGION || 'il' })
+  // No region argument, deliberately: jobs.js#steamRegion is the one place that reads
+  // STEAM_REGION, so this, `POST /api/v2/jobs` and update_library_prices.js cannot
+  // quote the same library in different currencies again.
+  jobsService.updatePrices()
     .then((r) => console.log('[CRON] Weekly Steam price update complete:', r))
     .catch((err) => console.error('[CRON] Price update failed:', err.message));
 });

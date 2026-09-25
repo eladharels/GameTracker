@@ -30,6 +30,23 @@ const safe = (v, n = 80) => sanitizeText(v, n);
 // entire run indefinitely. Same defect the catalog providers had.
 const STEAM_TIMEOUT_MS = 10000;
 
+// The Steam storefront region every price in this instance is quoted in, from
+// STEAM_REGION (default 'il'). Resolved HERE, once, and used as the default by every
+// price lookup — because every caller choosing its own was the bug: the cron passed
+// STEAM_REGION, `POST /api/v2/jobs {kind:"updatePrices"}` passed nothing and got
+// 'il', so an instance set to `us` stored USD on Monday and ILS after an admin
+// pressed "run now". Mixed currencies in one library cannot be told apart later.
+//
+// A value that is not a two-letter code falls back to 'il' LOUDLY, rather than being
+// sent to Steam as-is, where it silently answers "not in this region" for everything.
+function steamRegion(env = process.env) {
+  const raw = String(env.STEAM_REGION ?? '').trim().toLowerCase();
+  if (raw === '') return 'il';
+  if (/^[a-z]{2}$/.test(raw)) return raw;
+  console.warn(`[Jobs] Ignoring STEAM_REGION=${safe(raw, 20)}: not a two-letter country code. Using 'il'.`);
+  return 'il';
+}
+
 // --- Release checks --------------------------------------------------------
 
 // Users who have at least one unreleased game with a date, and their reminder
@@ -192,7 +209,7 @@ function priceString(value) {
 //   { ok: true,  price }              a formatted price for that region
 //   { ok: true,  price: null, reason } Steam answered; the game has no price there
 //   { ok: false, error }              Steam could not be reached or was unusable
-async function fetchSteamPrice(steamAppId, { region = 'il' } = {}) {
+async function fetchSteamPrice(steamAppId, { region = steamRegion() } = {}) {
   const id = String(steamAppId);
   try {
     const response = await axios.get('https://store.steampowered.com/api/appdetails', {
@@ -216,7 +233,7 @@ async function fetchSteamPrice(steamAppId, { region = 'il' } = {}) {
   }
 }
 
-async function updatePrices({ region = 'il' } = {}) {
+async function updatePrices({ region = steamRegion() } = {}) {
   const report = { checked: 0, updated: 0, withoutPrice: 0, errors: 0 };
   const games = await priceableGames();
   for (const game of games) {
@@ -358,5 +375,5 @@ async function runJob(kind, { scope = 'instance', userId = null, deps = {} } = {
 
 module.exports = {
   NO_DEDUPE, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames,
-  refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice,
+  refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice, steamRegion,
 };

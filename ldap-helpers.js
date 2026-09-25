@@ -357,6 +357,12 @@ function verifyLdapCredentials(ldapSettings, username, password) {
 // outage rather than as a bug.
 //
 // An empty/absent requiredGroup means the control is not in use — every entry passes.
+//
+// EXACT match only: `requiredGroup` is either the group's full DN, or its bare cn,
+// which is compared against the FIRST RDN of each memberOf DN. This was a substring
+// test — `g.includes('cn=' + want)` — so with requiredGroup "gamers", membership of
+// cn=gamers-denied or cn=gamersx satisfied it, and so did any DN that merely had a
+// cn=gamers… component somewhere further up the tree.
 function satisfiesRequiredGroup(entry, requiredGroup) {
   if (!requiredGroup || String(requiredGroup).trim() === '') return true;
   // TRIMMED. Untrimmed, ' gamers ' matched nothing and locked every user out
@@ -366,8 +372,26 @@ function satisfiesRequiredGroup(entry, requiredGroup) {
   const want = String(requiredGroup).trim().toLowerCase();
   return attrValues(entry, 'memberOf').some((group) => {
     const g = String(group).toLowerCase();
-    return g === want || g.includes(`cn=${want}`);
+    if (g === want) return true;
+    const rdn = firstRdn(g);
+    return rdn !== null && rdn.type === 'cn' && rdn.value === want;
   });
+}
+
+// The first RDN of a DN string, as {type, value}, or null when there is none.
+// Splits on the first UNESCAPED comma, so `cn=Smith\, John,ou=x` yields the value
+// `smith\, john` rather than `smith\`. Only whitespace around the `=` is folded: the
+// value is otherwise compared exactly as the directory wrote it.
+function firstRdn(dn) {
+  let end = dn.length;
+  for (let i = 0; i < dn.length; i++) {
+    if (dn[i] === '\\') { i++; continue; }
+    if (dn[i] === ',') { end = i; break; }
+  }
+  const rdn = dn.slice(0, end);
+  const eq = rdn.indexOf('=');
+  if (eq < 0) return null;
+  return { type: rdn.slice(0, eq).trim(), value: rdn.slice(eq + 1).trim() };
 }
 
 module.exports = {

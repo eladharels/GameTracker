@@ -34,7 +34,7 @@ const {
   isCompatMirrorDn, compatTreeAdvice,
 } = require("../ldap-helpers");
 const { escapeIgdbSearch } = require('../igdb-helpers');
-const { validateUsername, RESERVED_USERNAMES } = require('../user-rules');
+const { validateUsername, RESERVED_USERNAMES, directoryClaimRefusal } = require('../user-rules');
 
 let n = 0;
 const check = (label, fn) => { fn(); n++; console.log('  ok  ' + label); };
@@ -217,6 +217,29 @@ check('rejects an empty username', () => {
 });
 check('accepts an ordinary username', () => {
   assert.strictEqual(validateUsername('jane'), null);
+});
+
+console.log('directoryClaimRefusal (P0-1: an LDAP login must not take over a local account):');
+check('a reserved name is never the directory\'s, whether or not the row exists', () => {
+  // A directory account named `root` signed in AS the seeded administrator.
+  for (const name of RESERVED_USERNAMES) {
+    assert.ok(directoryClaimRefusal(name, null), `${name} (no row) was claimable`);
+    assert.ok(directoryClaimRefusal(name, { origin: 'local', password: '$2a$hash' }), `${name} was claimable`);
+    assert.ok(directoryClaimRefusal(name, { origin: 'ldap', password: null }), `${name} (ldap row) was claimable`);
+  }
+});
+check('a local account WITH a password is refused', () => {
+  // The admin-takeover case: same name in the directory, local row holds the privilege.
+  assert.strictEqual(directoryClaimRefusal('alice', { origin: 'local', password: '$2a$hash' }), 'local account');
+  // An absent origin is not a directory account either.
+  assert.strictEqual(directoryClaimRefusal('alice', { origin: null, password: '$2a$hash' }), 'local account');
+});
+check('a directory account, a new name, and a legacy passwordless row are claimable', () => {
+  assert.strictEqual(directoryClaimRefusal('alice', { origin: 'ldap', password: null }), null);
+  assert.strictEqual(directoryClaimRefusal('alice', null), null);
+  // Provisioned by an LDAP login before `origin` was recorded: defaults to 'local'
+  // but has no local credential for the directory to bypass.
+  assert.strictEqual(directoryClaimRefusal('alice', { origin: 'local', password: null }), null);
 });
 
 // services/settings.js is in scope for THIS FILE only via its pure functions.
@@ -2118,6 +2141,28 @@ console.log('ldap-helpers.satisfiesRequiredGroup:');
     // Fails CLOSED on a malformed entry rather than treating absence as membership.
     assert.strictEqual(satisfiesRequiredGroup(null, 'gamers'), false);
   });
+  check('a group whose name merely CONTAINS the required one is refused', () => {
+    // This was a substring test: cn=gamers-denied satisfied requiredGroup "gamers".
+    for (const dn of [
+      'cn=gamers-denied,ou=groups,dc=x',
+      'cn=gamersx,dc=x',
+      'cn=xgamers,dc=x',
+      'cn=other,cn=gamers,dc=x',     // cn=gamers further UP the tree is not membership
+      'ou=gamers,dc=x',              // right name, wrong RDN type
+    ]) {
+      assert.strictEqual(satisfiesRequiredGroup({ memberOf: [dn] }, 'gamers'), false, dn);
+    }
+  });
+  check('the first RDN is matched exactly, with escaped commas and spaced `=`', () => {
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['CN = Gamers ,dc=x'] }, 'gamers'), true);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=Game\\, Club,dc=x'] }, 'game\\, club'), true);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=Game\\, Club,dc=x'] }, 'game\\'), false);
+  });
+  check('a FULL group DN as requiredGroup matches that DN and nothing else', () => {
+    const want = 'CN=Gamers,OU=Groups,DC=x';
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=gamers,ou=groups,dc=x'] }, want), true);
+    assert.strictEqual(satisfiesRequiredGroup({ memberOf: ['cn=gamers,ou=other,dc=x'] }, want), false);
+  });
 }
 
 console.log('users.update — a directory account may not be given a local password:');
@@ -2323,6 +2368,44 @@ console.log('jobs.fetchSteamPrice — three outcomes, never collapsed:');
         const r = await jobsSvc.fetchSteamPrice('1');
         assert.ok(r.price.length <= 64, `price not bounded: ${r.price.length} chars`);
       });
+  });
+}
+
+console.log('jobs.steamRegion — one region for every price path (P0-4):');
+{
+  const jobsSvc = require('../services/jobs');
+  check('STEAM_REGION is honoured, normalised, and defaults to il', () => {
+    assert.strictEqual(jobsSvc.steamRegion({}), 'il');
+    assert.strictEqual(jobsSvc.steamRegion({ STEAM_REGION: '' }), 'il');
+    assert.strictEqual(jobsSvc.steamRegion({ STEAM_REGION: 'us' }), 'us');
+    assert.strictEqual(jobsSvc.steamRegion({ STEAM_REGION: ' GB ' }), 'gb');
+  });
+  check('a malformed STEAM_REGION falls back to il instead of reaching Steam', () => {
+    const warn = console.warn; console.warn = () => {};
+    try {
+      for (const bad of ['usa', 'u', '12', 'u$']) assert.strictEqual(jobsSvc.steamRegion({ STEAM_REGION: bad }), 'il', bad);
+    } finally { console.warn = warn; }
+  });
+
+  // The drift itself: the cron passed STEAM_REGION, `POST /api/v2/jobs` passed nothing
+  // and swept in ILS. Driven through runJob — the v2 entry point — with the region set.
+  checkAsync('runJob("updatePrices") sweeps in the CONFIGURED region, not a hardcoded il', async () => {
+    const axiosMod = require('axios');
+    const dbMod = require('../db');
+    const real = { get: axiosMod.get, all: dbMod.promises.all, run: dbMod.promises.run, env: process.env.STEAM_REGION };
+    const seen = [];
+    axiosMod.get = async (url, cfg) => { seen.push(cfg.params.cc); return { data: { 440: { success: true, data: { price_overview: { final_formatted: '$9.99' } } } } }; };
+    dbMod.promises.all = async () => [{ id: 1, game_id: 'igdb_1', steam_app_id: '440' }];
+    dbMod.promises.run = async () => ({ changes: 1 });
+    process.env.STEAM_REGION = 'us';
+    try {
+      await jobsSvc.runJob('updatePrices');
+      await jobsSvc.fetchSteamPrice('440');
+    } finally {
+      axiosMod.get = real.get; dbMod.promises.all = real.all; dbMod.promises.run = real.run;
+      if (real.env === undefined) delete process.env.STEAM_REGION; else process.env.STEAM_REGION = real.env;
+    }
+    assert.deepStrictEqual(seen, ['us', 'us'], `swept in ${JSON.stringify(seen)} with STEAM_REGION=us`);
   });
 }
 

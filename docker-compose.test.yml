@@ -63,6 +63,12 @@ services:
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:-smoke-test-dummy}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN:-smoke-test-dummy}
       - RAWG_API_KEY=${RAWG_API_KEY:-smoke-test-dummy}
+      # Same keys as docker-compose.yaml — the two files must stay the same SHAPE.
+      - THEGAMESDB_API_KEY=${THEGAMESDB_API_KEY:-}
+      - IGDB_CLIENT_SECRET=${IGDB_CLIENT_SECRET:-}
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - STEAM_REGION=${STEAM_REGION:-il}
       - JWT_SECRET=${JWT_SECRET:-smoke-test-jwt-secret-not-real}
       # Deterministic so the smoke test can LOG IN and exercise a route through
       # Express. Without it the root seed generates a random password printed once,

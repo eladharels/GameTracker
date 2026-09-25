@@ -78,6 +78,16 @@ services:
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN}
       - RAWG_API_KEY=${RAWG_API_KEY}
+      # Optional. Every variable index.js or a service reads must be listed here, or a
+      # value in .env silently does nothing — test/runtime.test.js enforces it. This
+      # block once omitted TRUST_PROXY, which the README calls MANDATORY in the
+      # hardened topology: set to 2 in .env, the backend still ran at 1, so every
+      # login shared the proxy's IP and five bad passwords locked out every user.
+      - THEGAMESDB_API_KEY=${THEGAMESDB_API_KEY:-}
+      - IGDB_CLIENT_SECRET=${IGDB_CLIENT_SECRET:-}
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - STEAM_REGION=${STEAM_REGION:-il}
       # No insecure default — JWT_SECRET must be provided (via .env or the shell env).
       # The backend refuses to start if it is missing, too short, or 'supersecretkey'.
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set (see .env)}

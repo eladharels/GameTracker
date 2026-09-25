@@ -838,10 +838,11 @@ paths:
         - name: region
           in: query
           required: false
-          schema: { type: string, pattern: '^[a-z]{2}$', default: il }
+          schema: { type: string, pattern: '^[a-z]{2}$' }
           description: |
             ISO 3166-1 alpha-2 country code selecting the Steam store. Defaults to the
-            same region the weekly price sweep uses, so this endpoint and the stored
+            instance's configured region (`STEAM_REGION`, `il` when unset) — the same
+            region the weekly price sweep uses, so this endpoint and the stored
             `lastPrice` are comparable by default.
       responses:
         '200':
