@@ -963,6 +963,23 @@ console.log('v2 admin mappers (the rename is where a guard stops recognising a f
   const usersSvc = require('../services/users');
   const throws = (fn) => { try { fn(); } catch (err) { return err; } return null; };
 
+  check('userWrite refuses a non-boolean admin flag, "false" above all (SEC-2)', () => {
+    // The service reads it as `x ? 1 : 0`: the string "false" is truthy and granted admin.
+    // `username` is a CREATE-only field; an update carrying it is refused for that
+    // reason, which would make these assertions pass without reaching the type check.
+    for (const opts of [{ create: true }, {}]) {
+      const base = opts.create ? { username: 'x', password: 'y' } : {};
+      for (const bad of ['false', 'true', 0, 1, null, 'no']) {
+        const err = throws(() => v2m.userWrite({ ...base, canManageUsers: bad }, opts));
+        assert.ok(err && err.code === 'validation' && /true or false/.test(err.message),
+          `canManageUsers=${JSON.stringify(bad)}: ${err ? err.message : 'accepted'}`);
+        const err2 = throws(() => v2m.userWrite({ ...base, sharesLibrary: bad }, opts));
+        assert.ok(err2 && /true or false/.test(err2.message), `sharesLibrary=${JSON.stringify(bad)} was accepted`);
+      }
+      assert.strictEqual(v2m.userWrite({ ...base, canManageUsers: false }, opts).can_manage_users, false);
+      assert.strictEqual(v2m.userWrite({ ...base, canManageUsers: true }, opts).can_manage_users, true);
+    }
+  });
   check('userWrite refuses every user-owned notification target, in BOTH spellings', () => {
     // This is the one that has to hold. `userWrite` RENAMES fields, so a body carrying
     // `gotifyToken` would arrive at the service under a name its

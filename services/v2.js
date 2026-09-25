@@ -290,6 +290,8 @@ const USER_WRITE_FIELDS = Object.freeze({
   sharesLibrary: 'shares_library',
 });
 
+const BOOLEAN_USER_FIELDS = Object.freeze(['can_manage_users', 'shares_library']);
+
 function userWrite(body, { create = false } = {}) {
   const input = Object(body);
   const out = {};
@@ -298,6 +300,14 @@ function userWrite(body, { create = false } = {}) {
     const column = USER_WRITE_FIELDS[key];
     if (!column) {
       throw serviceError(CODES.VALIDATION, `unknown field: ${key}`, { field: key });
+    }
+    // BOOLEANS, checked (ROADMAP SEC-2). The service reads these as `x ? 1 : 0`, so
+    // the STRING "false" is truthy: `PATCH /users/5 {"canManageUsers":"false"}` promoted
+    // the user to admin, and the same value slipped past "you cannot remove your own
+    // admin". The spec declares them boolean; this is where that becomes true. v1 is
+    // frozen and keeps its truthy reading -- its only client sends real booleans.
+    if (BOOLEAN_USER_FIELDS.includes(column) && typeof input[key] !== 'boolean') {
+      throw serviceError(CODES.VALIDATION, `${key} must be true or false`, { field: key });
     }
     out[column] = input[key];
   }

@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 13 | 2 |
+| SEC — Security (medium/low) | 13 | 3 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **23** |
+| **Total** | **64** | **24** |
 
 ---
 
@@ -496,12 +496,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - The refusal message confirms that a name resolves to a link-local address, and nothing
     more.
 
-### [ ] SEC-2 ✔ v2 user writes accept string booleans for `canManageUsers`
+### [x] SEC-2 ✔ v2 user writes accept string booleans for `canManageUsers`
 - **Where:** `services/v2.js` `userWrite` (no type check), `services/users.js:152-157`, `:287`.
 - **Failure:** `PATCH /api/v2/users/5 {"canManageUsers":"false"}` promotes the user, and the
   same input slips past the "cannot remove your own admin" check. Only admins can reach it.
 - **Fix:** require `typeof === 'boolean'` in the v2 mapper, or better in the service, and
   answer 400 otherwise.
+- **Done:** `v2.userWrite` refuses anything but a real boolean for `canManageUsers` and
+  `sharesLibrary`, on create and on update, with a 400. v1 keeps its truthy reading, because it
+  is frozen and its client sends real booleans. The unit test fails on the old code.
 
 ### [ ] SEC-3 Semgrep is unpinned and can be stubbed
 - **Where:** `.github/workflows/docker-build-deploy.yml:168-174`: an unversioned
