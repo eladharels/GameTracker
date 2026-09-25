@@ -162,7 +162,12 @@ GameTracker/
 │                                   #   page computes those same counts client-side already.
 │                                   #   Every query filters source = 'user'; returns `coverage`,
 │                                   #   including `truncated`, so the page can state what the
-│                                   #   log does NOT know
+│                                   #   log does NOT know. `recordedCompletions` counts GAMES
+│                                   #   currently done that the log saw finished, never events
+│                                   #   (CC-16). ONE deliberate exception to "nothing the library
+│                                   #   carries": agentSummary() returns statusCounts, because
+│                                   #   an agent's only alternative is downloading the whole
+│                                   #   library to count five numbers
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
 │                                   #   dispatch() is the ONE service that never throws — four
 │                                   #   independent outcomes, advisory result. See services/errors.js

@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 15 |
+| CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **22** |
+| **Total** | **64** | **23** |
 
 ---
 
@@ -437,7 +437,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   needs a safe integer and the text sorts need a string; anything else is a 400 before any
   query runs. The unit test fails on the old code.
 
-### [ ] CC-16 Stats: `statusCounts` in `agentSummary` and understated `unrecordedCompletions`
+### [x] CC-16 Stats: `statusCounts` in `agentSummary` and understated `unrecordedCompletions`
 - **Where:** `services/stats.js` `agentSummary`.
 - **Problem:**
   - It returns `statusCounts`, against the rule that `stats.js` returns nothing the library
@@ -446,6 +446,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     finished more than once.
 - **Fix:** either document an exception for agents or drop `statusCounts`. Count the
   games that have at least one `done` event, not the events.
+- **Done:**
+  - `recordedCompletions` now counts GAMES currently done that have a user `done` event,
+    which is what its own comment always said. It used to count completion EVENTS, capped at
+    `MAX_ROWS`.
+  - That corrects the stats page's "N of your finished games have no date" banner and the
+    agent's `unrecordedCompletions`, with no response shape change.
+  - `statusCounts` in `agentSummary` was a deliberate, documented exception. CLAUDE.md now says
+    so instead of contradicting it.
+  - The integration test fails on the old code.
 
 ---
 

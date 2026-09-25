@@ -265,6 +265,30 @@ const shift = (userId, gameId, toStatus, daysAgo) => db.promises.run(
     await db.promises.run('DELETE FROM users WHERE id = ?', [other.id]);
   });
 
+  await check('coverage counts GAMES the log saw finished, not completion EVENTS (CC-16)', async () => {
+    // One account, two done games: A finished TWICE (done, replay, done), B done with no
+    // recorded event at all (it predates the log). The old count was events: 2 -- which
+    // made "unrecorded" 2 - 2 = 0 and hid B. The truth is 1 recorded, 1 unrecorded.
+    await db.promises.run("DELETE FROM users WHERE username = 'statscov'");
+    await db.promises.run(
+      "INSERT INTO users (username, password, can_manage_users, created_at, origin) VALUES ('statscov','x',0,'now','local')");
+    const { id: cid } = await db.promises.get("SELECT id FROM users WHERE username='statscov'");
+    await lib.upsertGame(cid, { gameId: 'igdb_ca', gameName: 'A', releaseDate: past, status: 'playing' });
+    await lib.setStatus(cid, 'igdb_ca', 'done');
+    await lib.setStatus(cid, 'igdb_ca', 'playing');
+    await lib.setStatus(cid, 'igdb_ca', 'done');
+    // B is written straight to the table: a game done before the event log existed.
+    await db.promises.run(
+      "INSERT INTO user_games (user_id, game_id, game_name, release_date, status) VALUES (?, 'igdb_cb', 'B', ?, 'done')",
+      [cid, past]);
+    const s = await stats.summary(cid);
+    assert.strictEqual(s.coverage.libraryDone, 2);
+    assert.strictEqual(s.coverage.recordedCompletions, 1, `recordedCompletions=${s.coverage.recordedCompletions}`);
+    const a = await stats.agentSummary(cid, {});
+    assert.strictEqual(a.coverage.unrecordedCompletions, 1, 'a game finished twice hid one never recorded');
+    await db.promises.run('DELETE FROM users WHERE id = ?', [cid]);
+  });
+
   await db.promises.run('DELETE FROM users WHERE id = ?', [uid]);
 
   console.log(`\n${n - failed}/${n} passed`);
