@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 13 | 4 |
+| SEC — Security (medium/low) | 13 | 5 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **25** |
+| **Total** | **64** | **26** |
 
 ---
 
@@ -523,12 +523,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   (`semgrep.dev` is blocked). The first CI run on 1.178.0 is the check that the newer rules
   still pass.
 
-### [ ] SEC-4 GitHub Actions pinned by tag, not by commit SHA
+### [x] SEC-4 GitHub Actions pinned by tag, not by commit SHA
 - **Where:** `actions/checkout@v4`, `actions/setup-node@v4`, `docker/setup-buildx-action@v3`.
   The Semgrep rule that flags this is excluded at `:187`.
 - **Why it matters:** the runner is the production host.
 - **Fix:** pin to full SHAs with a version comment, remove the exclusion, and let Dependabot
   or Renovate bump them.
+- **Done:**
+  - Every `uses:` is pinned to the commit its current major tag points to (checkout v4.4.0,
+    setup-node v4.4.0, setup-buildx v3.12.0), with a `# vX.Y.Z` comment.
+  - Semgrep's mutable-action-tag rule is no longer excluded.
+  - `runtime.test.js` fails on any unpinned `uses:` or a missing version comment.
+  - I kept the current majors on purpose; newer majors (checkout v7, setup-node v7, buildx
+    v4) are an upgrade to test separately.
+- **Decision for you: no Dependabot yet.** Dependabot opens branches inside this repository,
+  and the CI gate trusts same-repo pull requests only because push access here already implies
+  deploy. A bot author breaks that assumption: its PRs would run CI on the production host.
+  Keep bumping pins by hand, or move the PR path to GitHub-hosted runners first (see CLAUDE.md,
+  "The gate's equivalence is conditional").
 
 ### [ ] SEC-5 Gitleaks allowlists whole documentation files
 - **Where:** `.gitleaks.toml:75-85` (`CLAUDE.md`, `README.md`,

@@ -327,4 +327,22 @@ console.log('the semgrep gate runs a pinned binary:');
   });
 }
 
+// Every action is pinned to a commit SHA (ROADMAP SEC-4). A tag can be moved upstream,
+// and this runner is the production host.
+console.log('every GitHub Action is pinned to a commit:');
+{
+  const raw = fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8');
+  check('no `uses:` references a tag or branch', () => {
+    const uses = [...raw.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)(.*)$/gm)];
+    assert.ok(uses.length > 0, 'no uses: lines found -- the scan is broken');
+    for (const [, ref, rest] of uses) {
+      assert.match(ref, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${ref} is not pinned to a commit SHA`);
+      assert.match(rest, /#\s*v\d/, `${ref} has no "# vX.Y.Z" comment saying which release it is`);
+    }
+  });
+  check('the Semgrep rule that flags a mutable action tag is not excluded', () => {
+    assert.ok(!/github-actions-mutable-action-tag/.test(raw), 'the mutable-action-tag rule is excluded again');
+  });
+}
+
 console.log(`\n${n} runtime assertions passed.`);
