@@ -97,15 +97,16 @@ function isBlockedHost(hostname) {
     // The same unwrapping for the other two forms that carry an IPv4 address in the
     // low 32 bits: the deprecated IPv4-COMPATIBLE `::a.b.c.d`, and NAT64's
     // `64:ff9b::a.b.c.d`, which a NAT64 gateway on the path translates straight to
-    // that IPv4 address. Defence in depth, from the CISO review of SEC-1.
-    const embedded = /^(?:::ffff:|::|64:ff9b::)/i;
-    const mappedHex = host.match(/^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    // that IPv4 address, and SIIT's IPv4-translated `::ffff:0:a.b.c.d`. Defence in
+    // depth, from the CISO review of SEC-1.
+    const embedded = /^(?:::ffff:|::ffff:0:|::|64:ff9b::)/i;
+    const mappedHex = host.match(/^(?:::ffff:|::ffff:0:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
     if (mappedHex) {
       const hi = parseInt(mappedHex[1], 16);
       const lo = parseInt(mappedHex[2], 16);
       host = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
     } else if (embedded.test(host)) {
-      const mappedDotted = host.match(/^(?:::ffff:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/i);
+      const mappedDotted = host.match(/^(?:::ffff:|::ffff:0:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/i);
       if (mappedDotted) host = mappedDotted[1];
     }
     if (METADATA_HOSTS.includes(host)) return true;

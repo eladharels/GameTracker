@@ -401,7 +401,7 @@ check('every IPv6 form carrying the metadata address, and all of fe80::/10, is b
   // From the CISO review of SEC-1: only `fe80:` was matched, and the IPv4-compatible
   // and NAT64 embeddings of 169.254.169.254 were not unwrapped at all.
   for (const host of ['[::169.254.169.254]', '[::a9fe:a9fe]', '[64:ff9b::169.254.169.254]',
-    '[64:ff9b::a9fe:a9fe]', '[fe90::1]', '[febf::1]']) {
+    '[64:ff9b::a9fe:a9fe]', '[::ffff:0:169.254.169.254]', '[fe90::1]', '[febf::1]']) {
     assert.strictEqual(isBlockedNotificationHost(`http://${host}/`), true, `${host} passed`);
   }
   // ...and ordinary addresses are not caught by the wider patterns.
