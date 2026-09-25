@@ -3245,65 +3245,37 @@ app.get('/api/user/me', authRequired, (req, res) => {
 
 // --- Per-user settings endpoint ---
 // Authenticated user can update their own email/ntfy_topic/gotify_token/telegram_chat_id/notification_days
+// v1's snake_case body keys, and the service's names for the same fields.
+const V1_NOTIFICATION_FIELDS = Object.freeze({
+  email: 'email', ntfy_topic: 'ntfyTopic', ntfy_url: 'ntfyUrl', gotify_token: 'gotifyToken',
+  gotify_url: 'gotifyUrl', telegram_chat_id: 'telegramChatId', notification_days: 'notificationDays',
+});
+
+// A thin adapter over users.updateNotificationSettings -- the SAME rules
+// `PATCH /api/v2/me/notifications` applies. This route used to carry its own copy
+// (ROADMAP CC-9), and it had drifted: no upper bound or de-duplication on
+// notification_days, and ntfy_topic / gotify_token / telegram_chat_id stored with no
+// type or length check and no sanitising, so a multi-megabyte or non-string value went
+// straight into the row. The response is still v1's {success:true}, and a refusal is
+// still a 400 {error}, worded with v1's snake_case field names.
 app.put('/api/user/me/settings', authRequired, (req, res) => {
-  const userId = req.user.id;
-  const { email, ntfy_topic, ntfy_url, gotify_token, gotify_url, telegram_chat_id, notification_days } = req.body;
-  const updates = [];
-  const params = [];
-  // Only accept http(s) URLs for the per-user notification servers (or empty to clear).
-  const isValidServerUrl = (u) => u === '' || /^https?:\/\/\S+$/i.test(u);
-  if (typeof email !== 'undefined') {
-    // Basic shape check + no commas. Nodemailer treats a comma-separated `to` as a
-    // recipient LIST, so an unvalidated value here let one account fan a
-    // notification out to arbitrary third parties from the deployment's own domain.
-    const cleanEmail = String(email).trim();
-    if (cleanEmail !== '' && !isValidEmailAddress(cleanEmail)) {
-      return res.status(400).json({ error: 'email must be a single valid address, or empty' });
-    }
-    updates.push('email = ?');
-    params.push(cleanEmail);
+  const body = req.body || {};
+  const fields = {};
+  for (const [v1Key, key] of Object.entries(V1_NOTIFICATION_FIELDS)) {
+    if (Object.hasOwn(body, v1Key)) fields[key] = body[v1Key];
   }
-  if (typeof ntfy_topic !== 'undefined') {
-    updates.push('ntfy_topic = ?');
-    params.push(ntfy_topic);
-  }
-  if (typeof ntfy_url !== 'undefined') {
-    if (!isValidServerUrl(String(ntfy_url).trim())) {
-      return res.status(400).json({ error: 'ntfy_url must be an http(s) URL or empty' });
-    }
-    updates.push('ntfy_url = ?');
-    params.push(String(ntfy_url).trim());
-  }
-  if (typeof gotify_token !== 'undefined') {
-    updates.push('gotify_token = ?');
-    params.push(gotify_token);
-  }
-  if (typeof gotify_url !== 'undefined') {
-    if (!isValidServerUrl(String(gotify_url).trim())) {
-      return res.status(400).json({ error: 'gotify_url must be an http(s) URL or empty' });
-    }
-    updates.push('gotify_url = ?');
-    params.push(String(gotify_url).trim());
-  }
-  if (typeof telegram_chat_id !== 'undefined') {
-    updates.push('telegram_chat_id = ?');
-    params.push(telegram_chat_id);
-  }
-  if (typeof notification_days !== 'undefined') {
-    if (!Array.isArray(notification_days) || notification_days.length === 0 || !notification_days.every(d => Number.isInteger(d) && d >= 0)) {
-      return res.status(400).json({ error: 'notification_days must be a non-empty array of non-negative integers' });
-    }
-    updates.push('notification_days = ?');
-    params.push(JSON.stringify(notification_days));
-  }
-  if (updates.length === 0) {
-    return res.status(400).json({ error: 'No settings to update' });
-  }
-  params.push(userId);
-  db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function (err) {
-    if (err) return res.status(500).json({ error: 'DB error' });
-    res.json({ success: true });
-  });
+  usersService.updateNotificationSettings(req.user.id, fields)
+    .then(() => res.json({ success: true }))
+    .catch((err) => {
+      if (err && err.code === SVC.VALIDATION) {
+        let message = err.message === 'no settings to update' ? 'No settings to update' : err.message;
+        for (const [v1Key, key] of Object.entries(V1_NOTIFICATION_FIELDS)) {
+          message = message.split(key).join(v1Key);
+        }
+        return res.status(400).json({ error: message });
+      }
+      return problem.send(res, err, { log: '[Settings] notification settings write failed:' });
+    });
 });
 
 // --- Per-user sharing toggle endpoint ---

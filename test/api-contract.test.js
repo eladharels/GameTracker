@@ -533,6 +533,53 @@ checkAsync('with no API keys configured, a single-game refresh says "unavailable
   assert.strictEqual(res.body.results.details[0].error, 'Lookup unavailable');
 });
 
+console.log('PUT /api/user/me/settings (CC-9: the same rules as v2, v1 wording):');
+
+// Drives the real v1 handler with the users table stubbed through db.promises, and
+// records the UPDATE it issues.
+async function putSettings(body) {
+  const real = { run: db.promises.run, get: db.promises.get };
+  const writes = [];
+  db.promises.run = async (sql, params) => { writes.push({ sql, params }); return { changes: 1 }; };
+  db.promises.get = async () => ({ email: '', notification_days: '[0,7,30]' });
+  const res = recordingRes();
+  try {
+    await handlerFor('put', '/api/user/me/settings')({ user: { id: 7 }, body }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+  } finally { db.promises.run = real.run; db.promises.get = real.get; }
+  return { res, writes };
+}
+
+checkAsync('a valid write still answers exactly {success: true}', async () => {
+  const { res } = await putSettings({ ntfy_topic: 'games', notification_days: [7, 0, 7] });
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body, { success: true });
+});
+checkAsync('notification_days is capped and de-duplicated, as on v2', async () => {
+  // v1 accepted [1e9] and stored duplicates; v2 refused and de-duplicated.
+  const big = await putSettings({ notification_days: [1000000000] });
+  assert.strictEqual(big.res.statusCode, 400, 'a day count of 1e9 was accepted');
+  assertKeys(big.res.body, ['error'], 'settings 400');
+  assert.match(big.res.body.error, /^notification_days /, 'the message lost its v1 field name');
+  const dup = await putSettings({ notification_days: [7, 0, 7] });
+  const w = dup.writes.find((x) => /notification_days/.test(x.sql));
+  assert.ok(w.params.includes('[0,7]'), `stored ${JSON.stringify(w.params)}`);
+});
+checkAsync('free-text channel fields are bounded and must be text', async () => {
+  // v1 stored ntfy_topic, gotify_token and telegram_chat_id verbatim, any size or type.
+  const { res, writes } = await putSettings({ ntfy_topic: 'x'.repeat(5000), telegram_chat_id: { $gt: '' } });
+  assert.strictEqual(res.statusCode, 200);
+  const params = writes[0].params;
+  assert.ok(params.every((p) => typeof p !== 'object'), 'an object reached the UPDATE');
+  assert.ok(params.every((p) => typeof p !== 'string' || p.length <= 200), 'a 5000-char topic was stored');
+});
+checkAsync('an empty body keeps v1 wording, and an unknown key is ignored', async () => {
+  const { res, writes } = await putSettings({ can_manage_users: 1 });
+  assert.strictEqual(res.statusCode, 400);
+  assert.deepStrictEqual(res.body, { error: 'No settings to update' });
+  assert.strictEqual(writes.length, 0);
+});
+
 console.log('POST /api/admin/test-notification (SEC-1 per-user limiter):');
 
 checkAsync('the 11th test notification in the window is 429, keyed per user', async () => {

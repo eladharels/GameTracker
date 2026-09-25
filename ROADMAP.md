@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 8 |
+| CC — Correctness & concurrency | 16 | 9 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **15** |
+| **Total** | **64** | **16** |
 
 ---
 
@@ -316,13 +316,20 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   contract test drives the real single-game route with no API keys configured, and it fails on
   the old code.
 
-### [ ] CC-9 v1 `PUT /api/user/me/settings` has its own copy of the rules
+### [x] CC-9 v1 `PUT /api/user/me/settings` has its own copy of the rules
 - **Where:** `index.js:3210-3269` versus `services/users.js#updateNotificationSettings`.
 - **Problem:** v1 has no `MAX_NOTIFICATION_DAY` cap and no de-duplication. `ntfy_topic`,
   `gotify_token` and `telegram_chat_id` are stored with no type or length check and no
   `sanitizeText`.
 - **Fix:** turn the v1 route into a thin adapter over the service, without changing the v1
   response shape.
+- **Done:** the v1 route maps its snake_case keys onto `users.updateNotificationSettings`, the
+  same rules `PATCH /api/v2/me/notifications` applies. It still answers `{success:true}`, and a
+  refusal is still `400 {error}`, worded with v1's field names.
+- **Behaviour changes:**
+  - `notification_days` above the cap is now refused, and duplicates are removed.
+  - Channel text fields are sanitised and capped at 200 characters. A non-string becomes empty.
+  - The `notification_days` refusal message now names the upper bound.
 
 ### [ ] CC-10 Backlog swap reads positions before taking the lock
 - **Where:** `services/library.js:119` (`listBacklog`) comes before the advisory lock at `:135`.
