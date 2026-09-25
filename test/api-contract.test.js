@@ -501,6 +501,38 @@ checkAsync('the token gate and the LOGIN limiter do not share a budget', async (
     'exhausting the token gate locked an unrelated account out of login');
 });
 
+console.log('POST /api/user/:username/games/:gameId/refresh-metadata (CC-8):');
+
+checkAsync('with no API keys configured, a single-game refresh says "unavailable", not "not found"', async () => {
+  // The single-game route chose the message from `lookup.degraded`, which is false
+  // when every provider is merely SKIPPED (no keys) -- so it told the user their game
+  // did not exist in any database. The bulk route had already been fixed; both now go
+  // through jobs.refreshOne. Stubbed through module objects: the catalog search, the
+  // library read, and the user lookup behind withExistingUser.
+  const catalog = require('../services/catalog');
+  const libraryService = require('../services/library');
+  const real = { search: catalog.searchAll, find: libraryService.findGame, get: db.get };
+  catalog.searchAll = async () => ({
+    results: [], providers: { igdb: 'skipped', rawg: 'skipped', thegamesdb: 'skipped' },
+    counts: { igdb: 0, rawg: 0, thegamesdb: 0 }, degraded: false,
+  });
+  libraryService.findGame = async () => ({ game_id: 'igdb_1', game_name: 'Halo', release_date: null });
+  db.get = (sql, params, cb) => cb(null, { id: 7, username: 'jane' });
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/user/:username/games/:gameId/refresh-metadata')(
+      { params: { username: 'jane', gameId: 'igdb_1' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+  } finally {
+    catalog.searchAll = real.search; libraryService.findGame = real.find; db.get = real.get;
+  }
+  assert.strictEqual(res.statusCode, 200);
+  assertKeys(res.body, ['success', 'results', 'message'], 'single-game refresh');
+  assert.strictEqual(res.body.results.errors[0].error, 'Lookup unavailable — a game database did not respond',
+    `told the user: ${res.body.results.errors[0].error}`);
+  assert.strictEqual(res.body.results.details[0].error, 'Lookup unavailable');
+});
+
 console.log('POST /api/admin/test-notification (SEC-1 per-user limiter):');
 
 checkAsync('the 11th test notification in the window is 429, keyed per user', async () => {

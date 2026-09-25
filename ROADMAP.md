@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 7 |
+| CC — Correctness & concurrency | 16 | 8 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **14** |
+| **Total** | **64** | **15** |
 
 ---
 
@@ -303,13 +303,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `test/integration/migration-lock.test.js` checks `pg_locks` after a run and starts a second
   migrating process. Both checks fail on the old code, and the second reproduced the hang.
 
-### [ ] CC-8 The single-game metadata refresh still has the bug the bulk refresh fixed
+### [x] CC-8 The single-game metadata refresh still has the bug the bulk refresh fixed
 - **Where:** `index.js:1305-1309` uses `lookup.degraded`, while the bulk route uses
   `nobodyAnswered` (`:1243`).
 - **Failure:** with no API keys configured, it reports "Game not found in API search results"
   instead of "lookup unavailable".
 - **Fix:** move the single-game refresh into `jobs.js` or `library.js` next to the bulk
   refresh and share the decision.
+- **Done:** `jobs.refreshOne` is the one "refresh this row" decision (search, then
+  `matchForRow`, then `nobodyAnswered`, then apply). The v2 job and both v1 routes call it.
+  The v1 routes keep their exact wording through a small `recordV1Refresh` formatter. A
+  contract test drives the real single-game route with no API keys configured, and it fails on
+  the old code.
 
 ### [ ] CC-9 v1 `PUT /api/user/me/settings` has its own copy of the rules
 - **Where:** `index.js:3210-3269` versus `services/users.js#updateNotificationSettings`.

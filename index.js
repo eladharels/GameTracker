@@ -1220,6 +1220,29 @@ app.put('/api/user/:username/backlog-reorder', authRequired, ownershipRequired, 
 });
 
 // Refresh metadata for all games in a user's library
+// v1's report of one game's refresh, shared by both refresh routes below. The DECISION
+// is jobs.refreshOne's -- the one the v2 job makes too. Only the wording is v1's, and it
+// is frozen: these strings are what clients have always been shown.
+//
+// "Not found" and "we could not look it up" are different sentences, and a user acts on
+// them differently: during a provider outage, or on an instance with no API keys at
+// all, every game in the library would otherwise be reported as not existing in any
+// database. The single-game route still chose between them with `lookup.degraded` --
+// the bug the bulk route had fixed -- until both called this (ROADMAP CC-8).
+function recordV1Refresh(results, game, { outcome, changes }) {
+  const ref = { gameName: game.game_name, gameId: game.game_id };
+  if (outcome === 'not_found' || outcome === 'provider_unavailable') {
+    const unavailable = outcome === 'provider_unavailable';
+    results.errors.push({ ...ref, error: unavailable
+      ? 'Lookup unavailable — a game database did not respond'
+      : 'Game not found in API search results' });
+    results.details.push({ ...ref, changes: [], error: unavailable ? 'Lookup unavailable' : 'Not found' });
+    return;
+  }
+  if (outcome === 'updated') results.updated++;
+  results.details.push({ ...ref, changes });
+}
+
 app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired, (req, res) => {
   const normalizedUsername = req.params.username ? req.params.username.toLowerCase() : '';
   if (!normalizedUsername) return res.status(400).json({ error: 'Missing username' });
@@ -1234,32 +1257,7 @@ app.post('/api/user/:username/refresh-metadata', authRequired, ownershipRequired
       // would burst hundreds of outbound requests and earn a rate-limit.
       for (const game of userGames) {
         try {
-          const lookup = await catalogService.searchAll(game.game_name,
-            { limit: catalogService.LIMIT_REFRESH });
-          const match = catalogService.matchForRow(lookup.results, game);
-          if (!match) {
-            // "Not found" and "we could not look it up" are different sentences, and
-            // a user acts on them differently. During a provider outage every game in
-            // the library would otherwise be reported as not existing in any database.
-            // nobodyAnswered rather than `degraded`, and the widening is a correctness
-            // fix, not a preference: `degraded` means "at least one provider FAILED", so
-            // an instance whose providers are all merely SKIPPED — no API keys — is not
-            // degraded, asked nobody, and reported every game in the library as not
-            // existing in any database. Both message strings already existed; only the
-            // condition choosing between them changed, so no response shape moves.
-            const unavailable = catalogService.nobodyAnswered(lookup.providers);
-            const why = unavailable
-              ? 'Lookup unavailable — a game database did not respond'
-              : 'Game not found in API search results';
-            results.errors.push({ gameName: game.game_name, gameId: game.game_id, error: why });
-            results.details.push({ gameName: game.game_name, gameId: game.game_id,
-              changes: [], error: unavailable ? 'Lookup unavailable' : 'Not found' });
-            continue;
-          }
-          const applied = await libraryService.applyRefreshedMetadata(user.id, game, match);
-          if (applied.updated) results.updated++;
-          results.details.push({ gameName: game.game_name, gameId: game.game_id,
-            changes: applied.changes });
+          recordV1Refresh(results, game, await jobsService.refreshOne(user.id, game));
         } catch (error) {
           // Per-game, so one bad game does not abandon the sweep. The message is the
           // service's or the database's, never a provider's — searchAll degrades
@@ -1302,24 +1300,7 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
       if (!game) return res.status(404).json({ error: 'Game not found in user library' });
 
       const results = { total: 1, updated: 0, errors: [], details: [] };
-      const lookup = await catalogService.searchAll(game.game_name,
-        { limit: catalogService.LIMIT_REFRESH });
-      const match = catalogService.matchForRow(lookup.results, game);
-
-      if (!match) {
-        // See the bulk route: an outage must not read as "this game does not exist".
-        results.errors.push({ gameName: game.game_name, gameId: game.game_id,
-          error: lookup.degraded
-            ? 'Lookup unavailable — a game database did not respond'
-            : 'Game not found in API search results' });
-        results.details.push({ gameName: game.game_name, gameId: game.game_id,
-          changes: [], error: lookup.degraded ? 'Lookup unavailable' : 'Not found' });
-      } else {
-        const applied = await libraryService.applyRefreshedMetadata(user.id, game, match);
-        if (applied.updated) results.updated++;
-        results.details.push({ gameName: game.game_name, gameId: game.game_id,
-          changes: applied.changes });
-      }
+      recordV1Refresh(results, game, await jobsService.refreshOne(user.id, game));
 
       res.json({
         success: true,

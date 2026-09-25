@@ -320,32 +320,49 @@ async function updatePrices({ region = steamRegion() } = {}) {
 // SEQUENTIAL, as v1 is. Each game costs up to three provider searches plus RAWG's
 // per-result detail lookups, so a whole library run concurrently bursts hundreds of
 // outbound requests and earns a rate-limit.
+// Refresh ONE library row from the catalog. The single decision all three refresh
+// paths make -- the v2 job below and both v1 routes in index.js -- which was open-coded
+// in each and had already drifted (ROADMAP CC-8): the single-game v1 route still chose
+// "not found" vs "lookup unavailable" from `lookup.degraded`, a bug the bulk route had
+// fixed, so an instance with no API keys told the user their game did not exist.
+//
+// Returns { outcome, changes }, outcome one of:
+//   'updated' | 'unchanged'         -- matched; `changes` names the columns written
+//   'not_found'                     -- asked, and no result is unambiguously this game
+//   'provider_unavailable'          -- nobody could be asked (outage, or no keys at all)
+// Throws only for a database error, which each caller reports per game.
+async function refreshOne(userId, game) {
+  const lookup = await catalog.searchAll(game.game_name, { limit: catalog.LIMIT_REFRESH });
+  // matchForRow, not findExactMatch: id first, then year — see catalog.js (CC-6).
+  const match = catalog.matchForRow(lookup.results, game);
+  if (!match) {
+    // nobodyAnswered, not `degraded`: an instance with no API keys configured reports
+    // every provider `skipped`, which is not degraded and still asked nobody.
+    return {
+      outcome: catalog.nobodyAnswered(lookup.providers) ? 'provider_unavailable' : 'not_found',
+      changes: [],
+    };
+  }
+  const applied = await library.applyRefreshedMetadata(userId, game, match);
+  return { outcome: applied.updated ? 'updated' : 'unchanged', changes: applied.changes };
+}
+
 async function refreshMetadata({ userId }) {
   const games = await library.listGamesWithAliases(userId);
   const result = { processed: 0, succeeded: 0, failed: 0, failures: [] };
   for (const game of games) {
     result.processed++;
     try {
-      const lookup = await catalog.searchAll(game.game_name, { limit: catalog.LIMIT_REFRESH });
-      // matchForRow, not findExactMatch: id first, then year — see catalog.js (CC-6).
-      const match = catalog.matchForRow(lookup.results, game);
-      if (!match) {
+      const { outcome } = await refreshOne(userId, game);
+      if (outcome === 'not_found' || outcome === 'provider_unavailable') {
         result.failed++;
         // "Nobody has this game" and "we could not ask" are different facts and a user
         // acts on them differently — during a provider outage the whole library would
         // otherwise be reported as not existing in any database. The closed reason set
         // is what carries the difference; a message would have carried the provider's.
-        result.failures.push({
-          gameId: game.game_id,
-          // nobodyAnswered, not `degraded`: an instance with no API keys configured
-          // reports every provider `skipped`, which is not degraded and still asked
-          // nobody — and reporting that as `not_found` tells a client every game in
-          // the library has ceased to exist. Measured live before this line changed.
-          reason: catalog.nobodyAnswered(lookup.providers) ? 'provider_unavailable' : 'not_found',
-        });
+        result.failures.push({ gameId: game.game_id, reason: outcome });
         continue;
       }
-      await library.applyRefreshedMetadata(userId, game, match);
       result.succeeded++;
     } catch (err) {
       // Per game: one bad row must not abandon the sweep.
@@ -426,5 +443,5 @@ async function runJob(kind, { scope = 'instance', userId = null, deps = {} } = {
 
 module.exports = {
   NO_DEDUPE, REMINDER_LOG, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames,
-  refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice, steamRegion,
+  refreshOne, refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice, steamRegion,
 };
