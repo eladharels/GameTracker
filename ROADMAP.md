@@ -37,18 +37,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 | Section | Items | Done |
 |---|---|---|
-| P0 — Fix first | 6 | 0 |
+| P0 — Fix first | 6 | 4 |
 | CC — Correctness & concurrency | 16 | 0 |
-| SEC — Security (medium/low) | 12 | 0 |
+| SEC — Security (medium/low) | 13 | 0 |
 | FE — Frontend | 12 | 0 |
-| UP — Tidying & upkeep | 16 | 0 |
-| **Total** | **62** | **0** |
+| UP — Tidying & upkeep | 17 | 0 |
+| **Total** | **64** | **4** |
 
 ---
 
 ## P0 — Fix first
 
-### [ ] P0-1 ✔ LDAP login can take over a same-named local account, including `root`
+### [x] P0-1 ✔ LDAP login can take over a same-named local account, including `root`
 - **Where:** `index.js:268-277` (`getOrCreateUser`), `index.js:1890-1918` (LDAP login branch).
 - **Problem:** after the directory authenticates a name, `getOrCreateUser` returns whatever
   row already has that username, whatever its `origin`. It then rewrites `origin='ldap'` and
@@ -64,8 +64,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Tests:**
   - An LDAP-authenticated `root` is refused.
   - An LDAP login for an existing local user is refused, and the row is unchanged.
+- **Done** (`3c81bb6`): `user-rules.js#directoryClaimRefusal` is the one rule. It is checked
+  before the group test and before the lockout counter is cleared, and again inside
+  `getOrCreateUser`. A refused claim falls back to the LOCAL password. Legacy passwordless
+  rows stay claimable.
+- **Operator action after deploy:** accounts taken over before this fix already have
+  `origin='ldap'` and stay claimable. Audit them with
+  `SELECT username, can_manage_users FROM users WHERE origin='ldap' AND password IS NOT NULL;`
+  and review every row it returns. See SEC-13.
+- **Behaviour change:** a local account with a password can no longer sign in with the
+  directory password of a same-named directory entry. Only its local password works.
 
-### [ ] P0-2 ✔ `ldap.requiredGroup` check is a substring match
+### [x] P0-2 ✔ `ldap.requiredGroup` check is a substring match
 - **Where:** `ldap-helpers.js:360-371` (`satisfiesRequiredGroup`), which the login
   (`index.js:1859`) and sudo-mode minting both use.
 - **Problem:** `g.includes('cn=' + want)`, so with `requiredGroup: "gamers"`,
@@ -76,8 +86,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Keep the existing trim behaviour.
 - **Tests:** add prefix/suffix cases (`gamers-denied`, `xgamers`, `gamersx`) to
   `test/helpers.test.js` next to the existing cases at `:2085-2120`.
+- **Done** (`3c81bb6`): matches the full DN, or the exact cn of the first RDN (escaped commas
+  handled). Anything else fails closed.
+- **Behaviour change:** a `requiredGroup` that only worked through the substring match now
+  refuses those users. CLAUDE.md now recommends configuring the full DN.
 
-### [ ] P0-3 ✔ `TRUST_PROXY`, `CORS_ORIGINS`, `THEGAMESDB_API_KEY` never reach the backend
+### [x] P0-3 ✔ `TRUST_PROXY`, `CORS_ORIGINS`, `THEGAMESDB_API_KEY` never reach the backend
 - **Where:** `docker-compose.yaml:64-83` (backend `environment:`). `index.js:108,120` read them.
 - **Problem:** README (`:135-137`) and CLAUDE.md both call `TRUST_PROXY=2` mandatory after
   `BACKEND_BIND=127.0.0.1`, but compose never passes it through, so a value in `.env` does
@@ -91,8 +105,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Add the same keys to `docker-compose.test.yml` (the two files must stay the same shape).
 - **Test:** add a static check in `test/runtime.test.js` that every `process.env.X` read by
   `index.js` for these keys appears in both compose files.
+- **Done** (`3c81bb6`, `6248d0f`): both compose files pass these variables, plus
+  `IGDB_CLIENT_SECRET` and `STEAM_REGION`.
+  - The CISO rejected the first version: the deploy job never reads the host's `.env`. It now
+    carries these values itself, and `BACKEND_BIND` too, which had been missing the same way.
+  - `runtime.test.js` checks two things:
+    - Every variable the backend reads is passed through by both compose files.
+    - Every variable production compose reads is carried by each deploy step.
+- **Operator action:** set `BACKEND_BIND`, `TRUST_PROXY`, `CORS_ORIGINS` and `STEAM_REGION` as
+  repository Variables, and `THEGAMESDB_API_KEY` and `IGDB_CLIENT_SECRET` as Secrets. A value
+  kept only in `.env` has no effect on a CI deploy.
 
-### [ ] P0-4 ✔ On-demand price sweep ignores `STEAM_REGION`
+### [x] P0-4 ✔ On-demand price sweep ignores `STEAM_REGION`
 - **Where:** `services/jobs.js:342` (`runJob('updatePrices')` calls `updatePrices()` with no
   arguments, so the region defaults to `'il'`). The cron at `index.js:3476` passes
   `process.env.STEAM_REGION`.
@@ -102,6 +126,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   (default `'il'`), and have every caller (cron, `runJob`, `update_library_prices.js`) use it.
   Remove the argument from the cron call.
 - **Test:** a unit test that `runJob('updatePrices')` and the cron entry resolve the same region.
+- **Done** (`3c81bb6`, `4160735`): `jobs.js#steamRegion()` is now the default for every price
+  lookup. That covers the cron, `runJob`, the v1 `/api/game-price`, the v2 `/catalog/prices`
+  default and `update_library_prices.js`. An invalid value falls back to `il` with one warning.
 
 ### [ ] P0-5 `:latest` is retagged before Trivy and the smoke test pass (push to main)
 - **Where:** `.github/workflows/docker-build-deploy.yml:320-352`. Trivy is at `:411-418` and
@@ -260,6 +287,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   character-set bound.
 - **Fix:** call `user-rules.js#validateUsername()`, the shared rule, and store the trimmed
   value.
+- **Also trim the LOGIN username** (`index.js` login route). From the CISO review of P0-1: AD
+  ignores trailing spaces, so `root ` authenticates as the directory's `root` and gets its own
+  unprivileged lookalike row. Deferred to this item because existing untrimmed local accounts
+  would become unreachable. Migrate them first.
 
 ### [ ] CC-15 Forged `backlogOrder` cursor returns 500 instead of 400
 - **Where:** `services/library.js` `listPage`. A non-numeric `lastKey` is bound against an
@@ -362,6 +393,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `x-required-scope: library`.
 - **Fix:** enforce `library` on library routes, or change the spec and docs to say admin
   implies library. Decide first; either way `test/openapi.test.js` should pin the result.
+
+### [ ] SEC-13 Audit accounts taken over before P0-1 (operator action)
+- **Why:** before P0-1, an LDAP login relabelled a same-named local account `origin='ldap'` and
+  kept its password hash. The new rule treats `origin='ldap'` as a directory account, so such a
+  row stays claimable.
+- **Action:** on staging and then production, run
+  `SELECT username, can_manage_users FROM users WHERE origin='ldap' AND password IS NOT NULL;`.
+  For each row, confirm the account is really a directory account and not a local admin that
+  was taken over. Record the outcome here.
 
 ---
 
@@ -536,6 +576,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Also closes, fully or partly:** CC-8, CC-9, CC-11, CC-12, CC-13, UP-10.
 - **Note:** leave the order to the Architect review.
 
+### [ ] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
+- **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with
+  `BACKEND_BIND=127.0.0.1`. Set on its own, a client connecting directly can spoof
+  `X-Forwarded-For` past the login rate limiter.
+- **Fix:** log a warning at boot or during deploy for that combination.
+
 ---
 
 ## Suggested order of work
@@ -552,6 +598,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ## Fix log
 
+Reviews for P0-1 to P0-4: **Architect approved. CISO rejected P0-3** (the deploy job didn't
+carry the variables), **then approved** after `6248d0f`. No frontend changes, so no UI/UX
+review was needed. **Not yet validated on GameTracker-stg.**
+
 | ID | PR | Date | Summary |
 |---|---|---|---|
-| — | — | — | — |
+| P0-1 | `3c81bb6` | 2026-09-25 | LDAP login can no longer claim a reserved name or a local account with a password |
+| P0-2 | `3c81bb6` | 2026-09-25 | `requiredGroup` is an exact full-DN or first-RDN cn match |
+| P0-3 | `3c81bb6`, `6248d0f` | 2026-09-25 | Backend settings reach the container through both compose files and the deploy job |
+| P0-4 | `3c81bb6`, `4160735` | 2026-09-25 | `jobs.js#steamRegion` is the one reader of `STEAM_REGION` |
