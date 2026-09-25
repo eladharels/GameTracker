@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 14 |
+| CC — Correctness & concurrency | 16 | 15 |
 | SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **21** |
+| **Total** | **64** | **22** |
 
 ---
 
@@ -429,10 +429,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Behaviour change:** `POST /api/users` and v2 user creation now refuse names outside that
   charset, with a 400. Existing accounts are untouched.
 
-### [ ] CC-15 Forged `backlogOrder` cursor returns 500 instead of 400
+### [x] CC-15 Forged `backlogOrder` cursor returns 500 instead of 400
 - **Where:** `services/library.js` `listPage`. A non-numeric `lastKey` is bound against an
   INTEGER column.
 - **Fix:** validate the cursor's type for each sort and throw `CODES.VALIDATION`.
+- **Done:** `decodeCursor` checks `lastKey` against the pinned sort's column. `backlogOrder`
+  needs a safe integer and the text sorts need a string; anything else is a 400 before any
+  query runs. The unit test fails on the old code.
 
 ### [ ] CC-16 Stats: `statusCounts` in `agentSummary` and understated `unrecordedCompletions`
 - **Where:** `services/stats.js` `agentSummary`.

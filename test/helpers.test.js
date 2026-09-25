@@ -502,6 +502,36 @@ function withTransports(behaviour, fn) {
 const asyncChecks = [];
 const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
 
+checkAsync('a forged cursor whose lastKey has the wrong TYPE is a 400, not a 500 (CC-15)', async () => {
+  const lib = require('../services/library');
+  const dbMod = require('../db');
+  const realAll = dbMod.promises.all;
+  const realGet = dbMod.promises.get;
+  let queried = false;
+  dbMod.promises.all = async () => { queried = true; return []; };
+  dbMod.promises.get = async () => { queried = true; return { total: 0 }; };
+  try {
+    // status=backlog where the sort needs it, or the request is refused for THAT reason
+    // and this assertion passes without ever reaching the cursor check.
+    const statusFor = (sort) => (sort === 'backlogOrder' ? 'backlog' : undefined);
+    for (const [sort, lastKey] of [['backlogOrder', 'abc'], ['backlogOrder', 1.5], ['name', 7], ['releaseDate', { x: 1 }]]) {
+      const status = statusFor(sort);
+      const cursor = lib.encodeCursor({ sort, order: 'asc', status, lastKey, lastId: 3 });
+      let err = null;
+      await lib.listPage(1, { sort, order: 'asc', status, cursor }).catch((e) => { err = e; });
+      assert.strictEqual(err && err.code, 'validation', `sort=${sort} lastKey=${JSON.stringify(lastKey)} got ${err && err.code}`);
+      assert.match(err.message, /not a cursor this server issued/, `refused for another reason: ${err.message}`);
+    }
+    assert.strictEqual(queried, false, 'a malformed cursor reached the database');
+    // Control: the right types still page.
+    for (const [sort, lastKey] of [['backlogOrder', 4], ['name', 'Halo'], ['addedAt', null]]) {
+      const status = statusFor(sort);
+      const cursor = lib.encodeCursor({ sort, order: 'asc', status, lastKey, lastId: 3 });
+      await lib.listPage(1, { sort, order: 'asc', status, cursor });
+    }
+  } finally { dbMod.promises.all = realAll; dbMod.promises.get = realGet; }
+});
+
 checkAsync('users.create stores the TRIMMED name, so " bob" is bob (CC-14)', async () => {
   const dbMod = require('../db');
   const usersSvc = require('../services/users');

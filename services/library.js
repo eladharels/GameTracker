@@ -803,6 +803,19 @@ function decodeCursor(raw, expected) {
         { field: 'cursor' });
     }
   }
+  // lastKey must also have the TYPE of the column it is compared with (ROADMAP CC-15).
+  // The check above admits a string OR a number for every sort, but backlog_order is
+  // INTEGER: a forged cursor carrying lastKey "abc" for sort=backlogOrder bound a string
+  // against it and failed in Postgres (22P02) as a 500, where the spec promises 400. The
+  // text columns take a string. Checked AFTER the sort pin, so `expected.sort` is the
+  // column this cursor will really be compared with.
+  if (state.lastKey !== null) {
+    const integerColumn = expected.sort === 'backlogOrder';
+    const ok = integerColumn ? Number.isSafeInteger(state.lastKey) : typeof state.lastKey === 'string';
+    if (!ok) {
+      throw serviceError(CODES.VALIDATION, 'cursor is not a cursor this server issued', { field: 'cursor' });
+    }
+  }
   return state;
 }
 
