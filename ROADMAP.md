@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 13 | 5 |
+| SEC — Security (medium/low) | 13 | 6 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **26** |
+| **Total** | **64** | **27** |
 
 ---
 
@@ -542,11 +542,35 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   Keep bumping pins by hand, or move the PR path to GitHub-hosted runners first (see CLAUDE.md,
   "The gate's equivalence is conditional").
 
-### [ ] SEC-5 Gitleaks allowlists whole documentation files
+### [x] SEC-5 Gitleaks allowlists whole documentation files
 - **Where:** `.gitleaks.toml:75-85` (`CLAUDE.md`, `README.md`,
   `SECURITY_HARDENING_2026-07.md`, `.gitleaks.toml`).
 - **Fix:** replace the path allowlists with regex or stopword allowlists for the specific
   example strings.
+- **Done:** every documentation path allowlist is gone. A scan of all 194 commits with them
+  removed found nothing, so they bought nothing. Placeholders stay as exact `regexes` entries.
+- **Found while doing it: the secret scan had been scanning NOTHING on the runner.** CI logs
+  for `main` show git refusing the checkout ("detected dubious ownership"), then gitleaks
+  logging "failed to scan Git repository", then "no leaks found" and exit 0. So secret-scan
+  has been green without reading a commit, for as long as the runner has had that ownership
+  mismatch.
+  - The step now sets `safe.directory` for itself (via `GIT_CONFIG_*`, not the runner's global
+    config).
+  - It fails unless gitleaks logged no error AND scanned as many commits as
+    `git rev-list --count --no-merges HEAD`.
+- **And the custom `gametracker-config-password` rule captured the KEY, not the value.**
+  - Its reported "secret" was the word `password`, so `--redact` hid the key and printed the
+    value into CI logs.
+  - No regex allowlist entry could ever apply to it.
+  - Fixed: the key group is non-capturing and `secretGroup = 1`. It still catches a real
+    non-empty bindPass value and ignores the empty template.
+  - With that fix, and an exact allowlist entry for the smoke test's fake MCP token, the full
+    history scans clean with gitleaks 8.21.2.
+- **Pinned:** `runtime.test.js` checks the `safe.directory` env, the fail-closed checks, the
+  absence of doc path allowlists, and the rule's capture group. Each check fails on the old
+  files.
+- **Operator note:** CI never scanned while this was broken, so the scan's first real run will
+  be the first real scan of the history. It passes locally on exactly the same history.
 
 ### [x] SEC-6 Deploy stops production before starting the new version, with no rollback
 - **Where:** `docker-build-deploy.yml:982-998`, then `:1037`.

@@ -35,7 +35,14 @@ description = "Non-empty password/secret value in a JSON or YAML config key"
 #   - password = ?  /  const password = argv[3]  in .js does NOT match (no quoted key)
 #   - "passed": "yes" does NOT match (key must end at the closing quote)
 #   - "bindPass": "" does NOT match, so settings.example.json stays clean
-regex = '''(?i)"(bind_?pass(word)?|smtp_?pass(word)?|passwd|password|bindpw|pass)"\s*:\s*"[^"]+"'''
+#
+# The KEY is a NON-capturing group and the VALUE is the one capture, on purpose: gitleaks
+# takes the first capture group as "the secret". This rule used to capture the key, so
+# the reported secret was the word `password` -- `--redact` then hid the key and printed
+# the VALUE into the CI log, and every regex allowlist entry below was compared with the
+# key instead of the value, so none of them ever applied to this rule.
+regex = '''(?i)"(?:bind_?pass(?:word)?|smtp_?pass(?:word)?|passwd|password|bindpw|pass)"\s*:\s*"([^"]+)"'''
+secretGroup = 1
 tags = ["password", "config"]
 
 [[rules]]
@@ -73,15 +80,11 @@ commits = [
 ]
 
 paths = [
-  # Documentation and changelog files may contain example/redacted values
-  '''PRODUCTION_CHANGELOG\.txt''',
-  '''NOTIFICATION_FIXES\.md''',
-  '''RELEASE_STATUS_UPDATE\.md''',
-  '''SECURITY_FIXES\.md''',
-  '''SECURITY_HARDENING_2026-07\.md''',
-  '''CLAUDE\.md''',
-  '''README\.md''',
-  '''\.gitleaks\.toml''',
+  # NO documentation files (ROADMAP SEC-5). README.md, CLAUDE.md, the changelogs, the
+  # security docs and this file were all exempt WHOLESALE -- the files most likely to
+  # have a real credential pasted into them as an "example". Scanning all of history
+  # with them included found nothing, so the exemption bought nothing and cost that.
+  # A placeholder a document needs goes in `regexes` below, EXACTLY, never as a path.
   # Credential-free template — every value is an empty string
   '''settings\.example\.json''',
   # Build artifacts
@@ -100,7 +103,10 @@ regexes = [
   # so the smoke test can log in and exercise a route through Express, which is the
   # only way the auth middleware gets tested at all.
   '''smoke-test-not-a-real-password''',
-  '''smoke-test-root-not-a-real-password''',
+  '''^smoke-test-root-not-a-real-password$''',
+  # The smoke stack's fake bearer token for the MCP handshake. Exact, not a gt_pat_
+  # pattern: a real token pasted into the workflow must still fail the scan.
+  '''^gt_pat_smoke-test-not-a-real-token$''',
 
   # 'supersecretkey' is the value index.js REJECTS at boot (the old insecure
   # default). It is a deny-list entry in the JWT_SECRET guard, not a fallback —

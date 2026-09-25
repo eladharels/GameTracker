@@ -992,7 +992,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 
 | Tool | Job | Failure Condition |
 |---|---|---|
-| Gitleaks | `secret-scan` | Any detected secret in git history |
+| Gitleaks | `secret-scan` | Any detected secret in git history — **or** a scan that errored or covered fewer commits than the history holds. Until ROADMAP SEC-5 it scanned NOTHING on the runner: git refused the checkout ("dubious ownership"), gitleaks logged "failed to scan" and exited 0 with "no leaks found". The step now sets `safe.directory` for itself and fails closed. No documentation file is path-allowlisted; a placeholder goes in `regexes`, exactly |
 | Semgrep | `semgrep` | Any ERROR-severity finding |
 | Trivy | `trivy-api` | CRITICAL or HIGH unfixed CVE in backend image |
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |

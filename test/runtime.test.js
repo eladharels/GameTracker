@@ -345,4 +345,43 @@ console.log('every GitHub Action is pinned to a commit:');
   });
 }
 
+// The secret scan must actually scan (SEC-5 review). On the runner, git refused the
+// checkout ("dubious ownership"), gitleaks logged "failed to scan", then "no leaks
+// found" and exited 0 -- the gate was green without reading a commit.
+console.log('the secret scan scans, and fails closed when it cannot:');
+{
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  const step = wf.jobs['secret-scan'].steps.find((st) => /gitleaks detect/.test(st.run || ''));
+  const toml = fs.readFileSync(path.join(ROOT, '.gitleaks.toml'), 'utf8');
+  check('the scan step marks the checkout safe for git, for that step only', () => {
+    assert.ok(step, 'no step runs gitleaks detect');
+    // GIT_CONFIG_GLOBAL, NOT GIT_CONFIG_COUNT/-c: git < 2.38 ignores command-line scope
+    // for safe.directory, and the runner has 2.34.1.
+    assert.ok(/export GIT_CONFIG_GLOBAL=/.test(step.run) && /--add safe\.directory/.test(step.run),
+      'without it git refuses the checkout and gitleaks scans nothing');
+    assert.ok(!/GIT_CONFIG_(COUNT|KEY_0)/.test(JSON.stringify(step)), 'command-line scope is ignored for safe.directory on git < 2.38');
+  });
+  check('the scan step refuses to pass on an error or a short commit count', () => {
+    assert.ok(step.run.includes("grep -Eq 'ERR|failed to scan'"), 'an errored scan can pass again');
+    assert.ok(/commits scanned/.test(step.run) && /rev-list --count --no-merges HEAD/.test(step.run),
+      'the scanned-commit count is no longer checked against the history');
+  });
+  check('no documentation file is exempt from the secret scan (SEC-5)', () => {
+    const start = toml.indexOf('paths = [');
+    const block = toml.slice(start, toml.indexOf(']', start));
+    const entries = [...block.matchAll(/^\s*'''([^']+)'''/gm)].map((m) => m[1]);
+    for (const doc of ['README', 'CLAUDE', 'SECURITY', 'CHANGELOG', 'FIXES', 'RELEASE_STATUS', 'gitleaks']) {
+      assert.ok(!entries.some((e) => e.includes(doc)), `${doc} is path-allowlisted again: ${entries.join(', ')}`);
+    }
+  });
+  check('the config-password rule captures the VALUE, not the key', () => {
+    const start = toml.indexOf('id = "gametracker-config-password"');
+    const rule = toml.slice(start, toml.indexOf('[[rules]]', start));
+    const regex = /regex = '''(.*)'''/.exec(rule)[1];
+    assert.ok(regex.startsWith('(?i)"(?:'), 'the key alternation is a capturing group again');
+    assert.ok(/\nsecretGroup = 1/.test(rule), 'secretGroup is not set');
+  });
+}
+
 console.log(`\n${n} runtime assertions passed.`);
