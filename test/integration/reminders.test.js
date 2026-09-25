@@ -10,6 +10,10 @@
 //
 // The notification transport is stubbed through the module object (jobs.js calls
 // `notifications.notifyReleaseReminder`), so nothing is actually sent.
+//
+// NEVER POINT THIS AT A REAL DATABASE. It runs full sweeps over EVERY account: other
+// users' due releases are really promoted, and their reminders are answered "not
+// delivered" -- harmless only in the throwaway smoke database.
 const assert = require('assert');
 const db = require('../../db');
 const lib = require('../../services/library');

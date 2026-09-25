@@ -2625,9 +2625,9 @@ v2Router.patch('/settings', requireAdminScope, (req, res) => {
 
 // --- jobs --------------------------------------------------------------------
 //
-// The two pieces of state services/jobs.js does not own, passed in once. `dedupe` is
-// the file-backed sent-notifications log; without it every run re-sends every due
-// reminder to real users, which is why jobs.js REQUIRES it rather than defaulting.
+// The two pieces of state passed in to services/jobs.js. `dedupe` is the reminder log
+// (jobs.REMINDER_LOG, the sent_reminders table); without it every run re-sends every
+// due reminder to real users, which is why jobs.js REQUIRES it rather than defaulting.
 // `refreshCrackStatus` wraps the module-scope cache below, returning its size so the
 // job has a count to report.
 // A FUNCTION, evaluated per request, not a module-scope object. `dedupe` is declared
