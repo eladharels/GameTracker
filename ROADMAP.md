@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 4 |
+| CC — Correctness & concurrency | 16 | 5 |
 | SEC — Security (medium/low) | 13 | 1 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **10** |
+| **Total** | **64** | **11** |
 
 ---
 
@@ -243,7 +243,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     rollback to the previous image finds its file.
   - `sent_reminders` has no retention. Consider pruning rows for past release dates.
 
-### [ ] CC-5 Local accounts get an email address from the directory
+### [x] CC-5 Local accounts get an email address from the directory
 - **Where:** `services/notifications.js:312-340` (`resolveEmail`), called at `:459` with
   `channels.email || ''`. `directory.js#getLdapEmail` never checks `origin`.
 - **Failure:** local user `jsmith` receives directory user `jsmith`'s address, which is saved to
@@ -251,6 +251,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   out gets it filled back in. It also costs one LDAP bind per notification.
 - **Fix:** only look up the directory for `origin === 'ldap'`. Never write it back
   automatically; if a backfill is wanted, leave it to `backfill_ldap_display_names.js`.
+- **Done**: `resolveEmail` consults the directory only for `origin='ldap'` accounts. For those
+  it still caches the address, because the directory owns their `mail`, and the LDAP login
+  overwrites it on every sign-in anyway. `test/integration/email-resolution.test.js` fails on
+  the old code.
+- **Operator follow-up:** local accounts that were already filled in keep the wrong address.
+  Check `SELECT username, email FROM users WHERE origin <> 'ldap' AND email <> '';` against
+  what those users expect, or ask them to re-check My Account.
 
 ### [ ] CC-6 Search merges different games that share a name
 - **Where:** `services/catalog.js:297` (dedupe on lower-cased name, preferring the undated

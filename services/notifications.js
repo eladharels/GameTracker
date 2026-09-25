@@ -32,7 +32,9 @@ const db = require('../db');
 const { get, run } = db.promises;
 const { loadSettings } = require('../settings-store');
 const { isValidEmailAddress, sanitizeText } = require('../user-rules');
-const { getLdapEmail } = require('../directory');
+// Through the module object, not destructured, so a test can substitute the directory
+// read and prove WHICH accounts reach it (ROADMAP CC-5).
+const directory = require('../directory');
 
 
 function escapeHtml(value) {
@@ -309,6 +311,14 @@ async function channelsForId(id) {
 //   * the backfill UPDATE was fire-and-forget. Per db.js, pool.end() abandons queries
 //     still waiting for a connection WITHOUT invoking their callbacks, so in a script
 //     or a shutting-down process the write vanishes silently. Awaited now.
+//
+// And ONLY FOR DIRECTORY ACCOUNTS (ROADMAP CC-5). Every account with an empty email
+// used to fall through to the directory, and `getLdapEmail` matches on the username
+// alone — so a LOCAL `jsmith` was given directory-`jsmith`'s address, WRITTEN to their
+// row, and from then on their reminders went to a different person. A local user who
+// cleared their address to opt out had it silently filled back in. It also cost one
+// service-account bind per notification for every such account. A local account's
+// empty email means "no email", full stop.
 async function resolveEmail(username, knownEmail) {
   const name = username ? String(username).toLowerCase() : '';
   // `knownEmail` lets a caller that has already SELECTed the row skip a second
@@ -318,9 +328,12 @@ async function resolveEmail(username, knownEmail) {
     : (await get('SELECT email FROM users WHERE username = ?', [name]))?.email;
   if (cached) return cached;
 
+  const account = await get('SELECT origin FROM users WHERE username = ?', [name]);
+  if (!account || account.origin !== 'ldap') return null;
+
   let fromLdap = null;
   try {
-    fromLdap = await getLdapEmail(name);
+    fromLdap = await directory.getLdapEmail(name);
   } catch (err) {
     console.error('[Notify] LDAP email lookup failed for', name, '-', err.message);
     return null;

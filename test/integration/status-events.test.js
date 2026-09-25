@@ -22,7 +22,7 @@ const lib = require('../../services/library');
 
 let n = 0, failed = 0;
 const ok = (label) => { n++; console.log('  ok  ' + label); };
-const fail = (label, e) => { failed++; console.log('  FAIL ' + label + ' -> ' + e.message); };
+const fail = (label, e) => { n++; failed++; console.log('  FAIL ' + label + ' -> ' + e.message); };
 async function check(label, fn) { try { await fn(); ok(label); } catch (e) { fail(label, e); } }
 
 const events = (userId) => db.promises.all(

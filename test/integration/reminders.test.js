@@ -22,7 +22,7 @@ const notifications = require('../../services/notifications');
 
 let n = 0, failed = 0;
 const ok = (label) => { n++; console.log('  ok  ' + label); };
-const fail = (label, e) => { failed++; console.log('  FAIL ' + label + ' -> ' + e.message); };
+const fail = (label, e) => { n++; failed++; console.log('  FAIL ' + label + ' -> ' + e.message); };
 async function check(label, fn) { try { await fn(); ok(label); } catch (e) { fail(label, e); } }
 
 const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
