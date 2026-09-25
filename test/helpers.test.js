@@ -1498,6 +1498,20 @@ console.log('catalog — a name is not an identity (CC-6):');
     assert.strictEqual(d16.steamAppId, null, "Doom (2016) was given Doom (1993)'s Steam App ID");
     assert.strictEqual(d16.coverUrl, null, "Doom (2016) was given Doom (1993)'s cover");
   });
+  check('an undated duplicate of a ONE-year name keeps the Steam App ID it collapses onto', () => {
+    // The collapse keeps the undated entry; it must still carry the id, or the game
+    // added from it is never priced. Regression from the first CC-6 change.
+    const x20 = { id: 'igdb_7', name: 'X', releaseDate: '2020-02-02', coverUrl: 'x.png', steamAppId: '777' };
+    const xNone = { id: 'thegamesdb_7', name: 'X', releaseDate: null, coverUrl: null, steamAppId: null };
+    const merged = catalog.mergeResults([x20], [], [xNone]);
+    assert.strictEqual(merged.length, 1);
+    assert.strictEqual(merged[0].steamAppId, '777', 'the collapsed survivor lost its Steam App ID');
+  });
+  check('...but an undated result of a MULTI-year name borrows no Steam App ID (which game is it?)', () => {
+    const undated = { id: 'thegamesdb_9', name: 'Doom', releaseDate: null, coverUrl: null, steamAppId: null };
+    const merged = catalog.mergeResults([doom93], [doom16], [undated]);
+    assert.strictEqual(merged.find((g) => !g.releaseDate).steamAppId, null);
+  });
   check('findExactMatch refuses a name that several results carry', () => {
     assert.strictEqual(catalog.findExactMatch([doom93, doom16], 'doom'), null, 'one of two Dooms was picked');
     assert.strictEqual(catalog.findExactMatch([doom93], 'doom'), doom93);

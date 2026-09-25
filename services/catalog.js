@@ -275,8 +275,8 @@ const yearOf = (g) => (typeof g?.releaseDate === 'string' && /^\d{4}/.test(g.rel
 // status and Steam App ID of the other game. Now:
 //   - same-named results whose release YEARS differ are different games, and each is
 //     kept. Only when a name carries at most one year does it collapse as before.
-//   - a Steam App ID is borrowed only from a same-named result in the SAME year (or
-//     both undated): it drives the price, and a price is not cosmetic.
+//   - a Steam App ID is borrowed only between results that are the same GAME by the
+//     collapse's own rule (sameGame): it drives the price, and a price is not cosmetic.
 //   - a cover may still be borrowed when one side is undated — it is cosmetic.
 function mergeResults(igdb, rawg, thegamesdb) {
   const all = [...igdb, ...rawg, ...thegamesdb];
@@ -288,12 +288,27 @@ function mergeResults(igdb, rawg, thegamesdb) {
 
   const sameYear = (a, b) => yearOf(a) === yearOf(b);
   const yearsAgree = (a, b) => !yearOf(a) || !yearOf(b) || sameYear(a, b);
+  // The distinct release years each name carries -- the SAME fact the collapse below
+  // decides on, so the two cannot disagree about what "one game" means.
+  const yearsByName = new Map();
+  for (const g of all) {
+    const key = String(g.name ?? '').toLowerCase();
+    if (!yearsByName.has(key)) yearsByName.set(key, new Set());
+    if (yearOf(g)) yearsByName.get(key).add(yearOf(g));
+  }
+  // Same GAME: same name, and either the same year, or one side undated while the name
+  // carries at most one year -- exactly when the collapse treats them as one entry. A
+  // stricter rule here stripped the Steam App ID from the undated survivor of
+  // "X (2020)" + undated "X", so a game added from it was never priced.
+  const sameGame = (a, b) => sameName(a.name, b.name) && (sameYear(a, b)
+    || ((!yearOf(a) || !yearOf(b))
+      && yearsByName.get(String(a.name ?? '').toLowerCase()).size <= 1));
 
   const filled = all.map((game) => {
     let out = game;
     if (!out.steamAppId) {
-      const donor = igdb.find((g) => sameName(g.name, out.name) && sameYear(g, out) && g.steamAppId)
-        || rawg.find((g) => sameName(g.name, out.name) && sameYear(g, out) && g.steamAppId);
+      const donor = igdb.find((g) => sameGame(g, out) && g.steamAppId)
+        || rawg.find((g) => sameGame(g, out) && g.steamAppId);
       if (donor) out = { ...out, steamAppId: donor.steamAppId };
     }
     if (!out.coverUrl) {

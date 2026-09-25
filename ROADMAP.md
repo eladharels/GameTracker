@@ -279,6 +279,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - The refresh uses a new `catalog.matchForRow` (provider id, then the row's year, else skip)
     in all three places: `jobs.refreshMetadata` and both v1 refresh routes.
   - Unit tests fail on the old code.
+- **Review fix (`/code-review`):** the Steam App ID rule and the collapse rule disagreed about
+  whether an undated result is the same game. The undated survivor of "X (2020)" plus undated
+  "X" lost its Steam App ID, so a game added from it was never priced. Both now use one
+  `sameGame` rule.
 - **Review fix:** `matchForRow` also refuses a lone same-named result whose year contradicts
   the row's. A capped refresh search may have returned only the other game.
 - **Residual:** the v1 refresh routes report an ambiguous name as "Game not found in API search
