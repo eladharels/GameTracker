@@ -1,0 +1,557 @@
+# GameTracker — Remediation Roadmap
+
+Source: full-codebase review of `main` @ `35d9502` (2026-09-25), covering the backend core,
+`services/`, the frontend, and CI/Docker/MCP. Nothing was changed during the review.
+
+Baseline at review time: root `npm test` passes (helpers 236, runtime 5, api-surface 18,
+api-contract 30, openapi 37), `mcp/` `npm test` passes (28), and backend lint reports 0 errors
+and 3 warnings. The `test/integration/` suites need Postgres and were not run.
+
+Items marked ✔ were re-checked by hand against the code, not only reported by a reviewer.
+
+---
+
+## How to use this file
+
+- Every finding has a stable ID (`P0-1`, `CC-3`, …). Use the ID in commit messages and
+  PR titles, for example `Fix P0-2: exact-match ldap.requiredGroup`.
+- Tick `[ ]` → `[x]` in the same PR that lands the fix, and fill in the **Fix log** at the
+  bottom (ID, PR, date, one line).
+- If you decide not to fix an item, tick it and mark it **Won't fix** with the reason. Don't
+  delete it: the reasoning is the documentation.
+- **Definition of done** for each item (from CLAUDE.md):
+  1. A test that fails before the fix and passes after, where one can be written. Use the unit
+     suite for pure logic and `test/integration/` for anything Postgres decides.
+  2. `npm test`, `npm run lint`, and the `mcp/` tests are all green.
+  3. CISO review for anything under auth/security/CI, Architect review for anything
+     structural, and UI/UX review for anything under `frontend/`.
+  4. Validated on GameTracker-stg, with a `STAGING_CHANGELOG.txt` entry, before production.
+  5. A v1 response-shape change is almost certainly wrong. If one is truly needed,
+     `test/api-contract.test.js` must change in the same PR.
+
+Severity: **P0** means fix first. After that, sections are ordered by impact.
+
+---
+
+## Progress
+
+| Section | Items | Done |
+|---|---|---|
+| P0 — Fix first | 6 | 0 |
+| CC — Correctness & concurrency | 16 | 0 |
+| SEC — Security (medium/low) | 12 | 0 |
+| FE — Frontend | 12 | 0 |
+| UP — Tidying & upkeep | 16 | 0 |
+| **Total** | **62** | **0** |
+
+---
+
+## P0 — Fix first
+
+### [ ] P0-1 ✔ LDAP login can take over a same-named local account, including `root`
+- **Where:** `index.js:268-277` (`getOrCreateUser`), `index.js:1890-1918` (LDAP login branch).
+- **Problem:** after the directory authenticates a name, `getOrCreateUser` returns whatever
+  row already has that username, whatever its `origin`. It then rewrites `origin='ldap'` and
+  signs a JWT carrying that row's `can_manage_users`. `RESERVED_USERNAMES`
+  (`user-rules.js`: me/root/admin) is never consulted, and LDAP is tried before local auth.
+- **Failure:** anyone able to create a directory account named `root`, or the name of a local
+  admin, logs in as that admin, and the local password is never checked.
+- **Fix:**
+  - Refuse to bind a directory login to a row whose `origin` is `local` (no silent
+    conversion). Converting a local account to LDAP should be an explicit admin action.
+  - Reject reserved usernames on the LDAP path with `validateUsername()`.
+  - Never rewrite `origin` implicitly.
+- **Tests:**
+  - An LDAP-authenticated `root` is refused.
+  - An LDAP login for an existing local user is refused, and the row is unchanged.
+
+### [ ] P0-2 ✔ `ldap.requiredGroup` check is a substring match
+- **Where:** `ldap-helpers.js:360-371` (`satisfiesRequiredGroup`), which the login
+  (`index.js:1859`) and sudo-mode minting both use.
+- **Problem:** `g.includes('cn=' + want)`, so with `requiredGroup: "gamers"`,
+  `cn=gamers-denied,…` and `cn=gamersx,…` both pass.
+- **Fix:**
+  - Parse the DN's first RDN and compare `cn` for exact (case-insensitive) equality.
+  - Or require the full group DN and compare the whole DN.
+  - Keep the existing trim behaviour.
+- **Tests:** add prefix/suffix cases (`gamers-denied`, `xgamers`, `gamersx`) to
+  `test/helpers.test.js` next to the existing cases at `:2085-2120`.
+
+### [ ] P0-3 ✔ `TRUST_PROXY`, `CORS_ORIGINS`, `THEGAMESDB_API_KEY` never reach the backend
+- **Where:** `docker-compose.yaml:64-83` (backend `environment:`). `index.js:108,120` read them.
+- **Problem:** README (`:135-137`) and CLAUDE.md both call `TRUST_PROXY=2` mandatory after
+  `BACKEND_BIND=127.0.0.1`, but compose never passes it through, so a value in `.env` does
+  nothing.
+- **Failure:** the backend stays at `trust proxy = 1` behind two hops. Every login then
+  appears to come from the edge proxy's IP, so five bad passwords from anyone lock out every
+  user for 15 minutes. `THEGAMESDB_API_KEY` from `.env` is silently ignored as well.
+- **Fix:**
+  - Add `TRUST_PROXY=${TRUST_PROXY:-1}`, `CORS_ORIGINS=${CORS_ORIGINS:-}` and
+    `THEGAMESDB_API_KEY=${THEGAMESDB_API_KEY:-}` to the backend environment.
+  - Add the same keys to `docker-compose.test.yml` (the two files must stay the same shape).
+- **Test:** add a static check in `test/runtime.test.js` that every `process.env.X` read by
+  `index.js` for these keys appears in both compose files.
+
+### [ ] P0-4 ✔ On-demand price sweep ignores `STEAM_REGION`
+- **Where:** `services/jobs.js:342` (`runJob('updatePrices')` calls `updatePrices()` with no
+  arguments, so the region defaults to `'il'`). The cron at `index.js:3476` passes
+  `process.env.STEAM_REGION`.
+- **Failure:** with `STEAM_REGION=us`, prices are in USD on Monday and in ILS after an admin
+  runs `POST /api/v2/jobs {kind:"updatePrices"}`. This is the drift `jobs.js` exists to prevent.
+- **Fix:** resolve the region in one place, inside `jobs.js`, from `process.env.STEAM_REGION`
+  (default `'il'`), and have every caller (cron, `runJob`, `update_library_prices.js`) use it.
+  Remove the argument from the cron call.
+- **Test:** a unit test that `runJob('updatePrices')` and the cron entry resolve the same region.
+
+### [ ] P0-5 `:latest` is retagged before Trivy and the smoke test pass (push to main)
+- **Where:** `.github/workflows/docker-build-deploy.yml:320-352`. Trivy is at `:411-418` and
+  runs later, as does smoke-test.
+- **Failure:** a push to main fails Trivy on a HIGH CVE, so deploy is skipped. But `:latest`
+  already points at the rejected image, and the next manual `docker compose up`, a reboot, or
+  a restart runs it in production.
+- **Fix:**
+  - Build every run as `sha-<short>` (or `run-<id>`).
+  - Promote to `:latest` only inside `deploy`, after every gate has passed.
+  - Point the scans and the smoke stack at the immutable tag.
+- **Test:** add a check in the workflow, or a static test, that no job before `deploy`
+  writes a `:latest` tag.
+
+### [ ] P0-6 ✔ Frontend: a 403 deletes the token but the app stays "logged in"
+- **Where:** `frontend/src/App.jsx:388-392` (UserManagementPage) and
+  `frontend/SharedLibrary.jsx:92-95`. `window.setUser` is never assigned anywhere.
+- **Problem:**
+  - Both places treat 403 like 401. They remove the token and navigate to `/login`, but never
+    clear the React `user` state.
+  - With `user` still set there is no `/login` route, so the catch-all route sends the user
+    to `/search`.
+  - The global interceptor (`App.jsx:55`) only redirects when a token is present.
+- **Failure:** a non-admin opens `/users` (the route has no client-side gate, `App.jsx:257`).
+  The token is silently deleted, and every later call is a 401 in an app that still looks
+  logged in, until the user reloads.
+- **Fix:**
+  - Centralise logout (a context or `useAuth().logout()`) and route every 401 through it.
+  - A 403 means "not allowed", not "logged out": show an error instead.
+  - Gate `/users` on the client with `can_manage_users`.
+  - Delete the `window.setUser` fallback.
+
+---
+
+## CC — Correctness & concurrency
+
+### [ ] CC-1 Metadata refresh overwrites a status the user just set
+- **Where:** `services/library.js:581-650` (`applyRefreshedMetadata`), fed by the snapshot
+  taken at the start of `jobs.js#refreshMetadata`. The UPDATE at `:632` has no status guard.
+- **Failure:**
+  1. The snapshot has the game as `wishlist`.
+  2. The user moves it to `playing`.
+  3. The refresh finds a future date and writes `unreleased` over `playing`.
+  4. It logs a `wishlist→unreleased` event that never happened.
+- **Fix:** add `AND status IS NOT DISTINCT FROM <snapshot status>` to the UPDATE (or re-read
+  the row `FOR UPDATE` inside a transaction). Skip the row and its event when 0 rows change.
+- **Test:** an integration test that interleaves a user status change with a refresh.
+
+### [ ] CC-2 Status-event `from` is read outside the write's transaction
+- **Where:** `services/library.js:903` (read), `:917` and `:941` (update by id), `:949`.
+- **Failure:**
+  - A concurrent write records a wrong `from` in the permanent log.
+  - If the game is deleted in between, the UPDATE hits 0 rows but the event is still inserted,
+    and `updated` is `undefined`.
+- **Fix:**
+  - Do the read with `SELECT … FOR UPDATE` inside the same `withTransaction`.
+  - Derive `from` from `UPDATE … RETURNING` combined with the locked read.
+  - Skip the event on 0 rows.
+- **Test:** an integration test for the "deleted between read and write" case.
+
+### [ ] CC-3 Release reminders are single-flighted on v2 only, so they can be sent twice
+- **Where:** `index.js:3357` (08:00 cron), `index.js:3433` (`POST /api/admin/check-releases`),
+  `run_notifications.js`, all calling `jobs.checkReleases` directly. The dedupe is
+  `wasSent → await notify → markSent`.
+- **Failure:** two overlapping runs both see "not sent", and both deliver to all four channels.
+- **Fix:** take a Postgres advisory lock (`pg_try_advisory_lock`) inside `checkReleases`
+  itself, so that every entry point is serialised, across processes too.
+
+### [ ] CC-4 Sent-notification log is clobbered across processes and written non-atomically
+- **Where:** `index.js:3327-3335`, plus `run_notifications.js`'s own in-memory copy.
+- **Failure:** a manual run followed by the 08:00 cron on the same day sends duplicates and
+  erases the script's records.
+- **Fix:** move the dedupe log into a Postgres table (`migrations/006_…`) with a unique key and
+  `INSERT … ON CONFLICT DO NOTHING RETURNING` as the claim. That also fixes CC-3's window.
+  Failing that, re-read before writing and write via a temp file and rename.
+
+### [ ] CC-5 Local accounts get an email address from the directory
+- **Where:** `services/notifications.js:312-340` (`resolveEmail`), called at `:459` with
+  `channels.email || ''`. `directory.js#getLdapEmail` never checks `origin`.
+- **Failure:** local user `jsmith` receives directory user `jsmith`'s address, which is saved to
+  `users.email`, so their reminders go to someone else. A user who cleared their email to opt
+  out gets it filled back in. It also costs one LDAP bind per notification.
+- **Fix:** only look up the directory for `origin === 'ldap'`. Never write it back
+  automatically; if a backfill is wanted, leave it to `backfill_ldap_display_names.js`.
+
+### [ ] CC-6 Search merges different games that share a name
+- **Where:** `services/catalog.js:297` (dedupe on lower-cased name, preferring the undated
+  result), `catalog.js:584` (`resolveGame` matches by name), and `:275-282` (Steam App ID
+  borrowed by name). `refreshMetadata` has the same problem.
+- **Failure:**
+  - Doom (1993) and Doom (2016) become one result.
+  - An MCP `name:"Doom"` add resolves silently instead of returning CONFLICT with candidates.
+  - A refresh can write another game's date, cover, status or price onto the row.
+- **Fix:** dedupe on `(name, release year)` and prefer provider-id matches. Make
+  `resolveGame` return CONFLICT whenever more than one candidate shares the name. Only borrow
+  a Steam App ID when the years agree.
+
+### [ ] CC-7 Schema-migration advisory lock is never released
+- **Where:** `schema-migrate.js:52` (session-level `pg_advisory_lock`). The comment at `:86`
+  claims `client.release()` releases it; it does not, because the pooled connection keeps it.
+- **Failure:** during an overlapping deploy or with a second instance, the new process blocks
+  on the lock until that pooled connection happens to close.
+- **Fix:** call `pg_advisory_unlock` in a `finally` before `release()`, or use
+  `pg_advisory_xact_lock` per transaction. Correct the comment.
+
+### [ ] CC-8 The single-game metadata refresh still has the bug the bulk refresh fixed
+- **Where:** `index.js:1305-1309` uses `lookup.degraded`, while the bulk route uses
+  `nobodyAnswered` (`:1243`).
+- **Failure:** with no API keys configured, it reports "Game not found in API search results"
+  instead of "lookup unavailable".
+- **Fix:** move the single-game refresh into `jobs.js` or `library.js` next to the bulk
+  refresh and share the decision.
+
+### [ ] CC-9 v1 `PUT /api/user/me/settings` has its own copy of the rules
+- **Where:** `index.js:3210-3269` versus `services/users.js#updateNotificationSettings`.
+- **Problem:** v1 has no `MAX_NOTIFICATION_DAY` cap and no de-duplication. `ntfy_topic`,
+  `gotify_token` and `telegram_chat_id` are stored with no type or length check and no
+  `sanitizeText`.
+- **Fix:** turn the v1 route into a thin adapter over the service, without changing the v1
+  response shape.
+
+### [ ] CC-10 Backlog swap reads positions before taking the lock
+- **Where:** `services/library.js:119` (`listBacklog`) comes before the advisory lock at `:135`.
+- **Failure:** a concurrent reorder writes stale positions back, and `backlog_order` ends up
+  with duplicate values.
+- **Fix:** read the positions after the lock, inside the same transaction.
+
+### [ ] CC-11 CrackRelease status write
+- **Where:** `index.js:740-763`.
+- **Problem:**
+  - The UPDATE is fire-and-forget.
+  - Any fetch error overwrites a known `crack_status` with `unknown`.
+  - It can store `unreleased`, which is outside the documented values.
+  - It returns `err.message` to non-admins.
+- **Fix:**
+  - Await the write.
+  - Keep the last known status on fetch errors.
+  - Map values onto `cracked|uncracked|unknown`.
+  - Return a generic error.
+
+### [ ] CC-12 Unawaited writes on the LDAP login path
+- **Where:** `index.js:275` and `:1910`.
+- **Failure:** a failed write is silently lost, so `display_name` and `email` go stale.
+- **Fix:** await both and log failures. This largely goes away once P0-1 and UP-16 are done.
+
+### [ ] CC-13 Errors thrown inside `db.*` callbacks never reach Express
+- **Where:** the `db.js` shim runs callbacks inside `.then`, so a throw becomes an unhandled
+  rejection (`index.js:3466` only logs it).
+- **Failure:** a TypeError in any of the 18 inline callbacks leaves the request hanging.
+- **Fix:** move the callback call out of the promise chain in the shim (for example with
+  `process.nextTick`), or migrate the remaining call sites to `db.promises`.
+
+### [ ] CC-14 `users.create` stores the username untrimmed and duplicates the username rules
+- **Where:** `services/users.js:272`.
+- **Failure:** `" bob"` becomes an account distinct from `bob`. There is no length or
+  character-set bound.
+- **Fix:** call `user-rules.js#validateUsername()`, the shared rule, and store the trimmed
+  value.
+
+### [ ] CC-15 Forged `backlogOrder` cursor returns 500 instead of 400
+- **Where:** `services/library.js` `listPage`. A non-numeric `lastKey` is bound against an
+  INTEGER column.
+- **Fix:** validate the cursor's type for each sort and throw `CODES.VALIDATION`.
+
+### [ ] CC-16 Stats: `statusCounts` in `agentSummary` and understated `unrecordedCompletions`
+- **Where:** `services/stats.js` `agentSummary`.
+- **Problem:**
+  - It returns `statusCounts`, against the rule that `stats.js` returns nothing the library
+    already carries.
+  - `unrecordedCompletions` (libraryDone − done events) is understated when a game was
+    finished more than once.
+- **Fix:** either document an exception for agents or drop `statusCounts`. Count the
+  games that have at least one `done` event, not the events.
+
+---
+
+## SEC — Security (medium / low)
+
+### [ ] SEC-1 The cloud-metadata block checks hostnames only (SSRF through notification URLs)
+- **Where:** `services/notifications.js:71-100`. Any user can reach it through
+  `POST /api/admin/test-notification` (`index.js:2712`).
+- **Failure:**
+  - `ntfy_url=http://169.254.169.254.nip.io`, or a DNS-rebinding name, reaches the metadata
+    endpoint.
+  - The 10s timeout versus an instant refusal also gives a timing-based port scan.
+- **Fix:**
+  - Resolve DNS and check every resolved address, pinning it through a custom `lookup` on
+    the agent.
+  - Block link-local and metadata ranges.
+  - Rate-limit the test endpoint per user.
+
+### [ ] SEC-2 ✔ v2 user writes accept string booleans for `canManageUsers`
+- **Where:** `services/v2.js` `userWrite` (no type check), `services/users.js:152-157`, `:287`.
+- **Failure:** `PATCH /api/v2/users/5 {"canManageUsers":"false"}` promotes the user, and the
+  same input slips past the "cannot remove your own admin" check. Only admins can reach it.
+- **Fix:** require `typeof === 'boolean'` in the v2 mapper, or better in the service, and
+  answer 400 otherwise.
+
+### [ ] SEC-3 Semgrep is unpinned and can be stubbed
+- **Where:** `.github/workflows/docker-build-deploy.yml:168-174`: an unversioned
+  `pip3 install semgrep` behind a `command -v` guard, with `--config auto`.
+- **Fix:** pin the version and verify it the way Gitleaks and Trivy are verified. Pin the
+  rule-set (a registry pack at a fixed version, or vendored rules).
+
+### [ ] SEC-4 GitHub Actions pinned by tag, not by commit SHA
+- **Where:** `actions/checkout@v4`, `actions/setup-node@v4`, `docker/setup-buildx-action@v3`.
+  The Semgrep rule that flags this is excluded at `:187`.
+- **Why it matters:** the runner is the production host.
+- **Fix:** pin to full SHAs with a version comment, remove the exclusion, and let Dependabot
+  or Renovate bump them.
+
+### [ ] SEC-5 Gitleaks allowlists whole documentation files
+- **Where:** `.gitleaks.toml:75-85` (`CLAUDE.md`, `README.md`,
+  `SECURITY_HARDENING_2026-07.md`, `.gitleaks.toml`).
+- **Fix:** replace the path allowlists with regex or stopword allowlists for the specific
+  example strings.
+
+### [ ] SEC-6 Deploy stops production before starting the new version, with no rollback
+- **Where:** `docker-build-deploy.yml:982-998`, then `:1037`.
+- **Failure:** a new image fails its healthcheck and production stays down until someone
+  steps in. There is also downtime on every deploy.
+- **Fix:**
+  - Keep the previous image tagged `:previous`.
+  - `up -d` without an explicit stop.
+  - On a failed health check, retag `:previous` → `:latest` and `up -d` again.
+
+### [ ] SEC-7 Session JWT in localStorage, and `exp` is never checked on the client
+- **Where:** `frontend/src/App.jsx:38,295,94-99`, `ApiTokensSection.jsx:52`.
+- **Mitigation already in place:** `script-src 'self'` (`nginx.conf:30`).
+- **Fix (short term):** check `exp` in `useAuth` and log out when it has expired.
+- **Fix (long term):** move to an `HttpOnly; Secure; SameSite=Strict` cookie with CSRF
+  protection. Needs Architect and CISO review, because the Android client uses Bearer.
+
+### [ ] SEC-8 `crackInfo.url` goes straight into `href`
+- **Where:** `frontend/src/App.jsx:2932`.
+- **Fix:** allow only `http:` and `https:` before rendering the link, and apply the same
+  check on the backend where the URL is scraped.
+
+### [ ] SEC-9 `reset-root-password.js` takes the password from argv
+- **Where:** `reset-root-password.js:21`.
+- **Problem:** argv is visible in `/proc` and in shell history.
+- **Fix:** read it from an environment variable or stdin, as `create-local-admin.js` does.
+
+### [ ] SEC-10 `/api/debug/...` route still shipped
+- **Where:** `index.js:1054`.
+- **Fix:** remove it, or gate it on `NODE_ENV !== 'production'`, and update
+  `test/api-surface.test.js`.
+
+### [ ] SEC-11 `.env` variants not ignored
+- **Where:** `.gitignore` and `.dockerignore` only cover `.env`, `.env.local` and
+  `.env.*.local`.
+- **Failure:** a `.env.production` is committed and copied into the image.
+- **Fix:** ignore `.env*`, with an exception for `!.env.example` if one is added.
+
+### [ ] SEC-12 `library` scope never actually required
+- **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
+- **Failure:** an `["admin"]`-only token can use every library route, although the spec says
+  `x-required-scope: library`.
+- **Fix:** enforce `library` on library routes, or change the spec and docs to say admin
+  implies library. Decide first; either way `test/openapi.test.js` should pin the result.
+
+---
+
+## FE — Frontend
+
+### [ ] FE-1 Crack-status requests fire again on every render
+- **Where:** `frontend/src/App.jsx:1096` (`currentGames` is a new `.slice()` on every render),
+  used as an effect dependency at `:1110` and `:1131`.
+- **Problem:** in-flight requests aren't tracked, so each response re-renders and re-POSTs
+  every pending game.
+- **Fix:** memoise `currentGames`, track in-flight ids in a ref, and send one batched request.
+
+### [ ] FE-2 Search results can come from an older query
+- **Where:** `App.jsx:722-750` (`handleSearch`).
+- **Failure:** a slow response to an earlier search replaces the results for the current
+  query, and its price lookups land in the shared `gamePrices` map.
+- **Fix:** use an `AbortController` or a request-sequence id, and ignore stale responses.
+
+### [ ] FE-3 The "already in your library" check compares names, not ids
+- **Where:** `App.jsx:766-772`.
+- **Failure:** RE4 (2023) is blocked because RE4 (2005) is in the library. The check also
+  downloads the whole library on every add.
+- **Fix:** compare `game_id`, using the library already held in state or the server's
+  answer to the add.
+
+### [ ] FE-4 Login shows "Invalid username or password" for every error
+- **Where:** `App.jsx:285-300`.
+- **Failure:** a 429 lockout or a 503 LDAP outage tells the user their password is wrong, so
+  they retry and extend the lockout.
+- **Fix:** give distinct messages for 401, 429 (with the retry time) and 503/network errors.
+
+### [ ] FE-5 A failed status change can undo other changes
+- **Where:** `App.jsx:1147`, `:1164`.
+- **Failure:** if game A's change fails after game B's succeeded, B is reverted in the UI too.
+- **Fix:** roll back only the game that failed, from its own previous value.
+
+### [ ] FE-6 Keyboard access: library cards and stats chips
+- **Where:**
+  - Cards only get `tabIndex` in backlog view (`App.jsx:1523`), and open only on click (`:1524`).
+  - The stats chips are `<div onClick>` with no role (`:1353-1368`).
+- **Fix:** use a `<button>` (or `role="button"` + `tabIndex=0` + Enter/Space handling).
+
+### [ ] FE-7 GameDetailModal: no initial focus, no focus trap, no focus return
+- **Where:** `frontend/src/GameDetailModal.jsx:84-103`.
+- **Fix:** reuse the `handleModalFocusTrap` pattern (`App.jsx:343`). Focus the dialog when it
+  opens and restore focus to the opener when it closes.
+
+### [ ] FE-8 Duplicated Bearer headers and 403-logout logic
+- **Where:** `App.jsx:366`, `:2001`, `:2188`, `:2434`, and `SharedLibrary.jsx`.
+- **Problem:** these build their own headers even though the interceptor already adds them.
+  This duplication is how P0-6 happened.
+- **Fix:** rely on the interceptor and on one error handler.
+
+### [ ] FE-9 `SharedLibrary.jsx` lives outside `src/`
+- **Fix:** move it to `frontend/src/` and fix its imports (it currently imports
+  `./src/contexts/...`).
+
+### [ ] FE-10 `App.jsx` is ~3000 lines with at least eight page components
+- **Fix:** split it into `src/pages/*` one page per PR, starting with the pages touched by
+  FE-1 to FE-5. No behaviour change in the same PR.
+
+### [ ] FE-11 CSP allows `style-src 'unsafe-inline'`
+- **Where:** `frontend/nginx.conf:30`.
+- **Status:** an accepted trade-off for inline styles and Swagger UI. Record the decision.
+  Revisit if inline `style=` usage is removed.
+
+### [ ] FE-12 Expired token renders the app until the first 401
+- **Where:** `useAuth` (`App.jsx:94-99`).
+- **Fix:** covered by SEC-7's short-term fix. Tick both together.
+
+---
+
+## UP — Tidying & upkeep
+
+### [ ] UP-1 Stale `.trivyignore` entry
+- **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,
+  and because the suppression applies to all three images it would hide a future picomatch.
+- **Fix:** remove it.
+
+### [ ] UP-2 Frontend build stage uses `node:20` (EOL 2026-04-30)
+- **Where:** `frontend/Dockerfile:2`.
+- **Fix:**
+  - Bump to `node:22`.
+  - Add an `engines` floor to `frontend/package.json` and extend `test/runtime.test.js`.
+  - Consider `npm ci --ignore-scripts`.
+  - Consider pinning base images by digest.
+
+### [ ] UP-3 `MCP_BIND=0.0.0.0` docs are wrong
+- **Where:** `docker-compose.yaml:131-133` and `mcp/README.md:159` say it "just works", but
+  `mcp/server.js:57` drops `0.0.0.0` from the derived Host allowlist.
+- **Fix:** document that LAN use needs `MCP_ALLOWED_HOSTS`.
+
+### [ ] UP-4 Stale workflow comment about sqlite3
+- **Where:** `docker-build-deploy.yml:227-230` says the backend "depends on sqlite3", but it
+  is a devDependency.
+- **Fix:** correct the comment.
+
+### [ ] UP-5 Backend `.dockerignore` misses `mcp/node_modules`
+- **Fix:** add `mcp/node_modules` (and `**/node_modules`).
+
+### [ ] UP-6 Two smoke stacks can't run concurrently
+- **Where:** hard-coded `container_name`s in `docker-compose.test.yml`. The workflow comment
+  at `:72-79` already notes that a main run's smoke test can be cancelled.
+- **Fix:** drop the `container_name`s from the test stack, or add a concurrency group that
+  never cancels a `push: main` run.
+
+### [ ] UP-7 No end-to-end coverage of `/api/v2` or the MCP→backend path
+- **Problem:** the smoke test never calls v2, and the MCP handshake uses a fake PAT.
+- **Fix:** in the smoke stage:
+  1. Mint a PAT with `create-api-token.js`.
+  2. Call one v2 read and one v2 write.
+  3. Call one MCP tool that reaches the backend.
+
+### [ ] UP-8 `saveSettings` is not atomic
+- **Where:** `settings-store.js`.
+- **Fix:** write to `settings.json.tmp`, `fsync`, then `rename`. Bind mounts of a single file
+  need care: rename replaces the inode, so bind-mount the directory, or copy then truncate
+  as a fallback. Check with Architect.
+
+### [ ] UP-9 `refresh_igdb_token.js` can have no effect
+- **Where:** `refresh_igdb_token.js:69`.
+- **Problem:** it writes `.env`, but a `settings.json` bearer token takes precedence.
+- **Fix:** write through `settings-store` (as the UI button does), or warn when a settings
+  value overrides it.
+
+### [ ] UP-10 v1 Steam price route is a separate implementation
+- **Where:** `index.js:812-842`.
+- **Problem:** no timeout, no id validation, and it returns `error.message`.
+- **Fix:** adapt it over `jobsService.fetchSteamPrice` without changing the v1 shape.
+
+### [ ] UP-11 Provider call volume
+- **Problem:**
+  - RAWG makes one detail request per result (`catalog.js:163`), up to 20 per search and
+    about 10 per game on refresh.
+  - `updatePrices` fetches the same `steam_app_id` once per owning user
+    (`jobs.js:161,225`).
+- **Fix:** skip RAWG details where the list payload is enough, cache them, and dedupe Steam
+  lookups by app id within a sweep.
+
+### [ ] UP-12 Telegram legacy Markdown on unescaped game names
+- **Where:** `services/notifications.js:256,272,278`.
+- **Failure:** a name containing `_`, `*` or `[` gets a 400 from Telegram, so the channel
+  silently never delivers for those games.
+- **Fix:** switch to `HTML` parse mode with escaping, or escape for MarkdownV2.
+
+### [ ] UP-13 `replaceOutgoing` builds an unbounded `IN (...)` list
+- **Where:** `services/shares.js:38`.
+- **Failure:** a huge array exceeds Postgres's 65,535-parameter limit and returns 500.
+- **Fix:** cap the array length (validation 400), or use `= ANY($1::text[])`.
+
+### [ ] UP-14 `rate_limited` in job `REASONS` has no producer
+- **Where:** `services/job-runner.js:47-55`.
+- **Fix:** produce it or remove it. It is in the spec enum, so update
+  `openapi/gametracker-v2.yaml` together with `test/openapi.test.js`.
+
+### [ ] UP-15 Leftovers
+- `console.log('About to schedule cron job')` at `index.js:3354`.
+- A stray "GET /api/v2/shares" comment above the stats route (`index.js:2237`).
+- `ensureRootUser` logs `[FATAL]` but lets the server start (`index.js:176-178`, `196-198`).
+  Decide whether that is fatal or a warning, and make the log level match.
+- 3 backend lint warnings (for example the unused `shareCols` at `:121`).
+
+### [ ] UP-16 Shrink `index.js` (3,517 lines)
+- **Move into services, one per PR, each an adapter-only change:**
+  - login (`:1684-1939`, ~250 lines);
+  - LDAP sync (`:2779-3014`, ~235 lines, which repeats bind and search instead of using
+    `ldap-helpers`);
+  - the CrackWatch cache and scraper (`:523-809`);
+  - the sent-notification store;
+  - the `/api/user/me*` routes;
+  - the Steam price route.
+- **Also closes, fully or partly:** CC-8, CC-9, CC-11, CC-12, CC-13, UP-10.
+- **Note:** leave the order to the Architect review.
+
+---
+
+## Suggested order of work
+
+1. **P0-1 to P0-4.** Small, contained, and security- or data-affecting. One PR each.
+2. **P0-5 and SEC-6**, together, since both change how images are tagged and promoted.
+3. **P0-6, FE-4 and SEC-7's short-term fix.** One frontend auth-state PR, with UI/UX review.
+4. **CC-1, CC-2, CC-3 and CC-4.** Concurrency, with integration tests against Postgres.
+5. **CC-5, CC-6 and SEC-1.** Notification and catalog correctness.
+6. **The remaining SEC items**, then FE-1 to FE-3 and FE-5 to FE-7.
+7. **UP items.** Opportunistic. UP-16 and FE-10 are ongoing refactors, done one piece per PR.
+
+---
+
+## Fix log
+
+| ID | PR | Date | Summary |
+|---|---|---|---|
+| — | — | — | — |
