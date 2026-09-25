@@ -26,6 +26,9 @@
 //     Express handler with an unsent response on a pool error.
 
 const axios = require('axios');
+const dns = require('dns');
+const http = require('http');
+const https = require('https');
 const nodemailer = require('nodemailer');
 const db = require('../db');
 // Shared promise surface — see db.js. Four services had each written their own.
@@ -72,8 +75,18 @@ function isSafeImageUrl(url) {
 const METADATA_HOSTS = ['169.254.169.254', 'metadata.google.internal', 'fd00:ec2::254', '100.100.100.200'];
 function isBlockedNotificationHost(url) {
   try {
-    const u = new URL(url);
-    let host = u.hostname.toLowerCase()
+    return isBlockedHost(new URL(url).hostname);
+  } catch {
+    return true; // unparseable -> refuse
+  }
+}
+
+// The same test applied to a bare hostname or IP address. Shared by the URL check
+// above (the TEXT the user typed) and guardedLookup below (the ADDRESSES that text
+// resolves to), so the two cannot disagree about what is blocked.
+function isBlockedHost(hostname) {
+  try {
+    let host = String(hostname).toLowerCase()
       .replace(/^\[|\]$/g, '')   // strip IPv6 brackets
       .replace(/\.$/, '');       // "metadata.google.internal." resolves the same
     // Unwrap IPv4-mapped IPv6. Note that `new URL()` does NOT keep the readable
@@ -101,6 +114,38 @@ function isBlockedNotificationHost(url) {
   }
 }
 
+// The TEXT check above is not enough on its own (ROADMAP SEC-1): it never consults
+// DNS, so `http://169.254.169.254.nip.io/` -- or any name the user controls, pointed
+// at the metadata address, or re-pointed there between a check and the request (DNS
+// rebinding) -- passed it, and any user could make this server POST to the cloud
+// metadata endpoint with the Diagnostics button.
+//
+// So the ntfy and Gotify requests connect through agents whose `lookup` refuses a
+// blocked ADDRESS. The check runs on the very resolution the socket connects to, so
+// there is no second lookup for a rebinding answer to slip between. Every address a
+// name resolves to is checked, not just the first. (An IP literal skips `lookup`
+// entirely, which is why the text check stays.)
+function guardedLookup(hostname, options, callback) {
+  if (typeof options === 'function') { callback = options; options = {}; }
+  const opts = typeof options === 'number' ? { family: options } : (options || {});
+  dns.lookup(hostname, { ...opts, all: true }, (err, addresses) => {
+    if (err) return callback(err);
+    if (!addresses.length || addresses.some((a) => isBlockedHost(a.address))) {
+      return callback(blockedHostError());
+    }
+    if (opts.all) return callback(null, addresses);
+    return callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+const GUARDED_AGENTS = Object.freeze({
+  httpAgent: new http.Agent({ lookup: guardedLookup }),
+  httpsAgent: new https.Agent({ lookup: guardedLookup }),
+});
+
+// The refusal code, wherever it ended up: a refusal raised inside `lookup` reaches the
+// caller wrapped by axios, with ours as the `cause`.
+const notifyCodeOf = (err) => err?.notifyCode || err?.cause?.notifyCode || null;
+
 // Raw axios errors distinguish ECONNREFUSED / 404 / timeout, which turns the
 // Diagnostics "send test notification" button into an open/closed/filtered port
 // scanner for the server's internal network. Collapse every network-level outcome
@@ -120,7 +165,7 @@ function blockedHostError() {
 
 function sanitizeDeliveryError(err, channel) {
   console.error(`[Notify] ${channel} delivery failed:`, err?.message || err);
-  if (err?.notifyCode === NOTIFY_CODES.BLOCKED_HOST) return err.message;
+  if (notifyCodeOf(err) === NOTIFY_CODES.BLOCKED_HOST) return BLOCKED_HOST_MESSAGE;
   return 'Delivery failed. Check the server URL and credentials in My Account, then try again.';
 }
 
@@ -226,6 +271,7 @@ async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
     headers,
     timeout: 10000,
     maxRedirects: 0,
+    ...GUARDED_AGENTS,
   });
   return true;
 }
@@ -246,6 +292,7 @@ async function sendGotify(title, message, token, priority = 5, imageUrl, serverU
     headers: { 'Content-Type': 'application/json', 'X-Gotify-Key': token },
     timeout: 10000,
     maxRedirects: 0,
+    ...GUARDED_AGENTS,
   });
   return true;
 }
@@ -457,7 +504,7 @@ async function dispatch(channels, payload, { only } = {}) {
         results[channel.key].error = outcome?.message || 'Not delivered.';
       }
     } catch (err) {
-      results[channel.key].code = err?.notifyCode || NOTIFY_CODES.DELIVERY_FAILED;
+      results[channel.key].code = notifyCodeOf(err) || NOTIFY_CODES.DELIVERY_FAILED;
       results[channel.key].error = sanitizeDeliveryError(err, channel.key);
     }
   }));
@@ -572,7 +619,7 @@ module.exports = {
   // these; a test must restore what it replaced.
   transports,
   // helpers other code still needs
-  escapeHtml, isSafeImageUrl, isBlockedNotificationHost, sanitizeDeliveryError,
+  escapeHtml, isSafeImageUrl, isBlockedNotificationHost, isBlockedHost, guardedLookup, sanitizeDeliveryError,
   ALLOWED_IMAGE_HOSTS, METADATA_HOSTS,
   // recipients + fan-out
   NOTIFY_CODES, CHANNEL_COLUMNS, CHANNELS, CHANNEL_KEYS,

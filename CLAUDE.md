@@ -702,6 +702,13 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 >
 > Each still has to be recorded in `test/api-surface.test.js` with its tier like any other
 > route.
+- **User-chosen notification servers (SSRF)**: private/LAN ntfy and Gotify URLs are allowed on
+  purpose (self-hosting is the feature); cloud-metadata and link-local addresses are not. The
+  refusal is enforced on the **resolved address at connect time**
+  (`services/notifications.js#guardedLookup`, via the axios agents), not only on the URL text —
+  a text-only check let `169.254.169.254.nip.io` and DNS rebinding through (ROADMAP SEC-1). The
+  Diagnostics test button is limited to 10 per user per 5 minutes (`testNotificationLimit`,
+  pinned in `test/api-surface.test.js`)
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.

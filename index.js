@@ -1666,6 +1666,36 @@ function libraryWriteLimit(req, res, next) {
   return next();
 }
 
+// --- test-notification limiter ---------------------------------------------------
+//
+// The Diagnostics "send test notification" button makes this SERVER send an outbound
+// request to a URL the USER chose (their own ntfy/Gotify server). The metadata block
+// (services/notifications.js#guardedLookup) stops the worst target, but what is left
+// is still an outbound request per click, and the 10-second timeout against an
+// instant refusal is a timing signal about the server's network (ROADMAP SEC-1).
+// Bounding it per user keeps that from becoming a scanner. Generous for a person
+// testing their own setup; far below anything useful for probing.
+const TEST_NOTIFY_KEYS = (userId) => [`notifytest:${userId}`];
+const TEST_NOTIFY_MAX = 10;
+const TEST_NOTIFY_WINDOW_MS = 5 * 60 * 1000;
+
+function testNotificationLimit(req, res, next) {
+  const userId = req.user && req.user.id;
+  if (!userId) return next();   // authRequired runs first; see libraryWriteLimit
+  const keys = TEST_NOTIFY_KEYS(userId);
+  const lockedFor = lockoutMinutes(keys, TEST_NOTIFY_MAX, TEST_NOTIFY_WINDOW_MS);
+  if (lockedFor > 0) {
+    console.warn(`[RateLimit] test notifications throttled for user ${userId}`);
+    res.set('Retry-After', String(lockedFor * 60));
+    return problem.send(res, {
+      code: SVC.RATE_LIMITED,
+      message: `Too many test notifications. Try again in ${lockedFor} minute${lockedFor === 1 ? '' : 's'}.`,
+    });
+  }
+  trackFailures(keys);   // every attempt counts: the outbound request is the cost
+  return next();
+}
+
 // The login limiter, expressed in terms of the shared primitives above. Behaviour is
 // unchanged — same keys, same window, same log line.
 const isLockedOut = (clientIP, username) => lockoutMinutes(attemptKeys(clientIP, username));
@@ -2736,7 +2766,7 @@ app.delete('/api/users/:id', authRequired, requirePermission('can_manage_users')
 });
 
 // --- Test Notification endpoint for admins ---
-app.post('/api/admin/test-notification', authRequired, async (req, res) => {
+app.post('/api/admin/test-notification', authRequired, testNotificationLimit, async (req, res) => {
   try {
     const { service, gameId, gameName, releaseDate, coverUrl } = req.body;
     

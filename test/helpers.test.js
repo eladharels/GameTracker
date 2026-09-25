@@ -484,6 +484,60 @@ function withTransports(behaviour, fn) {
 const asyncChecks = [];
 const checkAsync = (label, fn) => asyncChecks.push([label, fn]);
 
+console.log('guardedLookup — the ADDRESS a name resolves to is checked, not just its text (SEC-1):');
+{
+  const dnsMod = require('dns');
+  const notif = require('../services/notifications');
+  // A stubbed resolver: names map to fixed addresses, so nothing reaches real DNS.
+  const withDns = async (table, fn) => {
+    const real = dnsMod.lookup;
+    dnsMod.lookup = (host, opts, cb) => {
+      const addrs = table[host];
+      if (!addrs) { const e = new Error('ENOTFOUND ' + host); e.code = 'ENOTFOUND'; return cb(e); }
+      return cb(null, addrs.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })));
+    };
+    try { return await fn(); } finally { dnsMod.lookup = real; }
+  };
+  const lookup = (host, opts) => new Promise((resolve) =>
+    notif.guardedLookup(host, opts, (err, a, f) => resolve({ err, a, f })));
+
+  checkAsync('a name resolving to the metadata address is refused, whatever it is called', async () => {
+    await withDns({ '169.254.169.254.nip.io': ['169.254.169.254'], 'innocent.example': ['169.254.10.1'] }, async () => {
+      for (const host of ['169.254.169.254.nip.io', 'innocent.example']) {
+        const r = await lookup(host, {});
+        assert.ok(r.err, `${host} resolved to a metadata address and was allowed`);
+        assert.strictEqual(r.err.notifyCode, 'blocked_host');
+      }
+    });
+  });
+  checkAsync('ANY blocked address in the answer refuses the name (not only the first)', async () => {
+    await withDns({ 'mixed.example': ['10.0.0.5', '169.254.169.254'] }, async () => {
+      assert.ok((await lookup('mixed.example', {})).err, 'a second, blocked A record was ignored');
+    });
+  });
+  checkAsync('a LAN address is still allowed — self-hosted ntfy/Gotify is the documented feature', async () => {
+    await withDns({ 'ntfy.lan': ['192.168.1.20'] }, async () => {
+      const r = await lookup('ntfy.lan', {});
+      assert.strictEqual(r.err, null);
+      assert.deepStrictEqual([r.a, r.f], ['192.168.1.20', 4]);
+      const all = await lookup('ntfy.lan', { all: true });
+      assert.deepStrictEqual(all.a, [{ address: '192.168.1.20', family: 4 }]);
+    });
+  });
+  checkAsync('end to end: an ntfy send to such a name is refused before any socket opens', async () => {
+    // Through dispatch, axios and the real agents. The refusal happens inside lookup, so
+    // no connection is ever attempted -- which is also why this needs no network.
+    await withDns({ 'rebind.example': ['169.254.169.254'] }, async () => {
+      const res = await notif.dispatch(
+        { ntfy_topic: 't', ntfy_url: 'http://rebind.example:9' },
+        { subject: 's', text: 't', title: 't', message: 'm' }, { only: ['ntfy'] });
+      assert.strictEqual(res.ntfy.sent, false);
+      assert.strictEqual(res.ntfy.code, 'blocked_host', `got ${JSON.stringify(res.ntfy)}`);
+    });
+  });
+}
+
+
 // --- catalog: the v2 resolution layer ---------------------------------------
 //
 // Every check below drives the REAL function with a stubbed provider layer, through

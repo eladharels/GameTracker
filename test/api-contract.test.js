@@ -501,6 +501,29 @@ checkAsync('the token gate and the LOGIN limiter do not share a budget', async (
     'exhausting the token gate locked an unrelated account out of login');
 });
 
+console.log('POST /api/admin/test-notification (SEC-1 per-user limiter):');
+
+checkAsync('the 11th test notification in the window is 429, keyed per user', async () => {
+  // The limiter, pulled out of the live route by name, so this is the one that runs.
+  const { app } = require('../index.js');
+  const layer = (app.router || app._router).stack.find((l) => l.route
+    && l.route.path === '/api/admin/test-notification' && l.route.methods.post);
+  const limiter = layer.route.stack.find((s) => s.handle.name === 'testNotificationLimit').handle;
+  const call = (userId) => {
+    const res = recordingRes();
+    res.set = () => res;
+    let passed = false;
+    limiter({ user: { id: userId } }, res, () => { passed = true; });
+    return { res, passed };
+  };
+  for (let i = 0; i < 10; i++) assert.ok(call(91001).passed, `test notification ${i + 1} was throttled`);
+  const eleventh = call(91001);
+  assert.strictEqual(eleventh.passed, false, 'the 11th test notification was allowed');
+  assert.strictEqual(eleventh.res.statusCode, 429);
+  assertKeys(eleventh.res.body, ['error'], 'test-notification 429');
+  assert.ok(call(91002).passed, "one user's budget throttled another user");
+});
+
 console.log('POST /api/auth/login (the LDAP verification ladder):');
 
 checkAsync('an UNRECOGNISED verification result never issues a session', async () => {

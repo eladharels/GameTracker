@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 6 |
-| SEC — Security (medium/low) | 13 | 1 |
+| SEC — Security (medium/low) | 13 | 2 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **12** |
+| **Total** | **64** | **13** |
 
 ---
 
@@ -368,7 +368,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ## SEC — Security (medium / low)
 
-### [ ] SEC-1 The cloud-metadata block checks hostnames only (SSRF through notification URLs)
+### [x] SEC-1 The cloud-metadata block checks hostnames only (SSRF through notification URLs)
 - **Where:** `services/notifications.js:71-100`. Any user can reach it through
   `POST /api/admin/test-notification` (`index.js:2712`).
 - **Failure:**
@@ -380,6 +380,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     the agent.
   - Block link-local and metadata ranges.
   - Rate-limit the test endpoint per user.
+- **Done:**
+  - The ntfy and Gotify requests connect through agents whose `lookup`
+    (`notifications.guardedLookup`) checks EVERY resolved address. It is the same resolution
+    the socket uses, so a rebinding answer has no second lookup to slip into.
+  - The text check stays, for IP literals, which skip `lookup`.
+  - The test button is limited to 10 per user per 5 minutes.
+  - Unit tests stub `dns.lookup` and drive a real ntfy send through `dispatch`. They fail on
+    the old code.
+- **Residual:** a 10-second timeout versus an instant refusal is still a timing signal. The
+  limiter bounds it, and it doesn't remove it.
 
 ### [ ] SEC-2 ✔ v2 user writes accept string booleans for `canManageUsers`
 - **Where:** `services/v2.js` `userWrite` (no type check), `services/users.js:152-157`, `:287`.

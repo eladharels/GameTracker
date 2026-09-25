@@ -433,6 +433,15 @@ check('every status-write route carries the library write limiter', () => {
   }
 });
 
+// Same reason, SEC-1: the test-notification route makes the SERVER send a request to a
+// URL the user chose. Not an authorization middleware, so no tier assertion sees it.
+check('the test-notification route carries its per-user limiter', () => {
+  const route = liveRoutes().find((r) => r.key === 'POST /api/admin/test-notification');
+  assert.ok(route, 'POST /api/admin/test-notification is not a live route — update this pin with the rename');
+  assert.ok(route.names.includes('testNotificationLimit'),
+    `the test-notification route has no limiter. Its chain is: ${route.names.join(' -> ')}`);
+});
+
 const live = new Set(liveRoutes().map((r) => r.key));
   for (const key of specKeys.keys()) {
     assert.ok(live.has(key),
