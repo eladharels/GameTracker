@@ -807,6 +807,13 @@ Reviews for P0-5 and SEC-6: **Architect approved. CISO rejected** (the `:latest`
 review was needed. Exercised with a stubbed `docker`, but **not yet run on the real runner**.
 The first push to `main` after merging is the real test.
 
+Reviews for CC-10 to CC-16 (plus the `refreshOne` review fix): **CISO approved. Architect
+approved.** The notes acted on:
+- The LDAP profile sync write now requires `password IS NULL`.
+- CrackRelease `fetched` now requires a status word on the page.
+- The spec's `Username` schema is tied to `validateUsername` by a test.
+- A test pins the callback guard's `this` binding.
+
 Reviews for the CC-6 follow-up and CC-7 to CC-9: **CISO approved. Architect rejected CC-9**
 (a numeric channel id was wiped with a 200). Fixed in `6919d03` plus the next commit: numbers
 become text, other non-text is refused, and the field rename is safer.
