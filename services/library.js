@@ -961,13 +961,15 @@ async function setStatus(userId, gameId, status) {
       [resolved, backlogOrder, row.id]);
     await recordStatusEvent(
       { userId, gameId, from: row.status, to: resolved, source: 'user' }, tx);
-    return { id: row.id, resolved };
+    // Read back INSIDE the transaction: after commit, a delete could land first and
+    // hand the adapter `game: undefined`, which v2 turns into a 500.
+    const game = (await tx.query('SELECT * FROM user_games WHERE id = ?', [row.id])).rows[0];
+    return { game, resolved };
   });
 
-  const updated = await get('SELECT * FROM user_games WHERE id = ?', [outcome.id]);
   // `coerced` tells the caller the server resolved their request to something else,
   // rather than silently storing a different value than they asked for.
-  return { game: updated, coerced: outcome.resolved !== requested };
+  return { game: outcome.game, coerced: outcome.resolved !== requested };
 }
 
 // v2's add, given a game the catalog has already resolved.

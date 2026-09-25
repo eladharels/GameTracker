@@ -38,11 +38,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | Section | Items | Done |
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
-| CC — Correctness & concurrency | 16 | 0 |
+| CC — Correctness & concurrency | 16 | 4 |
 | SEC — Security (medium/low) | 13 | 1 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **6** |
+| **Total** | **64** | **10** |
 
 ---
 
@@ -175,7 +175,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ## CC — Correctness & concurrency
 
-### [ ] CC-1 Metadata refresh overwrites a status the user just set
+### [x] CC-1 Metadata refresh overwrites a status the user just set
 - **Where:** `services/library.js:581-650` (`applyRefreshedMetadata`), fed by the snapshot
   taken at the start of `jobs.js#refreshMetadata`. The UPDATE at `:632` has no status guard.
 - **Failure:**
@@ -186,8 +186,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** add `AND status IS NOT DISTINCT FROM <snapshot status>` to the UPDATE (or re-read
   the row `FOR UPDATE` inside a transaction). Skip the row and its event when 0 rows change.
 - **Test:** an integration test that interleaves a user status change with a refresh.
+- **Done** (`c42f066`): the status is decided from the row read `FOR UPDATE` in the same
+  transaction as the write, never from the sweep's snapshot. A row deleted in the meantime is
+  skipped.
 
-### [ ] CC-2 Status-event `from` is read outside the write's transaction
+### [x] CC-2 Status-event `from` is read outside the write's transaction
 - **Where:** `services/library.js:903` (read), `:917` and `:941` (update by id), `:949`.
 - **Failure:**
   - A concurrent write records a wrong `from` in the permanent log.
@@ -198,22 +201,47 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Derive `from` from `UPDATE … RETURNING` combined with the locked read.
   - Skip the event on 0 rows.
 - **Test:** an integration test for the "deleted between read and write" case.
+- **Done** (`c42f066`, review fix):
+  - The read happens `FOR UPDATE` inside the transaction, after the backlog advisory lock (the
+    lock order every writer now uses).
+  - The row is read back inside the transaction too, so a delete after commit can't return an
+    empty game.
+  - Integration tests interleave a real concurrent writer and a real concurrent delete. Both
+    fail on the old code.
 
-### [ ] CC-3 Release reminders are single-flighted on v2 only, so they can be sent twice
+### [x] CC-3 Release reminders are single-flighted on v2 only, so they can be sent twice
 - **Where:** `index.js:3357` (08:00 cron), `index.js:3433` (`POST /api/admin/check-releases`),
   `run_notifications.js`, all calling `jobs.checkReleases` directly. The dedupe is
   `wasSent → await notify → markSent`.
 - **Failure:** two overlapping runs both see "not sent", and both deliver to all four channels.
 - **Fix:** take a Postgres advisory lock (`pg_try_advisory_lock`) inside `checkReleases`
   itself, so that every entry point is serialised, across processes too.
+- **Done** (`7d61751`), with CC-4, by a per-reminder claim rather than a sweep-wide lock:
+  exactly one sweep in any process wins each (user, game, threshold).
+  `test/integration/reminders.test.js` runs three sweeps at once and gets one send; the old code
+  sent three.
+- **Accepted trade-off:** it fails "at most once". A crash between claim and send, or a
+  holder that fails to deliver while another sweep skipped, drops that one threshold for that
+  day.
 
-### [ ] CC-4 Sent-notification log is clobbered across processes and written non-atomically
+### [x] CC-4 Sent-notification log is clobbered across processes and written non-atomically
 - **Where:** `index.js:3327-3335`, plus `run_notifications.js`'s own in-memory copy.
 - **Failure:** a manual run followed by the 08:00 cron on the same day sends duplicates and
   erases the script's records.
 - **Fix:** move the dedupe log into a Postgres table (`migrations/006_…`) with a unique key and
   `INSERT … ON CONFLICT DO NOTHING RETURNING` as the claim. That also fixes CC-3's window.
   Failing that, re-read before writing and write via a temp file and rename.
+- **Done** (`7d61751`):
+  - Migration 006 adds `sent_reminders`, keyed `(user_id, game_id, type)`, with
+    `ON DELETE CASCADE`.
+  - `jobs.REMINDER_LOG` claims before sending and releases in a `finally` when nothing was
+    delivered. `checkReleases` refuses the old `{wasSent, markSent}` shape.
+  - The old file is not imported: only a same-day re-run could re-send once.
+- **Follow-ups:**
+  - Remove the `sent_notifications.json` bind mount (both compose files) and the smoke
+    workflow's seeding of it **in the release after this one**. They are kept only so a
+    rollback to the previous image finds its file.
+  - `sent_reminders` has no retention. Consider pruning rows for past release dates.
 
 ### [ ] CC-5 Local accounts get an email address from the directory
 - **Where:** `services/notifications.js:312-340` (`resolveEmail`), called at `:459` with
@@ -646,7 +674,12 @@ condition that `JWT_SECRET` is rotated at deploy and SEC-13 is carried out.
 Reviews for P0-5 and SEC-6: **Architect approved. CISO rejected** (the `:latest` check missed
 `docker tag x:sha x:latest`), **then approved** after `cf46533`. Workflow-only change, so no UI/UX
 review was needed. Exercised with a stubbed `docker`, but **not yet run on the real runner**.
-The first push to `main` after merging is the real test. No frontend changes, so no UI/UX
+The first push to `main` after merging is the real test.
+
+Reviews for CC-1 to CC-4: **CISO approved. Architect approved.** Both sets of non-blocking notes
+were acted on: a stale comment, a real concurrent-delete test, the read-back inside the
+transaction, the `LOCKS` comment, and a warning in the test header. Verified against a local
+Postgres 16: status-events 15/15, stats 18/18, upsert-release-date 10/10, reminders 5/5. No frontend changes, so no UI/UX
 review was needed. **Not yet validated on GameTracker-stg.**
 
 | ID | PR | Date | Summary |
@@ -656,4 +689,6 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | P0-3 | `3c81bb6`, `6248d0f` | 2026-09-25 | Backend settings reach the container through both compose files and the deploy job |
 | P0-4 | `3c81bb6`, `4160735` | 2026-09-25 | `jobs.js#steamRegion` is the one reader of `STEAM_REGION` |
 | P0-5 | `8fd5a87`, `cf46533`, review fix | 2026-09-25 | Builds are `sha-<commit>`/`pr-<n>`, and only deploy promotes to `:latest` |
+| CC-1, CC-2 | `c42f066` + review fix | 2026-09-25 | Status decided from the locked current row; events can no longer be invented or mis-attributed |
+| CC-3, CC-4 | `7d61751` | 2026-09-25 | Reminder dedupe is a primary-key claim in Postgres (migration 006) |
 | SEC-6 | `8fd5a87`, `cf46533` | 2026-09-25 | No `down` before `up`, and deploy rolls back to `:previous` on failure or cancel |

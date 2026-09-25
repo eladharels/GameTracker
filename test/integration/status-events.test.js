@@ -182,11 +182,26 @@ const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10
   });
 
   await check('setStatus on a game removed meanwhile is NOT_FOUND and writes no event', async () => {
+    // A REAL interleaving: another transaction holds the row and deletes it while
+    // setStatus is already running. The old code had read the row first, so it went on
+    // to an UPDATE matching nothing and STILL inserted an event for a game that no
+    // longer existed, returning game: undefined.
     await lib.upsertGame(rid, { gameId: 'igdb_r2', gameName: 'R2', releaseDate: iso(-10), status: 'wishlist' });
     const before = (await events(rid)).length;
-    await lib.removeGame(rid, 'igdb_r2');
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const other = db.withTransaction(async (tx) => {
+      await tx.query("SELECT 1 FROM user_games WHERE user_id = ? AND game_id = 'igdb_r2' FOR UPDATE", [rid]);
+      await tx.query("DELETE FROM user_games WHERE user_id = ? AND game_id = 'igdb_r2'", [rid]);
+      await gate;
+    });
+    await sleep(100);
     let code = null;
-    await lib.setStatus(rid, 'igdb_r2', 'done').catch((e) => { code = e.code; });
+    const pending = lib.setStatus(rid, 'igdb_r2', 'done').catch((e) => { code = e.code; });
+    await sleep(200);
+    release();
+    await other;
+    await pending;
     assert.strictEqual(code, 'not_found');
     assert.strictEqual((await events(rid)).length, before, 'an event was written for a game that no longer exists');
   });

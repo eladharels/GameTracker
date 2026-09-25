@@ -270,9 +270,11 @@ function all(sql, params, cb) {
 // BEFORE the lock, so a convoy holds pool slots while it waits.
 const LOCKS = Object.freeze({
   // Serialises everything that reads-then-writes user_games.backlog_order for one
-  // user: the upsert's position allocation, the up/down swap, and the wholesale
-  // reorder. All three must take it, or the ones that do not deadlock against each
-  // other — measured at 55 deadlocks in 60 rounds of four concurrent writers.
+  // user: the upsert's position allocation, the up/down swap, the wholesale reorder,
+  // and setStatus (on EVERY path, since CC-2 -- it locks its row FOR UPDATE, and must
+  // take this first, as the others do, or it deadlocks against them). All four must
+  // take it -- the ones that do not deadlock against each other, measured at 55
+  // deadlocks in 60 rounds of four concurrent writers. Take it BEFORE any row lock.
   BACKLOG_ORDER: 4242,
 });
 
