@@ -726,7 +726,11 @@ async function scrapeCrackRelease(gameName) {
     if (raw === 'CRACKED') status = 'cracked';
     else if (raw === 'UNCRACKED') status = 'uncracked';
     else if (raw === 'UNRELEASED') status = 'unreleased';
-    return { fetched: true, result: { status, url, slug, gameName } };
+    // `fetched` means CrackRelease ANSWERED, not merely that a page loaded: a 200 with
+    // no status word on it (a parked domain, a layout change, a challenge page) says
+    // nothing about the game, and treating it as an answer wrote `unknown` over a known
+    // status -- the same erasure CC-11 exists to stop (from the Architect review).
+    return { fetched: raw !== null, result: { status, url, slug, gameName } };
   } catch (err) {
     console.warn('[CrackRelease] Error fetching status for', safeForLog(gameName, 80), '-', err.message);
     // `error` stays in the body (v1 shape) but is OUR sentence, not the upstream's:

@@ -842,6 +842,10 @@ check('bounds agree with the constants the services enforce', () => {
   assert.strictEqual(spec.components.schemas.JobResult.properties.failures.maxItems,
     require('../services/job-runner').MAX_FAILURES);
   assert.strictEqual(spec.components.schemas.GameRef.pattern, catalog.GAME_REF_PATTERN);
+  // The username rule the API now enforces for every creation path (CC-14).
+  const userRules = require('../user-rules');
+  assert.strictEqual(spec.components.schemas.Username.maxLength, userRules.MAX_USERNAME_LENGTH);
+  assert.strictEqual(spec.components.schemas.Username.pattern, userRules.USERNAME_PATTERN);
 });
 
 check('the job enums match the runner and the service, in BOTH directions', () => {

@@ -23,6 +23,9 @@ const RESERVED_USERNAMES = ['me', 'root', 'admin'];
 // this set is either unreachable or invisible. Applies to accounts CREATED here; a
 // directory login provisions its own rows and is not narrowed by it.
 const MAX_USERNAME_LENGTH = 64;
+// The same string openapi/gametracker-v2.yaml declares as Username.pattern;
+// test/openapi.test.js asserts they are equal, so the spec and the rule cannot drift.
+const USERNAME_PATTERN = '^[a-z0-9._-]+$';
 function validateUsername(normalizedUsername) {
   if (!normalizedUsername) return 'Username is required.';
   if (RESERVED_USERNAMES.includes(normalizedUsername)) {
@@ -31,7 +34,7 @@ function validateUsername(normalizedUsername) {
   if (normalizedUsername.length > MAX_USERNAME_LENGTH) {
     return `Username must be at most ${MAX_USERNAME_LENGTH} characters.`;
   }
-  if (!/^[a-z0-9._-]+$/.test(normalizedUsername)) {
+  if (!new RegExp(USERNAME_PATTERN).test(normalizedUsername)) {
     return 'Username may contain only lowercase letters, digits, dot, underscore and hyphen.';
   }
   return null;
@@ -122,6 +125,6 @@ function sanitizeText(value, maxLength = 200) {
 
 module.exports = {
   sanitizeText,
-  RESERVED_USERNAMES, validateUsername, DIRECTORY_REFUSED_USERNAMES, directoryClaimRefusal, isValidEmailAddress,
+  RESERVED_USERNAMES, validateUsername, MAX_USERNAME_LENGTH, USERNAME_PATTERN, DIRECTORY_REFUSED_USERNAMES, directoryClaimRefusal, isValidEmailAddress,
   MIN_PASSWORD_LENGTH, validatePassword,
 };

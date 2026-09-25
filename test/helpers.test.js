@@ -1562,6 +1562,18 @@ console.log('db callback shim — a throwing callback is reported, never silent 
     assert.strictEqual(rejections.length, 0, 'the throw still escaped as an unhandled rejection');
     assert.ok(logged.some((l) => l.includes('query CALLBACK threw') && l.includes('SELECT id FROM users')), logged.join('\n'));
   });
+  checkAsync('the guard keeps `this` for db.run callbacks (this.changes / this.lastID)', async () => {
+    const realQuery = dbMod.pool.query;
+    dbMod.pool.query = async () => ({ rows: [{ id: 9 }], rowCount: 3 });
+    try {
+      const seen = await new Promise((resolve) => {
+        dbMod.run('UPDATE users SET x = ? WHERE id = ? RETURNING id', [1, 2], function (err) {
+          resolve({ err, changes: this.changes, lastID: this.lastID });
+        });
+      });
+      assert.deepStrictEqual(seen, { err: null, changes: 3, lastID: 9 });
+    } finally { dbMod.pool.query = realQuery; }
+  });
   checkAsync('an ASYNC callback that rejects is reported the same way', async () => {
     const { logged, rejections } = await withFakePool(async () => {
       dbMod.run('UPDATE users SET x = ? WHERE id = ?', [1, 2], async () => { throw new Error('later'); });

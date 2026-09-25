@@ -640,6 +640,10 @@ checkAsync('a CrackRelease outage leaves the stored status alone and leaks no up
   assert.strictEqual(res.body.status, 'unknown');
   assert.ok(!JSON.stringify(res.body).includes('10.0.0.7'), 'the upstream error reached the caller');
 });
+checkAsync('a page that loads but carries no status word is not an answer', async () => {
+  const parked = await crackRelease(async () => ({ data: '<html>This domain is for sale</html>' }));
+  assert.strictEqual(parked.writes.length, 0, 'a parked page overwrote the stored crack status');
+});
 checkAsync('a page that WAS read is stored -- and only as a documented value', async () => {
   const cracked = await crackRelease(async () => ({ data: '<span> CRACKED </span>' }));
   assert.deepStrictEqual(cracked.writes.map((p) => p[0]), ['cracked']);
