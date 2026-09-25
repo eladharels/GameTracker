@@ -39,6 +39,8 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Backend port**: 3000
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
 - **Persistent volumes**: `gametracker-pgdata` (named volume, Postgres data), settings.json, sent_notifications.json
+  (**obsolete** since migration 006 moved the reminder log into Postgres; still mounted for one release so a
+  rollback to the previous image finds it — remove the mount in the release after)
 
 > **The backend image has NO build toolchain, and must not regain one.** It used to install
 > `python3 make g++ sqlite3` because the `sqlite3` npm package has no prebuilt NAPI binary for
@@ -228,7 +230,12 @@ GameTracker/
 │   │                               #   parameters bound to the INSERT, so only a database
 │   │                               #   says which row came out. Verified by deleting the
 │   │                               #   clause — that test fails, the unit suite stays GREEN.
-│   │                               #   All three call services directly, so the adapters
+│   │                               #   status-events.test.js also interleaves a concurrent
+│   │                               #   writer with setStatus and the metadata refresh
+│   │                               #   (CC-1, CC-2). reminders.test.js runs THREE sweeps at
+│   │                               #   once and asserts one send — the old file log sent
+│   │                               #   three (CC-3, CC-4).
+│   │                               #   All four call services directly, so the adapters
 │   │                               #   between the socket and the service are covered by
 │   │                               #   curl steps in the same job instead
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
@@ -238,7 +245,8 @@ GameTracker/
 │                                   #   green. Two of the three clients (Android, the planned
 │                                   #   MCP) are not in this repo and cannot be grepped
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
-├── migrations/                     # Numbered .sql schema migrations. 005 adds
+├── migrations/                     # Numbered .sql schema migrations. 006 adds
+│                                   #   sent_reminders (the reminder dedupe log). 005 adds
 │                                   #   user_game_status_events. 004 adds user_games.added_at.
 │                                   #   003 adds api_tokens. 002 adds the
 │                                   #   user_games.status CHECK — its `IS NULL` disjunct
@@ -248,7 +256,8 @@ GameTracker/
 │   └── migrate-sqlite-to-postgres.js   # One-shot data migration (manual, idempotent).
 │                                   #   Requires the `sqlite3` devDependency, so it does NOT
 │                                   #   run inside the production image — use a dev checkout
-├── sent_notifications.json         # Notification deduplication log (gitignored)
+├── sent_notifications.json         # OBSOLETE reminder log (gitignored) — the sent_reminders
+│                                   #   table replaced it; see migrations/006
 ├── crackwatch-cache.json           # Cached DRM status (gitignored)
 ├── system-status-cache.json        # Last-OK timestamps per service (gitignored)
 ├── .dockerignore                   # Keeps secrets/state out of the image build context
@@ -549,6 +558,20 @@ GameTracker/
 > **Written in ONE place** — `library.js#recordStatusEvent`, called by all five status write
 > paths, which drops no-op re-saves (`from === to`). Callers already inside a transaction
 > pass their `tx` so the event and the write it describes commit together.
+
+### `sent_reminders`
+| Column | Type | Notes |
+|---|---|---|
+| user_id | FK → users.id | `ON DELETE CASCADE` |
+| game_id | **TEXT** | Same rule as `user_games.game_id`; no FK, so a reminder stays sent if the game is re-added |
+| type | TEXT | The threshold: `30days`, `7days`, `0days` |
+| sent_at | TIMESTAMPTZ | |
+
+> **The primary key `(user_id, game_id, type)` IS the dedupe.** `services/jobs.js#REMINDER_LOG`
+> claims a reminder with `INSERT … ON CONFLICT DO NOTHING RETURNING` BEFORE sending and releases
+> the claim when no channel delivered, so exactly one sweep in any process wins. It replaced
+> `sent_notifications.json`: one in-memory copy per process, checked then marked, so the cron,
+> the admin route and `run_notifications.js` overlapping each sent the reminder (ROADMAP CC-3/4).
 
 ### `user_shares`
 | Column | Type | Notes |
@@ -961,7 +984,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
-| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the three `test/integration/` suites failing against the real Postgres |
+| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the four `test/integration/` suites failing against the real Postgres |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
 
 ### Container Hardening

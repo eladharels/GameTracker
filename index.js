@@ -567,8 +567,9 @@ const isUnsafeKey = (k) => UNSAFE_KEYS.includes(String(k));
 // NARROW, and deliberately so. An earlier version of this also rethrew SyntaxError
 // and TypeError, which was WORSE than the bug it was written for: both cache loaders
 // below JSON.parse a mutable file at MODULE SCOPE, and JSON.parse throws SyntaxError
-// on a truncated file — which markNotificationSent can produce, since it rewrites
-// sent_notifications.json with a bare writeFileSync on every reminder. A container
+// on a truncated file — which the reminder log could produce while it lived in
+// sent_notifications.json, rewritten with a bare writeFileSync on every reminder
+// (it is a table now, migration 006; the CrackWatch cache is still a file). A container
 // kill mid-write would then have made the backend AND every operator script
 // unbootable, including the ones you would use to diagnose it. Reconstructible caches
 // must keep degrading.
@@ -3316,64 +3317,17 @@ app.get('/api/shared-libraries', authRequired, (req, res) => {
 });
 
 // --- Scheduled Notifications for Unreleased Games ---
-const SENT_NOTIFICATIONS_FILE = path.join(__dirname, 'sent_notifications.json');
-// Null-prototype maps throughout.
+// The reminder dedupe log is the `sent_reminders` table now (migration 006), claimed
+// atomically by services/jobs.js#REMINDER_LOG. It was sent_notifications.json, with
+// one in-memory copy per process rewritten whole on every reminder: the cron, the admin
+// route and run_notifications.js could each send the same reminder, and the second
+// write erased the first's records (ROADMAP CC-3, CC-4).
 //
-// game_id is attacker-controlled (POST /api/user/:username/games) and SQLite's
-// flexible typing happily stores the string "__proto__" in an INTEGER column. With
-// a normal object literal, `sentNotifications[user]["__proto__"]` returns
-// Object.prototype — truthy, so the "create if missing" guard is skipped — and the
-// following write lands on the PROTOTYPE. After that `wasNotificationSent()` returns
-// truthy for every user/game/type combination and release notifications silently
-// stop firing for everyone. Object.create(null) removes the sink entirely.
+// The file's bind mount stays in both compose files for ONE more release, and only so
+// a rollback to the previous image finds the file that image still writes to. Remove
+// it in the release after this one.
+const dedupe = jobsService.REMINDER_LOG;
 
-let sentNotifications = Object.create(null);
-if (fs.existsSync(SENT_NOTIFICATIONS_FILE)) {
-  try {
-    // JSON.parse itself does not pollute, but assigning its result would reintroduce
-    // a normal prototype — copy the entries onto null-prototype objects instead.
-    const raw = JSON.parse(fs.readFileSync(SENT_NOTIFICATIONS_FILE, 'utf8'));
-    for (const [user, games] of Object.entries(raw || {})) {
-      if (isUnsafeKey(user)) continue;
-      const userEntry = Object.create(null);
-      for (const [gameId, types] of Object.entries(games || {})) {
-        if (isUnsafeKey(gameId)) continue;
-        userEntry[gameId] = Object.assign(Object.create(null), types);
-      }
-      sentNotifications[user] = userEntry;
-    }
-  } catch (err) {
-    // No rethrow: same reason as the CrackWatch loader. This file is rewritten on
-    // every reminder, so a truncated one is a live possibility, and it is
-    // reconstructible — losing it re-sends at worst.
-    console.warn('[Notifications] Could not read sent_notifications.json:', err.message);
-    sentNotifications = Object.create(null);
-  }
-}
-function markNotificationSent(username, gameId, type) {
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  if (isUnsafeKey(normalizedUsername) || isUnsafeKey(gameId) || isUnsafeKey(type)) return;
-  if (!sentNotifications[normalizedUsername]) sentNotifications[normalizedUsername] = Object.create(null);
-  if (!sentNotifications[normalizedUsername][gameId]) sentNotifications[normalizedUsername][gameId] = Object.create(null);
-  sentNotifications[normalizedUsername][gameId][type] = new Date().toISOString();
-  fs.writeFileSync(SENT_NOTIFICATIONS_FILE, JSON.stringify(sentNotifications, null, 2));
-}
-// The reminder dedup log, as the pair services/jobs.js takes. Injected rather than
-// required, because this is file-backed state owned by the server process — a service
-// that wrote sent_notifications.json would make every test and every operator script
-// touch it.
-const dedupe = {
-  wasSent: (username, gameId, type) => !!wasNotificationSent(username, gameId, type),
-  markSent: (username, gameId, type) => markNotificationSent(username, gameId, type),
-};
-
-function wasNotificationSent(username, gameId, type) {
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  if (isUnsafeKey(normalizedUsername) || isUnsafeKey(gameId) || isUnsafeKey(type)) return false;
-  return sentNotifications[normalizedUsername] && sentNotifications[normalizedUsername][gameId] && sentNotifications[normalizedUsername][gameId][type];
-}
 // getAllUsers/getUserGames are gone: they existed only so the four copies of the
 // release sweep could enumerate. services/jobs.js does its own enumeration, with one
 // query instead of three round trips per user.

@@ -763,10 +763,14 @@ jobs:
       # clause is present, so only a database can say which row came out. Verified by
       # deleting the clause: the integration test fails and the whole unit suite stays
       # green.
+      #
+      # reminders runs three release sweeps at ONCE and asserts one send: the reminder
+      # log is a primary-key claim in Postgres now (migration 006). The JSON file it
+      # replaced sent three.
       - name: Verify status history, statistics and the upsert's date rule (real Postgres)
         run: |
           set -euo pipefail
-          for t in status-events stats upsert-release-date; do
+          for t in status-events stats upsert-release-date reminders; do
             docker compose -p gametracker-smoke -f docker-compose.test.yml \
               exec -T backend node "test/integration/${t}.test.js" || {
               echo "[smoke] ERROR: ${t} integration test failed"
