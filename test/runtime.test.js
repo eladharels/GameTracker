@@ -133,6 +133,46 @@ check('smoke stacks are per-run and a PR cannot evict a main run (UP-6)', () => 
   }
 });
 
+// ROADMAP UP-18. Since P0-6 the SPA's interceptor ENDS THE SESSION on any 401. So a 401
+// must mean exactly "no valid credential": an endpoint answering 401 for anything else —
+// a wrong sudo password, a stale CSRF token, an upstream's 401 passed through — would
+// sign people out for a typo. Sudo mode answers 403 (pinned in api-contract.test.js);
+// this pins the general rule, by WHERE 401s can come from.
+check('a 401 comes only from authentication (the SPA logs out on every 401, UP-18)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8').split('\n');
+  const ALLOWED = ['function authRequired(', 'function patRequired(', 'function selfOnly(',
+    'function ownershipRequired(', "app.post('/api/auth/login'"];
+  const opener = /^(?:async )?function \w+\(|^const \w+ = |^app\.(?:get|post|put|patch|delete|use)\(|^v2Router\.(?:get|post|put|patch|delete|use)\(/;
+  let enclosing = '(top level)'; const found = [];
+  src.forEach((line, i) => {
+    if (opener.test(line)) enclosing = line;
+    if (/status\(401\)|UNAUTHENTICATED/.test(line) && !/^\s*\/\//.test(line)) {
+      found.push(enclosing);
+      assert.ok(ALLOWED.some((a) => enclosing.startsWith(a)),
+        `index.js:${i + 1} answers 401 inside ${enclosing.trim().slice(0, 80)} — a 401 logs the SPA user out; use 403 unless the CREDENTIAL is missing or invalid`);
+    }
+  });
+  assert.ok(found.length >= 5, 'found no 401 producers — the scan itself is broken');
+  // Services never decide "unauthenticated": that is the adapters' job, and a service
+  // throwing it would reach both surfaces as a 401 through problem.js.
+  for (const f of fs.readdirSync(path.join(ROOT, 'services'))) {
+    if (['errors.js', 'problem.js', 'v2.js'].includes(f)) continue;
+    const text = fs.readFileSync(path.join(ROOT, 'services', f), 'utf8');
+    assert.ok(!/CODES\.UNAUTHENTICATED/.test(text), `services/${f} throws UNAUTHENTICATED`);
+  }
+});
+
+// UP-17. The pairing only a deploy can check: the backend never sees its own bind.
+check('deploy warns on a TRUST_PROXY / BACKEND_BIND mismatch (UP-17)', () => {
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  const steps = wf.jobs.deploy.steps;
+  const i = steps.findIndex((st) => /reverse-proxy pairing/i.test(st.name || ''));
+  const up = steps.findIndex((st) => /start production stack/i.test(st.name || ''));
+  assert.ok(i >= 0 && i < up, 'the pairing check is gone, or runs after the stack starts');
+  assert.ok(/TRUST_PROXY/.test(steps[i].run) && /BACKEND_BIND/.test(steps[i].run));
+});
+
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
 // every suite passed on an interpreter production never used. Keeping them equal is not
 // cosmetic — it is what makes a green `npm test` mean anything about the deployed thing.

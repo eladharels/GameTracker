@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 24 | 16 |
-| **Total** | **84** | **64** |
+| UP — Tidying & upkeep | 24 | 18 |
+| **Total** | **84** | **66** |
 
 ---
 
@@ -1224,6 +1224,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     oldest-first eviction, the TTL, and the dedupe (seven rows, one request). The old code
     fails them.
   - **Not done:** telling an upstream 429 apart from an outage (see UP-14).
+  - **Review nits:**
+    - A stored non-id is now logged once per value.
+    - The cache comment says plainly that it evicts by fetch time and is not an LRU.
+    - Accepted: a "no Steam" answer is cached for 7 days, so a game newly listed on Steam
+      can go unpriced for up to a week.
 
 ### [x] UP-12 Telegram legacy Markdown on unescaped game names
 - **Where:** `services/notifications.js:256,272,278`.
@@ -1304,17 +1309,36 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Also closes, fully or partly:** CC-8, CC-9, CC-11, CC-12, CC-13, UP-10.
 - **Note:** leave the order to the Architect review.
 
-### [ ] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
+### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with
   `BACKEND_BIND=127.0.0.1`. Set on its own, a client connecting directly can spoof
   `X-Forwarded-For` past the login rate limiter.
 - **Fix:** log a warning at boot or during deploy for that combination.
+- **Done, at deploy:** the backend cannot check this at boot, because the bind is a
+  host-side port mapping it never sees.
+  - A deploy step before `up` emits a GitHub `::warning` for `TRUST_PROXY>=2` with a
+    non-loopback bind: spoofable `X-Forwarded-For`.
+  - It also warns on the mirror case, `BACKEND_BIND=127.0.0.1` with `TRUST_PROXY=1`. There
+    every request arrives from nginx, so one user's failed logins would lock out everyone.
+  - It warns rather than fails: a proxy on another machine legitimately needs `0.0.0.0`.
+  - Exercised on seven input pairs; pinned in `test/runtime.test.js`, which also requires it
+    to run before the stack starts.
 
-### [ ] UP-18 Guard "a 401 always means the session is over"
+### [x] UP-18 Guard "a 401 always means the session is over"
 - **Why:** since P0-6 the SPA's interceptor logs the user out on any 401. An endpoint that
   answered 401 for another reason, such as a wrong sudo password, would sign people out.
   Sudo mode answers 403 today, and nothing pins that.
 - **Fix:** an `api-contract` or smoke-test assertion that a wrong sudo password answers 403.
+- **Done:** the sudo 403 was already pinned (`api-contract.test.js`, "a wrong password mints
+  NOTHING and answers 403"). What was missing was the general rule, so `runtime.test.js` now
+  pins WHERE a 401 may come from:
+  - in `index.js`, only inside `authRequired`, `patRequired`, `selfOnly`,
+    `ownershipRequired` and the login route;
+  - no service may throw `UNAUTHENTICATED`, since `problem.js` would turn that into a 401
+    on both surfaces.
+
+  Mutation-checked: turning the sudo refusal into a 401 fails with the line and the route
+  named.
 
 ### [ ] UP-19 Library duplicate detection belongs in the service (Architect, FE-3 review)
 - **Why:** cross-provider "same game" detection on add lives only in the SPA
@@ -1514,3 +1538,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-10, 12, 13, 15 | this batch | 2026-09-26 | v1 Steam price route adapted over the shared lookup (shape kept, no error.message); Telegram HTML mode; share list as one array param + the spec's 200 cap enforced; leftovers, backend lint at 0 |
 | UP-14 | this batch | 2026-09-26 | Unproduced `rate_limited` removed from job REASONS and the spec's FailureReason together |
 | UP-11 | this batch | 2026-09-26 | RAWG detail skipped when the list rules Steam out, answers cached (bounded, TTL); Steam price sweep deduped per app id |
+| UP-17, UP-18 | this batch | 2026-09-26 | Deploy warns on either TRUST_PROXY/BACKEND_BIND mismatch; a 401 may only come from authentication (the SPA logs out on every 401) |

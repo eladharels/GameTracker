@@ -183,7 +183,8 @@ function rawgRow(game, steamAppId) {
 }
 
 // What RAWG's DETAIL endpoint told us, per RAWG game id: the Steam App ID, or null
-// for "no Steam store". Bounded (oldest evicted first, by insertion order) and expiring,
+// for "no Steam store". Bounded — evicted in order of when an entry was FETCHED, not when
+// it was last read (a hit does not refresh it; this is not an LRU) — and expiring,
 // because it lives for the life of the process. Only ANSWERS are cached — a failed
 // lookup is retried next time, never remembered as "not on Steam".
 const RAWG_DETAIL_TTL_MS = 7 * 24 * 60 * 60 * 1000;

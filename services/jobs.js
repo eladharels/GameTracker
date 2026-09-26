@@ -314,7 +314,11 @@ async function updatePrices({ region = steamRegion() } = {}) {
           if (!r.ok) console.error(`[Jobs] Price lookup failed for app ${safe(id, 20)}:`, r.error);
           return r;
         })
-        : Promise.resolve({ ok: false, error: 'not a Steam app id' }));
+        : Promise.resolve((() => {
+          // Logged once per value, or the error count rises with no explanation.
+          console.error(`[Jobs] Skipping stored steam_app_id ${JSON.stringify(safe(id, 40))}: not a Steam app id`);
+          return { ok: false, error: 'not a Steam app id' };
+        })()));
     }
     return byAppId.get(id);
   };

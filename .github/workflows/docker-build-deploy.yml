@@ -1171,6 +1171,27 @@ jobs:
           done
           echo "[deploy] Rollback target recorded: has_previous=${HAS_PREVIOUS}"
 
+      # TRUST_PROXY and BACKEND_BIND are only safe as a PAIR (ROADMAP UP-17), and the
+      # backend cannot check it: the bind is a host-side port mapping it never sees.
+      #   TRUST_PROXY>=2 with the backend still on 0.0.0.0: a client connecting straight
+      #     to :3000 supplies its own X-Forwarded-For and walks past the login limiter.
+      #   BACKEND_BIND=127.0.0.1 with TRUST_PROXY=1: every request arrives from nginx, so
+      #     req.ip is nginx for everyone and one person's failures lock out all users.
+      # A WARNING, not a failure: a proxy on another machine legitimately needs 0.0.0.0,
+      # and refusing to deploy over a config choice would take the site down to make a point.
+      - name: Check the reverse-proxy pairing (TRUST_PROXY / BACKEND_BIND)
+        run: |
+          tp="${TRUST_PROXY:-1}"; bind="${BACKEND_BIND:-0.0.0.0}"
+          case "$tp" in ''|*[!0-9]*) echo "::warning title=TRUST_PROXY::TRUST_PROXY='${tp}' is not a hop count; the backend's parsing decides what it means"; exit 0 ;; esac
+          loopback=false; case "$bind" in 127.*|localhost|::1|'[::1]') loopback=true ;; esac
+          if [ "$tp" -ge 2 ] && [ "$loopback" = false ]; then
+            echo "::warning title=Reverse proxy pairing::TRUST_PROXY=${tp} but the backend is published on ${bind}. A client reaching port 3000 directly can spoof X-Forwarded-For past the login rate limiter. Set BACKEND_BIND=127.0.0.1 (README: Reverse proxy topology)."
+          elif [ "$tp" -le 1 ] && [ "$loopback" = true ]; then
+            echo "::warning title=Reverse proxy pairing::BACKEND_BIND=${bind} with TRUST_PROXY=${tp}: every request arrives through nginx, so the login limiter sees one client and a single user's failures lock out everyone. Set TRUST_PROXY=2."
+          else
+            echo "[deploy] Reverse-proxy pairing OK: TRUST_PROXY=${tp}, BACKEND_BIND=${bind}"
+          fi
+
       - name: Start production stack
         # MCP_BIND / MCP_ALLOWED_HOSTS are repository VARIABLES by preference — a LAN
         # address is not a credential, and a secret is masked in the logs where the
