@@ -2027,7 +2027,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ### [ ] UP-16 Shrink `index.js` (3,517 lines)
 - **Move into services, one per PR, each an adapter-only change:**
-  - login (`:1684-1939`, ~250 lines);
+  - ~~login~~ (step 3, done);
   - ~~LDAP sync~~ (step 2, done);
   - ~~the CrackWatch cache and scraper~~ (step 1, done);
   - the sent-notification store;
@@ -2083,6 +2083,29 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
          now names what the SPA really reads.
        - Accepted, not changed: `crackwatch.reset()` and `refresh({ rateMs })` are test-only
          seams, so mutating them costs only a slower or leakier test.
+  3. **The login decision → `services/login.js` (2026-09-26).**
+     - `authenticate()` returns one outcome (`ok`, `invalid`, `not_in_group`,
+       `directory_unavailable`, `error`), and the route maps it to 200/401/403/503/500
+       with v1's exact texts. The route keeps the request checks (the cookie opt-in, CSRF,
+       the lockout), the limiter keys, and the session.
+     - The rules moved one for one: ambiguous refuses; unreachable, not-found, a wrong
+       directory password and an unrecognised reason fall back to the local password; a
+       defect after the directory verified is a 500, before it a fallback; the claim check
+       before the group check and again at provisioning and at the guarded profile write;
+       the counter cleared only after authentication AND authorization; UP-21's outage
+       counted against the IP only.
+     - The `authCompleted` latch is gone: it guarded callbacks that could each fire the
+       fallback in any order, and the flow is now one `await` chain with one outcome.
+     - `getOrCreateUser` moved with it (its only caller). `isLdapConfigured` is now one
+       helper in `ldap-helpers.js`, shared with the sync.
+     - The database is reached through the `db` module in the same two forms the route used,
+       so the existing contract tests run against the service **unchanged**, and pass.
+     - They were not enough: of 18 mutations of the rules, 11 survived them. Several of those
+       rules were once bypasses and had only ever been proven by a review. 13 new unit tests
+       drive `authenticate()` with the directory, database and limiter stood in for; all 16
+       rule mutations tried are now caught. A new contract test maps each outcome through the
+       real route (two adapter mutations had survived). Checked against a real Postgres too.
+     - 3,180 → 2,888 lines.
 
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with

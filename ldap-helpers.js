@@ -394,7 +394,16 @@ function firstRdn(dn) {
   return { type: rdn.slice(0, eq).trim(), value: rdn.slice(eq + 1).trim() };
 }
 
+// Whether a service-account read is possible at all: the four settings it needs, each a
+// non-blank string. Shared by the login and the admin sync, which used to spell it
+// separately (and threw on a non-string value instead of answering "not configured").
+function isLdapConfigured(ldap) {
+  return ['url', 'base', 'bindDn', 'bindPass']
+    .every((k) => typeof ldap?.[k] === 'string' && ldap[k].trim() !== '');
+}
+
 module.exports = {
+  isLdapConfigured,
   verifyLdapCredentials,
   satisfiesRequiredGroup,
   escapeLdapFilterValue,

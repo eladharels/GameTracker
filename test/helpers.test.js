@@ -3285,6 +3285,133 @@ console.log('services/ldap-sync.js (UP-16: the admin LDAP sync out of index.js):
     } finally { ldapHelpers.createLdapClient = realCreate; ldapHelpers.warnIfCleartextLdap = realWarn; }
   });
 }
+
+console.log('services/login.js (UP-16: the login decision out of index.js; every rule pinned):');
+{
+  const login = require('../services/login');
+  const ldapHelpers = require('../ldap-helpers');
+  const db = require('../db');
+  const bcrypt = require('bcryptjs');
+  const LDAP = { url: 'ldaps://dc.example', base: 'dc=example', bindDn: 'cn=svc', bindPass: 'pw' };
+  const HASH = bcrypt.hashSync('local-pw', 4);
+  const entry = (extra = {}) => ({ dn: 'CN=Jane Doe,OU=People,DC=example', cn: 'Jane Doe', mail: 'jane@example.com', ...extra });
+
+  // One login with the directory, the database and the limiter stood in for.
+  //   verify:  what verifyLdapCredentials resolves (or a function to throw)
+  //   row:     the users row every lookup sees (null = none); claimRow: the claim check's
+  //   syncChanges: rows the profile UPDATE reports
+  async function run({ verify, row = null, claimRow, syncChanges = 1, ldap = LDAP, password = 'dir-pw',
+    getErr, insertErr, claimErr } = {}) {
+    const calls = [];
+    const writes = [];
+    const real = { verify: ldapHelpers.verifyLdapCredentials, get: db.get, run: db.run, pget: db.promises.get, prun: db.promises.run,
+      log: console.log, warn: console.warn, error: console.error };
+    ldapHelpers.verifyLdapCredentials = async () => { if (typeof verify === 'function') return verify(); return verify; };
+    db.get = (sql, params, cb) => (getErr ? cb(getErr) : cb(null, row || undefined));
+    db.run = (sql, params, cb) => { writes.push(['insert', params]); if (insertErr) cb.call({}, insertErr); else cb.call({ lastID: 77 }, null); };
+    db.promises.get = async () => { if (claimErr) throw claimErr; return (claimRow === undefined ? row : claimRow) || undefined; };
+    db.promises.run = async (sql, params) => { writes.push(['update', sql, params]); return { changes: syncChanges }; };
+    console.log = () => {}; console.warn = () => {}; console.error = () => {};
+    const limits = { fail: () => calls.push('fail'), failIpOnly: () => calls.push('failIpOnly'), clear: () => calls.push('clear') };
+    try {
+      const outcome = await login.authenticate({ username: 'jane', password, ldapSettings: ldap }, { limits });
+      return { outcome, calls, writes };
+    } finally {
+      ldapHelpers.verifyLdapCredentials = real.verify; db.get = real.get; db.run = real.run;
+      db.promises.get = real.pget; db.promises.run = real.prun;
+      console.log = real.log; console.warn = real.warn; console.error = real.error;
+    }
+  }
+  const O = login.OUTCOMES;
+  const LOCAL = { id: 3, username: 'jane', password: HASH, origin: 'local', can_manage_users: 0 };
+  const DIRROW = { id: 4, username: 'jane', password: null, origin: 'ldap', can_manage_users: 0 };
+
+  checkAsync('an AMBIGUOUS directory match refuses and never falls back, even to a matching local password', async () => {
+    const r = await run({ verify: { ok: false, reason: 'ambiguous', dns: ['a', 'b'] }, row: LOCAL, password: 'local-pw' });
+    assert.strictEqual(r.outcome.status, O.INVALID, 'an ambiguous match fell back to local auth');
+    assert.deepStrictEqual(r.calls, ['fail']);
+  });
+  checkAsync('an UNRECOGNISED verification reason is never a success, even with an entry attached', async () => {
+    const r = await run({ verify: { ok: false, reason: 'password_expired', entry: entry() }, row: DIRROW });
+    assert.strictEqual(r.outcome.status, O.INVALID, 'an unrecognised reason signed a session');
+  });
+  checkAsync('a defect AFTER the directory verified is a 500, never a fallback to the local password', async () => {
+    const r = await run({ verify: { ok: true, entry: entry() }, row: DIRROW, claimErr: new Error('pool gone'), password: 'local-pw' });
+    assert.deepStrictEqual(r.outcome, { status: O.ERROR, message: 'Authentication error' });
+  });
+  checkAsync('a defect BEFORE the directory spoke falls back to local auth', async () => {
+    const r = await run({ verify: () => { throw new Error('bug'); }, row: LOCAL, password: 'local-pw' });
+    assert.strictEqual(r.outcome.status, O.OK);
+    assert.strictEqual(r.outcome.user.id, 3);
+  });
+  checkAsync('the directory never claims a row holding a local hash: the LOCAL password decides', async () => {
+    const r = await run({ verify: { ok: true, entry: entry() }, row: LOCAL, password: 'the-directory-pw' });
+    assert.strictEqual(r.outcome.status, O.INVALID, 'the directory claimed a local account');
+    assert.ok(!r.writes.length, 'the local row was written');
+    assert.ok(!r.calls.includes('clear'), 'the claim cleared the local account\'s lockout counter');
+  });
+  checkAsync('outside the required group: 403, nothing written, and the counter NOT cleared', async () => {
+    const r = await run({ verify: { ok: true, entry: entry({ memberOf: ['cn=others,dc=example'] }) }, row: DIRROW,
+      ldap: { ...LDAP, requiredGroup: 'cn=gamers,dc=example' } });
+    assert.strictEqual(r.outcome.status, O.NOT_IN_GROUP);
+    assert.deepStrictEqual(r.calls, []);
+    assert.deepStrictEqual(r.writes, []);
+  });
+  checkAsync('a directory success: in the group, counter cleared, sanitised cn, validated email, one guarded write', async () => {
+    const r = await run({ verify: { ok: true, entry: entry({ dn: 'CN=Not The Cn,DC=example', cn: 'Jane\r\nDoe', mail: ' jane@example.com ', memberOf: ['CN=Gamers,DC=example'] }) },
+      row: DIRROW, ldap: { ...LDAP, requiredGroup: 'gamers' } });
+    assert.strictEqual(r.outcome.status, O.OK);
+    assert.deepStrictEqual(r.calls, ['clear']);
+    assert.deepStrictEqual(r.outcome.user, { ...DIRROW, origin: 'ldap', display_name: 'Jane Doe' });
+    assert.deepStrictEqual(r.writes, [['update', 'UPDATE users SET display_name = ?, origin = ?, email = ? WHERE username = ? AND password IS NULL',
+      ['Jane Doe', 'ldap', 'jane@example.com', 'jane']]]);
+  });
+  checkAsync('a malformed directory email is not written; a missing cn falls back to the DN, then the username', async () => {
+    const r = await run({ verify: { ok: true, entry: { dn: 'CN=From Dn,DC=example', mail: 'a@x.io, b@y.io' } }, row: DIRROW });
+    assert.deepStrictEqual(r.writes[0][2], ['From Dn', 'ldap', 'jane'], 'a comma-smuggling address reached users.email');
+    const r2 = await run({ verify: { ok: true, entry: { dn: 'uid=jane,dc=example' } }, row: DIRROW });
+    assert.strictEqual(r2.outcome.user.display_name, 'jane');
+  });
+  checkAsync('first directory login provisions an ldap row; a name claimed in between falls back to local', async () => {
+    const r = await run({ verify: { ok: true, entry: entry() }, row: null, claimRow: null });
+    assert.strictEqual(r.outcome.status, O.OK);
+    assert.deepStrictEqual(r.writes[0], ['insert', ['jane', r.writes[0][1][1], 'ldap', 'Jane Doe']]);
+    assert.strictEqual(r.outcome.user.id, 77);
+    // The claim check saw no row, but provisioning finds a LOCAL one: its password decides.
+    const r2 = await run({ verify: { ok: true, entry: entry() }, row: LOCAL, claimRow: null, password: 'wrong' });
+    assert.strictEqual(r2.outcome.status, O.INVALID, 'provisioning claimed a row that became local');
+    assert.ok(!r2.writes.some(([k]) => k === 'insert' || k === 'update'));
+  });
+  checkAsync('a provisioning database failure is 500 "DB error", never a fallback', async () => {
+    const r = await run({ verify: { ok: true, entry: entry() }, row: null, claimRow: null, insertErr: new Error('23505') });
+    assert.deepStrictEqual(r.outcome, { status: O.ERROR, message: 'DB error' });
+  });
+  checkAsync('a wrong DIRECTORY password counts, then the local password still decides', async () => {
+    const r = await run({ verify: { ok: false, reason: 'bad_password' }, row: LOCAL, password: 'local-pw' });
+    assert.strictEqual(r.outcome.status, O.OK);
+    assert.deepStrictEqual(r.calls, ['fail', 'clear']);
+  });
+  checkAsync('local auth: success clears, a wrong password counts, a hashless row is refused before bcrypt', async () => {
+    const noDir = { url: '' };
+    assert.deepStrictEqual((await run({ ldap: noDir, row: LOCAL, password: 'local-pw' })).calls, ['clear']);
+    const bad = await run({ ldap: noDir, row: LOCAL, password: 'nope' });
+    assert.deepStrictEqual([bad.outcome.status, bad.calls], [O.INVALID, ['fail']]);
+    const hashless = await run({ ldap: noDir, row: DIRROW, password: 'x' });
+    assert.deepStrictEqual([hashless.outcome.status, hashless.calls], [O.INVALID, ['fail']]);
+    const dbDown = await run({ ldap: noDir, getErr: new Error('ECONNREFUSED') });
+    assert.deepStrictEqual(dbDown.outcome, { status: O.ERROR, message: 'Database error' });
+  });
+  checkAsync('an unreachable directory that alone could decide is an outage, counted against the IP only (UP-21)', async () => {
+    for (const row of [null, DIRROW]) {
+      const r = await run({ verify: { ok: false, reason: 'unreachable' }, row });
+      assert.deepStrictEqual([r.outcome.status, r.calls], [O.DIRECTORY_UNAVAILABLE, ['failIpOnly']]);
+    }
+    const local = await run({ verify: { ok: false, reason: 'unreachable' }, row: LOCAL, password: 'local-pw' });
+    assert.strictEqual(local.outcome.status, O.OK, 'an outage locked out a local account');
+    const notFound = await run({ verify: { ok: false, reason: 'not_found' }, row: null });
+    assert.deepStrictEqual([notFound.outcome.status, notFound.calls], [O.INVALID, ['fail']]);
+  });
+}
 console.log('services/session.js (SEC-14: the browser session cookie):');
 {
   const sess = require('../services/session');

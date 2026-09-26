@@ -20,22 +20,10 @@ if (!JWT_SECRET || JWT_SECRET === 'supersecretkey' || JWT_SECRET.length < 16) {
 const fs = require('fs');
 const cron = require('node-cron');
 const path = require('path');
-// ldapjs itself is no longer required here -- createLdapClient() is the only way
-// anything should ever construct a client, and it lives in ./ldap-helpers.js. This file
-// no longer builds one at all: the sync moved to services/ldap-sync.js (UP-16).
-const {
-  attrValue,
-  attrValues,
-  compatTreeAdvice,
-} = require('./ldap-helpers');
-// The two credential-decision helpers are reached through the MODULE, not
-// destructured. Which verification outcome yields a session is the safety property of
-// the login route, and a destructured binding is captured at load time and cannot be
-// intercepted — so a test asserting "an unrecognised reason must not authenticate"
-// could not be written against it at all. A review had to mutate the module's exports
-// before index.js loaded to prove the fail-open. That is the trap CLAUDE.md documents,
-// on the one route where it matters most.
-const ldapHelpers = require('./ldap-helpers');
+// No LDAP here any more (UP-16): the login decision is services/login.js and the admin
+// sync services/ldap-sync.js. Both reach ldap-helpers through the MODULE, so a test can
+// stand in for the directory -- a destructured binding is captured at load time, which
+// once made "an unrecognised verification reason must not authenticate" untestable.
 // escapeIgdbSearch is no longer used here: every APIcalypse literal in the server
 // is now built inside services/catalog.js, which is the point of the extraction.
 const { resolveApiKey } = require('./settings-store');
@@ -63,6 +51,7 @@ const sessionService = require('./services/session');
 // The CrackWatch cache and CrackRelease scraper (UP-16's first slice out of this file).
 const crackwatch = require('./services/crackwatch');
 const ldapSync = require('./services/ldap-sync');
+const loginService = require('./services/login');
 let SESSION_COOKIE_MODE;
 try {
   SESSION_COOKIE_MODE = sessionService.cookieMode();
@@ -84,7 +73,7 @@ const problem = require('./services/problem');
 // RESERVED_USERNAMES and validatePassword are no longer imported here: the last route
 // that applied them by hand (POST /api/users) now calls services/users.js#create,
 // which holds both rules for BOTH surfaces.
-const { sanitizeText: sanitizeDirectoryText, isValidEmailAddress, directoryClaimRefusal, safeForLog } = require('./user-rules');
+const { safeForLog } = require('./user-rules');
 
 // Upper bound on PUT /api/user/:username/backlog-reorder.
 const MAX_BACKLOG_REORDER = 1000;
@@ -297,36 +286,8 @@ function withExistingUser(res, username, cb) {
   });
 }
 
-// Helper: get or create user.
-//
-// ONLY for the LDAP login path, where a successful directory authentication must
-// provision a local row for a first-time user. Everything else must use findUser
-// / withExistingUser — see the note above.
-function getOrCreateUser(username, cb, opts = {}) {
-  // Normalize username to lowercase to prevent case sensitivity issues
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername], (err, user) => {
-    if (err) return cb(err);
-    // The login route has already asked this before the group check; asked AGAIN here
-    // because the row it saw may not be the row that exists now — an administrator
-    // creating a local account of the same name in between must not have it claimed.
-    const refusal = directoryClaimRefusal(normalizedUsername, user || null);
-    if (refusal) return cb(Object.assign(new Error('directory may not claim this username'), { directoryClaimRefused: refusal }));
-    // No write for an EXISTING row here. There used to be a fire-and-forget UPDATE of
-    // display_name/origin, which the login route then repeated -- awaited, with the
-    // email -- straight after this callback (ROADMAP CC-12). One write, in one place.
-    if (user) return cb(null, user);
-    // Use CN if provided and non-empty, otherwise fallback to username
-    const displayNameToUse = (typeof opts.display_name === 'string' && opts.display_name.trim() !== '' ? opts.display_name : normalizedUsername);
-    console.log('Creating user:', { username: safeForLog(normalizedUsername, 64), display_name: safeForLog(displayNameToUse, 64), origin: opts.origin });
-    // RETURNING id: Postgres does not hand back an insert id implicitly the way
-    // SQLite's lastID did. Without this clause `this.lastID` is undefined.
-    db.run('INSERT INTO users (username, created_at, origin, display_name) VALUES (?, ?, ?, ?) RETURNING id', [normalizedUsername, new Date().toISOString(), opts.origin || 'local', displayNameToUse], function (err) {
-      if (err) return cb(err);
-      cb(null, { id: this.lastID, username: normalizedUsername, created_at: new Date().toISOString(), origin: opts.origin || 'local', display_name: displayNameToUse });
-    });
-  });
-}
+// getOrCreateUser moved to services/login.js#getOrCreateDirectoryUser: the directory login
+// was its only caller (UP-16).
 
 // Health check endpoint.
 //
@@ -1503,7 +1464,7 @@ const clearFailedAttempts = (clientIP, username) => clearFailures(attemptKeys(cl
 
 
 // --- Auth Endpoints ---
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   const clientIP = req.ip || req.connection.remoteAddress;
   
@@ -1553,282 +1514,39 @@ app.post('/api/auth/login', (req, res) => {
     });
   }
 
-  const settings = loadSettings();
-  const ldapSettings = settings.ldap || {};
-
-  // The LDAP path has several independent failure signals that can each decide to
-  // fall back: the bind callback, the search callback, and the client's 'error'
-  // event — and they do NOT arrive in a fixed order (on a refused connection the
-  // socket error usually beats the bind callback). Without this latch the fallback
-  // ran twice and the second run threw ERR_HTTP_HEADERS_SENT.
-  let authCompleted = false;
-  // Set once the directory has authenticated the caller. See the .catch at the end of
-  // the LDAP path: past this point a bug must be a 500, never a fallback to local auth.
-  let directoryVerified = false;
-  // Set when the directory could not be REACHED (UP-21). Then a login only the directory
-  // could decide -- no local row, or a row with no local hash -- is an outage, not a wrong
-  // password: 503, and it does not count against the ACCOUNT, whose owner cannot fix an
-  // outage by retyping and must not be locked out by one. It still counts against the
-  // IP, so an outage is no window for spraying. A row WITH a local hash is still decided
-  // by bcrypt, outage or not: that answer is definitive and fully rate limited.
-  let directoryUnreachable = false;
-  function directoryOutage() {
-    trackFailures([`ip:${clientIP}`]);
-    console.log(`[Auth] Directory unreachable; '${safeForLog(normalizedUsername, 64)}' cannot be verified locally. Answering 503.`);
-    res.set('Retry-After', '60');
-    return res.status(503).json({
-      error: 'Sign-in is temporarily unavailable: the directory could not be reached. Please try again in a few minutes.'
-    });
+  // Who, if anyone, these credentials sign in as: services/login.js (UP-16). This adapter
+  // owns the request checks above, the rate-limit keys, the status for each outcome, and
+  // the session. The limiter is called back at the same points the inline route used.
+  const limits = {
+    fail: () => trackFailedAttempt(clientIP, normalizedUsername),
+    // UP-21: an outage counts against the IP only, never the account.
+    failIpOnly: () => trackFailures([`ip:${clientIP}`]),
+    clear: () => clearFailedAttempts(clientIP, normalizedUsername),
+  };
+  let outcome;
+  try {
+    outcome = await loginService.authenticate(
+      { username: normalizedUsername, password, ldapSettings: loadSettings().ldap || {} }, { limits });
+  } catch (err) {
+    console.error('[Auth] Unexpected login failure:', safeForLog(err?.message || err));
+    outcome = { status: loginService.OUTCOMES.ERROR, message: 'Authentication error' };
   }
-  function fallbackLocalAuth() {
-    if (authCompleted) return;
-    authCompleted = true;
-    console.log('[Auth] Using fallback local authentication for user:', safeForLog(normalizedUsername, 64));
-    db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername], async (err, user) => {
-      if (err) {
-        console.error('[Auth] Database error during user lookup:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
-      if (!user) {
-        if (directoryUnreachable) return directoryOutage();
-        console.log('[Auth] Local user not found:', safeForLog(normalizedUsername, 64));
-        // Track failed attempt
-        trackFailedAttempt(clientIP, normalizedUsername);
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-      console.log('[Auth] Found user in database:', { id: user.id, username: safeForLog(user.username, 64), origin: user.origin });
-      try {
-        // LDAP users have no local password — reject cleanly instead of crashing bcrypt.
-        // The reason goes to the server log only: telling the *client* that this is
-        // an LDAP account confirmed both that the username exists and that it is a
-        // domain account, which is a ready-made target list for spraying against AD.
-        if (!user.password || typeof user.password !== 'string') {
-          if (directoryUnreachable) return directoryOutage();
-          console.log(`[Auth] User '${safeForLog(normalizedUsername, 64)}' has no local password (origin=${user.origin}). Local auth not possible.`);
-          trackFailedAttempt(clientIP, normalizedUsername);
-          return res.status(401).json({ error: 'Invalid credentials' });
-        }
-        const valid = await bcrypt.compare(String(password), user.password);
-        if (!valid) {
-          console.log('[Auth] Local password validation failed for user:', safeForLog(normalizedUsername, 64));
-          // Track failed attempt
-          trackFailedAttempt(clientIP, normalizedUsername);
-          return res.status(401).json({ error: 'Invalid credentials' });
-        }
-        console.log('[Auth] Password validation successful for user:', safeForLog(normalizedUsername, 64));
-        // Clear failed attempts on successful login
-        clearFailedAttempts(clientIP, normalizedUsername);
-        respondWithSession(user);
-      } catch (bcryptError) {
-        console.error('[Auth] Error during password comparison:', bcryptError);
-        return res.status(500).json({ error: 'Authentication error' });
-      }
-    });
-  }
-
-  // Check if LDAP is properly configured with all required fields
-  const isLdapConfigured = ldapSettings.url && 
-                          ldapSettings.base && 
-                          ldapSettings.bindDn && 
-                          ldapSettings.bindPass &&
-                          ldapSettings.url.trim() !== '' &&
-                          ldapSettings.base.trim() !== '' &&
-                          ldapSettings.bindDn.trim() !== '' &&
-                          ldapSettings.bindPass.trim() !== '';
-
-  // If LDAP is not properly configured, use local auth immediately
-  if (!isLdapConfigured) {
-    console.log('[Auth] LDAP not properly configured. Using local authentication.');
-    return fallbackLocalAuth();
-  }
-
-  // LDAP is configured: resolve the username to exactly one directory entry and
-  // verify the password by binding as that entry.
-  //
-  // Steps 1-3 now live in ldap-helpers.js#verifyLdapCredentials, because minting a
-  // personal access token has to make the SAME check and the alternative was a second
-  // copy of them. Two of the branches below were once authentication bypasses, so
-  // there is deliberately one implementation. What stays here is everything that is
-  // specific to logging IN: the fallback policy, the group check, the user sync and
-  // the session token.
-  ldapHelpers.verifyLdapCredentials(ldapSettings, normalizedUsername, password).then(async (result) => {
-    if (authCompleted) return;
-
-    // FALL BACK on 'unreachable' and 'not_found', exactly as before. A directory
-    // outage must not lock out local accounts, and a username the directory does not
-    // know may still be a local one.
-    if (result.reason === 'unreachable' || result.reason === 'not_found') {
-      directoryUnreachable = result.reason === 'unreachable';
-      return fallbackLocalAuth();
-    }
-
-    // REFUSE on ambiguity — never fall back, never guess. If the search matched
-    // several entries we cannot know which identity the caller meant, and binding as
-    // an arbitrary one is an authentication bug.
-    if (result.reason === 'ambiguous') {
-      console.error(`[LDAP] Ambiguous login: ${result.dns.length} entries matched username '${safeForLog(normalizedUsername, 64)}'. Refusing to authenticate.`);
-      // Overwhelmingly the cause is a search base that spans a compat tree. Say so —
-      // this used to present as an unexplained total login outage.
-      const advice = compatTreeAdvice(result.dns, ldapSettings.base);
-      if (advice) console.error(`[LDAP] ${advice}`);
-      trackFailedAttempt(clientIP, normalizedUsername);
-      authCompleted = true;
+  switch (outcome.status) {
+    case loginService.OUTCOMES.OK:
+      return respondWithSession(outcome.user);
+    case loginService.OUTCOMES.INVALID:
       return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Wrong password for a directory account. Still falls back, as before: the same
-    // username may also exist locally with a different password.
-    if (result.reason === 'bad_password') {
-      trackFailedAttempt(clientIP, normalizedUsername);
-      return fallbackLocalAuth();
-    }
-
-    // POSITIVE test, and the ladder above is not trusted to have been exhaustive.
-    //
-    // This used to fall straight through to the success branch for any reason string
-    // the ladder did not name — a review proved it by returning an unrecognised
-    // reason and watching the route log "User password authentication succeeded" for
-    // a FAILED verification. It fails closed today only by accident, because
-    // `result.entry` is absent and reading `.dn` throws into the catch below. Add a
-    // future non-ok reason that carries an entry — `password_expired` and
-    // `account_locked` are both natural shapes for this function — and the route
-    // issues a session for a verification that failed.
-    //
-    // Decided by omission is exactly how authorization has gone wrong here before.
-    if (!result.ok) {
-      console.error('[LDAP] Unrecognised verification result, refusing:', result.reason);
-      return fallbackLocalAuth();
-    }
-    // The directory has now SPOKEN, and from here a thrown exception must not become a
-    // local login. Everything below — the group test, the attribute reads, the user
-    // sync — runs after authentication but before `authCompleted` is set, and the
-    // terminal .catch used to answer that window with fallbackLocalAuth(). A review
-    // forced it: with the group test throwing, a user OUT of the group and holding a
-    // local password got a 200 and a session. Before the extraction the same throw
-    // crashed the process, which was fail-CLOSED; the .catch traded that for fail-open.
-    directoryVerified = true;
-
-    const foundUser = result.entry;
-    console.log('[LDAP] User password authentication succeeded.');
-
-    // 3b. Is this username the DIRECTORY's to sign in as? A local account — `root`
-    // above all — is not, whatever the directory says about a same-named entry. See
-    // user-rules.js#directoryClaimRefusal. Asked BEFORE the group test and before the
-    // failed-attempt counter is cleared: a directory account named after a local
-    // admin must not be able to reset that admin's lockout between password guesses.
-    // Falling back is right here, and is not the fail-open the .catch below guards
-    // against: local auth demands the LOCAL password, so it grants nothing the
-    // directory's answer could have granted.
-    const existing = await db.promises.get(
-      'SELECT origin, password FROM users WHERE username = ?', [normalizedUsername]);
-    const claimRefusal = directoryClaimRefusal(normalizedUsername, existing || null);
-    if (claimRefusal) {
-      console.warn(`[LDAP] Directory authenticated '${safeForLog(normalizedUsername, 64)}', but that username is not a directory account (${claimRefusal}). Using local authentication instead.`);
-      return fallbackLocalAuth();
-    }
-
-    // 4. Check group membership (Authorization).
-    // The failed-attempt counter is deliberately NOT cleared yet: a user who
-    // authenticates but is outside the required group is not authorized, so clearing
-    // here would let them reset the throttle at will.
-    if (ldapSettings.requiredGroup) {
-      console.log('[LDAP] User is member of groups:', attrValues(foundUser, 'memberOf'));
-      if (!ldapHelpers.satisfiesRequiredGroup(foundUser, ldapSettings.requiredGroup)) {
-        console.log(`[LDAP] Authorization failed: User is not in required group '${ldapSettings.requiredGroup}'.`);
-        authCompleted = true;
-        return res.status(403).json({ error: 'Not a member of the required group' });
-      }
-      console.log('[LDAP] Authorization passed: Group membership check OK.');
-    }
-    // Fully authenticated AND authorized — now it is safe to clear.
-    clearFailedAttempts(clientIP, normalizedUsername);
-
-    // 5. Create the session.
-    let cnValue = attrValue(foundUser, 'cn');
-    if (!cnValue && foundUser.dn) {
-      const match = foundUser.dn.match(/CN=([^,]+)/i);
-      if (match) cnValue = match[1];
-    }
-    // Sanitised before it becomes users.display_name: a directory-supplied cn
-    // containing newlines was stored verbatim and then rendered in the UI,
-    // notification subjects and exports.
-    const cleanCn = sanitizeDirectoryText(cnValue);
-    const displayName = cleanCn !== '' ? cleanCn : normalizedUsername;
-    const userEmail = attrValue(foundUser, 'mail', 'email');
-
-    // safeForLog: these are raw directory attribute values. ldapjs escapes control
-    // characters inside a DN but NOT inside attributes, so a cn of
-    // "bob\n[LDAP] Service account bind succeeded." wrote a fabricated line straight
-    // into the audit trail.
-    console.log('[DEBUG] Extracted cnValue:', safeForLog(cnValue));
-    console.log('[DEBUG] Final displayName:', safeForLog(displayName));
-    console.log('[DEBUG] User email from LDAP:', safeForLog(userEmail));
-
-    getOrCreateUser(normalizedUsername, async (err, user) => {
-      if (err && err.directoryClaimRefused) {
-        console.warn(`[LDAP] Username '${safeForLog(normalizedUsername, 64)}' stopped being claimable during login (${err.directoryClaimRefused}). Using local authentication instead.`);
-        return fallbackLocalAuth();
-      }
-      if (err) {
-        if (authCompleted) return;
-        authCompleted = true;
-        return res.status(500).json({ error: 'DB error' });
-      }
-      const updates = ['display_name = ?, origin = ?'];
-      const params = [displayName, 'ldap'];
-      // Validated at THIS write site, not only at the send sink. The comment on
-      // isValidEmailAddress names four writers that must all check; this one — the
-      // LDAP login path — was not among them, so a directory-supplied address
-      // smuggling a comma reached users.email and could fan notifications out to
-      // arbitrary third parties from this deployment's SPF/DKIM-aligned domain.
-      if (isValidEmailAddress(userEmail)) {
-        updates.push('email = ?');
-        params.push(userEmail.trim());
-      } else if (userEmail) {
-        console.warn('[LDAP] Ignoring malformed email from directory:', safeForLog(userEmail));
-      }
-      params.push(normalizedUsername);
-      // AWAITED (ROADMAP CC-12). It was fire-and-forget, so a failure vanished and the
-      // account's display_name and email silently stayed stale. A failure is logged but
-      // does not refuse the login: the directory has authenticated this person, and the
-      // profile sync is not what authorizes them.
-      try {
-        // `AND password IS NULL` makes the WRITE re-check directoryClaimRefusal's rule: a
-        // local password hash set on this row after the claim check must not have the
-        // row relabelled origin='ldap' (from the CISO review of CC-12).
-        const synced = await db.promises.run(`UPDATE users SET ${updates.join(', ')} WHERE username = ? AND password IS NULL`, params);
-        // ZERO rows means the row stopped being the directory's since the claim check
-        // (a local password was set, or the account is gone). Refusing the write is not
-        // enough: the session below would still be signed for it. Hand the decision to
-        // the LOCAL password instead, exactly as the claim check would now.
-        if (synced.changes === 0) {
-          console.warn(`[LDAP] '${safeForLog(normalizedUsername, 64)}' stopped being a directory account during login. Using local authentication instead.`);
-          return fallbackLocalAuth();
-        }
-      } catch (syncErr) {
-        console.error('[LDAP] Could not sync profile for', safeForLog(normalizedUsername, 64), '-', syncErr.message);
-      }
-
-      if (authCompleted) return;
-      authCompleted = true;
-      respondWithSession({ ...user, origin: 'ldap', display_name: displayName });
-    }, { origin: 'ldap', display_name: displayName });
-  }).catch((ldapError) => {
-    // verifyLdapCredentials never rejects, so this is a defect in the handling above
-    // rather than a directory failure.
-    console.error('[LDAP] Unexpected error handling the directory result:', ldapError);
-    if (authCompleted) return;
-    // AFTER the directory authenticated, a bug is a 500. Falling back here would let an
-    // exception in the group test hand a session to someone the directory just refused
-    // to authorize — fail-open on authorization, which is worse than an outage.
-    if (directoryVerified) {
-      authCompleted = true;
-      return res.status(500).json({ error: 'Authentication error' });
-    }
-    // BEFORE it spoke, falling back is right: a bug here must not become a total login
-    // outage for local accounts.
-    return fallbackLocalAuth();
-  });
+    case loginService.OUTCOMES.NOT_IN_GROUP:
+      return res.status(403).json({ error: 'Not a member of the required group' });
+    case loginService.OUTCOMES.DIRECTORY_UNAVAILABLE:
+      res.set('Retry-After', '60');
+      return res.status(503).json({
+        error: 'Sign-in is temporarily unavailable: the directory could not be reached. Please try again in a few minutes.'
+      });
+    default:
+      // ERROR carries one of the route's three fixed texts; anything else is a defect.
+      return res.status(500).json({ error: outcome.message || 'Authentication error' });
+  }
 });
 
 // --- User Management Endpoints ---

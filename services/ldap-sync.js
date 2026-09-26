@@ -22,11 +22,8 @@ const { serviceError, CODES } = require('./errors');
 
 const AMBIGUOUS = Symbol('ambiguous-ldap-match');
 
-// The four settings a service-account read needs, each non-blank.
-function isConfigured(ldap) {
-  return ['url', 'base', 'bindDn', 'bindPass']
-    .every((k) => typeof ldap?.[k] === 'string' && ldap[k].trim() !== '');
-}
+// The one "is a directory configured" rule, shared with the login.
+const isConfigured = (ldap) => ldapHelpers.isLdapConfigured(ldap);
 
 // One user's directory attributes: an attribute map, null (no entry), or AMBIGUOUS.
 // Rejects on a bind/search/socket failure. The client is closed whatever happens.

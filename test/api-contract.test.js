@@ -1543,6 +1543,39 @@ checkAsync('an unexpected failure is 500 {error} and does NOT echo the exception
   assert.deepStrictEqual(res.body, { error: 'LDAP sync failed.' }, 'the 500 echoed the exception or changed its text');
 });
 
+// UP-16: the login decision is services/login.js; the route maps its outcomes. Each status
+// and body is pinned here, driven through the real handler with the service stood in for.
+console.log('POST /api/auth/login (v1 statuses over services/login.js):');
+checkAsync('each outcome maps to the status and {error} text v1 always answered', async () => {
+  const loginService = require('../services/login');
+  const O = loginService.OUTCOMES;
+  const real = loginService.authenticate;
+  const cases = [
+    [{ status: O.INVALID }, 401, { error: 'Invalid credentials' }],
+    [{ status: O.NOT_IN_GROUP }, 403, { error: 'Not a member of the required group' }],
+    [{ status: O.ERROR, message: 'Database error' }, 500, { error: 'Database error' }],
+    [{ status: O.ERROR, message: 'DB error' }, 500, { error: 'DB error' }],
+    [{ status: O.ERROR, message: 'Authentication error' }, 500, { error: 'Authentication error' }],
+  ];
+  const errors = console.error; console.error = () => {};
+  try {
+    for (const [outcome, status, body] of [...cases, ['throws', 500, { error: 'Authentication error' }]]) {
+      loginService.authenticate = async () => { if (outcome === 'throws') throw new Error('bug at 10.0.0.9'); return outcome; };
+      const res = recordingRes();
+      await handlerFor('post', '/api/auth/login')({ body: { username: 'Outcome-Map-User', password: 'pw' }, headers: {}, ip: `203.0.113.${60 + cases.findIndex((c) => c[0] === outcome) + 1}`, connection: {} }, res);
+      assert.strictEqual(res.statusCode, status, `${JSON.stringify(outcome)} answered ${res.statusCode}`);
+      assert.deepStrictEqual(res.body, body);
+    }
+    let seen;
+    loginService.authenticate = async (args) => { seen = args; return { status: O.OK, user: { id: 5, username: 'jane', can_manage_users: 0, origin: 'local' } }; };
+    const ok = recordingRes();
+    await handlerFor('post', '/api/auth/login')({ body: { username: 'Outcome-Map-User', password: 'pw' }, headers: {}, ip: '203.0.113.80', connection: {} }, ok);
+    assert.strictEqual(ok.statusCode, 200);
+    assertKeys(ok.body, ['token'], 'login OK');
+    assert.strictEqual(seen.username, 'outcome-map-user', 'the service was not given the normalised username');
+  } finally { loginService.authenticate = real; console.error = errors; }
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {
