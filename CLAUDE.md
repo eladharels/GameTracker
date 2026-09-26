@@ -29,7 +29,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
   is progressively taking the logic out of it)
 
 ### Frontend
-- **Framework**: React 18 with React Router 6
+- **Framework**: React 18 with React Router 7
 - **Build tool**: Vite 6 (component tests: Vitest 4 + jsdom)
 - **HTTP client**: Axios
 - **Icons**: react-icons

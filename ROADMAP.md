@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
-| FE — Frontend | 22 | 20 |
+| FE — Frontend | 22 | 21 |
 | UP — Tidying & upkeep | 24 | 20 |
-| **Total** | **84** | **76** |
+| **Total** | **84** | **77** |
 
 ---
 
@@ -1178,7 +1178,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     from under it, so it can flicker. The fix is to lift an inner wrapper; recorded for the
     card rework.
 
-### [ ] FE-22 React Router 7 (moderate advisory; breaking upgrade)
+### [x] FE-22 React Router 7 (moderate advisory; breaking upgrade)
 - **Why:** `npm audit --omit=dev` still reports `react-router 6.0.0–7.17.0` (moderate,
   GHSA-wrjc-x8rr-h8h6: open redirect via a backslash in `<Link>`/`useNavigate`); the fix is v7.
   Exposure: the one storage-driven `navigate()` goes through `safeReturnPath`, which already
@@ -1192,6 +1192,30 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 ---
 
 ## UP — Tidying & upkeep
+- **Done:** `react-router-dom` 7.18.4. **The full `npm audit`, dev and production, is at 0
+  vulnerabilities**, clearing GHSA-wrjc-x8rr-h8h6 and GHSA-337j-9hxr-rhxg.
+  - **What the app uses:** `BrowserRouter`, `Routes`, `Route`, `Link`, `Navigate`,
+    `useNavigate`, `useLocation`, and `MemoryRouter` in tests. There are no data routers,
+    loaders or splat routes, so v7's breaking changes did not apply, and the code needed no
+    change.
+  - **Production lockfile moves:**
+    - `react-router`/`react-router-dom` 6.30.6 → 7.18.4;
+    - `@remix-run/router` removed (v7 absorbed it);
+    - new: `cookie` 1.1.1 and `set-cookie-parser` 2.7.2, React Router's server helpers.
+    Some of that reaches the bundle: the main chunk grew from about 370 kB to 389 kB (121 kB
+    gzip).
+  - **Verified on the built bundle:**
+    - navigation across five pages, with no console errors;
+    - an unknown path goes to `/search`;
+    - the token plus 401 → `/login` flow, with its notice;
+    - the lazy `/api-docs` (35 operations);
+    - dialog focus on SharedLibrary and User Management.
+
+    The 27 component tests pass, including the routed FE-14 login tests, and the v6
+    future-flag warnings are gone.
+  - **The same staging check as SEC-16 applies:** load the app and `/api-docs` on
+    GameTracker-stg before promoting.
+
 
 ### [x] UP-1 Stale `.trivyignore` entry
 - **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,
@@ -1821,3 +1845,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-19 | this batch | 2026-09-26 | One useDialogFocus() hook for all six dialogs: focus in/back, trap (now also from the container); alertdialog opens on Cancel |
 | FE-18 (+FE-19 review) | this batch | 2026-09-26 | User Management successes → toast, dialog errors = page banner style, sticky banner opaque at 1rem; Add User shows the server's reason; dialog trap on the role element, delete returns focus to the heading |
 | UP-7 | this batch | 2026-09-26 | Smoke stage mints a real PAT and drives v2 (401, read, write) and MCP whoami through to the backend |
+| FE-22 | this batch | 2026-09-26 | React Router 7.18.4: npm audit (dev + prod) at 0; no code change needed; routing verified on the built bundle |
