@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 23 | 8 |
-| **Total** | **83** | **56** |
+| UP — Tidying & upkeep | 24 | 10 |
+| **Total** | **84** | **58** |
 
 ---
 
@@ -1094,6 +1094,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     one. That is harmless, since main is linear and the newer commit contains the older.
   - **Not verifiable here:** there is no Docker daemon, so the first real run is this
     push's CI.
+  - **Review fixes:**
+    - The pin also refuses `--project-name gametracker-smoke` and any
+      `docker logs|exec|inspect|stop|rm|kill` against a fixed smoke name.
+    - It pins the cleanup pattern's anchoring, since unanchored it would `down --volumes`
+      the other partition's live stack.
+    - It requires all six host ports to be distinct and clear of production's.
+    - Mutation-checked: all four mutations fail.
+    - `docker-compose.test.yml`'s isolation header is corrected.
+    - Switchover note: a stack left over under the OLD fixed project `gametracker-smoke` is
+      not matched by the cleanup. Teardown runs `if: always()`, so this matters at most once.
 
 ### [ ] UP-7 No end-to-end coverage of `/api/v2` or the MCP→backend path
 - **Problem:** the smoke test never calls v2, and the MCP handshake uses a fake PAT.
@@ -1102,17 +1112,56 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   2. Call one v2 read and one v2 write.
   3. Call one MCP tool that reaches the backend.
 
-### [ ] UP-8 `saveSettings` is not atomic
+### [x] UP-8 `saveSettings` is not atomic
 - **Where:** `settings-store.js`.
 - **Fix:** write to `settings.json.tmp`, `fsync`, then `rename`. Bind mounts of a single file
   need care: rename replaces the inode, so bind-mount the directory, or copy then truncate
   as a fallback. Check with Architect.
+- **Done, as far as the current mount allows:**
+  - **New helper:** `settings-store#replaceFileContents` writes a temp file beside the
+    target, `fsync`s it and `rename`s it over, wherever that is possible: local dev, bare
+    metal, or a directory mount.
+  - **Why production can't use it:** today settings.json is a SINGLE-FILE bind mount inside a
+    `read_only` container. Creating the temp fails with `EROFS`, and `rename()` onto a mount
+    point fails with `EBUSY`.
+  - **The fallback is an in-place rewrite:** it writes the new bytes, THEN truncates, THEN
+    `fsync`s. The old code truncated first (flag `'w'`), so an interrupted save could leave an
+    empty file. It no longer passes through empty, and success is no longer reported for bytes
+    still in the page cache.
+  - **Still not atomic in production.** A torn file is what `readSettings()` reports as
+    `degraded`, and writers refuse to build on it.
+  - **Other fixes:** a stale temp from a crash (the container pid is always 1) no longer
+    wedges every later save. Real errors such as `ENOSPC` still throw and remove the temp.
+  - **Tests:** six tests in `helpers.test.js` over an in-memory `fs` (that file allows no disk
+    I/O). Mutation-checked: truncate-first fails, and so does dropping the stale-temp
+    removal. Also run on a real disk: atomic, mode 0600, no temp left.
+  - **Making production atomic is UP-24.**
 
-### [ ] UP-9 `refresh_igdb_token.js` can have no effect
+### [ ] UP-24 Bind-mount the settings DIRECTORY, not the file (operator migration; from UP-8)
+- **Why:** it is the only way `saveSettings` can rename atomically in production. See UP-8.
+- **Fix:**
+  - mount a directory such as `/home/docker/gametracker/data/config/` at `/app/config`;
+  - have `SETTINGS_FILE` follow it (env var, added to both compose files);
+  - move settings.json on the host as a deploy step.
+- **Risk to manage:** a deploy that runs before the file is moved sees an EMPTY directory,
+  which reads as "nothing configured": LDAP login and every API key vanish until it is moved.
+  The backend should refuse to start if the configured directory is empty while the old
+  single-file path still exists. Needs the owner's go-ahead and a staging run.
+
+### [x] UP-9 `refresh_igdb_token.js` can have no effect
 - **Where:** `refresh_igdb_token.js:69`.
 - **Problem:** it writes `.env`, but a `settings.json` bearer token takes precedence.
 - **Fix:** write through `settings-store` (as the UI button does), or warn when a settings
   value overrides it.
+- **Done:** the script now calls `services/settings#storeIgdbToken`, the button's own call,
+  and reads the client ID and secret with the button's precedence (settings, then env;
+  arguments still override). The backend picks the token up with no restart. The `.env`
+  rewrite is gone: it did nothing inside the backend container, where scripts are meant to
+  run, and it lost to any `settings.json` token.
+  - A failed store is reported separately from a Twitch failure.
+  - A corrupt settings.json is refused, not overwritten.
+  - Verified end to end against a stubbed Twitch: the token is stored, other keys are kept,
+    and a corrupt file exits 1 untouched.
 
 ### [ ] UP-10 v1 Steam price route is a separate implementation
 - **Where:** `index.js:812-842`.
@@ -1369,3 +1418,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-23 | this batch | 2026-09-26 | Vite 6.4.3 + Vitest 4.1.11: clears the HIGH dev-server and the mocker advisories; no production entry moved |
 | UP-1–5 | this batch | 2026-09-26 | Node floor 20→22 everywhere (20 is EOL) and the frontend build stage in the runtime gate; scriptless frontend install; stale trivyignore, workflow comment, `.dockerignore`, `MCP_BIND` docs |
 | UP-6 | this batch | 2026-09-26 | Smoke stack per run (project, no container_name) and smoke concurrency split main/PR with separate ports: a PR can no longer cancel a merge's deploy |
+| UP-8, UP-9 | this batch | 2026-09-26 | settings.json saved atomically where the mount allows, else write-then-truncate-then-fsync; production atomicity split out as UP-24. The IGDB token script stores through the settings service like the UI button |

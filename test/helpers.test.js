@@ -3682,6 +3682,83 @@ checkAsync('safeExternalUrl: only absolute http(s) reaches an href (SEC-8)', asy
   }
 });
 
+console.log('settings-store.replaceFileContents — atomic where the mount allows (UP-8):');
+{
+  const { replaceFileContents } = require('../settings-store');
+  // An in-memory fs: no disk is touched (this file's rule). `fail` injects an errno per
+  // operation+path; `log` records the call order the in-place branch depends on.
+  const fakeFs = (initial = {}, fail = {}) => {
+    const files = new Map(Object.entries(initial).map(([k, v]) => [k, Buffer.from(v)]));
+    const fds = new Map(); let next = 3; const log = [];
+    const boom = (op, p) => { const code = fail[`${op}:${p}`]; if (code) { const e = new Error(code); e.code = code; throw e; } };
+    return {
+      files, log,
+      openSync(p, flag) {
+        log.push(`open ${p} ${flag}`); boom('open', p);
+        if (flag === 'wx' && files.has(p)) { const e = new Error('EEXIST'); e.code = 'EEXIST'; throw e; }
+        if (flag === 'r+' && !files.has(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+        if (flag === 'w' || flag === 'wx') files.set(p, Buffer.alloc(0));
+        fds.set(next, p); return next++;
+      },
+      writeSync(fd, buf, off, len, pos) {
+        const p = fds.get(fd); log.push(`write ${p}`); boom('write', p);
+        const cur = files.get(p); const out = Buffer.alloc(Math.max(cur.length, pos + len));
+        cur.copy(out); buf.copy(out, pos, off, off + len); files.set(p, out);
+      },
+      ftruncateSync(fd, len) { const p = fds.get(fd); log.push(`truncate ${p}`); files.set(p, files.get(p).subarray(0, len)); },
+      fsyncSync(fd) { log.push(`fsync ${fds.get(fd)}`); },
+      closeSync(fd) { fds.delete(fd); },
+      renameSync(a, b) { log.push(`rename ${a}`); boom('rename', b); files.set(b, files.get(a)); files.delete(a); },
+      unlinkSync(p) {
+        boom('unlink', p);
+        if (!files.delete(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+      },
+    };
+  };
+  const F = '/app/settings.json', T = `${F}.tmp-7`;
+  const OLD = JSON.stringify({ smtp: { pass: 'a-much-longer-old-value-than-the-new-one' } });
+  const NEW = JSON.stringify({ smtp: { pass: 'new' } });
+
+  check('a writable directory gets write-temp, fsync, rename; no temp is left', () => {
+    const f = fakeFs({ [F]: OLD });
+    assert.strictEqual(replaceFileContents(F, NEW, f, { pid: 7 }), 'atomic');
+    assert.strictEqual(f.files.get(F).toString(), NEW);
+    assert.ok(!f.files.has(T), 'temp file left behind');
+    assert.ok(f.log.indexOf(`fsync ${T}`) < f.log.indexOf(`rename ${T}`), 'renamed before fsync');
+  });
+  check('a stale temp from a crashed save (same pid, as in a container) does not wedge every later save', () => {
+    const f = fakeFs({ [F]: OLD, [T]: 'half-written garbage' });
+    assert.strictEqual(replaceFileContents(F, NEW, f, { pid: 7 }), 'atomic');
+    assert.strictEqual(f.files.get(F).toString(), NEW);
+  });
+  for (const [what, fail, code] of [
+    ['a read-only directory (production: read_only container)', { [`unlink:${T}`]: 'EROFS', [`open:${T}`]: 'EROFS' }, 'EROFS'],
+    ['a single-file bind mount (rename onto a mount point)', { [`rename:${F}`]: 'EBUSY' }, 'EBUSY'],
+  ]) {
+    check(`${what} falls back to writing IN PLACE, write-then-truncate, then fsync (${code})`, () => {
+      const f = fakeFs({ [F]: OLD }, fail);
+      assert.strictEqual(replaceFileContents(F, NEW, f, { pid: 7 }), 'in-place');
+      assert.strictEqual(f.files.get(F).toString(), NEW, 'shorter content kept the old tail');
+      assert.ok(!f.files.has(T), 'temp file left behind');
+      const w = f.log.lastIndexOf(`write ${F}`), t = f.log.lastIndexOf(`truncate ${F}`), s2 = f.log.lastIndexOf(`fsync ${F}`);
+      // The old code truncated FIRST (flag 'w'): an interrupted save left an empty file.
+      assert.ok(w >= 0 && w < t && t < s2, `in-place order must be write, truncate, fsync: ${f.log.join(' | ')}`);
+      assert.ok(!f.log.includes(`open ${F} w`), 'in-place path truncated on open');
+    });
+  }
+  check('a REAL failure (ENOSPC) throws, removes the temp and leaves the old file intact', () => {
+    const f = fakeFs({ [F]: OLD }, { [`write:${T}`]: 'ENOSPC' });
+    assert.throws(() => replaceFileContents(F, NEW, f, { pid: 7 }), /ENOSPC/);
+    assert.strictEqual(f.files.get(F).toString(), OLD);
+    assert.ok(!f.files.has(T), 'temp file left behind');
+  });
+  check('no file yet, and no atomic path: the in-place branch creates it', () => {
+    const f = fakeFs({}, { [`open:${T}`]: 'EACCES' });
+    assert.strictEqual(replaceFileContents(F, NEW, f, { pid: 7 }), 'in-place');
+    assert.strictEqual(f.files.get(F).toString(), NEW);
+  });
+}
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

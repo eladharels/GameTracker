@@ -8,11 +8,12 @@
 # `docker compose -p "$SMOKE_PROJECT" -f docker-compose.test.yml logs backend`.
 #
 # ISOLATION:
-#   - Ports 3099 (backend) and 8099 (frontend) — no conflict with production (3000/8080).
+#   - Host ports from BACKEND_/FRONTEND_/MCP_TEST_PORT: 3099/8099/3199 for pull requests,
+#     3098/8098/3198 for main — no conflict with production (3000/8080/3001) or each other.
 #   - The database is a THROWAWAY container with an anonymous volume, torn down by
 #     `down --volumes`. It never touches the production volume gametracker-pgdata.
-#   - Data mounted from /tmp/gametracker-smoke-data/ — never touches the real
-#     production volume at /home/docker/gametracker/data/.
+#   - Data mounted from SMOKE_DATA_DIR, a per-run `mktemp -d` — never the real
+#     production data at /home/docker/gametracker/data/.
 #   - restart: "no" prevents orphan containers after CI teardown.
 #   - All API keys and the database password are dummy placeholder values.
 

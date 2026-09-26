@@ -59,8 +59,9 @@ let settingsMtimeMs = -1;
 // an object — ALSO yields EMPTY_SETTINGS, and that is the dangerous case: it is
 // indistinguishable from "nothing is configured" unless the caller is told.
 //
-// It is not hypothetical. saveSettings truncates in place (flag 'w'), so a container
-// kill or a full disk mid-write leaves exactly a corrupt file. Any writer that then
+// It is not hypothetical. Where the mount forbids an atomic rename (production's
+// single-file bind mount, ROADMAP UP-8) saveSettings rewrites in place, so a container
+// kill or a full disk mid-write can still leave exactly a corrupt file. Any writer that then
 // reconstructs the file from this value writes the emptiness back permanently:
 //
 //   truncate settings.json; POST /api/settings {} as ANY authenticated user
@@ -96,6 +97,67 @@ function readSettings() {
 // that are about to WRITE must use readSettings() and honour `degraded`.
 const loadSettings = () => readSettings().settings;
 
+// Errors that mean "an atomic replace is impossible HERE", not "the write failed":
+//   EROFS / EACCES / EPERM on the temp file — the directory is not writable. Production
+//     today: the backend runs `read_only: true` and settings.json is a SINGLE-FILE bind
+//     mount, so /app/ accepts no new file;
+//   EBUSY on rename — the target is itself a mount point (the same single-file bind
+//     mount), which rename(2) refuses to replace;
+//   EXDEV — the temp file landed on another filesystem.
+// Anything else (ENOSPC, EIO…) is a real failure and must throw.
+const NO_ATOMIC_HERE = new Set(['EROFS', 'EACCES', 'EPERM', 'EBUSY', 'EXDEV']);
+
+// Replace `file` with `data` as safely as the mount allows (ROADMAP UP-8). Pure over
+// `fsImpl` so test/helpers.test.js can drive both branches without a filesystem.
+//
+// 1. ATOMIC: write a temp file beside it, fsync, rename over. A crash leaves either the
+//    old file or the new one, never a torn one. Used wherever the directory is
+//    writable and the file is not a mount point — local dev, bare metal, and a future
+//    DIRECTORY bind mount (the change that makes production atomic; recorded in UP-8).
+// 2. IN PLACE, as the fallback: write the new bytes over the old, THEN truncate to the
+//    new length, then fsync. The old code truncated FIRST (flag 'w'), so any interrupted
+//    save left a short or empty file; this order at least never passes through empty,
+//    and the fsync means success is not reported for bytes still in the page cache. It
+//    is NOT atomic — readSettings() reports a torn file as `degraded`, and writers
+//    refuse to build on a degraded read, which is what bounds the damage.
+// Returns which path was taken, for the log line and the tests.
+function replaceFileContents(file, data, fsImpl = fs, { pid = process.pid } = {}) {
+  const buf = Buffer.from(data, 'utf8');
+  const tmp = `${file}.tmp-${pid}`;
+  let tmpCreated = false;
+  try {
+    // A crash can leave the temp behind, and in a container the pid is always 1 — so
+    // without this, 'wx' would fail EEXIST on every save from then on. 'wx' (not 'w')
+    // still refuses to follow anything planted at that name between the two calls.
+    try { fsImpl.unlinkSync(tmp); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    const fd = fsImpl.openSync(tmp, 'wx', 0o600);
+    tmpCreated = true;
+    try {
+      fsImpl.writeSync(fd, buf, 0, buf.length, 0);
+      fsImpl.fsyncSync(fd);
+    } finally { fsImpl.closeSync(fd); }
+    fsImpl.renameSync(tmp, file);
+    tmpCreated = false;
+    return 'atomic';
+  } catch (err) {
+    if (tmpCreated) { try { fsImpl.unlinkSync(tmp); } catch { /* best effort */ } }
+    if (!NO_ATOMIC_HERE.has(err.code)) throw err;
+  }
+  let fd;
+  try {
+    fd = fsImpl.openSync(file, 'r+');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    fd = fsImpl.openSync(file, 'w', 0o600);
+  }
+  try {
+    fsImpl.writeSync(fd, buf, 0, buf.length, 0);
+    fsImpl.ftruncateSync(fd, buf.length);
+    fsImpl.fsyncSync(fd);
+  } finally { fsImpl.closeSync(fd); }
+  return 'in-place';
+}
+
 // Write the whole file. THROWS on failure — deliberately.
 //
 // This used to swallow the error after logging it, so a full disk or a read-only
@@ -104,15 +166,11 @@ const loadSettings = () => readSettings().settings;
 // this function had already updated. Every 500 branch in the settings adapters was
 // unreachable. Callers must let the throw propagate.
 function saveSettings(settings) {
+  let how;
   try {
-    // mode 0600: this file holds the SMTP password, the LDAP bind password and the
-    // Telegram bot token. The default 0644 made it world-readable in the container.
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), { flag: 'w', mode: 0o600 });
-    // `mode` applies ONLY when writeFileSync creates the file. A settings.json that
-    // already exists at 0644 — created by hand, restored from a backup, or written
-    // by this code before the mode was added — kept those permissions through every
-    // subsequent save, so the comment above was true of new installs only. Measured:
-    // an existing 0644 file was still 0644 after a save.
+    // mode 0600 on creation: this file holds the SMTP password, the LDAP bind password
+    // and the Telegram bot token. The default 0644 made it world-readable in the container.
+    how = replaceFileContents(SETTINGS_FILE, JSON.stringify(settings, null, 2));
   } catch (err) {
     console.error('Failed to write settings.json:', err.message);
     // Never keep serving a cache we cannot vouch for: the write may have been
@@ -122,9 +180,11 @@ function saveSettings(settings) {
     throw err;
   }
   // Not fatal, and deliberately outside the throwing block: the content IS on disk,
-  // so failing the admin's save would be wrong. A container that cannot chmod its
-  // own bind-mounted file (not the owner) is a deployment issue to shout about, not
-  // a reason to reject the write.
+  // so failing the admin's save would be wrong. The mode given at creation does not
+  // apply to a file that already existed at 0644 — created by hand, restored from a
+  // backup, or written before the mode was added — so enforce it on every save. A
+  // container that cannot chmod its own bind-mounted file (not the owner) is a
+  // deployment issue to shout about, not a reason to reject the write.
   try {
     fs.chmodSync(SETTINGS_FILE, 0o600);
   } catch (err) {
@@ -136,7 +196,7 @@ function saveSettings(settings) {
   // would be a side effect on their local variable, not on our cache.
   settingsCache = deepFreeze({ ...EMPTY_SETTINGS, ...JSON.parse(JSON.stringify(settings)) });
   try { settingsMtimeMs = fs.statSync(SETTINGS_FILE).mtimeMs; } catch { settingsMtimeMs = -1; }
-  console.log('settings.json created/updated.');
+  console.log(`settings.json created/updated (${how}).`);
 }
 
 // The effective value of one API key, and where it came from.
@@ -163,4 +223,5 @@ const resolveApiKey = (name, env = process.env) => apiKeyStatus(name, env).value
 module.exports = {
   SETTINGS_FILE, EMPTY_SETTINGS,
   readSettings, loadSettings, saveSettings, apiKeyStatus, resolveApiKey,
+  replaceFileContents,
 };

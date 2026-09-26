@@ -106,7 +106,11 @@ GameTracker/
 ├── settings-store.js               # The SOLE reader/writer of settings.json, with the one
 │                                   #   mtime-validated cache and the settings-over-env
 │                                   #   API-key precedence (resolveApiKey). readSettings()
-│                                   #   reports a DEGRADED load — writers must refuse then
+│                                   #   reports a DEGRADED load — writers must refuse then.
+│                                   #   Saves are atomic (temp + fsync + rename) where the
+│                                   #   mount allows; production's single-file bind mount does
+│                                   #   not, so there it rewrites in place, write-then-truncate
+│                                   #   + fsync (UP-8; the directory mount is UP-24)
 ├── services/                       # The service layer. Route handlers are thin adapters:
 │   │                               #   they do auth and HTTP, services do the work, so /api
 │   │                               #   and /api/v2 stay two skins over ONE
@@ -899,7 +903,7 @@ docker compose -f docker-compose.yaml exec backend node <script> [args]
 | `create-api-token.js` | Mint a personal access token (printed ONCE, on stdout alone) | — |
 | `reset-root-password.js` | Reset the root user's password, read from `NEW_ROOT_PASSWORD` (argv still accepted, with a warning — it lands in `/proc` and shell history) | — |
 | `update_library_prices.js` | Manually trigger a Steam price update | — |
-| `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token | — |
+| `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token — stored in settings.json through the same service call as the UI button, so no restart (UP-9) | — |
 | `backfill_steam_app_ids.js` | Populate missing Steam App IDs for existing library entries | yes |
 | `backfill_ldap_display_names.js` | Sync display names from LDAP for all LDAP-origin users | yes |
 | `test_ldap_sync.js` | Diagnose the LDAP connection and resolve every ldap-origin user (read-only) | n/a |
