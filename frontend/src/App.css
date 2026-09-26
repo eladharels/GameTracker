@@ -2267,7 +2267,12 @@ body, html {
   gap: 0.5rem;
 }
 .error-msg {
-  color: #dc2626;
+  /* No colour here. This second rule used to set #dc2626 over the first rule's
+     --color-danger background: red on red at about 1.3:1, unreadable, on every plain
+     .error-msg in the app. White text on a background darkened from --color-danger:
+     white on the raw token is only ~3.6:1, below AA for this size; this is ~7:1. */
+  color: #fff;
+  background: color-mix(in srgb, var(--color-danger) 70%, #000);
   font-weight: 600;
   text-align: center;
 }

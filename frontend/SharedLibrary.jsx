@@ -87,11 +87,12 @@ function SharedLibrary() {
       // A 401 is the global interceptor's (it ends the session and reloads to /login).
       // A 403 is "not allowed", never "logged out" (ROADMAP P0-6) — this used to delete
       // the token and rely on a global setter nothing ever assigned.
-      if (err.response?.status === 403) {
-        setError('You do not have access to this sharing data.');
-      } else if (err.response?.status !== 401) {
-        setError('Failed to load sharing data.');
-      }
+      // A 401 is normally overtaken by the interceptor's reload; it only reaches here
+      // when no token was stored (logged out in another tab), and then says so.
+      const status = err.response?.status;
+      setError(status === 403 ? 'You do not have access to this sharing data.'
+        : status === 401 ? 'Your session has ended. Please sign in again.'
+        : 'Failed to load sharing data.');
       setLoading(false);
     });
   }, [token, user?.username]);
@@ -204,7 +205,10 @@ function SharedLibrary() {
       <h2>Shared Library</h2>
       {user && (
         <div style={{ marginBottom: '2rem' }}>
-          <button className="action-btn playing-btn" style={{marginBottom: 18, fontSize: '1.1em'}} onClick={() => setShareModalOpen(true)}>
+          <button className="action-btn playing-btn" style={{marginBottom: 18, fontSize: '1.1em'}} onClick={() => setShareModalOpen(true)}
+            // Nothing to manage when the sharing data failed to load: the dialog would
+            // otherwise read the failure as "No users selected".
+            disabled={!!error}>
             <FaShareAlt style={{marginRight: 8}} /> Manage Sharing
           </button>
           {shareModalOpen && (
@@ -272,7 +276,7 @@ function SharedLibrary() {
       {loading ? (
         <p>Loading shared libraries...</p>
       ) : error ? (
-        <div className="error-msg">{error}</div>
+        <div className="error-msg" role="alert">{error}</div>
       ) : (
         <div className="user-cards-section">
           <div className="user-cards-grid">

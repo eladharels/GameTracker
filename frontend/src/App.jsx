@@ -233,7 +233,8 @@ function App() {
             <FaChartBar className="nav-icon" />
             <span className="nav-label">Statistics</span>
           </Link>
-          {(user.can_manage_users || user.can_create_users) && (
+          {/* The same check as the /users route gate, so the link never leads to a redirect. */}
+          {user.can_manage_users && (
             <Link to="/users" className={location.pathname === '/users' ? 'active' : ''}>
               <FaUsers className="nav-icon" />
               <span className="nav-label">User Management</span>
@@ -424,6 +425,9 @@ function UserManagementPage({ user }) {
   const [users, setUsers] = useState([])
   const [, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // The list itself failed to load. The table is then hidden, not shown empty: an empty
+  // user table reads as "there are no users", which a failed request is not.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [newUser, setNewUser] = useState({ username: '', password: '', can_manage_users: false })
   const [success, setSuccess] = useState('')
   const [ldapSyncLoading, setLdapSyncLoading] = useState(false)
@@ -445,17 +449,21 @@ function UserManagementPage({ user }) {
     try {
       const res = await axios.get(`${API_BASE}/users`)
       setUsers(res.data)
+      setLoadFailed(false)
       setLoading(false)
     } catch (err) {
       // 401 is the global interceptor's to handle (it ends the session). A 403 is NOT
       // "logged out" (ROADMAP P0-6): this handler used to delete the token and navigate
       // to /login while React still held the user, so the app bounced to /search looking
       // signed in and every later request failed.
-      if (err.response?.status === 403) {
-        setError('You do not have permission to manage users.')
-      } else if (err.response?.status !== 401) {
-        setError('Failed to load users')
-      }
+      // A 401 normally never shows: the interceptor ends the session and reloads. It
+      // only acts when a token is stored, though — after a logout in ANOTHER tab this
+      // one sends no token, and a silent empty page is the wrong answer to that.
+      const status = err.response?.status
+      setError(status === 403 ? 'You do not have permission to manage users.'
+        : status === 401 ? 'Your session has ended. Please sign in again.'
+        : 'Failed to load users')
+      setLoadFailed(true)
       setLoading(false)
     }
   }
@@ -691,6 +699,19 @@ function UserManagementPage({ user }) {
           </div>
         </div>
       )}
+      {/* Page-level messages. They used to render ONLY inside the Add User dialog, so a
+          failed load, delete or LDAP sync with the dialog closed said nothing at all. While
+          the dialog is open it shows them itself, next to the form they concern. */}
+      {!modalOpen && error && (
+        <div className="gt-alert gt-alert--danger gt-alert--page" role="alert">
+          <FaExclamationCircle aria-hidden="true" />
+          <div>{error}</div>
+        </div>
+      )}
+      {!modalOpen && success && (
+        <div className="success-msg enhanced-success" role="status"><FaCheckCircle style={{marginRight:6}}/> {success}</div>
+      )}
+      {!loadFailed && (
       <div className="user-table-section">
         <table className="user-table-modern">
           <thead>
@@ -755,6 +776,7 @@ function UserManagementPage({ user }) {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   )
 }

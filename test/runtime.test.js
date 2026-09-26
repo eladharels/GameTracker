@@ -441,19 +441,33 @@ console.log('the SPA has one auth header and one way to end a session:');
     assert.ok(src['frontend/src/App.jsx'] && src['frontend/SharedLibrary.jsx'], 'the frontend walk found nothing');
   });
   check('only the axios interceptor (and Swagger UI\'s own client) set a Bearer header', () => {
-    const where = files.filter((f) => /Authorization:?\s*[:=]?\s*`Bearer/.test(src[f]) || /Authorization = `Bearer/.test(src[f]));
+    // Matches the VALUE being built, whatever the key is spelled like: a template
+    // (`Bearer ${t}`) or a concatenation ('Bearer ' + t, "Bearer " + t). A label such
+    // as 'Bearer Token' is neither. Pinned to ONE per allowed file.
+    const built = (f) => (src[f].match(/`Bearer \$\{|['"`]Bearer ['"`]\s*\+/g) || []).length;
+    const where = files.filter((f) => built(f) > 0);
     assert.deepStrictEqual(where.sort(), ['frontend/src/ApiDocsPage.jsx', 'frontend/src/App.jsx'],
       `hand-built Bearer headers in: ${where.join(', ')} — the interceptor in App.jsx adds it to every /api call`);
-    assert.strictEqual((src['frontend/src/App.jsx'].match(/`Bearer \$\{/g) || []).length, 1,
-      'App.jsx builds a Bearer header outside its interceptor');
+    assert.strictEqual(built('frontend/src/App.jsx'), 1, 'App.jsx builds a Bearer header outside its interceptor');
+    assert.strictEqual(built('frontend/src/ApiDocsPage.jsx'), 1, 'ApiDocsPage builds a second Bearer header');
   });
   check('nothing but App.jsx\'s session code deletes the token', () => {
+    for (const f of files) assert.ok(!/localStorage\.clear\(/.test(src[f]), `${f} clears ALL storage, token included`);
     const where = files.filter((f) => /removeItem\(['"]token['"]\)/.test(src[f]));
     assert.deepStrictEqual(where, ['frontend/src/App.jsx'], `token deleted from: ${where.join(', ')}`);
     // The interceptor (401), useAuth (expired at boot) and logout. A fourth is a page
     // deciding on its own that the session is over.
     assert.strictEqual((src['frontend/src/App.jsx'].match(/removeItem\(['"]token['"]\)/g) || []).length, 3,
       'App.jsx removes the token somewhere other than the interceptor, useAuth and logout');
+  });
+  check('the login page clears the "session ended" flag once it has shown it', () => {
+    // session.js#peekSessionEnd deliberately does NOT clear (StrictMode double-renders).
+    // Without the mount effect the notice would show on every visit to /login for the
+    // rest of the tab's life, and no pure-function test can see that.
+    const app = src['frontend/src/App.jsx'];
+    const login = app.slice(app.indexOf('function LoginPage('), app.indexOf('const handleLogin', app.indexOf('function LoginPage(')));
+    assert.ok(/useState\(\(\) => peekSessionEnd\(\)\)/.test(login), 'LoginPage no longer reads the flag with peekSessionEnd');
+    assert.ok(/useEffect\(\(\) => \{ clearSessionEnd\(\) \}, \[\]\)/.test(login), 'LoginPage no longer clears the flag on mount');
   });
   check('no `window.setUser` fallback', () => {
     for (const f of files) assert.ok(!/window\.setUser/.test(src[f]), `${f} still reaches for window.setUser`);

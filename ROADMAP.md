@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 14 | 12 |
-| FE — Frontend | 14 | 2 |
-| UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **67** | **36** |
+| FE — Frontend | 17 | 2 |
+| UP — Tidying & upkeep | 18 | 0 |
+| **Total** | **71** | **36** |
 
 ---
 
@@ -177,6 +177,23 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   decides. The global-setter fallback is gone. `test/runtime.test.js` now fails if any file
   but App.jsx deletes the token, if App.jsx does it anywhere beyond its three session paths,
   or if the fallback returns.
+- **Deviation from the fix text (Architect):** the single owner of "the session is over" is
+  the axios response interceptor, with a full reload, not a context or `useAuth().logout()`.
+  It runs outside React, so it cannot call `setUser`; the reload instead guarantees that no
+  in-memory state survives a refused credential. The intent (one owner, React never
+  disagreeing with storage) is met.
+- **Constraint this creates:** no authenticated `/api` endpoint may answer 401 for anything
+  but an invalid session, or the interceptor logs the user out. Sudo mode holds to this
+  correctly (a wrong password is 403, `index.js`). Guarding it is UP-18.
+- **Review fixes:** a 401 with no stored token (a logout in another tab) no longer leaves a
+  silent empty page; both pages say the session has ended. User Management's errors used to
+  render only inside the Add User dialog, so a failed load, delete or LDAP sync with the
+  dialog closed said nothing; they now show as a page-level alert, and the table is hidden
+  rather than shown empty when the load failed. The sidebar uses the router's predicate.
+  `.error-msg` was red text on a red background (~1.3:1) app-wide and is now ~7:1.
+- **Known limit:** the router gate reads the JWT's `can_manage_users`, which can be up to
+  12 hours stale. Someone promoted mid-session is redirected from a typed `/users` until
+  they sign in again. It fails closed, and the server re-reads privilege on every request.
 
 ---
 
@@ -784,8 +801,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Problem:** these build their own headers even though the interceptor already adds them.
   This duplication is how P0-6 happened.
 - **Fix:** rely on the interceptor and on one error handler.
-- **Done (with P0-6):** 24 hand-built headers removed across App.jsx, SharedLibrary.jsx and
-  ApiTokensSection.jsx. The interceptor adds the header to every same-origin `/api` call,
+- **Done (with P0-6):** hand-built headers removed from 28 call sites (17 constructions: 13
+  inline plus 4 helpers; the commit message's "24" is wrong) across App.jsx,
+  SharedLibrary.jsx and ApiTokensSection.jsx. The interceptor adds the header to every same-origin `/api` call,
   and Swagger UI's own client on the API page is the one deliberate exception. Pinned in
   `test/runtime.test.js`. Four lint warnings went with them.
 
@@ -820,6 +838,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** record the username with `from`, and honour `from` only when it matches the new
   login. The boot path needs the expired token's `username`, which `readSession`
   deliberately refuses to return, so this needs a small decode-ignoring-`exp` helper.
+
+### [ ] FE-15 SettingsPage still has 401 branches the interceptor makes unreachable
+- **Where:** `App.jsx` API-keys loader and its `apiKeysAuthError` banner.
+- **Why:** since P0-6 a 401 is the interceptor's (it reloads to `/login`), so these branches
+  either never run or race the reload.
+- **Fix:** remove them; keep the 403 messages.
+
+### [ ] FE-16 One `API_BASE` and one axios instance (pair with FE-9)
+- **Where:** `API_BASE` is defined five times (`${origin}/api` in four files, `'/api'` in
+  `ApiTokensSection.jsx`), and every page depends on App.jsx having modified the GLOBAL
+  axios instance on import.
+- **Fix:** a `frontend/src/api.js` owning `API_BASE` and the interceptors on an
+  `axios.create()` instance, and update the "only App.jsx" pins in `test/runtime.test.js`.
+
+### [ ] FE-17 One `endSession()` in `session.js`
+- **Why:** three call sites remove the token, and a count of 3 is pinned. One function
+  would make the claim "one way to end a session" literal and the pin 1. It must touch
+  storage only inside the function: `helpers.test.js` imports `session.js`.
 
 ---
 
@@ -930,6 +966,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `BACKEND_BIND=127.0.0.1`. Set on its own, a client connecting directly can spoof
   `X-Forwarded-For` past the login rate limiter.
 - **Fix:** log a warning at boot or during deploy for that combination.
+
+### [ ] UP-18 Guard "a 401 always means the session is over"
+- **Why:** since P0-6 the SPA's interceptor logs the user out on any 401. An endpoint that
+  answered 401 for another reason, such as a wrong sudo password, would sign people out.
+  Sudo mode answers 403 today, and nothing pins that.
+- **Fix:** an `api-contract` or smoke-test assertion that a wrong sudo password answers 403.
 
 ---
 

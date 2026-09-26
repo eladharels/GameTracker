@@ -211,6 +211,12 @@ GameTracker/
 │   │                               #   ALSO: every env var the backend reads must be in the
 │   │                               #   backend `environment:` of BOTH compose files, or in
 │   │                               #   its NOT_PASSED table with a reason
+│   │                               #   ALSO the SPA's auth invariants (P0-6, FE-8): only
+│   │                               #   App.jsx's interceptor and ApiDocsPage's spec-only
+│   │                               #   client build a Bearer header; only App.jsx removes the
+│   │                               #   token, at its three session paths; a 401 is the
+│   │                               #   interceptor's alone. A failure there means a page is
+│   │                               #   handling auth by itself again
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
