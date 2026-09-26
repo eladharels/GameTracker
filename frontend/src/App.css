@@ -1775,9 +1775,13 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
 /* The game title is the button that opens its details (FE-6): it must look exactly like
    the title it replaced. The global :focus-visible ring shows it on keyboard focus. */
 .game-title-btn {
-  background: none; border: 0; padding: 0; margin: 0;
+  background: none; border: 0; margin: 0;
   font: inherit; color: inherit; text-align: inherit; letter-spacing: inherit;
+  /* The UA sets text-shadow:none on buttons and `font` does not carry it: the grid title
+     lost the shadow that keeps it readable over the cover art. */
+  text-shadow: inherit;
   cursor: pointer; width: 100%;
+  padding: 0 2px;   /* room for the inset focus ring */
   /* The clamp the title had, applied where it can take effect (measured: 2 lines,
      ellipsis, the same height as the old plain-text title). */
   display: -webkit-box;
