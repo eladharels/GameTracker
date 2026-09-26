@@ -396,7 +396,10 @@ function UserManagementPage({ user }) {
   // user table reads as "there are no users", which a failed request is not.
   const [loadFailed, setLoadFailed] = useState(false)
   const [newUser, setNewUser] = useState({ username: '', password: '', can_manage_users: false })
-  const [success, setSuccess] = useState('')
+  // Success goes to the global toast, the app's usual feedback, and dismisses itself
+  // (FE-18). It was a solid, centred green block that stayed until the next action, beside
+  // a translucent error banner of a different design.
+  const { showToast } = useToast()
   const [ldapSyncLoading, setLdapSyncLoading] = useState(false)
   const [formError, setFormError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
@@ -439,7 +442,6 @@ function UserManagementPage({ user }) {
   const handleCreate = async (e) => {
     e.preventDefault()
     setError('')
-    setSuccess('')
     setFormError('')
     // Basic validation
     if (!newUser.username.trim() || !newUser.password.trim()) {
@@ -448,20 +450,29 @@ function UserManagementPage({ user }) {
     }
     try {
       await api.post(`${API_BASE}/users`, newUser)
-      setSuccess('User created!')
+      showToast('success', 'User created!')
       setNewUser({ username: '', password: '', can_manage_users: false })
       fetchUsers()
     } catch (err) {
-      setError('Failed to create user')
+      // The server's reason, next to the form it concerns (FE-18): "Username already
+      // exists" and the username rules are exposed 4xx messages (services/problem.js), and
+      // "Failed to create user" hid every one of them. Anything else stays generic.
+      const status = err.response?.status
+      const reason = err.response?.data?.error
+      setFormError(status === 403 ? 'You do not have permission to manage users.'
+        : status >= 400 && status < 500 && typeof reason === 'string' && reason ? reason
+          : 'Failed to create user.')
     }
   }
   const handleDelete = async (id) => {
     setError('')
-    setSuccess('')
     try {
       await api.delete(`${API_BASE}/users/${id}`)
-      setSuccess('User deleted!')
-      fetchUsers()
+      showToast('success', 'User deleted!')
+      // AWAITED so the confirm dialog closes after the row is gone: closing first returned
+      // focus to that row's Delete button, which the refetch then removed, leaving focus
+      // on <body> (FE-19 review). Now the hook's fallback — the page heading — takes it.
+      await fetchUsers()
     } catch (err) {
       setError('Failed to delete user')
     }
@@ -487,10 +498,9 @@ function UserManagementPage({ user }) {
   }
   const handleEdit = async (id, updates) => {
     setError('')
-    setSuccess('')
     try {
       await api.put(`${API_BASE}/users/${id}`, updates)
-      setSuccess('User updated!')
+      showToast('success', 'User updated!')
       fetchUsers()
     } catch (err) {
       setError('Failed to update user')
@@ -500,14 +510,13 @@ function UserManagementPage({ user }) {
   const handleLdapSync = async () => {
     setLdapSyncLoading(true)
     setError('')
-    setSuccess('')
     
     try {
       const response = await api.post(`${API_BASE}/admin/ldap-sync`, {})
       
       const result = response.data
       if (result.success) {
-        setSuccess(`LDAP sync completed! ${result.results.updated} users updated out of ${result.results.total} LDAP users.`)
+        showToast('success', `LDAP sync completed! ${result.results.updated} users updated out of ${result.results.total} LDAP users.`)
         fetchUsers() // Refresh the user list to show updated information
       } else {
         setError('LDAP sync failed')
@@ -576,8 +585,8 @@ function UserManagementPage({ user }) {
         </div>
       </div>
       {confirmOpen && (
-        <div className="user-modal-bg" ref={confirmModalRef} onClick={e => { if (e.target === confirmModalRef.current) setConfirmOpen(false) }} tabIndex={-1} aria-modal="true" role="alertdialog" aria-labelledby="confirm-dialog-title">
-          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={confirmDialog.onKeyDown}>
+        <div className="user-modal-bg" ref={confirmModalRef} onClick={e => { if (e.target === confirmModalRef.current) setConfirmOpen(false) }} tabIndex={-1} aria-modal="true" role="alertdialog" aria-labelledby="confirm-dialog-title" onKeyDown={confirmDialog.onKeyDown}>
+          <div className="user-modal-window" style={{maxWidth: 400}}>
             <h3 id="confirm-dialog-title" style={{marginTop:0}}>Delete User</h3>
             <p style={{color:'var(--color-fg-muted)'}}>Are you sure you want to delete this user? This cannot be undone.</p>
             <div style={{display:'flex', gap:'1rem', justifyContent:'flex-end', marginTop:'1.5rem'}}>
@@ -585,15 +594,15 @@ function UserManagementPage({ user }) {
               <button
                 className="create-user-btn enhanced-btn"
                 style={{background:'#ef4444', padding:'0.6em 1.4em'}}
-                onClick={() => { handleDelete(confirmTarget); setConfirmOpen(false) }}
+                onClick={async () => { await handleDelete(confirmTarget); setConfirmOpen(false) }}
               >Delete</button>
             </div>
           </div>
         </div>
       )}
       {pwModalOpen && (
-        <div className="user-modal-bg" ref={pwModalRef} onClick={e => { if (e.target === pwModalRef.current) setPwModalOpen(false) }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="pw-dialog-title">
-          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={pwDialog.onKeyDown}>
+        <div className="user-modal-bg" ref={pwModalRef} onClick={e => { if (e.target === pwModalRef.current) setPwModalOpen(false) }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="pw-dialog-title" onKeyDown={pwDialog.onKeyDown}>
+          <div className="user-modal-window" style={{maxWidth: 400}}>
             <button className="user-modal-close" aria-label="Close" onClick={() => setPwModalOpen(false)}>&times;</button>
             <h3 id="pw-dialog-title" style={{marginTop:0}}>Change Password</h3>
             <div className="user-form-group" style={{flexDirection:'column'}}>
@@ -621,8 +630,8 @@ function UserManagementPage({ user }) {
         </div>
       )}
       {modalOpen && (
-        <div className="user-modal-bg" ref={modalRef} onClick={handleModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="add-user-dialog-title">
-          <div className="user-modal-window" onKeyDown={addUserDialog.onKeyDown}>
+        <div className="user-modal-bg" ref={modalRef} onClick={handleModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="add-user-dialog-title" onKeyDown={addUserDialog.onKeyDown}>
+          <div className="user-modal-window">
             <button className="user-modal-close" aria-label="Close" onClick={() => setModalOpen(false)}>&times;</button>
             <h3 id="add-user-dialog-title" style={{marginTop:0, marginBottom:'1rem'}}>Add User</h3>
             <form className="user-form-modern user-form-vertical user-form-enhanced" onSubmit={handleCreate}>
@@ -654,11 +663,10 @@ function UserManagementPage({ user }) {
                   <span className="switch-label enhanced-switch-label">Admin</span>
                 </label>
               </div>
-              {formError && <div className="error-msg enhanced-error"><FaExclamationCircle style={{marginRight:6}}/> {formError}</div>}
+              {formError && <div className="gt-alert gt-alert--danger" role="alert"><FaExclamationCircle aria-hidden="true" /><div>{formError}</div></div>}
               <button type="submit" className="create-user-btn enhanced-btn">Create User</button>
             </form>
-            {success && <div className="success-msg enhanced-success"><FaCheckCircle style={{marginRight:6}}/> {success}</div>}
-            {error && <div className="error-msg enhanced-error"><FaExclamationCircle style={{marginRight:6}}/> {error}</div>}
+            {error && <div className="gt-alert gt-alert--danger" role="alert"><FaExclamationCircle aria-hidden="true" /><div>{error}</div></div>}
           </div>
         </div>
       )}
@@ -678,9 +686,6 @@ function UserManagementPage({ user }) {
             )}
           </div>
         </div>
-      )}
-      {!modalOpen && success && (
-        <div className="success-msg enhanced-success" role="status"><FaCheckCircle style={{marginRight:6}}/> {success}</div>
       )}
       {!loadFailed && (
       <div className="user-table-section">

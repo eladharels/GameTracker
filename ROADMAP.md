@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
-| FE — Frontend | 22 | 19 |
+| FE — Frontend | 22 | 20 |
 | UP — Tidying & upkeep | 24 | 19 |
-| **Total** | **84** | **74** |
+| **Total** | **84** | **75** |
 
 ---
 
@@ -970,13 +970,31 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
       different user lands on `/search`. Reverting the navigate fails exactly the
       second one.
 
-### [ ] FE-18 One banner style for page messages (UI/UX review of P0-6)
+### [x] FE-18 One banner style for page messages (UI/UX review of P0-6)
 - **Where:** User Management shows a translucent `gt-alert` for errors next to a solid,
   centred `.success-msg`; dialogs use solid `.error-msg` blocks.
 - **Fix:** success/info variants of `gt-alert` (`gt-alert--info` exists) for page-level
   messages; auto-dismiss or move success notices to the global toast, the app's usual
   feedback; give the sticky page banner `top: 1rem` and a more opaque background outside
   scrolling panels.
+- **Done:**
+  - **Success messages go to the global toast,** the app's usual feedback, which dismisses
+    itself: user created, deleted, updated, the LDAP sync result, and the rest (nine
+    calls). The solid, centred green blocks, in the dialog and on the page, and their
+    `.success-msg` CSS are gone.
+  - **The Add User dialog's errors** use the same translucent `gt-alert--danger` as the
+    page banner, with `role="alert"`.
+  - **The sticky page banner** sits at `top: 1rem` and is opaque (12% danger over
+    `--surface-1`), so content scrolling under it no longer shows through its text.
+  - **Found while checking:** Add User answered every failure "Failed to create user". It
+    now shows the server's own 4xx reason, such as "Username already exists", or the
+    permission text for a 403, and stays generic otherwise. The backend only exposes
+    `expose: true` messages.
+  - **Screenshots and measurements from the built app** cover the page banner (at
+    `top: 16px`, opaque) and the dialog error ("Username already exists").
+  - **Left:** `.error-msg` is still used by the login page, search, library and
+    SharedLibrary for single-line inline errors. That is a separate component (inline, not
+    a page banner) and was not in this item's scope.
 
 ### [x] FE-15 SettingsPage still has 401 branches the interceptor makes unreachable
 - **Where:** `App.jsx` API-keys loader and its `apiKeysAuthError` banner.
@@ -1069,6 +1087,21 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
       any `setTimeout(() => ….focus())`.
   - **Checked in the built app:** Manage Sharing opens on Close, is announced by name,
     keeps Shift+Tab inside, and Escape returns focus to the button.
+  - **Review fixes (both Shoulds):**
+    - **The container-wrap claim above was an overclaim when first shipped.** In the five
+      App.jsx and SharedLibrary dialogs, `role` and `tabIndex=-1` sat on the backdrop but
+      `onKeyDown` sat on the inner window. A click on the window's padding focused the
+      backdrop, outside the handler, and Shift+Tab left. `onKeyDown` now sits on the role
+      element. GameDetailModal's dialog gets `tabIndex=-1`, so a click inside keeps focus
+      in it rather than on `<body>`.
+    - **After a delete, focus went to `<body>`.** The confirmation closed while the row
+      still existed, so focus returned to its Delete button, which the refetch then
+      removed. It now closes after the delete AND the refetch, so the hook falls back to
+      the page heading.
+    - **Verified in the built app:**
+      - a click on the dialog's padding, then Shift+Tab, stays inside;
+      - the confirmation opens on Cancel;
+      - after the delete, focus is on the "User Management" heading.
   - **Not done: `inert` on the page behind.** Every dialog is rendered INSIDE its page, so
     making the page inert would disable the dialog too. That needs the dialogs portalled
     out first; recorded for FE-10's page extraction.
@@ -1755,3 +1788,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-9, FE-16 | this batch | 2026-09-26 | SharedLibrary.jsx into src/; one API client (api.js, axios.create) owning both interceptors, pages no longer depend on App.jsx patching the global axios |
 | FE-20 | this batch | 2026-09-26 | Every status colour (chips, hover glows, detail block) now from the --color-status-* tokens; no accent preset makes two statuses look alike |
 | FE-19 | this batch | 2026-09-26 | One useDialogFocus() hook for all six dialogs: focus in/back, trap (now also from the container); alertdialog opens on Cancel |
+| FE-18 (+FE-19 review) | this batch | 2026-09-26 | User Management successes → toast, dialog errors = page banner style, sticky banner opaque at 1rem; Add User shows the server's reason; dialog trap on the role element, delete returns focus to the heading |

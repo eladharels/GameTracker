@@ -219,8 +219,8 @@ function SharedLibrary() {
             <FaShareAlt style={{marginRight: 8}} /> Manage Sharing
           </button>
           {shareModalOpen && (
-            <div className="user-modal-bg" ref={shareModalRef} onClick={handleShareModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="share-dialog-title">
-              <div className="user-modal-window" onKeyDown={shareDialog.onKeyDown} style={{ maxWidth: 520, minWidth: 320, borderRadius: 18, background: 'var(--surface-2)', boxShadow: '0 8px 40px var(--accent-soft-strong)', padding: '2.2rem 2.2rem 1.5rem 2.2rem' }}>
+            <div className="user-modal-bg" ref={shareModalRef} onClick={handleShareModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="share-dialog-title" onKeyDown={shareDialog.onKeyDown}>
+              <div className="user-modal-window" style={{ maxWidth: 520, minWidth: 320, borderRadius: 18, background: 'var(--surface-2)', boxShadow: '0 8px 40px var(--accent-soft-strong)', padding: '2.2rem 2.2rem 1.5rem 2.2rem' }}>
                 <button ref={shareCloseRef} className="user-modal-close" aria-label="Close" onClick={() => setShareModalOpen(false)}>&times;</button>
                 <h3 id="share-dialog-title" style={{ marginTop: 0, marginBottom: 18, color: 'var(--color-accent)', fontWeight: 800, fontSize: '1.4em', letterSpacing: 0.5 }}>Manage Library Sharing</h3>
                 {loading ? <p>Loading users...</p> : (
@@ -362,8 +362,8 @@ function SharedLibrary() {
       )}
       {/* Modal for viewing shared library */}
       {modalOpen && (
-        <div className="user-modal-bg" onClick={e => { if (e.target.className === 'user-modal-bg') closeModal(); }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="shared-library-dialog-title">
-          <div className="user-modal-window" onKeyDown={libraryDialog.onKeyDown} style={{ maxWidth: 700, minWidth: 320 }}>
+        <div className="user-modal-bg" onClick={e => { if (e.target.className === 'user-modal-bg') closeModal(); }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="shared-library-dialog-title" onKeyDown={libraryDialog.onKeyDown}>
+          <div className="user-modal-window" style={{ maxWidth: 700, minWidth: 320 }}>
             <button ref={libraryCloseRef} className="user-modal-close" aria-label="Close" onClick={closeModal}>&times;</button>
             <h3 id="shared-library-dialog-title" style={{ marginTop: 0, marginBottom: 16 }}>
               {modalUser && (modalUser.display_name || modalUser.username)}'s Library

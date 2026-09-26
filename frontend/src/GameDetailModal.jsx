@@ -106,7 +106,7 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
 
   return (
     <div className="gdm-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="gdm-modal" role="dialog" aria-modal="true" aria-labelledby="gdm-title" onKeyDown={dialogKeyDown}>
+      <div className="gdm-modal" role="dialog" aria-modal="true" aria-labelledby="gdm-title" tabIndex={-1} onKeyDown={dialogKeyDown}>
         {cover && <img className="gdm-bg" src={cover} alt="" aria-hidden />}
         <div className="gdm-scrim" />
         <button ref={closeRef} className="gdm-close" onClick={onClose} aria-label="Close"><FaTimes /></button>
