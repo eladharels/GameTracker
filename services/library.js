@@ -1013,7 +1013,7 @@ const DEFAULT_NEW_STATUS = 'wishlist';
 // the MCP and Android deduped by id alone, so "add Hades" from an agent could create a
 // second row for a game the user already had from another provider. The rule now lives
 // here, and the SPA's copy is held EQUAL to it by shared test vectors
-// (test/fixtures/library-match.json, run over both by test/helpers.test.js). Two copies,
+// (test/library-match-vectors.js, run over both by test/helpers.test.js). Two copies,
 // because the backend cannot import a frontend source file without coupling the images.
 //
 // The rule is the FE-3 one, deliberately STRICTER than catalog.js's merging rules (see
@@ -1021,7 +1021,11 @@ const DEFAULT_NEW_STATUS = 'wishlist';
 //   'same'     -- same id, or same name AND the same KNOWN release year;
 //   'possible' -- same name, a year unknown on either side;
 //   nothing    -- different names, or both years known and different (a remake).
-const normTitle = (s) => String(s || '').trim().toLowerCase();
+// Normalised the way a STORED name already is (user-rules.js#sanitizeText: controls to
+// spaces, whitespace collapsed), so "Hades  II" arriving raw still finds "Hades II" on the
+// row. Mirrored exactly in frontend/src/libraryMatch.js.
+const normTitle = (s) => String(s || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+  .replace(/\s+/g, ' ').trim().toLowerCase();
 const releaseYear = (d) => {
   const m = /^(\d{4})/.exec(String(d || ''));
   return m ? m[1] : null;
@@ -1081,6 +1085,11 @@ const DUPLICATE_POLICIES = Object.freeze(['warn', 'reject']);
 // written -- so an agent that wants to ask first never has to undo a write. Only a game
 // NEW to the library is checked: re-adding one already there by id is the idempotent
 // update, whatever else shares its name.
+//
+// NOT A LOCK. The check and the write are separate statements, so two concurrent adds of
+// the same game under different ids can both pass and both store (review). The outcome is
+// the duplicate row this exists to warn about, not corruption, and the user can remove
+// it; a unique index on the NAME would be wrong, since remakes share names.
 async function addResolvedGame(userId, game, requestedStatus, deps = {}, options = {}) {
   const read = deps.findGame || findGame;
   const write = deps.upsertGame || upsertGame;
@@ -1093,8 +1102,10 @@ async function addResolvedGame(userId, game, requestedStatus, deps = {}, options
   if (!prior) {
     possibleDuplicates = findPossibleDuplicates(await (deps.listMatchRows || listMatchRows)(userId), game);
     if (policy === 'reject' && possibleDuplicates.length) {
+      // Sanitised and capped, as the ambiguous-name 409 does (catalog.js): the name is a
+      // third-party catalog's, and `detail` reaches an MCP client's model verbatim.
       throw serviceError(CODES.CONFLICT,
-        `"${game.name}" may already be in the library under another id`,
+        `"${sanitizeText(game.name, 80)}" may already be in the library under another id`,
         { possibleDuplicates });
     }
   }

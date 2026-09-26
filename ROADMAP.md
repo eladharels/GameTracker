@@ -1889,6 +1889,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - a v2 adapter test that the policy goes in and the hint comes out;
   - the spec enums;
   - the MCP rendering.
+- **Review (all APPROVE, with conditions; applied):**
+  - The reject message's catalog name is sanitised and capped, as the ambiguous-name 409's
+    is. It reaches an MCP model verbatim through `detail`.
+  - The MCP renderer QUOTES each name as a JSON string literal and strips C1 controls, line
+    and paragraph separators and bidi overrides as well as C0. Tests now pin the 120-character
+    name cap and the possible-duplicate list cap, both of which survived mutation.
+  - Both copies of the rule normalise names as a stored one already is (controls to spaces,
+    whitespace collapsed), so "Hades  II" arriving raw finds "Hades II". There is a new shared
+    vector, and removing the collapse from either copy fails it.
+  - The check-then-write race is documented in the service and the spec: it is a check, not
+    a lock. Two concurrent adds under different ids can both store.
+  - A stale comment reference is fixed.
 
 ### [x] UP-20 A DOM test harness for the SPA (Architect; pair with FE-10)
 - **Why:** component fixes (FE-1, FE-2, FE-5, FE-6, FE-7, the session notice) can only be

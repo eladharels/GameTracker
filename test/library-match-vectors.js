@@ -20,4 +20,7 @@ module.exports = [
   { name: 'the original and a remake both present, result is the remake', rows: [row('igdb_1', 'Doom', '1993-12-10'), row('igdb_2', 'Doom', '2016-05-13')], game: { id: 'rawg_1', name: 'Doom', releaseDate: '2016-05-13' }, want: 'same' },
   { name: 'an unnamed result matches nothing', rows: [row('igdb_1', '')], game: { id: 'rawg_1', name: '', releaseDate: null }, want: null },
   { name: 'empty library', rows: [], game: { id: 'rawg_1', name: 'Halo', releaseDate: null }, want: null },
+  // A STORED name is whitespace-collapsed on write (user-rules.js#sanitizeText); a raw
+  // incoming one is not. They must still meet (UP-19 review).
+  { name: 'doubled or control-character whitespace in the incoming name', rows: [row('igdb_1', 'Hades II', '2024-05-06')], game: { id: 'rawg_9', name: 'Hades \u0009 II', releaseDate: '2024-01-01' }, want: 'same' },
 ];

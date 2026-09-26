@@ -20,12 +20,17 @@ const API_BASE = (process.env.GAMETRACKER_API_URL || 'http://backend:3000/api/v2
 //
 // The RAW body is never passed through. It is JSON from another service and an agent
 // will read whatever is in it as instruction-shaped text; only these three fields cross.
-// A game for a model to read: name, id and year only, the name capped and stripped of
-// control characters. Game titles come from third-party databases.
+// A game for a model to read: name, id and year only. Game titles come from third-party
+// databases, so the name is stripped of C0/C1 controls, line and paragraph separators and
+// bidi overrides, capped at 120 characters, and QUOTED: a JSON string literal marks where
+// the data ends, which bare text does not (UP-19 review).
+const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+const NAME_CAP = 120;
 function gameLine(name, id, date, extra) {
-  const clean = String(name ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120);
+  const clean = String(name ?? '').replace(UNSAFE_TEXT, ' ').slice(0, NAME_CAP);
+  const safeId = String(id ?? '').replace(UNSAFE_TEXT, ' ').slice(0, 64);
   const year = /^(\d{4})/.exec(String(date || ''))?.[1] || 'year unknown';
-  return `- ${clean} (${String(id ?? '').slice(0, 64)}, ${year}${extra ? `, ${extra}` : ''})`;
+  return `- ${JSON.stringify(clean)} (${safeId}, ${year}${extra ? `, ${extra}` : ''})`;
 }
 const MAX_LISTED = 10;
 

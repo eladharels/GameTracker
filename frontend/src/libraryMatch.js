@@ -15,11 +15,15 @@
 // Those decide which record to KEEP or UPDATE, where merging too little costs a
 // duplicate row. This one decides whether to REFUSE an add, where a false positive
 // blocks a legitimate game — exactly the FE-3 bug. "Unifying" it with catalog.js would
-// bring that bug back. The rule belongs in services/library.js eventually (UP-19).
+// bring that bug back. The server's copy is services/library.js (UP-19); the two are held
+// equal by test/library-match-vectors.js. Change a vector there, never one side alone.
 //
 // Pure, no DOM: pinned from test/helpers.test.js through import().
 
-const norm = (s) => String(s || '').trim().toLowerCase()
+// Normalised as a STORED name already is: controls to spaces, whitespace collapsed. Held
+// EQUAL to services/library.js#normTitle by test/library-match-vectors.js (UP-19).
+const norm = (s) => String(s || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+  .replace(/\s+/g, ' ').trim().toLowerCase()
 const yearOf = (d) => {
   const m = /^(\d{4})/.exec(String(d || ''))
   return m ? m[1] : null

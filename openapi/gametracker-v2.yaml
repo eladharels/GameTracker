@@ -523,7 +523,9 @@ paths:
         (`match: possible`). A remake -- same name, a different known year -- is never
         one. The default, `onPossibleDuplicate: warn`, adds the game and lists them in
         `possibleDuplicates`; `reject` refuses with 409 BEFORE writing anything, so a
-        caller that wants to ask first never has to undo an add.
+        caller that wants to ask first never has to undo an add. It is a check, not a
+        lock: two concurrent adds of the same game under different ids can both
+        succeed.
       requestBody:
         required: true
         content:
