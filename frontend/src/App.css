@@ -1491,8 +1491,8 @@ body, html {
 
 .login-notice {
   /* Informational, not an error: accent-tinted glass, never the danger colour. */
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
   color: var(--text-primary);
   border-radius: var(--radius-md);
   padding: 0.7rem 0.9rem;

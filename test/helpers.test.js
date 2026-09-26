@@ -3529,7 +3529,9 @@ checkAsync('readSession decodes base64URL, not base64 — `-` and `_` payloads a
 });
 
 checkAsync('the login page is told why a session ended, once, and returns only to in-app paths', async () => {
-  const { safeReturnPath, markSessionEnded, takeSessionEnd } = await import('../frontend/src/session.js');
+  const { safeReturnPath, markSessionEnded, peekSessionEnd, clearSessionEnd } = await import('../frontend/src/session.js');
+  // Read-then-clear, as the login page does (peek in the initializer, clear on mount).
+  const takeSessionEnd = () => { const v = peekSessionEnd(); clearSessionEnd(); return v; };
   // Open-redirect guard: navigate() after login takes this value.
   assert.strictEqual(safeReturnPath('/settings'), '/settings');
   assert.strictEqual(safeReturnPath('/game/igdb_1?x=1'), '/game/igdb_1?x=1');
@@ -3552,6 +3554,9 @@ checkAsync('the login page is told why a session ended, once, and returns only t
     };
     assert.strictEqual(takeSessionEnd(), null, 'a notice appeared with no session having ended');
     markSessionEnded('/settings');
+    // A peek does not consume: StrictMode's double render must see the same value twice.
+    assert.deepStrictEqual(peekSessionEnd(), { from: '/settings' });
+    assert.deepStrictEqual(peekSessionEnd(), { from: '/settings' }, 'a read consumed the notice');
     assert.deepStrictEqual(takeSessionEnd(), { from: '/settings' });
     assert.strictEqual(takeSessionEnd(), null, 'the notice is shown more than once');
     // Re-validated on READ: storage is writable by anything in the origin.

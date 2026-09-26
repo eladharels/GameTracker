@@ -71,16 +71,26 @@ export function markSessionEnded(fromPath) {
   } catch { /* storage unavailable: the redirect still happens, just unexplained */ }
 }
 
-// Read AND clear, so the notice shows once. Returns {from} or null. The stored value is
-// re-validated: sessionStorage is writable by anything running in the origin.
-export function takeSessionEnd() {
+// Read WITHOUT clearing — safe inside a render/state initializer. Returns {from} or
+// null. The stored value is re-validated: sessionStorage is writable by anything
+// running in the origin.
+//
+// Reading and clearing are separate on purpose: StrictMode renders twice on mount in
+// dev and keeps the SECOND render's state, so a read-and-clear in the initializer
+// showed nothing under `vite dev` and made the feature look broken. The page reads in
+// its initializer and clears in a mount effect.
+export function peekSessionEnd() {
   try {
     const raw = sessionStorage.getItem(END_KEY)
-    sessionStorage.removeItem(END_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw)
     return { from: safeReturnPath(parsed && parsed.from) }
   } catch {
     return null
   }
+}
+
+// Clear, so the notice shows once.
+export function clearSessionEnd() {
+  try { sessionStorage.removeItem(END_KEY) } catch { /* nothing to clear */ }
 }

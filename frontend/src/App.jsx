@@ -9,7 +9,7 @@ import GameDetailModal from './GameDetailModal'
 import { formatDurationShort, formatDurationLong, formatDateReadable, formatDateLocal } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
-import { readSession, msUntilExpiry, markSessionEnded, takeSessionEnd } from './session'
+import { readSession, msUntilExpiry, markSessionEnded, peekSessionEnd, clearSessionEnd } from './session'
 import { safeExternalUrl } from './safeUrl'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
@@ -321,7 +321,8 @@ function LoginPage({ setUser }) {
   const navigate = useNavigate()
   // Why this page is showing, read once: set when a session ENDED (expiry, or refused by
   // the server), never on a manual logout. Carries the path to return to.
-  const [sessionEnd] = useState(() => takeSessionEnd())
+  const [sessionEnd] = useState(() => peekSessionEnd())
+  useEffect(() => { clearSessionEnd() }, [])   // cleared AFTER mount: see peekSessionEnd
   const [showEndNotice, setShowEndNotice] = useState(!!sessionEnd)
 
   const handleLogin = async (e) => {
@@ -344,7 +345,7 @@ function LoginPage({ setUser }) {
         // The server just issued this token, so "expired" can only mean this device's
         // clock is wrong. Say so: returning to a blank login form looked like a failure
         // with no reason, and the user could never get in.
-        setError('Signed in, but this device\'s clock looks wrong, so the session cannot start. Check the date and time settings and try again.')
+        setError('Can\'t start your session: this device\'s date and time look wrong. Correct them, then sign in again.')
         return
       }
       localStorage.setItem('token', res.data.token)
