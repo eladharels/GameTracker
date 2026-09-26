@@ -9,11 +9,11 @@ WORKDIR /app
 COPY package*.json ./
 
 # All dependencies (dev included: the build needs Vite), with install scripts OFF.
-# Six packages have one, and none is needed for a browser bundle:
+# Seven packages have one (eight lockfile entries), and none is needed for a browser bundle:
 #   - @scarf/scarf is an install-time telemetry beacon that phones home;
 #   - tree-sitter and its grammars compile a NATIVE Node binding via node-gyp. The
-#     browser gets Swagger's parser as its own bundle, so that binding never reached
-#     the page, and it only built because the old full `node:20` image carried a compiler;
+#     built bundle contains no tree-sitter at all (it parses YAML with js-yaml), so that
+#     binding never reached the page; it only built because full `node:20` had a compiler;
 #   - core-js-pure prints a banner; esbuild's postinstall only verifies its binary, which
 #     comes from the platform optionalDependency either way; fsevents is macOS-only.
 # Verified by building with scripts off and loading /api-docs, which parses the YAML spec.

@@ -5,7 +5,7 @@
 # runtime in the official images is a tarball at /usr/local/bin/node rather than a
 # package. So `trivy-api` is structurally blind to V8/OpenSSL/llhttp CVEs in the
 # interpreter itself, and its green result is not evidence about the Node version. Only
-# this line is. `test/helpers.test.js` pins it against package.json engines.
+# this line is. `test/runtime.test.js` pins it against package.json engines.
 #
 # Safe to bump because nothing here is native: every production dependency is pure
 # JavaScript (bcryptjs, not bcrypt), and `sqlite3` — the one package that ever needed a

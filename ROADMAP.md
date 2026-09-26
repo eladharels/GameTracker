@@ -1034,12 +1034,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - **The frontend is now in the runtime gate's `IMAGES`:** Dockerfile base ≥ floor, floor
     supported, CI's major equal. Mutation-checked: `FROM node:20` and `"node": ">=20"`
     each fail.
-  - **`npm ci --ignore-scripts` in the frontend image.** Six packages had install scripts,
-    and none is needed for a browser bundle:
+  - **`npm ci --ignore-scripts` in the frontend image.** Seven packages (eight lockfile
+    entries) had install scripts, and none is needed for a browser bundle:
     - `@scarf/scarf` is a telemetry beacon that phoned home from every image build.
     - `tree-sitter` and its grammars compiled a native Node binding through node-gyp. It
-      only worked because the full `node:20` image carried a compiler, and it never reached
-      the page, since the browser gets Swagger's parser as its own bundle.
+      only worked because the full `node:20` image carried a compiler. It never reached the
+      page: the built bundle contains no tree-sitter at all and parses YAML with js-yaml.
     - The rest are a banner, esbuild's binary self-check, and macOS-only `fsevents`.
 
     Verified: a scriptless install, then the build, the component tests, and `/api-docs` in a
