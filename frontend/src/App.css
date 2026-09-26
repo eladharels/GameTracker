@@ -1537,12 +1537,14 @@ body, html {
 }
 
 /* SEC-14: the boot probe and the "server unreachable" screens reuse the login card, so
-   the first thing on screen matches what follows it. Centred, no form fields. */
+   the first thing on screen matches what follows it. Centred, no form fields. The title is
+   a real heading here (there is no form), styled exactly like the login wordmark. */
 .app-boot {
   align-items: center;
   text-align: center;
   gap: 1rem;
 }
+.app-boot h1.login-wordmark-title { margin: 0; font-size: inherit; }
 .app-boot-text {
   margin: 0;
   color: var(--text-secondary);
@@ -1590,7 +1592,8 @@ body, html {
   background: color-mix(in srgb, var(--color-accent) 4%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
-.login-form button[type="submit"] {
+.login-form button[type="submit"],
+.login-form .app-boot-retry {
   background: var(--color-accent);
   color: var(--color-accent-contrast);
   border: none;
@@ -1606,17 +1609,20 @@ body, html {
   box-shadow: 0 4px 20px color-mix(in srgb, var(--color-accent) 30%, transparent);
   letter-spacing: 0.02em;
 }
-.login-form button[type="submit"]:hover:not(:disabled) {
+.login-form button[type="submit"]:hover:not(:disabled),
+.login-form .app-boot-retry:hover:not(:disabled) {
   background: var(--color-accent-hover);
   transform: translateY(-1px);
   box-shadow: 0 6px 24px color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
-.login-form button[type="submit"]:active:not(:disabled) {
+.login-form button[type="submit"]:active:not(:disabled),
+.login-form .app-boot-retry:active:not(:disabled) {
   transform: translateY(0);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
 /* While signing in: visibly busy, no lift, no pointer — the label alone looked clickable. */
-.login-form button[type="submit"]:disabled {
+.login-form button[type="submit"]:disabled,
+.login-form .app-boot-retry:disabled {
   opacity: 0.7;
   cursor: progress;
   transform: none;

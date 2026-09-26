@@ -94,12 +94,12 @@ export default function SystemStatusPage() {
       {/* SEC-14 condition 10: an instance running with SESSION_COOKIE_INSECURE=1 says so
           where an administrator looks, not only in a boot log line nobody reads. */}
       {getSession()?.cookieSecure === false && (
-        <div className="ss-security-warning" role="status">
+        <div className="ss-security-warning">
           <FaExclamationCircle aria-hidden="true" />
           <span>
             Sign-in cookies are <strong>not</strong> marked Secure (SESSION_COOKIE_INSECURE=1).
-            Sessions can be read on the network and tossed by sibling subdomains. Serve
-            GameTracker over HTTPS and unset it.
+            Anyone on the network path can read a session, and other sites on the same parent
+            domain can overwrite it. Serve GameTracker over HTTPS and unset it.
           </span>
         </div>
       )}

@@ -53,7 +53,12 @@ export default function LoginPage({ setUser }) {
         view = await probeSession()
       } catch (probeErr) {
         if (probeErr?.response?.status === 401) {
-          setError('Your browser refused the sign-in cookie. This GameTracker needs to be served over HTTPS; an administrator can also allow plain HTTP with SESSION_COOKIE_INSECURE=1.')
+          setError('Your browser didn\'t keep the sign-in cookie. Allow cookies for this site; if it is served over plain HTTP, an administrator must enable HTTPS or set SESSION_COOKIE_INSECURE=1.')
+        } else if (probeErr?.response?.status === 403) {
+          // The sign-in itself SUCCEEDED; only the confirmation was refused (a proxy stripping
+          // the X-Requested-With header, typically). Not "your account isn't allowed", which
+          // is what the generic mapping would say (CISO review).
+          setError('Signed in, but the server refused to confirm the session. A proxy in front of GameTracker may be stripping request headers; ask an administrator.')
         } else {
           setError(loginErrorMessage(probeErr))
         }

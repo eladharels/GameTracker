@@ -2,7 +2,7 @@
 // are testable without rendering the app. A stub adapter answers every request — nothing
 // leaves.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, API_BASE, probeSession } from './api'
+import { api, API_BASE, probeSession, serverLogout } from './api'
 import { getSession, peekSessionEnd, sessionFromView, setSession } from './session'
 
 let seen
@@ -65,6 +65,23 @@ describe('api: a 401 ends the session (P0-6), and only a 401 does', () => {
     signedIn()
     api.defaults.adapter = answer(403)
     await expect(api.get(`${API_BASE}/users`)).rejects.toBeTruthy()
+    expect(getSession()).not.toBeNull()
+    expect(peekSessionEnd()).toBeNull()
+  })
+  it('guard 1: a 401 on an ordinary call with NO session in memory ends nothing (the getSession check)', async () => {
+    // The race the guard exists for: a stale request's 401 landing after a sign-out.
+    const assign = vi.fn()
+    vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, pathname: '/library', assign })
+    api.defaults.adapter = answer(401)
+    await expect(api.get(`${API_BASE}/user/me`)).rejects.toBeTruthy()
+    expect(assign).not.toHaveBeenCalled()
+    expect(peekSessionEnd()).toBeNull()
+  })
+  it('guard 2: the LOGOUT call\'s own 401 never ends a session (skipSessionEnd), even one that exists', async () => {
+    // A logout from an earlier session answering 401 after a NEW sign-in must not end it.
+    signedIn()
+    api.defaults.adapter = answer(401)
+    await serverLogout()
     expect(getSession()).not.toBeNull()
     expect(peekSessionEnd()).toBeNull()
   })

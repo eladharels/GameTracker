@@ -12,8 +12,9 @@
 //
 // No DOM or storage at MODULE scope: test/helpers.test.js imports this file.
 
+// App.jsx mirrors this in React state to trigger renders, and sets BOTH together (the boot
+// probe, sign-in, every endSession caller); nothing else keeps a copy.
 let current = null
-const listeners = new Set()
 
 // The session as the server described it, plus when this tab learned of it, so the
 // expiry is computed from the server's `expiresIn` rather than this device's clock.
@@ -37,13 +38,7 @@ export const getSession = () => current
 
 export function setSession(session) {
   current = session || null
-  for (const fn of listeners) { try { fn(current) } catch { /* a listener must not break the others */ } }
   return current
-}
-
-export function subscribeSession(fn) {
-  listeners.add(fn)
-  return () => listeners.delete(fn)
 }
 
 // Milliseconds until the session expires (0 once it has), or null with no session.
@@ -208,6 +203,10 @@ export function clearSessionEnd() {
 // `explain`: record WHY for the login page (expiry, a refused credential). A manual
 // sign-out passes false: nothing went wrong, so the login page must say nothing.
 // `announce`: tell other tabs. False when this ending was itself another tab's news.
+// `logout`: clear the cookie server-side. False when there is nothing of THIS tab's to clear:
+// the boot probe's 401 (no valid cookie), and another tab's sign-out (that tab already
+// cleared it). A frozen background tab thawing later must not replay a stale logout and
+// clear a NEWER user's cookie (CISO review).
 //
 // The server-side logout (clearing the HttpOnly cookie, which JS cannot touch) is
 // registered by api.js, which owns HTTP. It is best-effort and never throws: a session
@@ -215,12 +214,13 @@ export function clearSessionEnd() {
 let serverLogout = null
 export function setServerLogout(fn) { serverLogout = typeof fn === 'function' ? fn : null }
 
-export function endSession({ explain, fromPath, announce = true } = {}) {
+export function endSession({ explain, fromPath, announce = true, logout = true } = {}) {
   // WHO, read before the session goes: the return path is recorded as theirs (FE-14).
   const owner = current?.username?.toLowerCase() || readHint()?.username || null
   setSession(null)
   writeHint(null)
   if (explain) markSessionEnded(fromPath, owner)
   if (announce) announceSession('logout', owner)
+  if (!logout) return
   try { const p = serverLogout && serverLogout(); if (p && p.catch) p.catch(() => {}) } catch { /* best effort */ }
 }

@@ -10,11 +10,9 @@ import { useDialogFocus } from './useDialogFocus';
 // it bypassed the auth interceptor.
 
 // Who is signed in, from session.js's one in-memory store (SEC-14). The page never sees
-// the credential: it is an HttpOnly cookie. `token` is kept as a presence flag only, so
-// the effect below still re-runs when the session changes.
+// the credential: it is an HttpOnly cookie.
 function getAuth() {
-  const user = getSession();
-  return { token: user ? user.username : null, user };
+  return { user: getSession() };
 }
 
 // Helper to generate a color from a string (username)
@@ -41,7 +39,7 @@ function normalizeStatus(status) {
 
 // This page will display user cards for every user who shares their library
 function SharedLibrary() {
-  const { token, user } = getAuth();
+  const { user } = getAuth();
   const [allUsers, setAllUsers] = useState([]); // All users for sharing UI
   const [sharedWith, setSharedWith] = useState([]); // Who I share with
   const [sharedWithMe, setSharedWithMe] = useState([]); // Who shared with me
@@ -75,7 +73,7 @@ function SharedLibrary() {
 
   // Fetch all users and my sharing list on mount
   useEffect(() => {
-    if (!token || !user) return;
+    if (!user) return;
     setLoading(true);
     setError('');
     Promise.all([
@@ -102,7 +100,7 @@ function SharedLibrary() {
         : 'Failed to load sharing data.');
       setLoading(false);
     });
-  }, [token, user?.username]);
+  }, [user?.username]);
 
   // Add or revoke sharing
   async function handleShareAdd(username) {

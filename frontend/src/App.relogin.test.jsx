@@ -118,3 +118,77 @@ it('another tab signing out ends this tab\'s session too (condition 18)', async 
   expect(await screen.findByLabelText('Username')).toBeTruthy()
   expect(getSession()).toBeNull()
 })
+
+it('boot: a NETWORK error (no response at all) is unreachable too, never the login page', async () => {
+  probeFailure = new Error('Network Error')   // no `.response`: the server never answered
+  renderApp('/library')
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Can.t reach the server/)
+  expect(screen.queryByLabelText('Username')).toBeNull()
+})
+
+it('expiry runs on the SERVER\'s expiresIn: a device clock hours fast does not end a fresh session', async () => {
+  // The server says: valid for an hour. This device's clock is two hours ahead, so a timer
+  // computed from exp against Date.now() would fire at once and sign the user out.
+  const realNowSec = Math.floor(Date.now() / 1000)
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(Date.now() + 2 * 3600 * 1000)
+  try {
+    serverSession = 'jane'
+    api.get.mockImplementation((url) => (url.endsWith('/auth/session')
+      ? Promise.resolve({ data: { session: { ...view('jane'), exp: realNowSec + 3600, expiresIn: 3600 } } })
+      : Promise.resolve({ data: [] })))
+    renderApp('/library')
+    await waitFor(() => expect(heading()).toMatch(/library/i))
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
+    expect(heading()).toMatch(/library/i)
+    expect(getSession()).not.toBeNull()
+  } finally { vi.useRealTimers() }
+})
+
+it('another tab signing IN: a signed-out tab follows; a tab signed in as someone else reloads', async () => {
+  renderApp('/login')
+  await screen.findByLabelText('Username')
+  serverSession = 'jane'
+  const otherTab = new BroadcastChannel('gametracker-session')
+  await act(async () => {
+    otherTab.postMessage({ type: 'login', username: 'jane' })
+    await new Promise((r) => setTimeout(r, 50))
+  })
+  await waitFor(() => expect(heading()).toMatch(/search/i))
+  // Now signed in as jane, and another tab signs in as bob: this page reloads rather than
+  // leave jane's data on screen under bob's cookie.
+  const reload = vi.fn()
+  vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, reload })
+  await act(async () => {
+    otherTab.postMessage({ type: 'login', username: 'bob' })
+    await new Promise((r) => setTimeout(r, 50))
+  })
+  otherTab.close()
+  expect(reload).toHaveBeenCalled()
+})
+
+it('neither the boot 401 nor another tab\'s sign-out calls the server logout (CISO review)', async () => {
+  writeHint({ username: 'jane', exp: Math.floor(Date.now() / 1000) - 60 })
+  // Nor does the boot 401 announce a sign-out to other tabs: nothing changed there.
+  const heard = []
+  const listener = new BroadcastChannel('gametracker-session')
+  listener.onmessage = (e) => heard.push(e.data)
+  renderApp('/library')
+  await screen.findByLabelText('Username')
+  await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+  listener.close()
+  expect(heard).toEqual([])
+  const logouts = () => api.post.mock.calls.filter(([url]) => url.endsWith('/auth/logout')).length
+  expect(logouts()).toBe(0)
+  cleanup()
+  serverSession = 'jane'
+  renderApp('/library')
+  await waitFor(() => expect(heading()).toMatch(/library/i))
+  const otherTab = new BroadcastChannel('gametracker-session')
+  await act(async () => {
+    otherTab.postMessage({ type: 'logout', username: 'jane' })
+    await new Promise((r) => setTimeout(r, 50))
+  })
+  otherTab.close()
+  expect(logouts()).toBe(0)
+})

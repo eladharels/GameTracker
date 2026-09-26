@@ -14,7 +14,7 @@ import CalendarPage from './pages/CalendarPage'
 import AccountPage from './pages/AccountPage'
 import {
   msUntilExpiry, endSession, sessionFromView, setSession, writeHint, readHint, dropLegacyToken,
-  markSignInUpdated, onSessionAnnounced,
+  markSignInUpdated, clearSignInUpdated, onSessionAnnounced,
 } from './session'
 import { probeSession } from './api'
 import LoginPage from './pages/LoginPage'
@@ -58,13 +58,14 @@ function useAuth() {
       .then((view) => {
         const session = setSession(sessionFromView(view))
         writeHint(session)
+        clearSignInUpdated()   // signed in already: the "updated" line must not surface later
         setState({ status: 'ready', user: session })
       })
       .catch((err) => {
         if (err?.response?.status === 401) {
           const hint = readHint()
           const expired = !!hint && typeof hint.exp === 'number' && hint.exp * 1000 <= Date.now()
-          endSession({ explain: expired, fromPath: window.location.pathname, announce: false })
+          endSession({ explain: expired, fromPath: window.location.pathname, announce: false, logout: false })
           setState({ status: 'ready', user: null })
         } else {
           setState({ status: 'unreachable', user: null })
@@ -169,7 +170,7 @@ function App() {
   useEffect(() => onSessionAnnounced((msg) => {
     if (msg.type === 'logout') {
       if (!user) return
-      endSession({ explain: false, announce: false })
+      endSession({ explain: false, announce: false, logout: false })
       setUser(null)
       navigate('/login')
     } else if (msg.type === 'login') {
@@ -185,7 +186,7 @@ function App() {
     return (
       <div className="login-page">
         <div className="login-form app-boot" role="status" aria-live="polite">
-          <div className="login-wordmark-title">GameTracker</div>
+          <h1 className="login-wordmark-title">GameTracker</h1>
           <p className="app-boot-text">Loading…</p>
         </div>
       </div>
@@ -195,9 +196,9 @@ function App() {
     return (
       <div className="login-page">
         <div className="login-form app-boot" role="alert">
-          <div className="login-wordmark-title">GameTracker</div>
+          <h1 className="login-wordmark-title">GameTracker</h1>
           <p className="app-boot-text">Can&apos;t reach the server. Your library is unchanged.</p>
-          <button type="button" onClick={probe} autoFocus>Retry</button>
+          <button type="button" className="app-boot-retry" onClick={probe} autoFocus>Retry</button>
         </div>
       </div>
     )

@@ -1411,6 +1411,19 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
     assert.strictEqual(viaBearer.statusCode, 403);
   });
 
+  checkAsync('the session route passes the COOKIE MODE, so System Status can warn about insecure mode', async () => {
+    // Called through the module object: a route that drops the mode argument would report
+    // cookieSecure:true on an insecure instance, and the warning would never show.
+    const { token } = sess.issue(ROW, SECRET);
+    const real = sess.sessionView;
+    let args;
+    sess.sessionView = (...a) => { args = a; return real(...a); };
+    try {
+      await withUserRow(ROW, () => runChain(v1Chain('get', '/api/auth/session'), { headers: { ...CSRF, cookie: cookieFor(token) } }));
+    } finally { sess.sessionView = real; }
+    assert.strictEqual(args && args[3], 'secure', 'the session route no longer tells the view which cookie mode is in force');
+  });
+
   checkAsync('POST /api/auth/logout clears the cookie with 204', async () => {
     const { token } = sess.issue(ROW, SECRET);
     const res = await withUserRow(ROW, () => runChain(v1Chain('post', '/api/auth/logout'), { headers: { ...CSRF, cookie: cookieFor(token) } }));

@@ -88,9 +88,17 @@ describe('LoginPage session handling (SEC-7)', () => {
     vi.spyOn(api, 'post').mockResolvedValue({ data: { session: view('jane') } })
     vi.spyOn(api, 'get').mockRejectedValue({ response: { status: 401, data: {} } })
     const setUser = renderLogin(); submit()
-    expect((await screen.findByRole('alert')).textContent).toMatch(/refused the sign-in cookie/)
+    expect((await screen.findByRole('alert')).textContent).toMatch(/didn.t keep the sign-in cookie/)
     expect(setUser).not.toHaveBeenCalled()
     expect(getSession()).toBeNull()
+  })
+  it('a 403 from the confirming probe is NOT "your account isn\'t allowed" -- the sign-in succeeded', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { session: view('jane') } })
+    vi.spyOn(api, 'get').mockRejectedValue({ response: { status: 403, data: { error: 'Missing or invalid X-Requested-With header' } } })
+    renderLogin(); submit()
+    const text = (await screen.findByRole('alert')).textContent
+    expect(text).toMatch(/refused to confirm the session/)
+    expect(text).not.toMatch(/isn.t allowed|X-Requested-With/)   // no misattribution, no raw server text
   })
   it('shows the one-time "sign-in has been updated" line after the old token was removed', () => {
     markSignInUpdated()

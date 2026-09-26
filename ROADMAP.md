@@ -692,7 +692,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `frontend/.env.production` in the backend context (caught in review).
   `test/runtime.test.js` checks each file and allows only `!.env.example` as a negation.
 
-### [ ] SEC-14 Move the web session to an HttpOnly cookie (split from SEC-7)
+### [x] SEC-14 Move the web session to an HttpOnly cookie (split from SEC-7)
 - **Where:** `frontend/src/App.jsx` (`localStorage` token), `index.js#authRequired`.
 - **Why:** a token in `localStorage` is readable by any script that runs in the origin.
   `script-src 'self'` makes that hard, not impossible.
@@ -897,6 +897,37 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     - no request carries Authorization, and every one carries the CSRF header;
     - with the backend down, the app shows the unreachable screen with Retry;
     - no page errors.
+- **Phase 2 review (CISO APPROVE with conditions; Architect and UI/UX REJECT on tests and
+  one style defect; all applied, fd2b609 and after):**
+  - **Tests for the five mutations that survived:**
+    - a boot NETWORK error (no response) is unreachable, not signed out;
+    - the expiry timer against a device clock two hours fast;
+    - cross-tab sign-in (a signed-out tab follows; a different user reloads);
+    - the session route passing the cookie mode;
+    - the System Status warning rendering.
+  - The two recursion guards are tested SEPARATELY: `getSession()` on the 401 handler, and
+    `skipSessionEnd` on logout.
+  - The boot 401 and another tab's sign-out no longer call the server logout, and the boot
+    401 announces nothing. A thawed background tab can no longer replay a stale logout over a
+    newer user's cookie.
+  - A 403 from the post-login probe has its own message ("Signed in, but the server refused
+    to confirm the session"), not the account-refused one.
+  - The unused `subscribeSession` is gone: App mirrors the store and sets both together.
+  - The "sign-in updated" flag clears on a successful boot, and SharedLibrary's misnamed
+    `token` flag is removed.
+  - UI/UX: Retry is styled as the login button (checked in Chromium under Violet and
+    Amber). Both screens have a real heading. The System Status warning drops `role=status`
+    and says "overwrite" instead of "tossed". The refused-cookie text also covers blocked
+    cookies.
+  - **Noted, not changed:** white on the Amber accent is low-contrast for the login button
+    and Retry alike. That predates this change and belongs to the accent presets (FE-20).
+  - Seven mutations re-run, each caught.
+- **CI fixes found on the way (fd2b609):**
+  - the registry semgrep rules flagged `jwt.decode` (the exp is now signed in, not read
+    back) and the `SETTINGS_DIR` `path.join` (justified `nosemgrep`);
+  - gitleaks flagged a realistic-length placeholder PAT in a test (exact-run allowlist, and
+    the test now builds it at runtime);
+  - the contract suite failed without `JWT_SECRET` set, as CI runs it.
 
 ### [x] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
 - **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).
