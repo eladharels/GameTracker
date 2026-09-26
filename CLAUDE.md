@@ -432,13 +432,16 @@ GameTracker/
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
 > router and asserts the authorization tier of all 84 routes — public / auth / owner-or-admin /
-> admin / self-only / pat / pat-admin — derived from the middleware chain, not from the path. CI
+> admin / self-only / pat / pat-library / pat-admin — derived from the middleware chain, not from the path. CI
 > fails on a route that is not in the inventory, on a tier that changed, and on any
 > unauthenticated route outside the two-item allowlist (`GET /api/health`,
 > `POST /api/auth/login`).
 >
-> The seven tiers are not decoration. `pat` is distinct from `auth` because folding them together
+> The eight tiers are not decoration. `pat` is distinct from `auth` because folding them together
 > would hide the fact that `/api/v2` refuses session JWTs, which is the whole admin boundary;
+> `pat-library` is distinct from `pat` because a v2 route with NO scope guard looks exactly like
+> a library route otherwise — a new v2 route needs `requireLibraryScope` or `requireAdminScope`,
+> and plain `pat` is accepted only for the one `as-started` operation the spec pins;
 > `self-only` is distinct from `owner-or-admin` because a shared library is a consent
 > relationship between two accounts and is the one place an administrator gets no bypass.
 >
@@ -653,7 +656,13 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   plaintext — a database dump yields no working credentials), revoked by DELETEing one row. Two
   scopes only, `library` and `admin`. **A scope may only NARROW the privilege read from `users`,
   never grant it**: a library-scoped token held by an admin is not an admin, and an admin-scoped
-  token held by a non-admin does not become one. Minted by `create-api-token.js`; accepted by v1's
+  token held by a non-admin does not become one. **The two are independent — `admin` does not
+  imply `library`** (ROADMAP SEC-12): an admin-only token manages users and settings and gets 403
+  from every library route. v2 enforces it per route with `requireLibraryScope` (tier
+  `pat-library`); v1's `authRequired` lets such a token reach only routes carrying a
+  `requirePermission` guard, read from `req.route`, failing closed without one. The ONE rule is
+  `services/auth.js#holdsScope`. `GET /api/v2/jobs/:jobId` alone is `x-required-scope: as-started`
+  (`scopeForJob`: the scope of the call that started the job). Minted by `create-api-token.js`; accepted by v1's
   `authRequired` alongside JWTs (additive — no route or response shape changed). The login rate
   limiter lives inside the login route, so token auth never reaches it; that is deliberate, since
   5 retries from an MCP client would otherwise lock the owner out for 15 minutes.

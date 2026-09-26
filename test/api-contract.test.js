@@ -948,6 +948,119 @@ checkAsync('a game history keeps the shape the modal reads', async () => {
     'the timeline renders every one of these, and labels rows by `source`');
 });
 
+console.log('Token scopes (SEC-12 — admin does not imply library):');
+
+// The REAL chains, pulled off the live routers, so what runs here is what serves.
+function routeChain(stack, method, path) {
+  const layer = stack.find((l) => l.route && l.route.path === path && l.route.methods[method]);
+  assert.ok(layer, `${method.toUpperCase()} ${path} is not a live route`);
+  return layer.route;
+}
+function v2Stack() {
+  const { app } = require('../index.js');
+  const mount = (app.router || app._router).stack.find(
+    (l) => l.handle && Array.isArray(l.handle.stack) && l.handle.stack.some((x) => x.route && x.route.path === '/jobs/:jobId'));
+  return mount.handle.stack;
+}
+const scopedIdentity = (scopes, admin = true) => ({
+  user: { id: 7, username: 'ops', can_manage_users: admin, origin: 'local', display_name: 'ops' },
+  scopes, tokenId: 1, expiresAt: null,
+});
+
+// v1: authRequired, fed a PAT, on a library route and on an admin route.
+async function v1Call(method, path, scopes) {
+  process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-only-secret-not-used-for-signing';
+  const { app } = require('../index.js');
+  const authService = require('../services/auth');
+  const route = routeChain((app.router || app._router).stack, method, path);
+  const authRequired = route.stack.find((s) => s.handle.name === 'authRequired').handle;
+  const realVerify = authService.verifyToken;
+  authService.verifyToken = async () => scopedIdentity(scopes);
+  const res = recordingRes();
+  let passed = false;
+  try {
+    await authRequired({ headers: { authorization: 'Bearer gt_pat_scope-test' }, route }, res, () => { passed = true; });
+  } finally {
+    authService.verifyToken = realVerify;
+  }
+  return { res, passed };
+}
+
+checkAsync('v1: an admin-only token is refused on a library route, with the {error} envelope', async () => {
+  const { res, passed } = await v1Call('get', '/api/user/:username/games', ['admin']);
+  assert.strictEqual(passed, false, 'an admin-only token reached a library route on v1');
+  assert.strictEqual(res.statusCode, 403);
+  assertKeys(res.body, ['error'], 'v1 scope refusal');
+});
+
+checkAsync('v1: an admin-only token still reaches an admin route', async () => {
+  const { passed } = await v1Call('get', '/api/users', ['admin']);
+  assert.strictEqual(passed, true, 'the admin-only token lost the admin routes it exists for');
+});
+
+checkAsync('v1: a library token reaches a library route', async () => {
+  const { passed } = await v1Call('get', '/api/user/:username/games', ['library']);
+  assert.strictEqual(passed, true);
+});
+
+checkAsync('v1: with no route context the scope check fails CLOSED', async () => {
+  const authService = require('../services/auth');
+  const route = routeChain((require('../index.js').app.router || require('../index.js').app._router).stack, 'get', '/api/users');
+  const authRequired = route.stack.find((s) => s.handle.name === 'authRequired').handle;
+  const realVerify = authService.verifyToken;
+  authService.verifyToken = async () => scopedIdentity(['admin']);
+  const res = recordingRes();
+  let passed = false;
+  try {
+    await authRequired({ headers: { authorization: 'Bearer gt_pat_scope-test' } }, res, () => { passed = true; });
+  } finally { authService.verifyToken = realVerify; }
+  assert.strictEqual(passed, false, 'an admin-only token passed where authRequired could not see the route');
+  assert.strictEqual(res.statusCode, 403);
+});
+
+// v2: the guard itself, and the job poll whose scope comes from the job.
+function v2Res() {
+  const res = recordingRes();
+  res.set = () => res;
+  res.type = () => res;
+  return res;
+}
+checkAsync('v2: requireLibraryScope refuses an admin-only token and admits a library one', async () => {
+  const guard = routeChain(v2Stack(), 'get', '/library/games').stack
+    .find((s) => s.handle.name === 'requireLibraryScope').handle;
+  const run = (scopes) => {
+    const res = v2Res();
+    let passed = false;
+    guard({ user: { can_manage_users: true }, auth: { scopes } }, res, () => { passed = true; });
+    return { res, passed };
+  };
+  const admin = run(['admin']);
+  assert.strictEqual(admin.passed, false, 'an admin-only token reached a v2 library route');
+  assert.strictEqual(admin.res.statusCode, 403);
+  assert.strictEqual(admin.res.body.code, 'forbidden');
+  assert.strictEqual(run(['library']).passed, true);
+  assert.strictEqual(run(['admin', 'library']).passed, true);
+});
+
+checkAsync('v2: a job is readable with the scope that STARTED it, and no other', async () => {
+  const jobRunner = require('../services/job-runner');
+  const handler = routeChain(v2Stack(), 'get', '/jobs/:jobId').stack.slice(-1)[0].handle;
+  const realGet = jobRunner.get;
+  const poll = (jobScope, scopes, admin) => {
+    jobRunner.get = () => ({ id: 'j', kind: 'refreshMetadata', scope: jobScope, ownerId: 7, state: 'running',
+      createdAt: new Date().toISOString(), startedAt: null, finishedAt: null, result: null, error: null });
+    const res = v2Res();
+    try {
+      handler({ params: { jobId: 'j' }, user: { id: 7, can_manage_users: admin }, auth: { scopes } }, res);
+    } finally { jobRunner.get = realGet; }
+    return res.statusCode;
+  };
+  assert.strictEqual(poll('instance', ['admin'], true), 200, 'an admin-only token cannot poll the sweep it started');
+  assert.strictEqual(poll('instance', ['library'], false), 403, "a library token read an instance-wide job's results");
+  assert.strictEqual(poll('self', ['library'], false), 200, 'a library token cannot poll its own refresh');
+  assert.strictEqual(poll('self', ['admin'], true), 403, "an admin-only token read a library refresh's results");
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

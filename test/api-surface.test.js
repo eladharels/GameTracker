@@ -148,6 +148,10 @@ function tierOf(route) {
       ? `pat-admin:${route.perms.join('+')}`
       : `admin:${route.perms.join('+')}`;
   }
+  // v2's library guard (SEC-12). Its own tier, not folded into 'pat': until it existed
+  // `library` was "the absence of admin" and a route with no scope check at all looked
+  // exactly like a library route — the decided-by-omission shape again.
+  if (route.names.includes('patRequired') && route.names.includes('requireLibraryScope')) return 'pat-library';
   if (route.names.includes('ownershipRequired')) return 'owner-or-admin';
   // Strictly narrower than owner-or-admin: self, with NO admin bypass. Recorded as
   // its own tier so the table states the real rule — it previously logged these as
@@ -253,34 +257,34 @@ const EXPECTED = {
 // Every one of these is also an operation in openapi/gametracker-v2.yaml carrying
 // `x-implemented: true`, and the drift check below fails if the two disagree.
 const EXPECTED_V2 = {
-  'GET /api/v2/me': 'pat',
-  'GET /api/v2/library/games': 'pat',
-  'GET /api/v2/library/games/:gameId': 'pat',
-  'DELETE /api/v2/library/games/:gameId': 'pat',
-  'GET /api/v2/tokens': 'pat',
-  'POST /api/v2/tokens': 'pat',
-  'DELETE /api/v2/tokens/:tokenId': 'pat',
-  'GET /api/v2/me/notifications': 'pat',
-  'PATCH /api/v2/me/notifications': 'pat',
-  'PATCH /api/v2/library/games/:gameId': 'pat',
-  'GET /api/v2/library/backlog': 'pat',
-  'PUT /api/v2/library/backlog': 'pat',
-  'GET /api/v2/catalog/search': 'pat',
+  'GET /api/v2/me': 'pat-library',
+  'GET /api/v2/library/games': 'pat-library',
+  'GET /api/v2/library/games/:gameId': 'pat-library',
+  'DELETE /api/v2/library/games/:gameId': 'pat-library',
+  'GET /api/v2/tokens': 'pat-library',
+  'POST /api/v2/tokens': 'pat-library',
+  'DELETE /api/v2/tokens/:tokenId': 'pat-library',
+  'GET /api/v2/me/notifications': 'pat-library',
+  'PATCH /api/v2/me/notifications': 'pat-library',
+  'PATCH /api/v2/library/games/:gameId': 'pat-library',
+  'GET /api/v2/library/backlog': 'pat-library',
+  'PUT /api/v2/library/backlog': 'pat-library',
+  'GET /api/v2/catalog/search': 'pat-library',
   // A LIVE Steam price, distinct from the library row's stored one. Library scope: an
   // agent asking "what does this cost" is doing library work, not administration.
-  'GET /api/v2/catalog/prices/:steamAppId': 'pat',
-  'POST /api/v2/library/games': 'pat',
-  'GET /api/v2/shares': 'pat',
+  'GET /api/v2/catalog/prices/:steamAppId': 'pat-library',
+  'POST /api/v2/library/games': 'pat-library',
+  'GET /api/v2/shares': 'pat-library',
   // Share TARGETS. Library-scoped and NOT admin, deliberately: listUsers is admin-only,
   // so without this a non-admin credential could reach POST /shares/outgoing and had no
   // way to discover a valid value for it. Username and display name only.
-  'GET /api/v2/users/directory': 'pat',
-  'PUT /api/v2/shares/outgoing': 'pat',
-  'POST /api/v2/shares/outgoing': 'pat',
-  'DELETE /api/v2/shares/outgoing/:username': 'pat',
+  'GET /api/v2/users/directory': 'pat-library',
+  'PUT /api/v2/shares/outgoing': 'pat-library',
+  'POST /api/v2/shares/outgoing': 'pat-library',
+  'DELETE /api/v2/shares/outgoing/:username': 'pat-library',
   // No ownership middleware, deliberately: the grant check IS the authorization, and
   // there is no admin bypass on this path. See openapi's `x-admin-bypass: false`.
-  'GET /api/v2/shares/incoming/:username/games': 'pat',
+  'GET /api/v2/shares/incoming/:username/games': 'pat-library',
   'GET /api/v2/users': 'pat-admin:can_manage_users',
   'POST /api/v2/users': 'pat-admin:can_manage_users',
   'PATCH /api/v2/users/:userId': 'pat-admin:can_manage_users',
@@ -297,13 +301,13 @@ const EXPECTED_V2 = {
   // Live probes of every external dependency. Admin, matching v1: searchCatalog
   // already tells a library-scoped caller which providers answered, so what this adds
   // is infrastructure detail — latency, HTTP status, which keys are set.
-  'GET /api/v2/stats/summary': 'pat',
+  'GET /api/v2/stats/summary': 'pat-library',
   'GET /api/v2/system/status': 'pat-admin:can_manage_users',
   'PATCH /api/v2/settings': 'pat-admin:can_manage_users',
   // Library-scoped on purpose: POST /library/refresh hands back a job, and an
   // operation whose own caller cannot poll the result is not an operation. Ownership,
   // not scope, is what protects an instance-wide job's failures[].
-  'POST /api/v2/library/refresh': 'pat',
+  'POST /api/v2/library/refresh': 'pat-library',
   'GET /api/v2/jobs/:jobId': 'pat',
   'POST /api/v2/jobs': 'pat-admin:can_manage_users',
 };
@@ -460,17 +464,29 @@ check('every v2 route on the router is in the spec', () => {
 
 check('x-required-scope agrees with the tier the router derives', () => {
   // The one comparison worth making: the spec's published authorization claim against
-  // the middleware chain that actually runs. `library` is defined as the ABSENCE of
-  // admin, so only the admin boundary is derivable — which is exactly what
-  // API_V2_DESIGN.md narrowed the claim to.
+  // the middleware chain that actually runs. All three values are derivable now
+  // (SEC-12): `library` used to be the ABSENCE of admin and so could only be claimed,
+  // never checked — and it was enforced nowhere.
+  //   library    <-> requireLibraryScope  (tier pat-library)
+  //   admin      <-> requireAdminScope    (tier pat-admin:...)
+  //   as-started <-> NEITHER guard (tier pat): the handler decides from the resource.
+  // The third is the dangerous one, since "no guard" is also what a forgotten guard
+  // looks like; it is only accepted where the spec says so explicitly.
   const tiers = new Map(liveRoutes().map((r) => [r.key, tierOf(r)]));
+  const expectedTier = { library: 'pat-library', 'as-started': 'pat' };
   for (const [key, op] of specKeys) {
     const declared = op['x-required-scope'];
-    const tier = tiers.get(key);
-    const routerSaysAdmin = String(tier).startsWith('pat-admin:');
-    assert.strictEqual(declared === 'admin', routerSaysAdmin,
-      `${key}: spec says x-required-scope '${declared}' but the router's tier is '${tier}'`);
+    const tier = String(tiers.get(key));
+    const agrees = declared === 'admin' ? tier.startsWith('pat-admin:') : tier === expectedTier[declared];
+    assert.ok(agrees, `${key}: spec says x-required-scope '${declared}' but the router's tier is '${tier}'`);
   }
+});
+
+check('only the job poll decides its scope from the resource', () => {
+  // Pinned, so a second `as-started` operation is a reviewed decision rather than the
+  // easy way to make the agreement check above stop complaining about a missing guard.
+  const asStarted = [...specKeys].filter(([, op]) => op['x-required-scope'] === 'as-started').map(([k]) => k);
+  assert.deepStrictEqual(asStarted, ['GET /api/v2/jobs/:jobId']);
 });
 
 check('no v2 route is registered below the catch-all that would shadow it', () => {
@@ -502,7 +518,7 @@ check('every v2 route is token-authenticated, never merely authenticated', () =>
   // carries no scope, so the admin boundary would be bypassable by logging in.
   for (const route of liveRoutes().filter((r) => r.key.includes('/api/v2/'))) {
     const tier = tierOf(route);
-    assert.ok(tier === 'pat' || tier.startsWith('pat-admin:'),
+    assert.ok(tier === 'pat' || tier === 'pat-library' || tier.startsWith('pat-admin:'),
       `${route.key} has tier '${tier}' — every /api/v2 route must go through patRequired`);
   }
 });

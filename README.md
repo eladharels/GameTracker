@@ -218,6 +218,12 @@ do.** A `library`-scoped token held by an administrator is *not* an administrato
 scope filters privilege, it never grants it. Grant `admin` only to something that genuinely
 needs to manage users or read API keys — an MCP server tending your library does not.
 
+**The two scopes are independent: `admin` does NOT include `library`.** An `admin`-only token
+manages users and settings and gets 403 from every library route, on v1 and v2 alike. Mint
+`library,admin` for a token that must do both. Before this was enforced an `admin`-only token
+used the library routes too, so **existing admin-only tokens lose library access** on upgrade.
+A job (`GET /api/v2/jobs/{id}`) is readable with the scope of the call that started it.
+
 > `library` is a slight misnomer worth knowing about: it means *everything that is not
 > admin*, not "read-only" and not "only the library". A `library` token can still change its
 > own account's notification settings and share its library with another user. What it
@@ -353,8 +359,9 @@ What differs from v1, and why:
 | Long sweeps | run inline until the proxy gives up | `202` and a job to poll |
 | Adding a game | search, pick client-side, post the id | post a **name**; ambiguity is a `409` listing the candidates |
 
-Scopes: a PAT is minted `library` or `admin`. A scope only ever **narrows** the privilege on the
-account — a library-scoped token held by an administrator is not an administrator.
+Scopes: a PAT is minted `library`, `admin`, or both. A scope only ever **narrows** the privilege on
+the account — a library-scoped token held by an administrator is not an administrator — and the
+two are independent: an `admin`-only token cannot use library routes.
 
 | Group | Routes |
 |---|---|

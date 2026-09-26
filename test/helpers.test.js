@@ -3031,6 +3031,33 @@ checkAsync('the create path REFUSES a planted notification target, on both surfa
 
 const authService = require('../services/auth');
 
+check('holdsScope: admin and library are INDEPENDENT, and admin needs the account too (SEC-12)', () => {
+  const admin = { can_manage_users: true };
+  const plain = { can_manage_users: false };
+  const narrowed = (user, scopes) => authService.authorize({ user, scopes });
+  // admin is read from the NARROWED flag: scope alone is not enough, nor is the account.
+  assert.strictEqual(authService.holdsScope(narrowed(admin, ['admin']), ['admin'], 'admin'), true);
+  assert.strictEqual(authService.holdsScope(narrowed(plain, ['admin']), ['admin'], 'admin'), false,
+    'an admin-scoped token made a non-admin an admin');
+  assert.strictEqual(authService.holdsScope(narrowed(admin, ['library']), ['library'], 'admin'), false);
+  // library is the token's alone — and admin does NOT imply it. It used to: `library`
+  // was checked nowhere, so an ["admin"] token used every library route.
+  assert.strictEqual(authService.holdsScope(admin, ['admin'], 'library'), false,
+    'an admin-only token was treated as holding the library scope');
+  assert.strictEqual(authService.holdsScope(plain, ['library'], 'library'), true);
+  assert.strictEqual(authService.holdsScope(admin, undefined, 'library'), false);
+  assert.strictEqual(authService.holdsScope(admin, ['admin', 'library'], 'nonsense'), false,
+    'an unknown scope name must be refused, never granted');
+});
+
+check('scopeForJob: a job needs the scope that started it, and an unknown one needs admin', () => {
+  assert.strictEqual(authService.scopeForJob({ scope: 'self' }), 'library');
+  assert.strictEqual(authService.scopeForJob({ scope: 'instance' }), 'admin');
+  // Fail closed: a record whose scope nobody recognises is treated as instance-wide.
+  assert.strictEqual(authService.scopeForJob({ scope: 'mystery' }), 'admin');
+  assert.strictEqual(authService.scopeForJob(null), 'admin');
+});
+
 check('a scope can only NARROW privilege, never grant it', () => {
   const admin = { id: 1, username: 'root', can_manage_users: true, origin: 'local', display_name: 'root' };
   const plain = { id: 2, username: 'jane', can_manage_users: false, origin: 'local', display_name: 'jane' };

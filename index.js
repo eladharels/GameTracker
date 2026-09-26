@@ -1387,6 +1387,12 @@ function authRequired(req, res, next) {
         // arrives with can_manage_users false and requirePermission refuses it.
         req.user = authService.authorize(identity);
         req.auth = { kind: 'pat', scopes: identity.scopes, tokenId: identity.tokenId };
+        // An admin-only token manages users and settings; it does not read or write
+        // libraries (SEC-12). 403, not 401: the credential is valid, the scope is not.
+        if (!authService.holdsScope(req.user, identity.scopes, authService.SCOPES.LIBRARY)
+            && !v1RouteIsAdminGated(req)) {
+          return res.status(403).json({ error: 'This token does not have the library scope' });
+        }
         next();
       })
       .catch((err) => {
@@ -1493,6 +1499,40 @@ function requireAdminScope(req, res, next) {
   return next();
 }
 requireAdminScope.requiredPermission = 'can_manage_users';
+
+// The v2 LIBRARY guard: everything that is not administration (ROADMAP SEC-12).
+//
+// Repeated per route, like requireAdminScope and for the same reason: the gate in
+// test/api-surface.test.js credits it from the route's own chain, reports it as tier
+// `pat-library`, and compares that against the spec's `x-required-scope: library`.
+// It cannot be a router-level .use() — the admin routes must NOT carry it, since an
+// admin-only token is allowed to manage users without being handed every library.
+//
+// Before this existed `library` meant "the absence of admin" and was enforced nowhere,
+// so an ["admin"] token used every library route the spec said it could not.
+function requireLibraryScope(req, res, next) {
+  if (!authService.holdsScope(req.user, req.auth && req.auth.scopes, authService.SCOPES.LIBRARY)) {
+    return v2.send(res, {
+      code: SVC.FORBIDDEN,
+      message: 'this operation requires a token with the library scope',
+    });
+  }
+  return next();
+}
+requireLibraryScope.requiredScope = 'library';
+
+// v1's half of the same rule. v1 has no per-route scope markers and its shapes are
+// frozen, so it keys on what IS on every route: an admin-gated route carries a
+// requirePermission() middleware tagged `.requiredPermission`. A PAT without the
+// library scope may reach those and nothing else — otherwise v2's enforcement would be
+// one URL prefix away from meaningless.
+//
+// req.route is set because authRequired is always ROUTE-level middleware. Were it ever
+// mounted with app.use(), req.route would be undefined and this refuses: fail closed.
+function v1RouteIsAdminGated(req) {
+  return !!(req.route && Array.isArray(req.route.stack)
+    && req.route.stack.some((layer) => layer.handle && layer.handle.requiredPermission));
+}
 
 function requirePermission(permission) {
   // NAMED, and tagged with the permission it enforces. Both matter: the Express
@@ -2127,12 +2167,12 @@ const v2Router = express.Router();
 v2Router.use(patRequired);
 
 // GET /api/v2/me — identity and EFFECTIVE privilege, for orientation.
-v2Router.get('/me', (req, res) => {
+v2Router.get('/me', requireLibraryScope, (req, res) => {
   res.json(v2.me(req.user, req.auth));
 });
 
 // GET /api/v2/tokens — this account's tokens. The secret is never returned.
-v2Router.get('/tokens', (req, res) => {
+v2Router.get('/tokens', requireLibraryScope, (req, res) => {
   authService.listTokens(req.user.id)
     .then((rows) => res.json({ data: rows.map(v2.token) }))
     .catch((err) => v2.send(res, err, { log: '[v2] token list failed:' }));
@@ -2144,7 +2184,7 @@ v2Router.get('/tokens', (req, res) => {
 // never mint one carrying a scope it does not itself hold. Without that this operation
 // is an escape hatch out of the whole scope system: the library-scoped token handed to
 // the MCP would mint itself an admin token and be an administrator one call later.
-v2Router.post('/tokens', (req, res) => {
+v2Router.post('/tokens', requireLibraryScope, (req, res) => {
   const body = req.body || {};
   authService.createToken({
     userId: req.user.id,
@@ -2159,7 +2199,7 @@ v2Router.post('/tokens', (req, res) => {
 
 // DELETE /api/v2/tokens/:tokenId — revocation is the whole point of the design.
 // Owner-scoped inside the DELETE, so another account's id removes nothing and says so.
-v2Router.delete('/tokens/:tokenId', (req, res) => {
+v2Router.delete('/tokens/:tokenId', requireLibraryScope, (req, res) => {
   const id = parseRouteId(req.params.tokenId);
   if (id === null) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such token' });
   authService.revokeToken(id, req.user.id)
@@ -2168,21 +2208,21 @@ v2Router.delete('/tokens/:tokenId', (req, res) => {
 });
 
 // GET /api/v2/me/notifications — the caller's own delivery targets.
-v2Router.get('/me/notifications', (req, res) => {
+v2Router.get('/me/notifications', requireLibraryScope, (req, res) => {
   usersService.readNotificationSettings(req.user.id)
     .then((row) => res.json(v2.notificationSettings(row)))
     .catch((err) => v2.send(res, err, { log: '[v2] notification read failed:' }));
 });
 
 // PATCH /api/v2/me/notifications — partial; absent keys are left alone.
-v2Router.patch('/me/notifications', (req, res) => {
+v2Router.patch('/me/notifications', requireLibraryScope, (req, res) => {
   usersService.updateNotificationSettings(req.user.id, req.body || {})
     .then((row) => res.json(v2.notificationSettings(row)))
     .catch((err) => v2.send(res, err, { log: '[v2] notification write failed:' }));
 });
 
 // GET /api/v2/library/games — filtered, sorted, paged SERVER-SIDE.
-v2Router.get('/library/games', (req, res) => {
+v2Router.get('/library/games', requireLibraryScope, (req, res) => {
   libraryService.listPage(req.user.id, {
     status: req.query.status,
     sort: req.query.sort,
@@ -2199,7 +2239,7 @@ v2Router.get('/library/games', (req, res) => {
 
 // GET /api/v2/library/games/:gameId — v1 had no per-game read outside a route
 // literally named /api/debug/, so reading one game meant fetching the whole library.
-v2Router.get('/library/games/:gameId', (req, res) => {
+v2Router.get('/library/games/:gameId', requireLibraryScope, (req, res) => {
   libraryService.findGame(req.user.id, req.params.gameId)
     .then((row) => {
       if (!row) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such game in your library' });
@@ -2211,7 +2251,7 @@ v2Router.get('/library/games/:gameId', (req, res) => {
 // DELETE /api/v2/library/games/:gameId — 204, or 404 when there was nothing to
 // delete. v1 answered {"success":true} either way, so a mistyped id was a silent
 // no-op reported as success: the worst possible shape for an LLM-driven client.
-v2Router.delete('/library/games/:gameId', (req, res) => {
+v2Router.delete('/library/games/:gameId', requireLibraryScope, (req, res) => {
   libraryService.removeGame(req.user.id, req.params.gameId)
     .then(({ removed }) => {
       if (!removed) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such game in your library' });
@@ -2225,7 +2265,7 @@ v2Router.delete('/library/games/:gameId', (req, res) => {
 // There is deliberately no releaseDate in the body. Accepting one is what let v1 write
 // an already-released game back to `unreleased` and then announce it to every
 // notification channel on the next correct write.
-v2Router.patch('/library/games/:gameId', libraryWriteLimit, (req, res) => {
+v2Router.patch('/library/games/:gameId', requireLibraryScope, libraryWriteLimit, (req, res) => {
   const body = req.body || {};
   if (!Object.hasOwn(body, 'status')) {
     return v2.send(res, {
@@ -2240,7 +2280,7 @@ v2Router.patch('/library/games/:gameId', libraryWriteLimit, (req, res) => {
 });
 
 // GET /api/v2/library/backlog — the backlog in display order.
-v2Router.get('/library/backlog', (req, res) => {
+v2Router.get('/library/backlog', requireLibraryScope, (req, res) => {
   libraryService.listBacklog(req.user.id)
     .then((rows) => res.json({ data: rows.map(v2.backlogEntry) }))
     .catch((err) => v2.send(res, err, { log: '[v2] backlog read failed:' }));
@@ -2250,7 +2290,7 @@ v2Router.get('/library/backlog', (req, res) => {
 //
 // Bulk BY DESIGN: ordering is a set operation, and applying it as a sequence of moves
 // leaves a half-ordered list on any failure. One transaction under one advisory lock.
-v2Router.put('/library/backlog', (req, res) => {
+v2Router.put('/library/backlog', requireLibraryScope, (req, res) => {
   const order = (req.body || {}).order;
   if (!Array.isArray(order)) {
     return v2.send(res, {
@@ -2279,7 +2319,7 @@ v2Router.put('/library/backlog', (req, res) => {
 // clients drop them, and an LLM reading the body sees an ordinary empty list. Here it
 // is `meta.degraded`, alongside per-provider statuses, and a TOTAL outage is a 502
 // rather than an empty array (services/catalog.js#search).
-v2Router.get('/catalog/search', (req, res) => {
+v2Router.get('/catalog/search', requireLibraryScope, (req, res) => {
   catalogService.search(req.query.q, { limit: req.query.limit })
     .then((result) => res.json({
       data: result.results.map(v2.catalogGame),
@@ -2293,7 +2333,7 @@ v2Router.get('/catalog/search', (req, res) => {
 // TWO service calls and no rules of its own: catalog decides WHICH game, library
 // decides what storing it means. The name path collapses search-then-add into one
 // call, and an ambiguous name is a 409 carrying the candidates rather than a guess.
-v2Router.post('/library/games', libraryWriteLimit, (req, res) => {
+v2Router.post('/library/games', requireLibraryScope, libraryWriteLimit, (req, res) => {
   const body = req.body || {};
   catalogService.resolveGame({ gameId: body.gameId, name: body.name })
     // `status` is passed through UNDEFAULTED. The default — and the rule that omitting
@@ -2343,7 +2383,7 @@ v2Router.post('/library/games', libraryWriteLimit, (req, res) => {
 // into disagreeing about how many games someone finished. It aggregates because an
 // agent asking "how many did I finish in March" should not spend its context on a row
 // per completion — see services/stats.js#agentSummary.
-v2Router.get('/stats/summary', (req, res) => {
+v2Router.get('/stats/summary', requireLibraryScope, (req, res) => {
   statsService.agentSummary(req.user.id, {
     period: req.query.period || 'month',
     timeZone: req.query.timeZone || 'UTC',
@@ -2394,7 +2434,7 @@ v2Router.get('/system/status', requireAdminScope, (req, res) => {
 // Username and display name ONLY. Every credential on the instance can read this, so
 // it carries what a share picker needs and nothing else — the admin listing keeps the
 // email, the permission flag and the origin.
-v2Router.get('/users/directory', (req, res) => {
+v2Router.get('/users/directory', requireLibraryScope, (req, res) => {
   sharesService.listDirectory()
     .then((rows) => res.json({
       data: rows.map((r) => ({
@@ -2415,7 +2455,7 @@ v2Router.get('/users/directory', (req, res) => {
 // common case, and a caller that reads "no price" as a failure reports an outage every
 // time someone asks about one. Steam being unreachable is a 502, because that is this
 // server's problem and not an answer about the game.
-v2Router.get('/catalog/prices/:steamAppId', (req, res) => {
+v2Router.get('/catalog/prices/:steamAppId', requireLibraryScope, (req, res) => {
   const steamAppId = String(req.params.steamAppId || '');
   // Validated here rather than passed through: this value goes into an outbound URL,
   // and the spec's pattern is only a promise until something enforces it.
@@ -2439,7 +2479,7 @@ v2Router.get('/catalog/prices/:steamAppId', (req, res) => {
     .catch((err) => v2.send(res, err, { log: '[v2] price lookup failed:' }));
 });
 
-v2Router.get('/shares', (req, res) => {
+v2Router.get('/shares', requireLibraryScope, (req, res) => {
   Promise.all([
     sharesService.listOutgoingShares(req.user.username),
     sharesService.listIncomingShares(req.user.username),
@@ -2456,7 +2496,7 @@ v2Router.get('/shares', (req, res) => {
 // v1 spells this POST while giving it replace semantics, so an agent "adding a share"
 // by posting one name silently revoked every other one. Same service call, honest
 // method; POST below adds.
-v2Router.put('/shares/outgoing', (req, res) => {
+v2Router.put('/shares/outgoing', requireLibraryScope, (req, res) => {
   const usernames = (req.body || {}).usernames;
   if (!Array.isArray(usernames)) {
     return v2.send(res, {
@@ -2477,7 +2517,7 @@ v2Router.put('/shares/outgoing', (req, res) => {
 });
 
 // POST /api/v2/shares/outgoing — add ONE. Additive and idempotent.
-v2Router.post('/shares/outgoing', (req, res) => {
+v2Router.post('/shares/outgoing', requireLibraryScope, (req, res) => {
   sharesService.addOutgoing(req.user.username, (req.body || {}).username)
     // 201 on the idempotent path too: the resource named in the request exists after
     // this call either way, and a 200/201 split here would only tell the caller
@@ -2490,7 +2530,7 @@ v2Router.post('/shares/outgoing', (req, res) => {
 //
 // The 404 is decided by whether a ROW was deleted, never by whether the account
 // exists. See services/shares.js#removeOutgoing: the alternative is a username oracle.
-v2Router.delete('/shares/outgoing/:username', (req, res) => {
+v2Router.delete('/shares/outgoing/:username', requireLibraryScope, (req, res) => {
   sharesService.removeOutgoing(req.user.username, req.params.username)
     .then(({ removed }) => {
       if (!removed) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such share' });
@@ -2506,7 +2546,7 @@ v2Router.delete('/shares/outgoing/:username', (req, res) => {
 // it is a consent relationship between two accounts rather than a resource the server
 // owns. A 403 here is deliberately indistinguishable from a library that does not
 // exist.
-v2Router.get('/shares/incoming/:username/games', (req, res) => {
+v2Router.get('/shares/incoming/:username/games', requireLibraryScope, (req, res) => {
   sharesService.readSharedPage(req.params.username, req.user.username, {
     limit: req.query.limit,
     cursor: req.query.cursor,
@@ -2708,7 +2748,7 @@ const jobDeps = () => ({
 // Separate from POST /jobs, and that separation is the control: an instance-wide
 // `kind` enum on one admin-only operation is how "refresh my library" quietly becomes
 // "refresh everyone's". This one is library-scoped and hard-wired to scope 'self'.
-v2Router.post('/library/refresh', (req, res) => {
+v2Router.post('/library/refresh', requireLibraryScope, (req, res) => {
   try {
     const record = jobRunner.start({
       kind: 'refreshMetadata',
@@ -2747,14 +2787,24 @@ v2Router.post('/jobs', requireAdminScope, (req, res) => {
 
 // GET /api/v2/jobs/:jobId — status and result, for the account that STARTED it.
 //
-// library-scoped, not admin: POST /library/refresh is, and an operation that hands
-// back a job its own caller cannot poll is not an operation. OWNERSHIP is what
-// protects an instance-wide job's result, which matters because its `failures[]` names
-// game ids from every user's library. Someone else's id is a 404, never a 403 — which
-// is only worth having because the ids are 24 random bytes rather than sequential.
+// Neither requireLibraryScope nor requireAdminScope: the scope it needs is the scope of
+// the operation that STARTED the job (authService.scopeForJob), which only the record
+// knows — POST /library/refresh is library, POST /jobs is admin, and a fixed scope here
+// locked one of them out of polling its own job. The spec says so with
+// `x-required-scope: as-started`, and test/api-surface.test.js requires that marker of
+// any v2 route carrying neither guard. OWNERSHIP still comes first, because an
+// instance-wide job's `failures[]` names game ids from every user's library. Someone
+// else's id is a 404, never a 403 — which is only worth having because the ids are 24
+// random bytes rather than sequential.
 v2Router.get('/jobs/:jobId', (req, res) => {
   const record = jobRunner.get(req.params.jobId, req.user.id);
   if (!record) return v2.send(res, { code: SVC.NOT_FOUND, message: 'no such job' });
+  // Ownership first (someone else's job stays a 404), THEN the scope of the operation
+  // that started it. The caller owns this job, so a 403 tells them nothing new.
+  const needed = authService.scopeForJob(record);
+  if (!authService.holdsScope(req.user, req.auth.scopes, needed)) {
+    return v2.send(res, { code: SVC.FORBIDDEN, message: `this job's result requires a token with the ${needed} scope` });
+  }
   res.json(v2.job(record));
 });
 

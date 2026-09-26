@@ -618,9 +618,10 @@ check('the admin operation set is PINNED, not merely non-empty', () => {
   const admin = operations().filter(({ op }) => op['x-required-scope'] === 'admin')
     .map(({ op }) => op.operationId).sort();
   assert.deepStrictEqual(admin,
-    // getJob is deliberately NOT here: it is library-scoped and protected by OWNERSHIP,
-    // because POST /library/refresh is library-scoped and an operation that returns a
-    // job its own caller cannot poll is not an operation.
+    // getJob is deliberately NOT here: it is `as-started` — readable with the scope of
+    // the operation that started the job, behind OWNERSHIP — because startJob is admin
+    // and POST /library/refresh is library, and an operation that returns a job its
+    // own caller cannot poll is not an operation (SEC-12).
     // The three token-revocation operations are admin-scoped for the same reason
     // deleteUser is: they act on another account's credentials. An admin ACCOUNT
     // presenting a library-scoped token is not an admin here — authorize() has
@@ -631,13 +632,22 @@ check('the admin operation set is PINNED, not merely non-empty', () => {
     'the set of admin-scoped operations changed');
 });
 
+check('every operation documents the 403 its scope guard can return', () => {
+  // Since SEC-12 every operation requires a scope, so every operation can refuse one:
+  // an admin-only token gets 403 from the library operations too. A generated client
+  // with no 403 case treats that as an unexpected error rather than "wrong token".
+  for (const { path: p, method, op } of operations()) {
+    assert.ok(op.responses['403'], `${method.toUpperCase()} ${p} does not document its 403`);
+  }
+});
+
 check('every operation declares a scope, and absence is a failure not a default', () => {
   // `library` being "the absence of admin" made a FORGOTTEN marker indistinguishable
   // from a deliberate non-admin one — the exact "decided by omission" pattern
   // CLAUDE.md describes for route authorization.
   for (const { path: p, method, op } of operations()) {
     const scope = op['x-required-scope'];
-    assert.ok(scope === 'admin' || scope === 'library',
+    assert.ok(scope === 'admin' || scope === 'library' || scope === 'as-started',
       `${method.toUpperCase()} ${p} declares x-required-scope '${scope}'`);
   }
   assert.strictEqual(spec.paths['/shares/incoming/{username}/games'].get['x-admin-bypass'], false,
