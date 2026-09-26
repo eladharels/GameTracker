@@ -1552,14 +1552,21 @@ body, html {
   box-shadow: 0 4px 20px color-mix(in srgb, var(--color-accent) 30%, transparent);
   letter-spacing: 0.02em;
 }
-.login-form button[type="submit"]:hover {
+.login-form button[type="submit"]:hover:not(:disabled) {
   background: var(--color-accent-hover);
   transform: translateY(-1px);
   box-shadow: 0 6px 24px color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
-.login-form button[type="submit"]:active {
+.login-form button[type="submit"]:active:not(:disabled) {
   transform: translateY(0);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+/* While signing in: visibly busy, no lift, no pointer — the label alone looked clickable. */
+.login-form button[type="submit"]:disabled {
+  opacity: 0.7;
+  cursor: progress;
+  transform: none;
+  box-shadow: none;
 }
 .user-management-page {
   max-width: 900px;

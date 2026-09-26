@@ -3612,8 +3612,9 @@ checkAsync('loginErrorMessage: a lockout or an outage never reads as a wrong pas
   }
   assert.match(loginErrorMessage({ message: 'Network Error' }), /reach the server/);
   assert.strictEqual(loginErrorMessage(e(400, 'Username and password are required')), 'Username and password are required');
-  assert.strictEqual(loginErrorMessage(e(403, 'Not a member of the required group')), 'Not a member of the required group',
-    'the required-group refusal lost its reason');
+  const refused = loginErrorMessage(e(403, 'Not a member of the required group'));
+  assert.notStrictEqual(refused, wrong, 'a required-group refusal read as a wrong password');
+  assert.match(refused, /administrator/, 'a required-group refusal does not say who can grant access');
   assert.notStrictEqual(loginErrorMessage(undefined), wrong);
 });
 

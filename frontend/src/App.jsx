@@ -264,7 +264,7 @@ function App() {
           )}
           <button className="logout-btn" onClick={logout}>
             <FaSignOutAlt className="nav-icon" />
-            <span className="nav-label">Logout</span>
+            <span className="nav-label">Sign out</span>
           </button>
           <button
             className={`widescreen-btn${widescreen ? ' widescreen-btn--active' : ''}`}
@@ -341,7 +341,7 @@ function LoginPage({ setUser }) {
     
     // Client-side validation to prevent empty credentials
     if (!username.trim() || !password.trim()) {
-      setError('Username and password are required')
+      setError('Username and password are required.')
       return
     }
     
@@ -363,7 +363,7 @@ function LoginPage({ setUser }) {
       } catch {
         // The server accepted the sign-in; the BROWSER refused to store it (storage
         // blocked or full). Not "can't reach the server", which is what it read as.
-        setError('Signed-in sessions need browser storage, and this browser blocked it. Allow site data for this page, then sign in again.')
+        setError('Signed-in sessions need browser storage, and this browser blocked it. Allow site data for this site, then sign in again.')
         return
       }
       setUser(session)
@@ -891,11 +891,13 @@ function SearchPage({ user }) {
         status: statusOverride || (unreleased ? 'unreleased' : 'wishlist'),
         steamAppId: game.steamAppId || null,
       })
-      showToast('success', `Added ${game.name} to your library!`);
       if (match === 'possible') {
         // Not refused (it may be a remake), but not silent either: search often returns
         // the undated copy of a game the library already holds from another provider.
-        showToast('info', `Your library already has a game called "${game.name}". Remove one if it's the same game.`, { duration: 8000 });
+        // ONE toast, so a screen reader announces one thing, not two in a row.
+        showToast('info', `Added "${game.name}" to your library. You already had a game with this name, so remove one if they're the same game.`, { duration: 8000 });
+      } else {
+        showToast('success', `Added ${game.name} to your library!`);
       }
     } catch (err) {
       showToast('error', 'Failed to add to library.');
@@ -2930,7 +2932,7 @@ function SettingsPage() {
               <SettingsField label="Bind Password"      saved={!!serverSettings.ldap?.bindPass}>
                 <input className="ent-input" type="password" value={ldap.bindPass     || ''} onChange={e => setLdap(p => ({ ...p, bindPass:      e.target.value }))} placeholder="Service account password" />
               </SettingsField>
-              <SettingsField label="Required Group"     saved={!!serverSettings.ldap?.requiredGroup} hint="Optional — only members of this group can log in">
+              <SettingsField label="Required Group"     saved={!!serverSettings.ldap?.requiredGroup} hint="Optional — only members of this group can sign in">
                 <input className="ent-input" value={ldap.requiredGroup || ''} onChange={e => setLdap(p => ({ ...p, requiredGroup: e.target.value }))} placeholder="GameTrackerUsers" />
               </SettingsField>
             </div>

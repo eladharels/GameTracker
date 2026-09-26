@@ -22,9 +22,11 @@ export function loginErrorMessage(err) {
   if (status === 401) return 'Invalid username or password.'
   // The server's lockout message carries the minutes remaining.
   if (status === 429) return serverMsg || 'Too many sign-in attempts. Please wait a few minutes and try again.'
-  // 400 is validation; 403 is "not in the required group" — both server-authored and
-  // already on the wire, and "Sign-in failed. Please try again." invited pointless retries.
-  if ((status === 400 || status === 403) && serverMsg) return serverMsg
+  // 403 is "not a member of the required group": admin language the user cannot act on.
+  // Mapped HERE rather than reworded on the server, whose text also serves token minting
+  // on a frozen v1 route. Retrying never helps, so say who can.
+  if (status === 403) return 'Your account isn\'t allowed to sign in to GameTracker. Ask an administrator for access.'
+  if (status === 400 && serverMsg) return serverMsg
   if (status >= 500) return 'Sign-in is temporarily unavailable. Please try again in a moment.'
   return 'Sign-in failed. Please try again.'
 }
