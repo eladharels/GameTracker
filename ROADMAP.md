@@ -1951,7 +1951,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ---
 
-### [ ] UP-25 CI fills the runner's disk: BuildKit's build cache is never pruned (CI, PR #5)
+### [x] UP-25 CI fills the runner's disk: BuildKit's build cache is never pruned (CI, PR #5)
 - **Where:** `.github/workflows/docker-build-deploy.yml`, `build-images`. The runner is the
   production host.
 - **Symptom (2026-09-26):** two consecutive runs failed as only a full disk explains:
@@ -1985,7 +1985,19 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - The step fails by name when under 5 GiB remains after the prune, so a full disk reads
     as a full disk, not as an apt signature error three steps later.
   - Host disk alerting belongs to the operator.
-- **Open:** confirm the disk numbers from the next run. If the build cache is not what
+- **Confirmed (27f4d2d, the run after the `-af` prune):**
+  - `/` at **71%**: 59G used, 25G available, down from 100% with 0 available.
+  - Build Cache is down to 404 MB, so the `-af` prune on 6189e50 reclaimed about 24 GB.
+  - Every job passed, including the smoke stack that had failed on Postgres.
+- **Still for the operator:**
+  - check production's database and backend logs for write failures during the full-disk
+    window;
+  - account for the ~20 GB outside Docker;
+  - remove the 1.9 GB of unreferenced volumes by hand;
+  - add host disk alerting.
+
+  CI now clears the build cache on every build and refuses to build below 5 GiB free, so it
+  can no longer be the thing that fills the disk unnoticed. If the build cache is not what
   fills the disk, the operator needs to look at the host (volumes, logs, other projects),
   which CI cannot and should not do.
 
