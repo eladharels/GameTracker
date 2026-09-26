@@ -367,7 +367,9 @@ export default function LibraryPage({ user }) {
         setUserGames(prev => {
           const exists = prev.some(g => String(g.game_id) === String(gameId))
           if (exists) return prev
-          return [...prev, snapshot].sort(byBacklogOrder)
+          // Appended, not sorted: every view orders its own list, and sorting ALL statuses
+          // by backlog position here only looked meaningful (Architect review).
+          return [...prev, snapshot]
         })
         showToast('success', `"${snapshot.game_name}" restored.`)
       },
@@ -697,13 +699,13 @@ export default function LibraryPage({ user }) {
         <>
           {filter === 'backlog' && (
             <span id="backlog-reorder-hint" className="visually-hidden">
-              Press Enter or Space to pick this game up, then on another game to move it there. Escape, or Enter on the same game, cancels.
+              Press Enter or Space to pick this game up, then on another game to move it there. Escape, or Enter or Space on the same game, cancels.
             </span>
           )}
           {filter === 'backlog' && (
             <div aria-live="polite" aria-atomic="true" className="visually-hidden">
               {keyboardDragId
-                ? `Selected game for reordering. Press Enter or Space on another game to move it there, or Escape, or Enter on this game, to cancel.`
+                ? `Selected game for reordering. Press Enter or Space on another game to move it there, or Escape, or Enter or Space on this game, to cancel.`
                 : reorderAnnouncement}
             </div>
           )}

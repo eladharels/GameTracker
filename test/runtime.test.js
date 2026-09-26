@@ -758,7 +758,7 @@ check('the frontend component tests exist and CI runs them', () => {
   const minimums = {
     'frontend/src/GameDetailModal.test.jsx': 1, 'frontend/src/LoginPage.test.jsx': 1,
     'frontend/src/App.relogin.test.jsx': 1, 'frontend/src/useDialogFocus.test.jsx': 1,
-    'frontend/src/pages/SearchPage.test.jsx': 5, 'frontend/src/pages/LibraryPage.test.jsx': 15,
+    'frontend/src/pages/SearchPage.test.jsx': 5, 'frontend/src/pages/LibraryPage.test.jsx': 16,
   };
   for (const [f, min] of Object.entries(minimums)) {
     assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is gone — its source-text pin was retired in its favour`);

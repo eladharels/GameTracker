@@ -480,7 +480,13 @@ jobs:
           echo "[disk] After reclaiming unused build cache:"
           df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
           # 5 GiB: roughly three images plus the smoke stack. Measured in KiB (df -Pk).
-          AVAIL_KB=$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')
+          # The daemon's REAL root, not an assumed /var/lib/docker (a custom data-root would
+          # make df fail and the check pass silently). An unreadable value warns, never passes quietly.
+          DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+          AVAIL_KB=$(df -Pk "${DOCKER_ROOT}" 2>/dev/null | awk 'NR==2 {print $4}')
+          if [ -z "${AVAIL_KB}" ]; then
+            echo "::warning::Could not measure free space under ${DOCKER_ROOT}; the 5 GiB guard did not run."
+          fi
           if [ -n "${AVAIL_KB}" ] && [ "${AVAIL_KB}" -lt 5242880 ]; then
             echo "::error::Runner disk still has only $((AVAIL_KB / 1024)) MiB free after clearing build cache. This host also runs PRODUCTION: an operator must free space (ROADMAP UP-25). Not building."
             exit 1

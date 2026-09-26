@@ -239,6 +239,21 @@ describe('keyboard reordering of the backlog (FE-23)', () => {
     expect(document.activeElement).toBe(box)
   })
 
+  it('a move still focuses the moved card when focus stayed inside the list meanwhile', async () => {
+    library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 })]
+    const slow = deferred()
+    api.put.mockImplementation((url, body) => { puts.push({ url, body }); return slow.p })
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 2/ })) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Bravo' }), { key: 'Enter' }) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Alpha' }), { key: 'Enter' }) })
+    screen.getByRole('region', { name: 'Your games' }).focus()   // inside the list, not <body>
+    await act(async () => { slow.resolve({ data: {} }) })
+    await flush()
+    await flush()
+    expect(document.activeElement).toBe(screen.getByRole('group', { name: 'Bravo' }))
+  })
+
   it('with a search typed, a move reorders the WHOLE backlog, not the visible subset (FE-24)', async () => {
     library = [row('igdb_1', 'Apple', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Berry', 'backlog', { backlog_order: 2 }),
       row('igdb_3', 'Cherry', 'backlog', { backlog_order: 3 }), row('igdb_4', 'Apricot', 'backlog', { backlog_order: 4 })]

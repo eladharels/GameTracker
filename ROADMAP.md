@@ -1379,6 +1379,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     - The live region's "Selected…" text names Space and Enter-on-the-same-game.
     - The three backlog comparators, one with a different sentinel, became one
       `byBacklogOrder`.
+  - **Third review (all approved), non-blocking items applied:**
+    - a test for focus that stayed inside the list, the one branch no test covered;
+    - "Enter or Space" in both cancel texts;
+    - the undo restore appends instead of sorting every status by backlog position.
+
+    UP-25's disk guard now measures `docker info`'s real root and warns when it cannot
+    measure. Before, a custom data-root skipped the check silently.
 
 ### [x] FE-24 Reordering the backlog with a search typed corrupted `backlog_order` (Architect, FE-23 review)
 - **Where:** `frontend/src/pages/LibraryPage.jsx`: `handleBacklogDrop` and
