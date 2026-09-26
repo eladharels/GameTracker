@@ -705,7 +705,15 @@ function UserManagementPage({ user }) {
       {!modalOpen && error && (
         <div className="gt-alert gt-alert--danger gt-alert--page" role="alert">
           <FaExclamationCircle aria-hidden="true" />
-          <div>{error}</div>
+          <div>
+            {error}
+            {/* With the table hidden, retrying is otherwise only a page reload. */}
+            {loadFailed && (
+              <><br /><button type="button" className="gt-alert-action" onClick={() => { setError(''); fetchUsers() }}>
+                <FaSync aria-hidden="true" /> Retry
+              </button></>
+            )}
+          </div>
         </div>
       )}
       {!modalOpen && success && (

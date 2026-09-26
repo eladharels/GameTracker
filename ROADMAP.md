@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 14 | 12 |
-| FE — Frontend | 17 | 2 |
+| FE — Frontend | 18 | 2 |
 | UP — Tidying & upkeep | 18 | 0 |
-| **Total** | **71** | **36** |
+| **Total** | **72** | **36** |
 
 ---
 
@@ -838,6 +838,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** record the username with `from`, and honour `from` only when it matches the new
   login. The boot path needs the expired token's `username`, which `readSession`
   deliberately refuses to return, so this needs a small decode-ignoring-`exp` helper.
+
+### [ ] FE-18 One banner style for page messages (UI/UX review of P0-6)
+- **Where:** User Management shows a translucent `gt-alert` for errors next to a solid,
+  centred `.success-msg`; dialogs use solid `.error-msg` blocks.
+- **Fix:** success/info variants of `gt-alert` (`gt-alert--info` exists) for page-level
+  messages; auto-dismiss or move success notices to the global toast, the app's usual
+  feedback; give the sticky page banner `top: 1rem` and a more opaque background outside
+  scrolling panels.
 
 ### [ ] FE-15 SettingsPage still has 401 branches the interceptor makes unreachable
 - **Where:** `App.jsx` API-keys loader and its `apiKeysAuthError` banner.
