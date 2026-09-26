@@ -34,7 +34,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~2900 lines — single large component)
+- **Entry point**: `frontend/src/App.jsx` (~1500 lines — the shell, login, search and library; the other pages are in `src/pages/`, FE-10)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -364,7 +364,9 @@ GameTracker/
 │   │   ├── pages/                  # Pages extracted from App.jsx, one per change (FE-10):
 │   │   │   ├── UserManagementPage.jsx  #   admin user table, dialogs, LDAP sync
 │   │   │   ├── SystemStatusPage.jsx    #   the six dependency probes (admin)
-│   │   │   └── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
+│   │   │   ├── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
+│   │   │   ├── CalendarPage.jsx        #   release calendar
+│   │   │   └── AccountPage.jsx         #   My Account: channels, reminders, API tokens
 │   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
 │   │   │                           #   (`cd frontend && npm test`, run by frontend-quality).
 │   │   │                           #   They replace test/runtime.test.js's source-text shape

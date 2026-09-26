@@ -922,8 +922,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
        hit "J.map is not a function" on Diagnostics; it was the same on `HEAD` and came from
        my mock answering `{}` where `/user/me/games` returns an array (pinned in
        `api-contract.test.js`), so it was not the extraction.
-     - Remaining in App.jsx: the App shell, LoginPage, SearchPage, LibraryPage (both
-       pinned), CalendarPage and AccountPage.
+  4. `CalendarPage` and `AccountPage` → `src/pages/`. Two orphans left behind by blank
+     lines move with them: the `formatDateLocal` note, and `NOTIF_DAY_OPTIONS`, used only by
+     AccountPage. `App.jsx` also lost 16 icon imports and `ApiTokensSection`, which it no
+     longer used; lint allows unused capitalised names, so nothing flagged them.
+     - App.jsx is now **1,518 lines, down from 3,166**.
+     - Verified in the built app: the calendar shows a mocked release, and the account page
+       shows its reminder options and the API Tokens section, with no page errors.
+  - **Remaining in App.jsx:** the shell, `LoginPage` (its component tests import it from
+    App), and `SearchPage`/`LibraryPage`. Those two carry the FE-1/2/5/6 source-text pins,
+    which should become behaviour tests as they move. That is the rest of FE-10.
 
 ### [x] FE-11 CSP allows `style-src 'unsafe-inline'`
 - **Where:** `frontend/nginx.conf:30`.
