@@ -13,7 +13,7 @@
 
 require('dotenv').config();
 const axios = require('axios');
-const { resolveApiKey } = require('./settings-store');
+const { resolveApiKey, SETTINGS_FILE } = require('./settings-store');
 const settingsService = require('./services/settings');
 
 // The last 6 characters only. This is a live credential and the console it prints to
@@ -61,8 +61,12 @@ async function refreshToken() {
     // to overwrite) is reported separately from a Twitch failure, as the route does.
     try {
       const masked = settingsService.storeIgdbToken(access_token);
-      console.log(`✅ Stored in settings.json (${masked}). The backend uses it on its next read —`);
-      console.log('   no restart needed.');
+      // The PATH, because it is settings-store's __dirname: inside the backend container
+      // that is the mounted file the server reads, but from a host checkout it is the
+      // checkout's own settings.json, which no running server reads at all.
+      console.log(`✅ Stored in ${SETTINGS_FILE} (${masked}).`);
+      console.log('   A backend reading that file uses it on its next read — no restart needed.');
+      console.log('   (Run this INSIDE the backend container, or the file above is not the live one.)');
     } catch (err) {
       console.error('❌ Twitch issued a token, but it could not be stored:', String(err.message).slice(0, 300));
       process.exit(1);

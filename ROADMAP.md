@@ -1136,6 +1136,22 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     I/O). Mutation-checked: truncate-first fails, and so does dropping the stale-temp
     removal. Also run on a real disk: atomic, mode 0600, no temp left.
   - **Making production atomic is UP-24.**
+  - **Review fixes (the Architect rejected the first cut):**
+    - `writeSync`'s return value was ignored. Node does not retry a short write, and a
+      filling disk reports a short count before it reports `ENOSPC`. So the atomic path could
+      rename a torn temp over a good file and report success, which is worse than the
+      `writeFileSync` it replaced, since that one loops. `writeAll` now loops until every
+      byte is written, and throws if a write makes no progress.
+    - Two new tests: a short write is completed, and a write with no progress throws with
+      the old file intact. Mutation-checked: going back to the single unchecked write fails
+      them.
+    - The EROFS test now fails the `open`, so its "no temp left" assertion can actually fail.
+    - `refresh_igdb_token.js` prints the path it wrote. Outside the container that is the
+      checkout's own file, which no running server reads.
+    - The UP-6 pin now matches each step's `run` text. Through `JSON.stringify`, a quoted
+      fixed name slipped past it; three mutations are now caught.
+    - Not done (Nit): an `fsync` of the directory after the rename. A crash can then lose that
+      one save's durability, but never produce a torn file.
 
 ### [ ] UP-24 Bind-mount the settings DIRECTORY, not the file (operator migration; from UP-8)
 - **Why:** it is the only way `saveSettings` can rename atomically in production. See UP-8.

@@ -114,11 +114,13 @@ check('smoke stacks are per-run and a PR cannot evict a main run (UP-6)', () => 
   assert.strictEqual(new Set(ports).size, 6, `the six smoke host ports must all differ: ${ports.join(',')}`);
   for (const p of ['3000', '8080', '3001']) assert.ok(!ports.includes(p), `a smoke port collides with production ${p}`);
   // Every way a step could address the stack by a fixed name instead of the project.
-  const steps = JSON.stringify(job.steps);
+  // Against each step's own `run` text: through JSON.stringify every quote became \",
+  // and a quoted fixed name slipped past both patterns (UP-6 review).
+  const runs = job.steps.map((st) => st.run || '').join('\n');
   for (const [re, what] of [
     [/(?:-p|--project-name)[ =]+["']?gametracker-smoke(?![-\w])/, 'a fixed compose project'],
-    [/docker (?:logs|exec|inspect|stop|rm|kill)\b[^"]*?gametracker-[\w-]*smoke/, 'a fixed container name'],
-  ]) assert.ok(!re.test(steps), `a smoke step addresses the stack by ${what} again`);
+    [/docker (?:logs|exec|inspect|stop|rm|kill)\b[^\n]*?["']?gametracker-[\w-]*smoke/, 'a fixed container name'],
+  ]) assert.ok(!re.test(runs), `a smoke step addresses the stack by ${what} again`);
   // The pre-start cleanup runs `down --volumes` on whatever it matches. The anchoring is
   // the safety property: unanchored, it would also match the OTHER partition's live stack.
   const clean = job.steps.find((st) => /leftover smoke stacks/i.test(st.name || ''));

@@ -3687,7 +3687,8 @@ console.log('settings-store.replaceFileContents — atomic where the mount allow
   const { replaceFileContents } = require('../settings-store');
   // An in-memory fs: no disk is touched (this file's rule). `fail` injects an errno per
   // operation+path; `log` records the call order the in-place branch depends on.
-  const fakeFs = (initial = {}, fail = {}) => {
+  // `short` caps how many bytes ONE writeSync to a path accepts, as a filling disk does.
+  const fakeFs = (initial = {}, fail = {}, short = {}) => {
     const files = new Map(Object.entries(initial).map(([k, v]) => [k, Buffer.from(v)]));
     const fds = new Map(); let next = 3; const log = [];
     const boom = (op, p) => { const code = fail[`${op}:${p}`]; if (code) { const e = new Error(code); e.code = code; throw e; } };
@@ -3702,8 +3703,10 @@ console.log('settings-store.replaceFileContents — atomic where the mount allow
       },
       writeSync(fd, buf, off, len, pos) {
         const p = fds.get(fd); log.push(`write ${p}`); boom('write', p);
-        const cur = files.get(p); const out = Buffer.alloc(Math.max(cur.length, pos + len));
-        cur.copy(out); buf.copy(out, pos, off, off + len); files.set(p, out);
+        const n = Math.min(len, short[p] ?? len);
+        const cur = files.get(p); const out = Buffer.alloc(Math.max(cur.length, pos + n));
+        cur.copy(out); buf.copy(out, pos, off, off + n); files.set(p, out);
+        return n;
       },
       ftruncateSync(fd, len) { const p = fds.get(fd); log.push(`truncate ${p}`); files.set(p, files.get(p).subarray(0, len)); },
       fsyncSync(fd) { log.push(`fsync ${fds.get(fd)}`); },
@@ -3732,7 +3735,7 @@ console.log('settings-store.replaceFileContents — atomic where the mount allow
     assert.strictEqual(f.files.get(F).toString(), NEW);
   });
   for (const [what, fail, code] of [
-    ['a read-only directory (production: read_only container)', { [`unlink:${T}`]: 'EROFS', [`open:${T}`]: 'EROFS' }, 'EROFS'],
+    ['a read-only directory (production: read_only container)', { [`open:${T}`]: 'EROFS' }, 'EROFS'],
     ['a single-file bind mount (rename onto a mount point)', { [`rename:${F}`]: 'EBUSY' }, 'EBUSY'],
   ]) {
     check(`${what} falls back to writing IN PLACE, write-then-truncate, then fsync (${code})`, () => {
@@ -3752,6 +3755,20 @@ console.log('settings-store.replaceFileContents — atomic where the mount allow
     assert.strictEqual(f.files.get(F).toString(), OLD);
     assert.ok(!f.files.has(T), 'temp file left behind');
   });
+  check('a SHORT write is completed, not renamed over the good file half-written', () => {
+    // Linux reports a filling disk as a short count first; the ENOSPC comes on the
+    // next call. Ignoring the count renamed a torn temp over settings.json as success.
+    const f = fakeFs({ [F]: OLD }, {}, { [T]: 5 });
+    assert.strictEqual(replaceFileContents(F, NEW, f, { pid: 7 }), 'atomic');
+    assert.strictEqual(f.files.get(F).toString(), NEW, 'a torn temp was renamed over the file');
+  });
+  check('a write that makes NO progress throws and leaves the old file intact', () => {
+    const f = fakeFs({ [F]: OLD }, {}, { [T]: 0 });
+    assert.throws(() => replaceFileContents(F, NEW, f, { pid: 7 }), /short write/);
+    assert.strictEqual(f.files.get(F).toString(), OLD);
+    assert.ok(!f.files.has(T), 'temp file left behind');
+  });
+
   check('no file yet, and no atomic path: the in-place branch creates it', () => {
     const f = fakeFs({}, { [`open:${T}`]: 'EACCES' });
     assert.strictEqual(replaceFileContents(F, NEW, f, { pid: 7 }), 'in-place');

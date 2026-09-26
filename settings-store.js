@@ -121,6 +121,21 @@ const NO_ATOMIC_HERE = new Set(['EROFS', 'EACCES', 'EPERM', 'EBUSY', 'EXDEV']);
 //    is NOT atomic — readSettings() reports a torn file as `degraded`, and writers
 //    refuse to build on a degraded read, which is what bounds the damage.
 // Returns which path was taken, for the log line and the tests.
+// writeSync may write FEWER bytes than asked and Node does not retry: on a filling disk
+// Linux answers with a short count first and ENOSPC only on the NEXT call. Ignoring the
+// count meant a half-written temp was renamed over a good settings.json and the save
+// reported success (UP-8 review). writeFileSync loops internally; this is that loop.
+function writeAll(fsImpl, fd, buf) {
+  let off = 0;
+  while (off < buf.length) {
+    const n = fsImpl.writeSync(fd, buf, off, buf.length - off, off);
+    if (!(n > 0)) {
+      const e = new Error(`short write: ${off} of ${buf.length} bytes`); e.code = 'EIO'; throw e;
+    }
+    off += n;
+  }
+}
+
 function replaceFileContents(file, data, fsImpl = fs, { pid = process.pid } = {}) {
   const buf = Buffer.from(data, 'utf8');
   const tmp = `${file}.tmp-${pid}`;
@@ -133,7 +148,7 @@ function replaceFileContents(file, data, fsImpl = fs, { pid = process.pid } = {}
     const fd = fsImpl.openSync(tmp, 'wx', 0o600);
     tmpCreated = true;
     try {
-      fsImpl.writeSync(fd, buf, 0, buf.length, 0);
+      writeAll(fsImpl, fd, buf);
       fsImpl.fsyncSync(fd);
     } finally { fsImpl.closeSync(fd); }
     fsImpl.renameSync(tmp, file);
@@ -151,7 +166,7 @@ function replaceFileContents(file, data, fsImpl = fs, { pid = process.pid } = {}
     fd = fsImpl.openSync(file, 'w', 0o600);
   }
   try {
-    fsImpl.writeSync(fd, buf, 0, buf.length, 0);
+    writeAll(fsImpl, fd, buf);
     fsImpl.ftruncateSync(fd, buf.length);
     fsImpl.fsyncSync(fd);
   } finally { fsImpl.closeSync(fd); }
