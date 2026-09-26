@@ -469,8 +469,11 @@ jobs:
       # signature" three steps later took two runs to trace back to this.
       - name: Report disk and reclaim build cache
         run: |
-          echo "[disk] Before:"
-          df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
+          # The daemon's REAL root, not an assumed /var/lib/docker: a custom data-root would
+          # make df fail and the guard below pass silently. Used by the report AND the guard.
+          DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+          echo "[disk] Before (${DOCKER_ROOT}):"
+          df -h "${DOCKER_ROOT}" 2>&1 || df -h / 2>&1 || true
           docker system df 2>&1 || true
           if ! docker builder prune -af > "${RUNNER_TEMP}/prune.log" 2>&1; then
             echo "::warning::docker builder prune failed:"; cat "${RUNNER_TEMP}/prune.log"
@@ -478,11 +481,9 @@ jobs:
             tail -n 1 "${RUNNER_TEMP}/prune.log"
           fi
           echo "[disk] After reclaiming unused build cache:"
-          df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
+          df -h "${DOCKER_ROOT}" 2>&1 || df -h / 2>&1 || true
           # 5 GiB: roughly three images plus the smoke stack. Measured in KiB (df -Pk).
-          # The daemon's REAL root, not an assumed /var/lib/docker (a custom data-root would
-          # make df fail and the check pass silently). An unreadable value warns, never passes quietly.
-          DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+          # An unreadable value warns, never passes quietly.
           AVAIL_KB=$(df -Pk "${DOCKER_ROOT}" 2>/dev/null | awk 'NR==2 {print $4}')
           if [ -z "${AVAIL_KB}" ]; then
             echo "::warning::Could not measure free space under ${DOCKER_ROOT}; the 5 GiB guard did not run."
