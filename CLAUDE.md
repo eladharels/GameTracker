@@ -34,7 +34,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~370 lines — the shell, routes and login. The pages extracted from it are in `src/pages/`; `StatsPage`, `SharedLibrary` and `ApiDocsPage` were always separate files in `src/`, FE-10)
+- **Entry point**: `frontend/src/App.jsx` (~260 lines — the shell and the routes. Every page extracted from it is in `src/pages/`; `StatsPage`, `SharedLibrary` and `ApiDocsPage` were always separate files in `src/`, FE-10)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -308,7 +308,7 @@ GameTracker/
 │   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx                 # The app shell, routes and LoginPage. Pages extracted from
+│   │   ├── App.jsx                 # The app shell and routes only. Pages extracted from
 │   │   │                           #   it are in pages/ (FE-10); Stats, SharedLibrary and
 │   │   │                           #   ApiDocs were always separate files here in src/
 │   │   ├── App.css                 # Global styles (glassmorphism theme, ~6700 lines)
@@ -367,6 +367,7 @@ GameTracker/
 │   │   ├── gameStatus.js           # STATUSES + the unreleased/normalise helpers the search
 │   │   │                           #   and library pages share (pages never import App.jsx)
 │   │   ├── pages/                  # Pages extracted from App.jsx, one per change (FE-10):
+│   │   │   ├── LoginPage.jsx           #   sign-in; LoginPage.test.jsx pins FE-4/SEC-7/FE-14
 │   │   │   ├── UserManagementPage.jsx  #   admin user table, dialogs, LDAP sync
 │   │   │   ├── SystemStatusPage.jsx    #   the six dependency probes (admin)
 │   │   │   ├── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
@@ -456,7 +457,7 @@ GameTracker/
 
 ### Architectural Pattern
 - **Full-stack monolith**: All backend logic lives in a single `index.js`
-- **Single-page application**: React Router over `App.jsx` (the shell and login),
+- **Single-page application**: React Router over `App.jsx` (the shell and routes),
   `src/pages/*` (the pages extracted from it verbatim, one per change, FE-10), and the
   three page files that were always separate (`StatsPage`, `SharedLibrary`, `ApiDocsPage`)
 - **File-based config**: Runtime settings (SMTP, LDAP, Telegram, API keys) in `settings.json`,

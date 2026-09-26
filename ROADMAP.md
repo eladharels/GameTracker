@@ -927,7 +927,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Done** (`git mv`, so history follows it). `test/runtime.test.js` now refuses any `.jsx`
   outside `frontend/src/`.
 
-### [ ] FE-10 `App.jsx` is ~3000 lines with at least eight page components
+### [x] FE-10 `App.jsx` is ~3000 lines with at least eight page components
 - **Fix:** split it into `src/pages/*` one page per PR, starting with the pages touched by
   FE-1 to FE-5. No behaviour change in the same PR.
 - **In progress:**
@@ -998,8 +998,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     - no `aria-label` on a BACKLOG card, which is where the FE-6 regression shipped.
     The test-count guard also counts `test(` and refuses `.skip`/`.only`/`.todo`. A skipped
     test counted and ran nowhere.
-  - **Remaining:** `LoginPage` stays in App.jsx for now. Its component tests import it from
-    there, and it is 100 lines.
+  7. `LoginPage` → `src/pages/`, byte-identical apart from `export default` and its imports.
+     Its test moves with it to `pages/LoginPage.test.jsx`. App.jsx drops the named
+     `export { LoginPage }` that existed only for that test, plus the `api` import, which
+     only the login used.
+     - **App.jsx is now 262 lines, down from 3,168:** the shell and the route table.
+     - Verified in the built app: a signed-out visit to /library lands on /login; a
+       refused password shows "Invalid username or password."; the next sign-in lands on
+       /search. No page errors.
+  - **Done.** Every page App.jsx used to hold is in `src/pages/`. `StatsPage`,
+    `SharedLibrary` and `ApiDocsPage` were always separate files in `src/` and stay there:
+    moving them is churn with no behaviour attached.
 
 ### [x] FE-11 CSP allows `style-src 'unsafe-inline'`
 - **Where:** `frontend/nginx.conf:30`.

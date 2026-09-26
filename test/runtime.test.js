@@ -693,7 +693,7 @@ console.log('the SPA has one auth header and one way to end a session:');
       'more than one path ends a session silently');
   });
   // The login page's "session ended" notice (shown once, cleared on mount) is covered by
-  // behaviour tests now: frontend/src/LoginPage.test.jsx (UP-20).
+  // behaviour tests now: frontend/src/pages/LoginPage.test.jsx (UP-20).
   // FE-19: every modal dialog gets focus-in, focus-return and the Tab trap from ONE hook.
   // Each dialog used to carry its own partial copy, and three had none. A file may not
   // render more dialogs than it has useDialogFocus() calls, and nothing focuses on a timer.
@@ -756,7 +756,7 @@ check('the frontend component tests exist and CI runs them', () => {
   // With a MINIMUM test count each (Architect review): an emptied file would otherwise
   // pass an existence check while covering nothing.
   const minimums = {
-    'frontend/src/GameDetailModal.test.jsx': 1, 'frontend/src/LoginPage.test.jsx': 1,
+    'frontend/src/GameDetailModal.test.jsx': 1, 'frontend/src/pages/LoginPage.test.jsx': 1,
     'frontend/src/App.relogin.test.jsx': 1, 'frontend/src/useDialogFocus.test.jsx': 1,
     'frontend/src/pages/SearchPage.test.jsx': 5, 'frontend/src/pages/LibraryPage.test.jsx': 16,
   };

@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { api } from './api'
-import { LoginPage } from './App'
-import { markSessionEnded } from './session'
+import { api } from '../api'
+import LoginPage from './LoginPage'
+import { markSessionEnded } from '../session'
 
 // base64URL, as a real JWT is — `-`/`_` in place of `+`/`/` is the case the old inline
 // atob() threw on (session.js). TextEncoder so a non-Latin-1 username cannot throw here.
