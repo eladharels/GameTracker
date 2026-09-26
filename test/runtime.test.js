@@ -469,6 +469,19 @@ console.log('the SPA has one auth header and one way to end a session:');
     assert.ok(/useState\(\(\) => peekSessionEnd\(\)\)/.test(login), 'LoginPage no longer reads the flag with peekSessionEnd');
     assert.ok(/useEffect\(\(\) => \{ clearSessionEnd\(\) \}, \[\]\)/.test(login), 'LoginPage no longer clears the flag on mount');
   });
+  check('no `window.setUser` fallback', () => {
+    for (const f of files) assert.ok(!/window\.setUser/.test(src[f]), `${f} still reaches for window.setUser`);
+  });
+}
+
+// STOPGAP: shape pins for component-level frontend fixes. The SPA has no DOM test harness
+// (ROADMAP UP-20), so these assert the ABSENCE of each regression's shape as it shipped,
+// plus a positive form where one exists. They are weaker than behaviour tests: an
+// equivalent rewrite can fail them, and a differently-shaped regression can pass them.
+console.log('frontend component fixes keep their shape (stopgap until a DOM harness):');
+{
+  const app = fs.readFileSync(path.join(ROOT, 'frontend/src/App.jsx'), 'utf8');
+  const src = { 'frontend/src/App.jsx': app };
   // FE-1, FE-2, FE-5 live inside components and the SPA has no DOM harness, so only the
   // SHAPE of each regression is pinned here — the one that shipped before.
   check('no effect is keyed on the per-render `currentGames` array (FE-1)', () => {
@@ -480,15 +493,20 @@ console.log('the SPA has one auth header and one way to end a session:');
   check('a search response is dropped unless it answers the latest query (FE-2)', () => {
     const app = src['frontend/src/App.jsx'];
     const search = app.slice(app.indexOf('const handleSearch'), app.indexOf('const addToLibrary'));
-    assert.ok(/if \(seq !== searchSeq\.current\) return/.test(search), 'handleSearch no longer ignores stale responses');
+    // All THREE guards: the results, the error branch, and each price.
+    const guards = (search.match(/if \(seq !== searchSeq\.current\) return/g) || []).length
+      + (app.slice(app.indexOf('const fetchGamePrice = async (gameId, steamAppId, seq)'), app.indexOf('const handleSearch'))
+        .match(/if \(seq !== searchSeq\.current\) return/g) || []).length;
+    assert.ok(guards >= 4, `stale-response guards: ${guards} of 4 (result, error, price ok, price error)`);
   });
   check('a failed status change rolls back that game only (FE-5)', () => {
     const app = src['frontend/src/App.jsx'];
     const fn = app.slice(app.indexOf('const setGameStatus'), app.indexOf('const removeGame'));
     assert.ok(!/setUserGames\(previous/.test(fn), 'setGameStatus restores a whole-library snapshot again');
-  });
-  check('no `window.setUser` fallback', () => {
-    for (const f of files) assert.ok(!/window\.setUser/.test(src[f]), `${f} still reaches for window.setUser`);
+    // Positive, not only an absence: the rollback maps ONE game, conditioned on its status
+    // still being the one this request set. A renamed snapshot would pass the line above.
+    assert.ok(/sameGame\(g\) && g\.status === status \? \{ \.\.\.g, status: previousStatus \}/.test(fn),
+      'the rollback is no longer per-game and conditional');
   });
 }
 

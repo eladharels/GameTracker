@@ -218,6 +218,9 @@ GameTracker/
 │   │                               #   token, at its three session paths; a 401 is the
 │   │                               #   interceptor's alone. A failure there means a page is
 │   │                               #   handling auth by itself again
+│   │                               #   AND, as a STOPGAP until the SPA has a DOM test harness
+│   │                               #   (ROADMAP UP-20), shape pins for component-level fixes
+│   │                               #   (FE-1/2/5): weaker than behaviour tests, by design
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -319,8 +322,11 @@ GameTracker/
 │   │   │                           #   ended so the login page can say so (sessionStorage)
 │   │   ├── safeUrl.js              # safeExternalUrl — the ONLY way a server-supplied URL
 │   │   │                           #   may reach an `href` (http/https only)
-│   │   ├── libraryMatch.js         # isAlreadyInLibrary — by id, or name AND year; never by
-│   │   │                           #   name alone (a remake is not its original, FE-3)
+│   │   ├── libraryMatch.js         # libraryMatch — 'same' (id, or name AND known year)
+│   │   │                           #   refuses an add; 'possible' (name, a year unknown)
+│   │   │                           #   adds with a note; never refuse by name alone (a
+│   │   │                           #   remake is not its original, FE-3). Deliberately
+│   │   │                           #   stricter than catalog.js's merge rules — see header
 │   │   ├── loginErrors.js          # loginErrorMessage — a 429 lockout or an outage must
 │   │   │                           #   never read as "wrong password" (FE-4)
 │   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2

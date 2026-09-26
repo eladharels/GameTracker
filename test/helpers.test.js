@@ -3585,19 +3585,35 @@ checkAsync('isAlreadyInLibrary: by id, or by name AND year — never by name alo
   assert.strictEqual(isAlreadyInLibrary(lib, null), false);
 });
 
+checkAsync('libraryMatch: same name with an unknown year is "possible", never refused, never silent', async () => {
+  const { libraryMatch } = await import('../frontend/src/libraryMatch.js');
+  const lib = [{ game_id: 'igdb_1', game_name: 'Hades II', release_date: '2025-09-25' }];
+  // search.mergeResults keeps the UNDATED copy — the common shape of a true duplicate.
+  assert.strictEqual(libraryMatch(lib, { id: 'rawg_9', name: 'Hades II', releaseDate: null }), 'possible');
+  assert.strictEqual(libraryMatch([{ game_id: 'igdb_1', game_name: 'Hades II', release_date: null }],
+    { id: 'rawg_9', name: 'Hades II', releaseDate: null }), 'possible', 'both undated');
+  assert.strictEqual(libraryMatch(lib, { id: 'rawg_9', name: 'Hades II', releaseDate: '2025-01-01' }), 'same');
+  assert.strictEqual(libraryMatch(lib, { id: 'rawg_9', name: 'Hades II', releaseDate: '2031-01-01' }), null,
+    'two known, different years is a remake, not a possible duplicate');
+  assert.strictEqual(libraryMatch(lib, { id: 'igdb_1', name: 'x' }), 'same');
+  assert.strictEqual(libraryMatch(lib, { id: 'rawg_2', name: 'Other' }), null);
+});
+
 checkAsync('loginErrorMessage: a lockout or an outage never reads as a wrong password (FE-4)', async () => {
   const { loginErrorMessage } = await import('../frontend/src/loginErrors.js');
-  const wrong = 'Invalid username or password';
+  const wrong = 'Invalid username or password.';
   const e = (status, error) => ({ response: { status, data: error ? { error } : {} } });
   assert.strictEqual(loginErrorMessage(e(401, 'Invalid credentials')), wrong);
-  assert.strictEqual(loginErrorMessage(e(429, 'Too many login attempts. Please try again in 12 minutes.')),
-    'Too many login attempts. Please try again in 12 minutes.', 'the lockout lost its minutes remaining');
+  assert.strictEqual(loginErrorMessage(e(429, 'Too many sign-in attempts. Please try again in 12 minutes.')),
+    'Too many sign-in attempts. Please try again in 12 minutes.', 'the lockout lost its minutes remaining');
   assert.notStrictEqual(loginErrorMessage(e(429)), wrong);
   for (const status of [500, 502, 503]) {
     assert.notStrictEqual(loginErrorMessage(e(status, 'Authentication error')), wrong, `${status} read as a wrong password`);
   }
   assert.match(loginErrorMessage({ message: 'Network Error' }), /reach the server/);
   assert.strictEqual(loginErrorMessage(e(400, 'Username and password are required')), 'Username and password are required');
+  assert.strictEqual(loginErrorMessage(e(403, 'Not a member of the required group')), 'Not a member of the required group',
+    'the required-group refusal lost its reason');
   assert.notStrictEqual(loginErrorMessage(undefined), wrong);
 });
 

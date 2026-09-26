@@ -11,7 +11,7 @@ import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
 import { readSession, msUntilExpiry, markSessionEnded, peekSessionEnd, clearSessionEnd } from './session'
 import { safeExternalUrl } from './safeUrl'
-import { isAlreadyInLibrary } from './libraryMatch'
+import { libraryMatch } from './libraryMatch'
 import { loginErrorMessage } from './loginErrors'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
@@ -328,6 +328,9 @@ function LoginPage({ setUser }) {
   // Why this page is showing, read once: set when a session ENDED (expiry, or refused by
   // the server), never on a manual logout. Carries the path to return to.
   const [sessionEnd] = useState(() => peekSessionEnd())
+  // In flight: a slow directory bind otherwise leaves the form looking idle, inviting a
+  // second submit.
+  const [signingIn, setSigningIn] = useState(false)
   useEffect(() => { clearSessionEnd() }, [])   // cleared AFTER mount: see peekSessionEnd
   const [showEndNotice, setShowEndNotice] = useState(!!sessionEnd)
 
@@ -342,6 +345,7 @@ function LoginPage({ setUser }) {
       return
     }
     
+    setSigningIn(true)
     try {
       // Convert username to lowercase to prevent case sensitivity issues
       const normalizedUsername = username.toLowerCase()
@@ -354,12 +358,21 @@ function LoginPage({ setUser }) {
         setError('Can\'t start your session: this device\'s date and time look wrong. Correct them, then sign in again.')
         return
       }
-      localStorage.setItem('token', res.data.token)
+      try {
+        localStorage.setItem('token', res.data.token)
+      } catch {
+        // The server accepted the sign-in; the BROWSER refused to store it (storage
+        // blocked or full). Not "can't reach the server", which is what it read as.
+        setError('Signed-in sessions need browser storage, and this browser blocked it. Allow site data for this page, then sign in again.')
+        return
+      }
       setUser(session)
       navigate(sessionEnd?.from || '/search')
     } catch (err) {
       // Distinct answers for a lockout, an outage and a wrong password (FE-4).
       setError(loginErrorMessage(err))
+    } finally {
+      setSigningIn(false)
     }
   }
 
@@ -401,7 +414,9 @@ function LoginPage({ setUser }) {
             onChange={e => setPassword(e.target.value)}
           />
         </div>
-        <button type="submit">Login</button>
+        <button type="submit" disabled={signingIn} aria-busy={signingIn}>
+          {signingIn ? 'Signing in…' : 'Sign in'}
+        </button>
         {error && <div className="error-msg" role="alert">{error}</div>}
       </form>
     </div>
@@ -862,8 +877,10 @@ function SearchPage({ user }) {
       // was refused because the original was in the library. The five-column own-games
       // read, not the whole library with every alias.
       const res = await axios.get(`${API_BASE}/user/me/games`);
-      if (isAlreadyInLibrary(res.data, game)) {
-        showToast('error', 'You already have this game in your library!');
+      const match = libraryMatch(res.data, game);
+      if (match === 'same') {
+        // 'info', not 'error': nothing failed — the game is simply already there.
+        showToast('info', 'This game is already in your library.');
         return;
       }
       await axios.post(`${API_BASE}/user/${user.username}/games`, {
@@ -875,6 +892,11 @@ function SearchPage({ user }) {
         steamAppId: game.steamAppId || null,
       })
       showToast('success', `Added ${game.name} to your library!`);
+      if (match === 'possible') {
+        // Not refused (it may be a remake), but not silent either: search often returns
+        // the undated copy of a game the library already holds from another provider.
+        showToast('info', `Your library already has a game called "${game.name}". Remove one if it's the same game.`, { duration: 8000 });
+      }
     } catch (err) {
       showToast('error', 'Failed to add to library.');
     }
@@ -1196,6 +1218,9 @@ function LibraryPage({ user }) {
   // render, so effects keyed on it ran on every render; with crack-status requests not
   // tracked in flight, each response re-rendered and re-POSTed every pending game.
   const currentPageKey = currentGames.map(g => g.game_id).join('\u0001')
+  // Prices also depend on WHICH visible games have a Steam id: a metadata refresh can
+  // add one without changing any id, and the price would never load.
+  const currentPriceKey = currentGames.map(g => `${g.game_id}:${g.steamAppId || ''}`).join('\u0001')
   const crackInFlight = useRef(new Set())
 
   // Fetch price for a game by Steam App ID
@@ -1219,7 +1244,7 @@ function LibraryPage({ user }) {
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showPrices, currentPageKey])
+  }, [showPrices, currentPriceKey])
 
   const fetchCrackStatus = async (game) => {
     const id = String(game.game_id)

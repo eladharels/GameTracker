@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 14 | 12 |
+| SEC — Security (medium/low) | 15 | 12 |
 | FE — Frontend | 18 | 7 |
-| UP — Tidying & upkeep | 18 | 0 |
-| **Total** | **72** | **41** |
+| UP — Tidying & upkeep | 21 | 0 |
+| **Total** | **76** | **41** |
 
 ---
 
@@ -702,6 +702,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Constraint (CISO):** `/api/v2` must never accept the cookie. v2 is PAT-only by design, and a
   session cookie there is exactly the scope-less JWT that design excludes.
 
+### [ ] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
+- **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).
+- **Why:** each call writes to the database and fetches a third-party site. FE-1's
+  in-flight dedupe is a courtesy in one client, not a control: a script or a PAT can loop.
+- **Fix:** a per-user budget, like `testNotificationLimit`, pinned in
+  `test/api-surface.test.js`.
+
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
 - **Failure:** an `["admin"]`-only token can use every library route, although the spec says
@@ -778,18 +785,26 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   downloads the whole library on every add.
 - **Fix:** compare `game_id`, using the library already held in state or the server's
   answer to the add.
-- **Done:** `frontend/src/libraryMatch.js#isAlreadyInLibrary`: same id, or same name AND same
-  known year (catches one game from two providers, not a remake). Reads the five-column
+- **Done:** `frontend/src/libraryMatch.js#libraryMatch`: 'same' (same id, or same name AND same
+  known year) refuses the add; 'possible' (same name, a year unknown) adds it with a note
+  that a same-named game is already there — search keeps the undated copy, so a strict
+  yes/no let true duplicates through silently (code review); a remake with two different
+  known years is neither. Reads the five-column
   `/api/user/me/games`, not the whole library. Tested in `helpers.test.js`.
 
 ### [x] FE-4 Login shows "Invalid username or password" for every error
 - **Where:** `App.jsx:285-300`.
-- **Failure:** a 429 lockout or a 503 LDAP outage tells the user their password is wrong, so
-  they retry and extend the lockout.
+- **Failure:** a 429 lockout or a 5xx LDAP outage (the server sends 500) tells the user their password is wrong, so
+  they retry. (Correction from the UI/UX review: retries do NOT extend the lockout; the
+  server checks it before counting an attempt. They just keep failing.)
 - **Fix:** give distinct messages for 401, 429 (with the retry time) and 503/network errors.
 - **Done:** `frontend/src/loginErrors.js#loginErrorMessage`: 401 wrong password, 429 the
   server's message with its minutes, 5xx temporarily unavailable, no response can't reach the
   server. Tested in `helpers.test.js`.
+- **Review fixes:** the server's lockout message said "1 minutes", and FE-4 now shows it
+  verbatim; it is pluralised, says "sign-in", and carries `Retry-After` like the other two
+  limiters. The button says "Sign in" and shows "Signing in…" while in flight, since a slow
+  directory bind looked idle. A duplicate add is an info toast, not an error.
 
 ### [x] FE-5 A failed status change can undo other changes
 - **Where:** `App.jsx:1147`, `:1164`.
@@ -797,6 +812,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** roll back only the game that failed, from its own previous value.
 - **Done:** the failure restores that game's previous status, and only if its status is still
   the one this request set. Pinned in `test/runtime.test.js`.
+- **Known edge (code review, not a regression):** two quick changes to one game that BOTH
+  fail (wishlist→playing, then playing→done) end on "playing" while the server holds
+  "wishlist". The old snapshot restore was wrong here too. Re-fetching that game on
+  failure would close it.
 
 ### [ ] FE-6 Keyboard access: library cards and stats chips
 - **Where:**
@@ -993,6 +1012,33 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   answered 401 for another reason, such as a wrong sudo password, would sign people out.
   Sudo mode answers 403 today, and nothing pins that.
 - **Fix:** an `api-contract` or smoke-test assertion that a wrong sudo password answers 403.
+
+### [ ] UP-19 Library duplicate detection belongs in the service (Architect, FE-3 review)
+- **Why:** cross-provider "same game" detection on add lives only in the SPA
+  (`frontend/src/libraryMatch.js`). v1 POST, v2 `POST /library/games`, the MCP and Android
+  dedupe by id alone, through the upsert — "adapters own no rules" says it belongs in
+  `services/library.js`, returned from the add (a hint on v1, a 409 or hint on v2).
+- **Keep:** the both-years-known rule. It is deliberately stricter than `catalog.js`'s two
+  (see that file's header), because a false positive REFUSES a legitimate add.
+- **Optional, same area:** a batch crack-status read, if the library page size grows.
+
+### [ ] UP-20 A DOM test harness for the SPA (Architect; pair with FE-10)
+- **Why:** component fixes (FE-1, FE-2, FE-5, the session notice) can only be pinned by
+  source text in `test/runtime.test.js`, a stopgap that an equivalent rewrite can fail and
+  a differently-shaped regression can pass. Eleven FE items remain.
+- **Fix:** Vitest, happy-dom or jsdom, and `@testing-library/react` as frontend
+  devDependencies (never in the nginx image), a CI step in `frontend-quality`, then turn the
+  shape pins into behaviour tests. Easiest once FE-10 splits `App.jsx` into pages.
+
+### [ ] UP-21 An unreachable directory answers "wrong password" at login (code review, FE-4)
+- **Where:** the login route in `index.js`. When `verifyLdapCredentials` returns
+  `unreachable`, it falls back to local auth; a directory account has no local hash, so the
+  answer is 401 `Invalid credentials`, and the attempt counts toward the lockout.
+- **Why it matters:** FE-4 cannot tell a directory outage from a typo, so an outage still
+  tells every directory user their password is wrong, and burns their lockout budget.
+- **Fix:** answer 503 when the directory is unreachable AND the row has no local hash, and
+  do not count it. This is a new status on a frozen v1 route: it needs an Architect and
+  CISO decision, recorded in `test/api-contract.test.js`, before code.
 
 ---
 

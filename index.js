@@ -1117,7 +1117,9 @@ app.get('/api/debug/user/:username/game/:gameId', authRequired, ownershipRequire
   });
 });
 
-// --- Get current user's games for notification testing ---
+// --- The caller's own games, five columns (api-contract pins the projection) ---
+// Read by Settings → Diagnostics (notification testing) AND by the search page's
+// "already in your library" check (FE-3) — not a testing-only route any more.
 app.get('/api/user/me/games', authRequired, (req, res) => {
   libraryService.listOwnGames(req.user.id)
     .then((rows) => {
@@ -1776,8 +1778,11 @@ app.post('/api/auth/login', (req, res) => {
   const lockedFor = isLockedOut(clientIP, normalizedUsername);
   if (lockedFor) {
     console.log(`[Auth] Rate limited: IP ${clientIP} / user '${safeForLog(normalizedUsername, 64)}'. ${lockedFor} minutes remaining.`);
+    // Retry-After, as the other two limiters send; the body keeps its {error} shape. The
+    // SPA shows this text verbatim since FE-4, which is how "1 minutes" became visible.
+    res.set('Retry-After', String(lockedFor * 60));
     return res.status(429).json({
-      error: `Too many login attempts. Please try again in ${lockedFor} minutes.`
+      error: `Too many sign-in attempts. Please try again in ${lockedFor} minute${lockedFor === 1 ? '' : 's'}.`
     });
   }
 

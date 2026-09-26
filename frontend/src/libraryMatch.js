@@ -7,6 +7,16 @@
 // rawg_9 in a result, and that pair is worth catching. A remake shares the name, never
 // the year.
 //
+// DELIBERATELY STRICTER than the server's two matching rules, and must stay so:
+//   services/catalog.js#sameGame     (merging search results) treats an undated side as
+//                                    the same game when the name carries one year;
+//   services/catalog.js#matchForRow  (metadata refresh) accepts one same-named result
+//                                    when either year is unknown.
+// Those decide which record to KEEP or UPDATE, where merging too little costs a
+// duplicate row. This one decides whether to REFUSE an add, where a false positive
+// blocks a legitimate game — exactly the FE-3 bug. "Unifying" it with catalog.js would
+// bring that bug back. The rule belongs in services/library.js eventually (UP-19).
+//
 // Pure, no DOM: pinned from test/helpers.test.js through import().
 
 const norm = (s) => String(s || '').trim().toLowerCase()
@@ -15,17 +25,32 @@ const yearOf = (d) => {
   return m ? m[1] : null
 }
 
+// Three answers, not two (review of FE-3). A REFUSAL needs certainty: same id, or same
+// name AND the same known year. But catalog.js#mergeResults keeps the UNDATED copy when a
+// name carries one year, so the result a user adds is often undated and from another
+// provider — a strict yes/no let that true duplicate through silently. Same name with a
+// year unknown on either side is therefore 'possible': the add goes ahead (a remake must
+// not be refused) and the page says a same-named game is already there.
+//
 // `rows`: library rows (game_id, game_name, release_date). `game`: a search result
-// (id, name, releaseDate).
-export function isAlreadyInLibrary(rows, game) {
-  if (!Array.isArray(rows) || !game) return false
+// (id, name, releaseDate). Returns 'same' | 'possible' | null.
+export function libraryMatch(rows, game) {
+  if (!Array.isArray(rows) || !game) return null
   const id = String(game.id ?? '')
   const name = norm(game.name)
   const year = yearOf(game.releaseDate)
-  return rows.some((r) => {
-    if (id && String(r.game_id) === id) return true
-    // Same name counts only when BOTH years are known and equal: an unknown year is not
-    // evidence that two same-named games are one.
-    return !!name && norm(r.game_name) === name && !!year && yearOf(r.release_date) === year
-  })
+  let possible = false
+  for (const r of rows) {
+    if (id && String(r.game_id) === id) return 'same'
+    if (!name || norm(r.game_name) !== name) continue
+    const rYear = yearOf(r.release_date)
+    if (year && rYear) {
+      if (year === rYear) return 'same'
+      continue                    // both known and different: a remake, not a duplicate
+    }
+    possible = true               // same name, a year unknown: cannot tell
+  }
+  return possible ? 'possible' : null
 }
+
+export const isAlreadyInLibrary = (rows, game) => libraryMatch(rows, game) === 'same'
