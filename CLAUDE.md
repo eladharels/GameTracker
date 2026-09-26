@@ -361,6 +361,8 @@ GameTracker/
 │   │   │                           #   axios (pinned). Touches `window` at module scope, so
 │   │   │                           #   helpers.test.js must never import it
 │   │   ├── SharedLibrary.jsx       # Shared-library page (moved into src/, FE-9)
+│   │   ├── pages/                  # Pages extracted from App.jsx, one per change (FE-10):
+│   │   │   └── UserManagementPage.jsx  #   admin user table, dialogs, LDAP sync
 │   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
 │   │   │                           #   (`cd frontend && npm test`, run by frontend-quality).
 │   │   │                           #   They replace test/runtime.test.js's source-text shape

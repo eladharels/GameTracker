@@ -903,6 +903,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 ### [ ] FE-10 `App.jsx` is ~3000 lines with at least eight page components
 - **Fix:** split it into `src/pages/*` one page per PR, starting with the pages touched by
   FE-1 to FE-5. No behaviour change in the same PR.
+- **In progress:**
+  1. `UserManagementPage` (and its `userApiError` helper) moved to
+     `src/pages/UserManagementPage.jsx`, verbatim apart from its imports. App.jsx went from
+     3,166 to 2,757 lines.
+     - The pages FE-1 to FE-5 touch (Search, Library) are held back on purpose: their
+       source-text pins in `test/runtime.test.js` read `App.jsx`, and should move to
+       behaviour tests as those pages are extracted.
+     - Verified: lint, the 27 component tests, the runtime pins (the dialog-per-hook pin now
+       covers the new file), and both User Management browser checks from FE-18 and FE-19,
+       unchanged.
 
 ### [x] FE-11 CSP allows `style-src 'unsafe-inline'`
 - **Where:** `frontend/nginx.conf:30`.
