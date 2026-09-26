@@ -531,7 +531,28 @@ async function updateNotificationSettings(userId, fields) {
   return readNotificationSettings(userId);
 }
 
+// My Account's profile read (GET /api/user/me, UP-16). The column list IS the safety
+// property -- never the password hash, never the admin flag -- so it is issued through the
+// db MODULE, where a test can assert the statement. `notification_days` is returned RAW:
+// v1 renders it with its own parse, which a NULL column answers as null, and that shape is
+// frozen.
+const PROFILE_COLUMNS = 'id, username, email, ntfy_topic, ntfy_url, gotify_token, gotify_url, '
+  + 'telegram_chat_id, notification_days, display_name, shares_library';
+async function readProfile(userId) {
+  const row = await db.promises.get(`SELECT ${PROFILE_COLUMNS} FROM users WHERE id = ?`, [userId]);
+  if (!row) throw serviceError(CODES.NOT_FOUND, 'User not found');
+  return row;
+}
+
+// The "share my library" toggle (PUT /api/user/me/sharing, UP-16). Any value is coerced by
+// truthiness, as v1 always has; only a MISSING value is refused.
+async function setLibrarySharing(userId, sharesLibrary) {
+  if (typeof sharesLibrary === 'undefined') throw serviceError(CODES.VALIDATION, 'Missing shares_library value');
+  await db.promises.run('UPDATE users SET shares_library = ? WHERE id = ?', [sharesLibrary ? 1 : 0, userId]);
+}
+
 module.exports = {
+  readProfile, setLibrarySharing, PROFILE_COLUMNS,
   listAll, findById, create, update, remove, verifyPassword,
   assertNotUserOwned, ADMIN_LIST_COLUMNS, USER_OWNED_NOTIFICATION_COLUMNS,
   ADMIN_WRITABLE_COLUMNS,

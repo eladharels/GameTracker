@@ -176,7 +176,9 @@ GameTracker/
 │                                   #   STATUS, because "0 results" and "down" must not
 │                                   #   read the same to a caller. NOTHING from a
 │                                   #   provider's error body reaches the caller
-│   ├── users.js                    # Admin user management; the lockout safety rules
+│   ├── users.js                    # Admin user management; the lockout safety rules; My
+│   │                               #   Account's profile read (PROFILE_COLUMNS: never the hash)
+│   │                               #   and sharing toggle
 │   ├── jobs.js                     # The scheduled work as CALLABLE functions: the release
 │   │                               #   sweep, the weekly Steam price sync, and the metadata
 │   │                               #   refresh (the fifth copy of that one, and the last that

@@ -1613,6 +1613,58 @@ checkAsync('five wrong passwords lock the account out (429 + Retry-After); a suc
   } finally { dbMod.get = realGet; settingsStore.loadSettings = realLoad; console.log = quiet; }
 });
 
+// UP-16: My Account's profile read and sharing toggle are services/users.js now. Neither route
+// had a shape pinned before; both are v1 and frozen.
+console.log('GET /api/user/me and PUT /api/user/me/sharing (v1 over services/users.js):');
+checkAsync('GET /api/user/me: exact keys, no credential column, v1\'s notification_days parse, 404 and 500', async () => {
+  const dbMod = require('../db');
+  const realGet = dbMod.promises.get;
+  const ROW = { id: 7, username: 'jane', email: 'j@x.io', ntfy_topic: 't', ntfy_url: '', gotify_token: 'g', gotify_url: '',
+    telegram_chat_id: '1', notification_days: '[1,3]', display_name: 'Jane', shares_library: 1 };
+  const call = async (answer) => {
+    let sql;
+    dbMod.promises.get = async (s) => { sql = s; if (answer instanceof Error) throw answer; return answer; };
+    const res = recordingRes();
+    try { await handlerFor('get', '/api/user/me')({ user: { id: 7 } }, res); } finally { dbMod.promises.get = realGet; }
+    return { res, sql };
+  };
+  const errors = console.error; console.error = () => {};
+  try {
+    const ok = await call(ROW);
+    assertKeys(ok.res.body, Object.keys(ROW), 'GET /api/user/me');
+    assert.deepStrictEqual(ok.res.body.notification_days, [1, 3]);
+    assert.ok(!/password|can_manage_users|\*/.test(ok.sql), `the profile read selects a credential column: ${ok.sql}`);
+    assert.strictEqual((await call({ ...ROW, notification_days: null })).res.body.notification_days, null,
+      'a NULL notification_days no longer answers null (v1\'s frozen rendering)');
+    assert.deepStrictEqual((await call({ ...ROW, notification_days: 'not json' })).res.body.notification_days, [0, 7, 30]);
+    const missing = await call(undefined);
+    assert.deepStrictEqual([missing.res.statusCode, missing.res.body], [404, { error: 'User not found' }]);
+    const down = await call(new Error('ECONNREFUSED 10.0.0.5'));
+    assert.deepStrictEqual([down.res.statusCode, down.res.body], [500, { error: 'DB error' }]);
+  } finally { console.error = errors; }
+});
+checkAsync('PUT /api/user/me/sharing: truthiness to 1/0, a missing value is 400, {success:true}', async () => {
+  const dbMod = require('../db');
+  const realRun = dbMod.promises.run;
+  const writes = [];
+  dbMod.promises.run = async (sql, params) => { writes.push(params); return { changes: 1 }; };
+  const call = async (body) => {
+    const res = recordingRes();
+    await handlerFor('put', '/api/user/me/sharing')({ user: { id: 7 }, body }, res);
+    return res;
+  };
+  try {
+    for (const [value, stored] of [[true, 1], [false, 0], ['yes', 1], [0, 0]]) {
+      const res = await call({ shares_library: value });
+      assert.deepStrictEqual([res.statusCode, res.body], [200, { success: true }]);
+      assert.deepStrictEqual(writes.pop(), [stored, 7]);
+    }
+    const missing = await call({});
+    assert.deepStrictEqual([missing.statusCode, missing.body], [400, { error: 'Missing shares_library value' }]);
+    assert.strictEqual(writes.length, 0, 'a refused toggle wrote');
+  } finally { dbMod.promises.run = realRun; }
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {

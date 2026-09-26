@@ -2025,14 +2025,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     service over the one account with two CLI recoveries. Logging `[FATAL]` while carrying
     on was the actual defect.
 
-### [ ] UP-16 Shrink `index.js` (3,517 lines)
+### [x] UP-16 Shrink `index.js` (3,517 lines)
 - **Move into services, one per PR, each an adapter-only change:**
   - ~~login~~ (step 3, done);
   - ~~LDAP sync~~ (step 2, done);
   - ~~the CrackWatch cache and scraper~~ (step 1, done);
-  - the sent-notification store;
-  - the `/api/user/me*` routes;
-  - the Steam price route.
+  - ~~the sent-notification store~~ (already `services/jobs.js#REMINDER_LOG`, CC-3/4);
+  - ~~the `/api/user/me*` routes~~ (step 4; `/me/settings` and `/me/tokens` were already adapters);
+  - ~~the Steam price route~~ (already an adapter over `jobs.fetchSteamPrice`).
 - **Also closes, fully or partly:** CC-8, CC-9, CC-11, CC-12, CC-13, UP-10.
 - **Note:** leave the order to the Architect review.
 - **In progress:**
@@ -2126,6 +2126,20 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
          comment naming `getOrCreateUser` is fixed.
        - Accepted: lowercasing inside `getOrCreateDirectoryUser` is untested; its one
          caller already passes a normalised name. Now 2,882 lines.
+  4. **My Account's profile read and sharing toggle → `services/users.js` (2026-09-26).**
+     - `readProfile()` (the column list, `PROFILE_COLUMNS`, never the hash or the admin flag,
+       issued through the db module so a test sees it) and `setLibrarySharing()` (truthiness
+       to 1/0, only a MISSING value refused, as v1 always did).
+     - v1's rendering of `notification_days` stays in the adapter: a bare `JSON.parse`, so a
+       NULL column answers `null` where the service's parser would answer `[0,7,30]`. That
+       is the frozen wire shape.
+     - Neither route had a pinned shape. New contract tests pin both: exact keys, no
+       credential column, the NULL/garbage `notification_days` answers, 404/500 texts, and
+       the toggle's coercion and 400. Five mutations tried, each caught.
+- **Done (2026-09-26).** Every item listed above is a service. `index.js` went from 3,612 at
+  the start of this item to 2,876; what remains is routing, middleware, the adapters and the
+  process wiring (cron, CACHE_DIR, startup). Further moves are opportunistic, one reviewed
+  step each, as before.
 
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with
