@@ -307,7 +307,8 @@ GameTracker/
 │   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx                 # Main React app (all pages/views in one file)
+│   │   ├── App.jsx                 # The app shell, routes, LoginPage, SearchPage and LibraryPage;
+│   │   │                           #   every other page is in pages/ (FE-10, in progress)
 │   │   ├── App.css                 # Global styles (glassmorphism theme, ~6700 lines)
 │   │   ├── GameDetailModal.jsx     # Game detail overlay
 │   │   ├── StatsPage.jsx           # Statistics. Charts are hand-rolled — CSS bars + an
@@ -449,7 +450,8 @@ GameTracker/
 
 ### Architectural Pattern
 - **Full-stack monolith**: All backend logic lives in a single `index.js`
-- **Single-page application**: All frontend views/pages live in `App.jsx` + React Router
+- **Single-page application**: React Router over `App.jsx` (the shell, login, search, library) and
+  `src/pages/*` (every other page, extracted verbatim one per change, FE-10)
 - **File-based config**: Runtime settings (SMTP, LDAP, Telegram, API keys) in `settings.json`,
   read through a cached `loadSettings()` that revalidates on the file's mtime
 - **Stateless API**: JWT-based authentication — no server-side session state. The token carries

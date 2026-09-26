@@ -927,11 +927,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **In progress:**
   1. `UserManagementPage` (and its `userApiError` helper) moved to
      `src/pages/UserManagementPage.jsx`, verbatim apart from its imports. App.jsx went from
-     3,166 to 2,757 lines.
+     3,168 to 2,757 lines.
      - The pages FE-1 to FE-5 touch (Search, Library) are held back on purpose: their
        source-text pins in `test/runtime.test.js` read `App.jsx`, and should move to
        behaviour tests as those pages are extracted.
-     - Verified: lint, the 27 component tests, the runtime pins (the dialog-per-hook pin now
+     - Verified: lint, the component tests (27 at the time), the runtime pins (the dialog-per-hook pin now
        covers the new file), and both User Management browser checks from FE-18 and FE-19,
        unchanged.
   2. `SystemStatusPage` → `src/pages/`. It renders mocked probe results in the built app
@@ -947,7 +947,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
      lines move with them: the `formatDateLocal` note, and `NOTIF_DAY_OPTIONS`, used only by
      AccountPage. `App.jsx` also lost 16 icon imports and `ApiTokensSection`, which it no
      longer used; lint allows unused capitalised names, so nothing flagged them.
-     - App.jsx is now **1,518 lines, down from 3,166**.
+     - App.jsx is now **1,517 lines, down from 3,168**.
      - Verified in the built app: the calendar shows a mocked release, and the account page
        shows its reminder options and the API Tokens section, with no page errors.
   - **Remaining in App.jsx:** the shell, `LoginPage` (its component tests import it from
