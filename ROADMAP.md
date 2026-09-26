@@ -1745,8 +1745,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   Their shape pins were retired from `test/runtime.test.js`, which now checks the test files
   exist and CI runs them. Mutation-checked: removing the fallback or the notice-clearing effect
   fails exactly one test each.
-- **Still shape-pinned:** FE-1, FE-2, FE-5, FE-6 live inside `LibraryPage`/`SearchPage` in
-  App.jsx; converting them is easiest as FE-10 extracts those pages.
+- **Still shape-pinned:** FE-1, FE-5, FE-6 live inside `LibraryPage` in App.jsx; converting
+  them is easiest as FE-10 extracts it. FE-2 moved to behaviour tests in
+  `pages/SearchPage.test.jsx` when SearchPage was extracted (FE-10 step 5).
 - **Versions (Architect review):** Vitest **3.2.7** — the first cut used Vitest 2, which the full
   audit rates CRITICAL (GHSA-5xrq-8626-4rwp, the UI server; <3.2.6). Vitest 3 runs on this Vite 5.
 - **Known (dev-only, never shipped):** the moderate `@vitest/mocker` advisory

@@ -714,14 +714,14 @@ console.log('the SPA has one auth header and one way to end a session:');
 }
 
 // STOPGAP: shape pins for the component fixes NOT yet covered by frontend/src/*.test.jsx
-// (FE-1/2/5/6, inside LibraryPage/SearchPage — they convert as FE-10 extracts those pages). They assert the ABSENCE of each regression's shape as it shipped,
+// (FE-1/5/6, inside LibraryPage — they convert as FE-10 extracts it; FE-2 already has). They assert the ABSENCE of each regression's shape as it shipped,
 // plus a positive form where one exists. They are weaker than behaviour tests: an
 // equivalent rewrite can fail them, and a differently-shaped regression can pass them.
 console.log('frontend component fixes keep their shape (stopgap until FE-10 extracts the pages):');
 {
   const app = fs.readFileSync(path.join(ROOT, 'frontend/src/App.jsx'), 'utf8');
   const src = { 'frontend/src/App.jsx': app };
-  // FE-1, FE-2, FE-5 live inside components and the SPA has no DOM harness, so only the
+  // FE-1 and FE-5 live inside LibraryPage, which has no component test yet, so only the
   // SHAPE of each regression is pinned here — the one that shipped before.
   check('no effect is keyed on the per-render `currentGames` array (FE-1)', () => {
     const app = src['frontend/src/App.jsx'];
@@ -740,7 +740,7 @@ console.log('frontend component fixes keep their shape (stopgap until FE-10 extr
     // Details open from a real TITLE BUTTON on every library and search card (UI/UX review:
     // an aria-label on a role-less card div is invalid ARIA and hid the card's contents).
     const searchPage = fs.readFileSync(path.join(ROOT, 'frontend/src/pages/SearchPage.jsx'), 'utf8');
-    assert.ok((app + searchPage).match(/className="game-title-btn"/g).length >= 2,
+    assert.ok(((app + searchPage).match(/className="game-title-btn"/g) || []).length >= 2,
       'library and search cards no longer open their details from a title button');
     assert.ok(/role="group"\s*\n\s*aria-labelledby=\{`lib-title-/.test(app), 'library cards are no longer labelled groups');
     assert.ok(!/aria-label=\{filter === 'backlog'/.test(app), 'a card div carries an aria-label again');
@@ -758,7 +758,7 @@ console.log('frontend component fixes keep their shape (stopgap until FE-10 extr
   // FE-7 (the detail dialog's focus trap, focus on open, focus return and the fallback)
   // is covered by behaviour tests: frontend/src/GameDetailModal.test.jsx (UP-20). Those use
   // their own harness, so the WIRING stays pinned here until FE-10 extracts the pages and a
-  // page-level test can cover it: both real call sites must hand the dialog a fallback.
+  // page-level test can cover it: every call site, in any page, must hand the dialog a fallback.
   check('every GameDetailModal call site passes a focus fallback (FE-7 wiring)', () => {
     // Across every page, not App.jsx alone: FE-10 moves call sites into src/pages/.
     const dir = path.join(ROOT, 'frontend/src');
