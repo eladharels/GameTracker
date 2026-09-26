@@ -134,6 +134,12 @@ regexes = [
   # exempts every finding in that commit. This matches only a literal xxxx… run,
   # which no CSPRNG-generated base64url token will ever be.
   '''gt_pat_x{20,}''',
+
+  # The same case again (SEC-14): test/api-contract.test.js in commit 1ae53a3 carried a
+  # realistic-length placeholder of literal A's, to prove a PAT in the session cookie is
+  # refused. History keeps it. Exact run of A's only -- a CSPRNG token is never that --
+  # and the test now builds its placeholder at runtime so no new literal appears.
+  '''gt_pat_A{40,}''',
 ]
 
 [[rules]]

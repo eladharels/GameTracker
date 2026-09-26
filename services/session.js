@@ -54,10 +54,12 @@ function claimsFor(user) {
   };
 }
 
-// Sign a session. Returns the token and its `exp` (seconds since the epoch).
-function issue(user, secret) {
-  const token = jwt.sign(claimsFor(user), secret, { expiresIn: SESSION_TTL_SECONDS });
-  const { exp } = jwt.decode(token);
+// Sign a session. Returns the token and its `exp` (seconds since the epoch). The exp is
+// computed HERE and signed in, rather than read back out of the token: nothing in this
+// file decodes a JWT without verifying it (semgrep's jwt-decode-without-verify).
+function issue(user, secret, nowMs = Date.now()) {
+  const exp = Math.floor(nowMs / 1000) + SESSION_TTL_SECONDS;
+  const token = jwt.sign({ ...claimsFor(user), exp }, secret);
   return { token, exp };
 }
 

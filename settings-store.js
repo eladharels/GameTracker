@@ -43,6 +43,9 @@ const SETTINGS_FILE = SETTINGS_DIR ? path.join(SETTINGS_DIR, 'settings.json') : 
 // Returns null when the location is usable. `fsImpl` is a test seam.
 function checkSettingsLocation(fsImpl = fs, { dir = SETTINGS_DIR, legacy = LEGACY_SETTINGS_FILE } = {}) {
   if (!dir) return null;
+  // `dir` is the operator's SETTINGS_DIR (or a test's), never request input: the
+  // environment is already trusted with JWT_SECRET and the database credentials.
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
   const target = path.join(dir, 'settings.json');
   let dirOk = false;
   try { dirOk = fsImpl.statSync(dir).isDirectory(); } catch { dirOk = false; }

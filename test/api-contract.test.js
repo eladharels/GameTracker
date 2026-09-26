@@ -1277,6 +1277,10 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
 // is pinned is what a request meets, not what a function returns in isolation.
 {
   const sess = require('../services/session');
+  // The SAME default handlerFor() gives index.js, set BEFORE it is read: CI runs `npm test`
+  // with no JWT_SECRET, and reading it here first captured undefined -- every session this
+  // block signed was "secretOrPrivateKey must have a value".
+  process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-only-secret-not-used-for-signing';
   const SECRET = process.env.JWT_SECRET;
   const ROW = { id: 31, username: 'cookie-user', can_manage_users: 0, origin: 'local', display_name: 'Cookie User' };
   const CSRF = { 'x-requested-with': 'GameTracker' };
@@ -1385,7 +1389,7 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
     assert.strictEqual(dup.statusCode, 401);
     assert.match(setCookies(dup)[0] || '', /Max-Age=0/, 'a duplicated cookie was refused but not cleared');
     // A PAT is never accepted from the cookie.
-    const pat = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: cookieFor('gt_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') } }));
+    const pat = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: cookieFor(`gt_pat_${'A'.repeat(43)}`) } }));
     assert.strictEqual(pat.statusCode, 401);
   });
 
