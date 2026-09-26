@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 16 | 14 |
+| SEC — Security (medium/low) | 17 | 15 |
 | FE — Frontend | 22 | 21 |
 | UP — Tidying & upkeep | 24 | 20 |
-| **Total** | **84** | **77** |
+| **Total** | **85** | **78** |
 
 ---
 
@@ -747,6 +747,27 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `/api-docs`, so reloading that page under `npm run dev` or `vite preview` was proxied to the
   backend. It is now `'^/api/'`, the same boundary as nginx's `location /api/`. This was never
   a production defect.
+
+### [x] SEC-17 CI tool installs: fixed /tmp paths, no checksum, then `sudo install` (UP-7 review)
+- **Where:** the Gitleaks step and the three Trivy steps in `docker-build-deploy.yml`.
+- **Problem:** each one downloaded to a fixed `/tmp/<tool>.tar.gz`, extracted to `/tmp`, and
+  ran `sudo install` from there. On a self-hosted runner that IS the production host, a
+  pre-planted `/tmp/gitleaks` (a symlink, or a binary raced in between the extract and the
+  install) is what gets installed as root. Nothing checked the download beyond TLS, and
+  the version pin says nothing about the bytes.
+- **Done:**
+  - **Private download dir:** each install downloads into a `mktemp -d` under
+    `RUNNER_TEMP` (mode 0700, removed on exit).
+  - **Pinned checksum:** it checks the tarball against a SHA-256 PINNED in the workflow,
+    BEFORE extracting and before `sudo install`. The pins were taken from each release's
+    `checksums.txt` AND recomputed from an independent download; both agreed. A checksum
+    fetched from the same release would prove nothing if the release were what had been
+    tampered with.
+  - **Rehearsed locally:** the correct hash installs gitleaks 8.21.2 and leaves no temp
+    dir; a wrong hash fails with nothing installed.
+  - **Pinned in `runtime.test.js`:** no step uses a fixed `/tmp` path; every
+    `sudo install` has `sha256sum -c` before `tar -x`, before `sudo install`, with a
+    64-hex pin. Mutation-checked: dropping a check, or restoring a `/tmp` path, fails.
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
@@ -1917,3 +1938,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-18 (+FE-19 review) | this batch | 2026-09-26 | User Management successes → toast, dialog errors = page banner style, sticky banner opaque at 1rem; Add User shows the server's reason; dialog trap on the role element, delete returns focus to the heading |
 | UP-7 | this batch | 2026-09-26 | Smoke stage mints a real PAT and drives v2 (401, read, write) and MCP whoami through to the backend |
 | FE-22 | this batch | 2026-09-26 | React Router 7.18.4: npm audit (dev + prod) at 0; router transitions turned off (`routerConfig.js`) after review caught them breaking the post-login return path |
+| SEC-17 | this batch | 2026-09-26 | Gitleaks/Trivy installs: private mktemp dir + pinned SHA-256 checked before `sudo install` |

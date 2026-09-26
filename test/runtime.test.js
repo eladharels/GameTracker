@@ -250,6 +250,31 @@ check('main.jsx renders the router with the shared ROUTER_PROPS (FE-22)', () => 
   assert.ok(/useTransitions:\s*false/.test(cfg), 'routerConfig.js no longer turns off router transitions');
 });
 
+// Tool installs on the production host (review of UP-7). Every binary the pipeline
+// downloads is installed as ROOT, so it must come from a private mktemp dir (a fixed /tmp
+// path can be pre-planted) and match a SHA-256 PINNED in this file before it is extracted.
+check('CI installs tools from a private dir, checksum-verified before sudo install', () => {
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  let installs = 0;
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    for (const st of job.steps || []) {
+      const run = (st.run || '').replace(/^\s*#.*$/gm, '');
+      assert.ok(!/(?:-o|>|-C)\s+\/tmp\//.test(run) && !/\s\/tmp\/[\w.-]+/.test(run),
+        `${jobName} / "${st.name}" uses a fixed /tmp path`);
+      if (/sudo install\b/.test(run)) {
+        installs++;
+        const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
+        assert.ok(check >= 0 && check < untar && untar < inst,
+          `${jobName} / "${st.name}" installs as root without checking a pinned SHA-256 first`);
+        const env = JSON.stringify(st.env || {}) + run;
+        assert.ok(/[0-9a-f]{64}/.test(env), `${jobName} / "${st.name}" has no pinned SHA-256`);
+      }
+    }
+  }
+  assert.ok(installs >= 4, `found ${installs} root installs — expected gitleaks and three trivy`);
+});
+
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
 // every suite passed on an interpreter production never used. Keeping them equal is not
 // cosmetic — it is what makes a green `npm test` mean anything about the deployed thing.
