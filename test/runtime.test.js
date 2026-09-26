@@ -195,6 +195,26 @@ check('deploy warns on a TRUST_PROXY / BACKEND_BIND mismatch (UP-17)', () => {
   assert.ok(/TRUST_PROXY/.test(steps[i].run) && /BACKEND_BIND/.test(steps[i].run));
 });
 
+// FE-11. The SPA's CSP carries no 'unsafe-inline' anywhere. React style props go through
+// the CSSOM, which CSP does not govern, so nothing needs it — and it is what would let
+// injected markup restyle the page (a UI-redress primitive), and, in script-src, run.
+check("the SPA's CSP has no 'unsafe-inline' and nothing in the SPA needs it (FE-11)", () => {
+  const conf = fs.readFileSync(path.join(ROOT, 'frontend/nginx.conf'), 'utf8');
+  const csp = /Content-Security-Policy\s+"([^"]+)"/.exec(conf);
+  assert.ok(csp, 'no CSP in frontend/nginx.conf');
+  assert.ok(!/unsafe-inline|unsafe-eval/.test(csp[1]), `the CSP allows unsafe-*: ${csp[1]}`);
+  const walk = (dir) => fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => {
+    const rel = `${dir}/${e.name}`;
+    if (e.isDirectory()) return ['node_modules', 'dist'].includes(e.name) ? [] : walk(rel);
+    return /\.jsx?$/.test(e.name) && !/\.test\./.test(e.name) ? [rel] : [];
+  });
+  for (const f of walk('frontend')) {
+    const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    assert.ok(!/dangerouslySetInnerHTML|setAttribute\(\s*['"]style['"]|createElement\(\s*['"]style['"]/.test(text),
+      `${f} sets style through markup; the CSP would block it (and it would need 'unsafe-inline')`);
+  }
+});
+
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
 // every suite passed on an interpreter production never used. Keeping them equal is not
 // cosmetic — it is what makes a green `npm test` mean anything about the deployed thing.

@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
-| FE — Frontend | 22 | 12 |
+| FE — Frontend | 22 | 14 |
 | UP — Tidying & upkeep | 24 | 19 |
-| **Total** | **84** | **67** |
+| **Total** | **84** | **69** |
 
 ---
 
@@ -902,10 +902,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** split it into `src/pages/*` one page per PR, starting with the pages touched by
   FE-1 to FE-5. No behaviour change in the same PR.
 
-### [ ] FE-11 CSP allows `style-src 'unsafe-inline'`
+### [x] FE-11 CSP allows `style-src 'unsafe-inline'`
 - **Where:** `frontend/nginx.conf:30`.
 - **Status:** an accepted trade-off for inline styles and Swagger UI. Record the decision.
   Revisit if inline `style=` usage is removed.
+- **Done: removed, not just recorded, because the premise was wrong.** React's `style={{}}`
+  props are applied through the CSSOM (`element.style`), which CSP does not govern; only
+  `<style>` elements and `style="…"` in MARKUP are.
+  - **Measured in Chromium:** the built bundle was served with `style-src` WITHOUT
+    `'unsafe-inline'`, with a `securitypolicyviolation` listener installed before any
+    script. Login, search, library, settings, stats, account and `/api-docs` (Swagger UI,
+    35 operations, one expanded) raised ZERO violations. A planted `<style>` and
+    `style="…"` raised two, which proves the detector works.
+  - **Nothing injects either:** no `dangerouslySetInnerHTML`, no runtime `<style>`, in the
+    app or in swagger-ui-react and react-icons.
+  - **Pinned:** `test/runtime.test.js` requires the CSP to carry no `unsafe-*`, and no SPA
+    module to set style through markup.
+  - **Coverage limit:** the pages ran against empty API responses. **Load the library with
+    real data, a game detail dialog and a toast on GameTracker-stg before promoting.**
 
 ### [x] FE-12 Expired token renders the app until the first 401
 - **Where:** `useAuth` (`App.jsx:94-99`).
@@ -980,7 +994,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** give Wishlist a colour independent of `--color-accent`, or pick the status palette
   so no preset collides.
 
-### [ ] FE-21 `.game-card`'s entry animation overrides every card transform (UI/UX, code review)
+### [x] FE-21 `.game-card`'s entry animation overrides every card transform (UI/UX, code review)
 - **Where:** `App.css` — `.game-card { animation: cardEnter 0.3s ease both }`. Fill-mode `both`
   keeps the last keyframe's `transform: translateY(0)`, which beats normal declarations, so
   the grid and list hover lifts and the backlog drag-over `scale(1.02)` never apply (measured
@@ -988,6 +1002,22 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** `animation-fill-mode: backwards`, or animate `translate`/`opacity` instead of
   `transform`. Then mind the cascade: `.game-card:hover` (0,2,0) beats
   `.card-keyboard-selected` (0,1,0).
+- **Done:** `animation-fill-mode: backwards`. The end state is the card's own style, where it
+  lands anyway.
+  - `.card-drag-over` is now `.game-card.card-drag-over` (0,2,0), placed after
+    `:hover`, so a hovered drop target shows the drop cue, not the lift.
+  - `.card-keyboard-selected` keeps no transform: `:hover` (0,2,0) outranks it (0,1,0), so
+    a lift there would fight the pointer. Its comment now says that.
+  - New: `prefers-reduced-motion: reduce` turns the entry animation off.
+  - **Measured in Chromium** (built CSS), old then new:
+
+    | | Old | New |
+    |---|---|---|
+    | Resting | identity | `none` |
+    | Hovered | identity | `translateY(-5px)` |
+    | Hovered drag-over | identity | `scale(1.02)` |
+
+    With reduced motion, no animation runs.
 
 ### [ ] FE-22 React Router 7 (moderate advisory; breaking upgrade)
 - **Why:** `npm audit --omit=dev` still reports `react-router 6.0.0–7.17.0` (moderate,
@@ -1366,6 +1396,21 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Keep:** the both-years-known rule. It is deliberately stricter than `catalog.js`'s two
   (see that file's header), because a false positive REFUSES a legitimate add.
 - **Optional, same area:** a batch crack-status read, if the library page size grows.
+- **Proposal, waiting on the owner (2026-09-26). Not started, because it is a v2 contract
+  decision:**
+  - **v1 is out.** A hint in `POST /api/user/:u/games` adds a response field, and
+    `api-contract.test.js` pins that key set exactly.
+  - **v2: a hint, not a 409.** `POST /library/games` answers as today, plus an optional
+    `possibleDuplicates: [{ gameId, name, releaseDate, match: 'same' | 'possible' }]`. It
+    is additive, so no v2 client breaks, and the MCP `add_game` tool can say it to the user.
+  - **Why not a 409:** refusing would turn the SPA's UX rule into a hard API rule for
+    agents, and a name-plus-year match is certain enough to WARN about but still not an
+    id.
+  - **One copy of the rule:** it is currently ESM in `frontend/src/libraryMatch.js`. It
+    would move to `services/library.js` (CommonJS), with the SPA keeping its own copy
+    pinned EQUAL by a test that runs both over the same table. Today there is no
+    cross-boundary module, and a backend `import()` of a frontend source file would couple
+    the images.
 
 ### [x] UP-20 A DOM test harness for the SPA (Architect; pair with FE-10)
 - **Why:** component fixes (FE-1, FE-2, FE-5, FE-6, FE-7, the session notice) can only be
@@ -1455,6 +1500,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     - budget isolation from each other and from the login keys.
 
     Every existing contract and route-tier test passes unchanged.
+  - **Review fixes:**
+    - Express's router answers an invalid percent-encoding in a path parameter with a
+      `URIError` whose status is 400 and which has no `expose`. The clamp had turned that
+      into a 500; it now keeps the 400. Checked over HTTP with `/api/user/%E0/games`.
+    - The library limiter's log line says `library writes throttled` again, through a
+      `logWhat` option, in case an operator greps for it.
 
 ### [x] UP-23 Vite ≥ 6.4.3 (HIGH dev-server advisories; unblocks Vitest 4) (CISO, UP-20 review)
 - **Why:** `npm audit` rates `vite <=6.4.2` HIGH. The issues are the dev server's path
@@ -1581,3 +1632,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-11 | this batch | 2026-09-26 | RAWG detail skipped when the list rules Steam out, answers cached (bounded, TTL); Steam price sweep deduped per app id |
 | UP-17, UP-18 | this batch | 2026-09-26 | Deploy warns on either TRUST_PROXY/BACKEND_BIND mismatch; a 401 may only come from authentication (the SPA logs out on every 401) |
 | UP-22 (+UP-18 review) | this batch | 2026-09-26 | rate-limits.js: one store, one sweep, a named perUserLimit() factory rendering both surfaces; the final error handler no longer passes an upstream 401 through |
+| FE-11, FE-21 (+UP-22 review) | this batch | 2026-09-26 | CSP style-src drops 'unsafe-inline' (measured: zero violations; React styles are CSSOM); card animation no longer pins transform; router's URIError 400 kept |

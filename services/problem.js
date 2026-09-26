@@ -93,8 +93,13 @@ function send(res, err, { fallback = 'DB error', log, messages } = {}) {
 // body-parser set `expose: true` on their 4xx (malformed JSON 400, 413 too large). Never
 // a 401 — nothing that reaches here is an authentication decision; those are made, and
 // answered, by the auth middleware. Everything else is a 500.
+//
+// One more 400 is ours to keep: Express's router answers a path parameter that is not
+// valid percent-encoding (`/api/user/%E0/games`) with a URIError carrying status 400 and
+// NO `expose` flag (router/lib/layer.js decodeParam). Without this it became a 500.
 function statusForUnhandled(err) {
   const s = Number(err?.status ?? err?.statusCode);
+  if (err instanceof URIError && s === 400) return 400;
   return err?.expose === true && Number.isInteger(s) && s >= 400 && s < 500 && s !== 401 ? s : 500;
 }
 

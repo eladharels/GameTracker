@@ -80,7 +80,9 @@ setInterval(() => {
 //
 // A 429 with Retry-After in the SURFACE's wire format: problem+json on /api/v2, the
 // frozen {error} envelope on v1. CLAUDE.md records why that 429 is not a v1 status move.
-function perUserLimit({ name, prefix, max, windowMs, what }) {
+// `logWhat` defaults to `what`; set it where the log line predates the factory and an
+// operator may be grepping for it.
+function perUserLimit({ name, prefix, max, windowMs, what, logWhat = what }) {
   if (windowMs > LOCKOUT_DURATION) {
     throw new Error(`${name}: a ${windowMs}ms window outlives the sweep's ${LOCKOUT_DURATION}ms horizon`);
   }
@@ -90,7 +92,7 @@ function perUserLimit({ name, prefix, max, windowMs, what }) {
     const keys = [`${prefix}:${userId}`];
     const lockedFor = lockoutMinutes(keys, max, windowMs);
     if (lockedFor > 0) {
-      console.warn(`[RateLimit] ${what} throttled for user ${userId}`);
+      console.warn(`[RateLimit] ${logWhat} throttled for user ${userId}`);
       res.set('Retry-After', String(lockedFor * 60));
       const err = {
         code: CODES.RATE_LIMITED,
@@ -116,7 +118,7 @@ function perUserLimit({ name, prefix, max, windowMs, what }) {
 // minutes is one write every 1.25 s sustained.
 const libraryWriteLimit = perUserLimit({
   name: 'libraryWriteLimit', prefix: 'libwrite', max: 240, windowMs: 5 * 60 * 1000,
-  what: 'library changes',
+  what: 'library changes', logWhat: 'library writes',
 });
 
 // The Diagnostics "send test notification" button makes THIS server send a request to a

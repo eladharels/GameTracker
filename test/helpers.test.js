@@ -3840,6 +3840,11 @@ console.log('problem.statusForUnhandled — the last-resort status (UP-18 review
   check("body-parser's exposed 4xx keep their status; nothing else does", () => {
     assert.strictEqual(statusForUnhandled({ status: 400, expose: true, type: 'entity.parse.failed' }), 400);
     assert.strictEqual(statusForUnhandled({ status: 413, expose: true }), 413);
+    // Express's router: a path parameter that is not valid percent-encoding.
+    const bad = new URIError('Failed to decode param \'%E0\''); bad.status = 400;
+    assert.strictEqual(statusForUnhandled(bad), 400, 'a malformed path became a 500');
+    const other = new URIError('x'); other.status = 401;
+    assert.strictEqual(statusForUnhandled(other), 500, 'a URIError smuggled a 401 through');
     for (const e of [{ status: 401, expose: true }, { status: 403 }, { status: 502, expose: true },
       { status: '400', expose: 'yes' }, new Error('x'), null, undefined]) {
       assert.strictEqual(statusForUnhandled(e), 500, `${JSON.stringify(e)} kept its status`);

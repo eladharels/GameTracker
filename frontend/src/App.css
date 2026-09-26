@@ -732,8 +732,17 @@ body, html {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+/* `backwards`, NOT `both` (ROADMAP FE-21). A forwards fill keeps the last keyframe's
+   `transform: translateY(0)` applied after the animation ends, and an animation's value
+   beats every normal declaration — so the grid/list hover lifts and the backlog
+   drag-over scale never applied (measured in Chromium: identity matrix). `backwards`
+   only holds the FIRST keyframe until the animation starts; the end state is the card's
+   own style, which is where it lands anyway. */
 .game-card {
-  animation: cardEnter 0.3s ease both;
+  animation: cardEnter 0.3s ease backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .game-card { animation: none; }
 }
 
 .game-card:hover {
@@ -775,7 +784,10 @@ body, html {
   opacity: 0.4;
   cursor: grabbing;
 }
-.card-drag-over {
+/* .game-card-qualified (0,2,0): with the entry animation no longer pinning `transform`,
+   `.game-card:hover` (0,2,0) competes for it, and a card being dragged over is also
+   hovered. Same specificity and LATER in the file, so the drop cue wins. */
+.game-card.card-drag-over {
   border-color: var(--color-accent) !important;
   box-shadow: 0 0 0 2px var(--color-accent), 0 10px 30px #0004 !important;
   transform: scale(1.02);
@@ -787,8 +799,8 @@ body, html {
 .card-keyboard-selected {
   outline: 2px dashed var(--color-accent);
   outline-offset: 3px;
-  /* No transform: .game-card's cardEnter animation (fill-mode both) overrides every
-     transform on the card, so a lift here never applied (FE-21). */
+  /* No transform, deliberately: `.game-card:hover` (0,2,0) outranks this (0,1,0), so a
+     lift here would fight the pointer. The dashed outline is the whole signal. */
 }
 
 /* Subtle glow on non-active cards during a drag to show they're droppable */
