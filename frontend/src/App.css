@@ -741,8 +741,23 @@ body, html {
 .game-card {
   animation: cardEnter 0.3s ease backwards;
 }
+/* Reduced motion covers what FE-21 brought back to life, not only the entrance: the hover
+   lifts, the cover zoom and the drag-over scale all animate a TRANSFORM, and until FE-21
+   none of them applied at all, so nobody had to think about them (UI/UX review). The
+   border, shadow and outline cues stay; only the movement goes. */
 @media (prefers-reduced-motion: reduce) {
   .game-card { animation: none; }
+  .game-card,
+  .game-card:hover,
+  .game-card .game-cover,
+  .game-card:hover .game-cover,
+  .games-list.list-view .game-card:hover,
+  .games-list:not(.list-view) .game-card:hover .game-cover,
+  .game-card.card-drag-over,
+  .games-list.list-view .game-card.card-drag-over {
+    transform: none !important;
+    transition-property: border-color, box-shadow, background-color, opacity !important;
+  }
 }
 
 .game-card:hover {
@@ -787,6 +802,11 @@ body, html {
 /* .game-card-qualified (0,2,0): with the entry animation no longer pinning `transform`,
    `.game-card:hover` (0,2,0) competes for it, and a card being dragged over is also
    hovered. Same specificity and LATER in the file, so the drop cue wins. */
+.game-card.card-drag-over,
+/* List view's hover (0,4,0) would otherwise out-rank the drop cue (review of FE-21). */
+.games-list.list-view .game-card.card-drag-over:hover {
+  transform: scale(1.02);
+}
 .game-card.card-drag-over {
   border-color: var(--color-accent) !important;
   box-shadow: 0 0 0 2px var(--color-accent), 0 10px 30px #0004 !important;

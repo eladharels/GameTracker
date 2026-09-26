@@ -210,7 +210,9 @@ check("the SPA's CSP has no 'unsafe-inline' and nothing in the SPA needs it (FE-
   });
   for (const f of walk('frontend')) {
     const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
-    assert.ok(!/dangerouslySetInnerHTML|setAttribute\(\s*['"]style['"]|createElement\(\s*['"]style['"]/.test(text),
+    // Every way markup — and so a style attribute or a <style> — gets in: React's escape
+    // hatch, the two DOM sinks, setAttribute('style'), a created or JSX <style>.
+    assert.ok(!/dangerouslySetInnerHTML|\.innerHTML\s*=|insertAdjacentHTML|setAttribute\(\s*['"]style['"]|createElement\(\s*['"]style['"]|<style[\s>{]/.test(text),
       `${f} sets style through markup; the CSP would block it (and it would need 'unsafe-inline')`);
   }
 });

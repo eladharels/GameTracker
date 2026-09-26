@@ -918,8 +918,20 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     app or in swagger-ui-react and react-icons.
   - **Pinned:** `test/runtime.test.js` requires the CSP to carry no `unsafe-*`, and no SPA
     module to set style through markup.
-  - **Coverage limit:** the pages ran against empty API responses. **Load the library with
-    real data, a game detail dialog and a toast on GameTracker-stg before promoting.**
+  - **Coverage limit:** the pages ran against empty API responses.
+  - **CISO condition, staging check before promotion:** on GameTracker-stg, in Chromium AND
+    Firefox, with the DevTools console open, it must show no CSP errors while you:
+    - load the library with real covers;
+    - drag-reorder the backlog;
+    - open the detail dialog with its history;
+    - trigger a toast;
+    - open the shared library page and stats;
+    - open `/api-docs` and expand an operation;
+    - check that Google Fonts load.
+  - **Review fix:** the markup scan also refuses `.innerHTML =`, `insertAdjacentHTML` and a
+    JSX `<style>`; a planted JSX `<style>` fails it. Swagger UI's markdown can emit
+    `style="text-align"`, but it goes through DOMPurify with `FORBID_ATTR: ["style"]`,
+    because `useUnsafeMarkdown` is off, so it never reaches the DOM.
 
 ### [x] FE-12 Expired token renders the app until the first 401
 - **Where:** `useAuth` (`App.jsx:94-99`).
@@ -1032,6 +1044,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     | Hovered drag-over | identity | `scale(1.02)` |
 
     With reduced motion, no animation runs.
+  - **Review fixes (UI/UX):**
+    - List view's hover (0,4,0) out-ranked the drop cue. A hovered drop target in list
+      view now scales too (measured 1.02).
+    - Reduced motion now also stops the TRANSFORMS this change brought back to life: the
+      hover lift, the cover zoom and the drag-over scale (measured `none`). The border,
+      shadow and outline cues stay.
+  - **Nit, left:** with the pointer in a card's bottom 5px, the lift moves the card out
+    from under it, so it can flicker. The fix is to lift an inner wrapper; recorded for the
+    card rework.
 
 ### [ ] FE-22 React Router 7 (moderate advisory; breaking upgrade)
 - **Why:** `npm audit --omit=dev` still reports `react-router 6.0.0–7.17.0` (moderate,
@@ -1425,6 +1446,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     pinned EQUAL by a test that runs both over the same table. Today there is no
     cross-boundary module, and a backend `import()` of a frontend source file would couple
     the images.
+  - **Weigh also (review):** a hint arrives AFTER the possible duplicate has been written,
+    so an agent must undo it. Two alternatives:
+    - a pre-add check, such as `?dryRun`, or `onPossibleDuplicate=warn|reject` with `warn`
+      as the default;
+    - keeping the two copies equal through shared JSON test vectors rather than one test
+      running both codebases.
 
 ### [x] UP-20 A DOM test harness for the SPA (Architect; pair with FE-10)
 - **Why:** component fixes (FE-1, FE-2, FE-5, FE-6, FE-7, the session notice) can only be
