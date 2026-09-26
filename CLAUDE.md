@@ -441,6 +441,8 @@ GameTracker/
 │                                   #   the v1 defect it corrects. Read BEFORE editing the spec
 ├── [Docs]:
 │   ├── README.md                   # Setup, API reference, operations
+│   ├── OPERATOR_RUNBOOK.md         # Host-only steps code cannot take: SEC-13 audit,
+│   │                               #   UP-24 settings-directory migration, UP-25 disk
 │   ├── SECURITY_HARDENING_2026-07.md  # Threat history + operational runbook (authoritative)
 │   ├── PRODUCTION_CHANGELOG.txt    # Record of changes promoted from staging
 │   ├── SECURITY_FIXES.md           # Historical — early credential-validation fix
@@ -455,6 +457,7 @@ GameTracker/
     ├── backfill_steam_app_ids.js
     ├── backfill_ldap_display_names.js
     ├── test_ldap_sync.js
+    ├── audit_ldap_hashed_accounts.js   # SEC-13: read-only list of possible pre-P0-1 takeovers
     └── run_notifications.js
 ```
 
@@ -963,6 +966,7 @@ docker compose -f docker-compose.yaml exec backend node <script> [args]
 | `backfill_ldap_display_names.js` | Sync display names from LDAP for all LDAP-origin users | yes |
 | `test_ldap_sync.js` | Diagnose the LDAP connection and resolve every ldap-origin user (read-only) | n/a |
 | `run_notifications.js` | Manually trigger the release notification check | — |
+| `audit_ldap_hashed_accounts.js` | SEC-13: list `origin='ldap'` rows that still hold a local hash, with admin flag and tokens. Read-only; see `OPERATOR_RUNBOOK.md` | n/a |
 
 > **`DB_PATH` is gone.** It pointed at the SQLite file. Because node-sqlite3 opens with
 > `OPEN_CREATE`, a script aimed at a missing path silently *created* an empty database,

@@ -326,6 +326,11 @@ console.log('the environment the backend reads reaches its container:');
     // the random password printed once at first boot is the Docker path. The smoke
     // stack sets a throwaway one so CI can log in.
     ROOT_PASSWORD: 'docker-compose.yaml',
+    // UP-24. Set by the operator in the SAME change that swaps the single-file mount for a
+    // directory mount (OPERATOR_RUNBOOK.md). Passed on its own it would point at a
+    // directory that is not mounted, which the startup check refuses; so it is never
+    // defaulted in here.
+    SETTINGS_DIR: 'both',
   };
 
   const read = new Set();

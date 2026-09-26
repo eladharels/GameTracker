@@ -822,6 +822,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `directoryClaimRefusal` does: a row with a hash is checked locally, a row without one goes to
   the directory. Then login and minting follow one rule instead of two that disagree about
   `origin='ldap'` rows that still hold a hash.
+  - **Done (2026-09-26):** the hash decides. A test drives the takeover shape: an
+    `origin='ldap'` row holding the local hash can no longer mint with the directory
+    password, the directory is never asked, and the local password still works. The old code
+    fails that test.
+- **Prepared for the operator (2026-09-26):**
+  - `audit_ldap_hashed_accounts.js` lists the affected rows with their admin flag, creation
+    date and tokens. It is read-only and never prints a hash; verified against a local probe
+    row.
+  - `OPERATOR_RUNBOOK.md` → SEC-13 gives the per-row decision, the SQL for each outcome, token
+    revocation and the `JWT_SECRET` rotation.
+  - **What stays open is the audit itself,** which only someone with production access can
+    run.
 
 ---
 
@@ -1608,6 +1620,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   which reads as "nothing configured": LDAP login and every API key vanish until it is moved.
   The backend should refuse to start if the configured directory is empty while the old
   single-file path still exists. Needs the owner's go-ahead and a staging run.
+- **Code done (2026-09-26, owner go-ahead):**
+  - `settings-store.js` honours `SETTINGS_DIR`; unset, nothing changes.
+  - `checkSettingsLocation()` refuses, naming the fix, when the directory is missing or holds
+    no `settings.json`. It is called before the server starts, and five tests cover it.
+  - `SETTINGS_DIR` is in runtime.test.js's `NOT_PASSED` until the compose change.
+- **Open, for the operator:** the host copy, the compose change (both files, plus the smoke
+  seed path) and the staging run. `OPERATOR_RUNBOOK.md` → UP-24 has each step and the
+  rollback.
 
 ### [x] UP-9 `refresh_igdb_token.js` can have no effect
 - **Where:** `refresh_igdb_token.js:69`.
@@ -2079,7 +2099,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - add host disk alerting.
 
   CI now clears the build cache on every build and refuses to build below 5 GiB free, so it
-  can no longer be the thing that fills the disk unnoticed. If the build cache is not what
+  can no longer be the thing that fills the disk unnoticed.
+
+  `OPERATOR_RUNBOOK.md` → UP-25 has the commands for each of these, including a cron-based
+  ntfy disk alert. If the build cache is not what
   fills the disk, the operator needs to look at the host (volumes, logs, other projects),
   which CI cannot and should not do.
 

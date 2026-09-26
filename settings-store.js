@@ -23,7 +23,34 @@ const path = require('path');
 //
 // __dirname is the repo root, which is why this module lives here and not under
 // services/: the path would then depend on the directory depth of its own file.
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const LEGACY_SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+// UP-24: the settings DIRECTORY. Production bind-mounts settings.json as a single FILE,
+// and rename(2) cannot replace a mount point, so saves there fall back to an in-place
+// rewrite (UP-8). Mounting a directory instead makes every save atomic. SETTINGS_DIR
+// selects it; unset, nothing changes. The migration is an operator step
+// (OPERATOR_RUNBOOK.md, UP-24) and checkSettingsLocation() below is its safety net.
+const SETTINGS_DIR = (process.env.SETTINGS_DIR || '').trim();
+const SETTINGS_FILE = SETTINGS_DIR ? path.join(SETTINGS_DIR, 'settings.json') : LEGACY_SETTINGS_FILE;
+
+// Refuse to start on a half-done migration. A missing settings.json reads as "nothing
+// configured": LDAP login and every API key would silently vanish, and the first admin
+// save would write a near-empty file over the gap. So when SETTINGS_DIR is set and holds
+// no settings.json, the answer is an error naming the fix, never a quiet empty start.
+// Returns null when the location is usable. `fsImpl` is a test seam.
+function checkSettingsLocation(fsImpl = fs, { dir = SETTINGS_DIR, legacy = LEGACY_SETTINGS_FILE } = {}) {
+  if (!dir) return null;
+  const target = path.join(dir, 'settings.json');
+  let dirOk = false;
+  try { dirOk = fsImpl.statSync(dir).isDirectory(); } catch { dirOk = false; }
+  if (!dirOk) return `SETTINGS_DIR=${dir} is not a directory. Mount it, or unset SETTINGS_DIR (OPERATOR_RUNBOOK.md, UP-24).`;
+  if (fsImpl.existsSync(target)) return null;
+  if (fsImpl.existsSync(legacy)) {
+    return `SETTINGS_DIR=${dir} has no settings.json, but ${legacy} still exists. Copy it into ${dir} `
+      + 'before starting (OPERATOR_RUNBOOK.md, UP-24): starting now would run with LDAP and every API key unset.';
+  }
+  return `SETTINGS_DIR=${dir} has no settings.json. Copy settings.example.json there, or restore the real file.`;
+}
 
 // Frozen, and so is everything loadSettings() hands out.
 //
@@ -236,7 +263,7 @@ function apiKeyStatus(name, env = process.env) {
 const resolveApiKey = (name, env = process.env) => apiKeyStatus(name, env).value;
 
 module.exports = {
-  SETTINGS_FILE, EMPTY_SETTINGS,
+  SETTINGS_FILE, SETTINGS_DIR, EMPTY_SETTINGS, checkSettingsLocation,
   readSettings, loadSettings, saveSettings, apiKeyStatus, resolveApiKey,
   replaceFileContents,
 };

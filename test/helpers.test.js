@@ -3007,6 +3007,41 @@ console.log('auth admin revocation — the SQL is the safety property:');
   });
 }
 
+console.log('settings-store.checkSettingsLocation (UP-24: never start on a half-done migration):');
+{
+  const store = require('../settings-store');
+  // A fake filesystem: paths that exist, and which of them are directories.
+  const fakeFs = (files, dirs) => ({
+    existsSync: (p) => files.includes(p) || dirs.includes(p),
+    statSync: (p) => {
+      if (!dirs.includes(p) && !files.includes(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+      return { isDirectory: () => dirs.includes(p) };
+    },
+  });
+  const legacy = '/app/settings.json';
+  check('SETTINGS_DIR unset: nothing to check, today\'s single-file layout is unchanged', () => {
+    assert.strictEqual(store.checkSettingsLocation(fakeFs([], []), { dir: '', legacy }), null);
+  });
+  check('the directory holds settings.json: usable', () => {
+    assert.strictEqual(store.checkSettingsLocation(
+      fakeFs(['/app/config/settings.json'], ['/app/config']), { dir: '/app/config', legacy }), null);
+  });
+  check('an EMPTY directory while the old file still exists refuses, naming the fix', () => {
+    // The trap UP-24 exists to catch: the deploy runs before the file is moved, and an
+    // empty directory reads as "nothing configured" -- LDAP and every API key gone.
+    const msg = store.checkSettingsLocation(fakeFs([legacy], ['/app/config']), { dir: '/app/config', legacy });
+    assert.match(msg, /no settings\.json/);
+    assert.match(msg, /OPERATOR_RUNBOOK/);
+  });
+  check('an empty directory with no old file refuses too -- never a quiet empty start', () => {
+    assert.ok(store.checkSettingsLocation(fakeFs([], ['/app/config']), { dir: '/app/config', legacy }));
+  });
+  check('SETTINGS_DIR that is not a directory refuses', () => {
+    assert.match(store.checkSettingsLocation(fakeFs([], []), { dir: '/nope', legacy }), /not a directory/);
+    assert.match(store.checkSettingsLocation(fakeFs(['/app/f'], []), { dir: '/app/f', legacy }), /not a directory/);
+  });
+}
+
 console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
   check('readSettings() really does return { settings, degraded }', () => {
     // The stubs below imitate this shape. When they imitated it WRONGLY — returning
@@ -3063,6 +3098,25 @@ console.log('users.verifyPassword (sudo mode for minting a token from the browse
       settingsStore.readSettings = realRead;
       ldapHelpers.verifyLdapCredentials = realVerify;
     }
+  });
+
+  checkAsync('a row with a local HASH is decided by it, whatever its origin (SEC-13)', async () => {
+    // The pre-P0-1 takeover shape: origin='ldap' with the local account's hash kept. Login
+    // refuses the directory's claim on it; minting must too, or the directory password
+    // that took the account over can still mint a token for it.
+    const ldapHelpers = require('../ldap-helpers');
+    const realVerify = ldapHelpers.verifyLdapCredentials;
+    let asked = 0;
+    ldapHelpers.verifyLdapCredentials = async () => { asked++; return { ok: true, entry: { dn: 'uid=root' } }; };
+    try {
+      const hash = await bcryptLib.hash('the-local-password', 4);
+      await withRow({ username: 'root', password: hash, origin: 'ldap' }, async () => {
+        const viaDirectory = await usersService.verifyPassword(1, 'the-directory-password');
+        assert.strictEqual(viaDirectory.ok, false, 'the directory password minted for a hashed (taken-over) row');
+        assert.strictEqual((await usersService.verifyPassword(1, 'the-local-password')).ok, true);
+      });
+      assert.strictEqual(asked, 0, 'a row with a local hash was sent to the directory');
+    } finally { ldapHelpers.verifyLdapCredentials = realVerify; }
   });
 
   checkAsync('a verified directory user OUTSIDE requiredGroup is still refused', async () => {

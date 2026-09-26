@@ -347,11 +347,15 @@ async function verifyPassword(userId, password) {
   // bcrypt.compare, which rejects with "Illegal arguments" on a null hash — an
   // unhandled rejection there takes the process down under Node's default
   // --unhandled-rejections=throw.
-  // `origin` OR a missing hash — the two signals should agree, and where they do not
-  // this takes the safer reading. A row with origin='ldap' that somehow acquired a
-  // local hash must not be verifiable by that hash, and a row with no hash at all
-  // cannot be verified locally whatever its origin says.
-  if (row.origin === 'ldap' || !row.password || typeof row.password !== 'string') {
+  // THE HASH decides, not `origin` (SEC-13 follow-up). A row holding a local hash is
+  // checked locally; a row without one goes to the directory. That is the rule LOGIN
+  // applies (user-rules.js#directoryClaimRefusal), and it used to differ here. The rows
+  // where the two disagree are exactly the pre-P0-1 takeovers: a local account relabelled
+  // origin='ldap' with its hash kept. Login already refused the directory's claim on them;
+  // minting still sent them to the directory, so the directory password that took the
+  // account over could still mint a token for it. One rule now, and the takeover gains
+  // nothing from either door.
+  if (!row.password || typeof row.password !== 'string') {
     // `.settings`, NOT the return value. readSettings() answers
     // { settings, degraded } — reading `.ldap` off the wrapper gives undefined, which
     // silently became "no directory configured" and refused every directory user with
