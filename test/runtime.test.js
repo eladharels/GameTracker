@@ -713,52 +713,25 @@ console.log('the SPA has one auth header and one way to end a session:');
   });
 }
 
-// STOPGAP: shape pins for the component fixes NOT yet covered by frontend/src/*.test.jsx
-// (FE-1/5/6, inside LibraryPage — they convert as FE-10 extracts it; FE-2 already has). They assert the ABSENCE of each regression's shape as it shipped,
-// plus a positive form where one exists. They are weaker than behaviour tests: an
-// equivalent rewrite can fail them, and a differently-shaped regression can pass them.
-console.log('frontend component fixes keep their shape (stopgap until FE-10 extracts the pages):');
+// FE-1, FE-2, FE-5 and FE-6 are covered by BEHAVIOUR now (FE-10):
+// frontend/src/pages/SearchPage.test.jsx (FE-2: the four stale-response guards) and
+// frontend/src/pages/LibraryPage.test.jsx (FE-1: one crack check per game and the 429
+// back-off; FE-5: per-game, conditional rollback; FE-6: chip buttons, labelled card
+// groups, named controls, backlog focus and Escape). Each fix, removed, fails a test there.
+// Two WIRING properties stay here because no rendered output shows them.
+console.log('frontend wiring the component tests cannot observe:');
 {
-  const app = fs.readFileSync(path.join(ROOT, 'frontend/src/App.jsx'), 'utf8');
-  const src = { 'frontend/src/App.jsx': app };
-  // FE-1 and FE-5 live inside LibraryPage, which has no component test yet, so only the
-  // SHAPE of each regression is pinned here — the one that shipped before.
+  const library = fs.readFileSync(path.join(ROOT, 'frontend/src/pages/LibraryPage.jsx'), 'utf8');
+  // FE-1's other half. The in-flight set (tested) stops the duplicate REQUESTS; an effect
+  // keyed on `currentGames` — a new array every render — would still re-run on every
+  // render, which nothing on screen reveals. Use currentPageKey / currentPriceKey.
   check('no effect is keyed on the per-render `currentGames` array (FE-1)', () => {
-    const app = src['frontend/src/App.jsx'];
-    assert.ok(!/\}, \[[^\]]*\bcurrentGames\b[^\]]*\]\)/.test(app),
+    assert.ok(!/\}, \[[^\]]*\bcurrentGames\b[^\]]*\]\)/.test(library),
       'an effect depends on currentGames, a new array every render — use currentPageKey');
-    assert.ok(/crackInFlight\.current\.has\(/.test(app), 'crack-status requests are no longer tracked in flight');
-  });
-  // FE-2 (a stale search response changes nothing) is covered by BEHAVIOUR now:
-  // frontend/src/pages/SearchPage.test.jsx drives all four guards — results, error, price,
-  // price error — and each fails its own test when removed (FE-10).
-  check('stats chips are buttons; card details open from a title button (FE-6)', () => {
-    assert.ok(!/<div className="stats-chip/.test(app), 'a stats chip is a <div onClick> again — not reachable by keyboard');
-    const chips = (app.match(/<button type="button" className="stats-chip /g) || []).length;
-    const pressed = (app.match(/aria-pressed=\{filter === '/g) || []).length;
-    assert.ok(chips === 6 && pressed >= 6, `stats chips: ${chips} buttons, ${pressed} with aria-pressed (want 6/6)`);
-    // Details open from a real TITLE BUTTON on every library and search card (UI/UX review:
-    // an aria-label on a role-less card div is invalid ARIA and hid the card's contents).
-    const searchPage = fs.readFileSync(path.join(ROOT, 'frontend/src/pages/SearchPage.jsx'), 'utf8');
-    assert.ok(((app + searchPage).match(/className="game-title-btn"/g) || []).length >= 2,
-      'library and search cards no longer open their details from a title button');
-    assert.ok(/role="group"\s*\n\s*aria-labelledby=\{`lib-title-/.test(app), 'library cards are no longer labelled groups');
-    assert.ok(!/aria-label=\{filter === 'backlog'/.test(app), 'a card div carries an aria-label again');
-    // Keyboard reordering: the backlog card stays focusable, Escape comes before the
-    // inner-control guard, and Enter/Space still pick up and drop.
-    assert.ok(/tabIndex=\{filter === 'backlog' \? 0 : undefined\}/.test(app), 'backlog cards are no longer focusable');
-    const kb = app.slice(app.indexOf("onKeyDown={filter !== 'backlog' ? undefined"), app.indexOf('setKeyboardDragId(null)\n', app.indexOf("onKeyDown={filter !== 'backlog' ? undefined")) + 400);
-    assert.ok(kb.indexOf("e.key === 'Escape'") > -1 && kb.indexOf("e.key === 'Escape'") < kb.indexOf('e.target !== e.currentTarget'),
-      'Escape no longer cancels a held card from a control inside it');
-    assert.ok(/handleBacklogDrop\(game\.game_id\)/.test(kb), 'keyboard reordering no longer drops the held card');
-    for (const name of ['Status for ', 'Refresh metadata for ', 'Remove ']) {
-      assert.ok(app.includes('aria-label={`' + name + '${game.game_name}'), `a card control lost its name: "${name}…"`);
-    }
   });
   // FE-7 (the detail dialog's focus trap, focus on open, focus return and the fallback)
-  // is covered by behaviour tests: frontend/src/GameDetailModal.test.jsx (UP-20). Those use
-  // their own harness, so the WIRING stays pinned here until FE-10 extracts the pages and a
-  // page-level test can cover it: every call site, in any page, must hand the dialog a fallback.
+  // is covered by behaviour tests in frontend/src/GameDetailModal.test.jsx (UP-20). That
+  // harness renders the dialog alone, so whether each PAGE hands it a fallback is pinned here.
   check('every GameDetailModal call site passes a focus fallback (FE-7 wiring)', () => {
     // Across every page, not App.jsx alone: FE-10 moves call sites into src/pages/.
     const dir = path.join(ROOT, 'frontend/src');
@@ -775,23 +748,22 @@ console.log('frontend component fixes keep their shape (stopgap until FE-10 extr
     }
     assert.ok(sites >= 2, `found ${sites} GameDetailModal call sites — the scan is broken`);
   });
-  check('a failed status change rolls back that game only (FE-5)', () => {
-    const app = src['frontend/src/App.jsx'];
-    const fn = app.slice(app.indexOf('const setGameStatus'), app.indexOf('const removeGame'));
-    assert.ok(!/setUserGames\(previous/.test(fn), 'setGameStatus restores a whole-library snapshot again');
-    // Positive, not only an absence: the rollback maps ONE game, conditioned on its status
-    // still being the one this request set. A renamed snapshot would pass the line above.
-    assert.ok(/sameGame\(g\) && g\.status === status \? \{ \.\.\.g, status: previousStatus \}/.test(fn),
-      'the rollback is no longer per-game and conditional');
-  });
 }
 
 // The pins retired above are covered by component tests; this keeps them from quietly
 // disappearing, and CI from quietly not running them (UP-20).
 check('the frontend component tests exist and CI runs them', () => {
-  for (const f of ['frontend/src/GameDetailModal.test.jsx', 'frontend/src/LoginPage.test.jsx',
-    'frontend/src/pages/SearchPage.test.jsx', 'frontend/src/App.relogin.test.jsx', 'frontend/src/useDialogFocus.test.jsx']) {
+  // With a MINIMUM test count each (Architect review): an emptied file would otherwise
+  // pass an existence check while covering nothing.
+  const minimums = {
+    'frontend/src/GameDetailModal.test.jsx': 1, 'frontend/src/LoginPage.test.jsx': 1,
+    'frontend/src/App.relogin.test.jsx': 1, 'frontend/src/useDialogFocus.test.jsx': 1,
+    'frontend/src/pages/SearchPage.test.jsx': 4, 'frontend/src/pages/LibraryPage.test.jsx': 7,
+  };
+  for (const [f, min] of Object.entries(minimums)) {
     assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is gone — its source-text pin was retired in its favour`);
+    const n = (fs.readFileSync(path.join(ROOT, f), 'utf8').match(/^\s*it\(/gm) || []).length;
+    assert.ok(n >= min, `${f} has ${n} tests, want at least ${min} — pins were retired in their favour`);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'frontend/package.json'), 'utf8'));
   assert.equal(pkg.scripts.test, 'vitest run', 'frontend `npm test` no longer runs vitest');

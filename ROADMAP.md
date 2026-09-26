@@ -969,9 +969,31 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
      - App.jsx is now **1,276 lines**.
      - Verified in the built app: a search shows its result and Steam price, the detail
        dialog opens, and Escape returns focus to the title, with no page errors.
-  - **Remaining in App.jsx:** the shell, `LoginPage` (its component tests import it from
-    App), and `LibraryPage`. LibraryPage carries the FE-1/5/6 source-text pins, which
-    should become behaviour tests as it moves. That is the rest of FE-10.
+  6. `LibraryPage` → `src/pages/`, byte-identical apart from `export default` and its
+     imports. App.jsx is now **370 lines, down from 3,168**: the shell, the routes and
+     `LoginPage`.
+     - **The FE-1, FE-5 and FE-6 source-text pins are retired.** `pages/LibraryPage.test.jsx`
+       drives the page instead, with seven tests. Ten mutations were each caught:
+       - removing the crack-check in-flight set, or the 429 back-off;
+       - dropping the rollback's `g.status === status` condition, or restoring a
+         whole-library snapshot;
+       - one chip losing `aria-pressed`;
+       - a card losing `role="group"` for an `aria-label`;
+       - a card that is a tab stop outside the backlog;
+       - Escape after the inner-control guard, or no inner-control guard at all;
+       - a card control losing its name.
+     - One shape pin stays, because nothing on screen shows it: no effect may be keyed on
+       the per-render `currentGames` array. The in-flight set already stops the duplicate
+       requests, so only the wasted effect runs remain.
+     - The "component tests exist" check now wants a minimum test count per file (Architect
+       review): an emptied file passed an existence check.
+     - **Found by the new tests:** keyboard reordering of the backlog has never moved
+       anything. That is **FE-23**, fixed separately, because this change moves code
+       without changing behaviour.
+     - Verified in the built app: cards, crack dots, and the title button opening the
+       dialog with focus returned on Escape; backlog cards take focus. No page errors.
+  - **Remaining:** `LoginPage` stays in App.jsx for now. Its component tests import it from
+    there, and it is 100 lines.
 
 ### [x] FE-11 CSP allows `style-src 'unsafe-inline'`
 - **Where:** `frontend/nginx.conf:30`.
@@ -1309,6 +1331,20 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 ---
 
 ## UP — Tidying & upkeep
+
+### [ ] FE-23 Keyboard reordering of the backlog has never moved anything (found by FE-10's tests)
+- **Where:** `frontend/src/pages/LibraryPage.jsx`, the card's `onKeyDown` and `handleBacklogDrop`.
+- **Defect:** Enter/Space on a card sets `keyboardDragId`, and Enter on a second card calls
+  `handleBacklogDrop(target)`. That function reads `draggedGameId`, which only a MOUSE drag
+  sets, so it returns at its first line. No request is sent. The card is released, the hint
+  says the move happened, and the order is unchanged. The screen-reader path advertised in
+  `#backlog-reorder-hint` does nothing.
+- **Why nobody saw it:** the FE-6 pin in `test/runtime.test.js` checked that the TEXT
+  `handleBacklogDrop(game.game_id)` appeared in the key handler, and it did. The first
+  behaviour test to press the keys found it.
+- **Fix:** `handleBacklogDrop(sourceId, targetId)`, with both paths passing the source
+  explicitly, and a test asserting the `backlog-reorder` PUT carries the new order.
+  Kept out of the FE-10 extraction, which changes no behaviour.
 
 ### [x] UP-1 Stale `.trivyignore` entry
 - **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,
@@ -1745,9 +1781,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   Their shape pins were retired from `test/runtime.test.js`, which now checks the test files
   exist and CI runs them. Mutation-checked: removing the fallback or the notice-clearing effect
   fails exactly one test each.
-- **Still shape-pinned:** FE-1, FE-5, FE-6 live inside `LibraryPage` in App.jsx; converting
-  them is easiest as FE-10 extracts it. FE-2 moved to behaviour tests in
-  `pages/SearchPage.test.jsx` when SearchPage was extracted (FE-10 step 5).
+- **No longer shape-pinned (FE-10):** FE-2 moved to behaviour tests in
+  `pages/SearchPage.test.jsx`, and FE-1, FE-5 and FE-6 moved to `pages/LibraryPage.test.jsx`.
+  One wiring pin each for FE-1 (no effect keyed on `currentGames`) and FE-7 (every page
+  passes the dialog a focus fallback) stays in `test/runtime.test.js`, because no rendered
+  output shows either.
 - **Versions (Architect review):** Vitest **3.2.7** — the first cut used Vitest 2, which the full
   audit rates CRITICAL (GHSA-5xrq-8626-4rwp, the UI server; <3.2.6). Vitest 3 runs on this Vite 5.
 - **Known (dev-only, never shipped):** the moderate `@vitest/mocker` advisory

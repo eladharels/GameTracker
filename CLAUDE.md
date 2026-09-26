@@ -34,7 +34,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~1300 lines — the shell, login and library; the other pages are in `src/pages/`, FE-10)
+- **Entry point**: `frontend/src/App.jsx` (~370 lines — the shell, routes and login; every page is in `src/pages/`, FE-10)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -231,9 +231,10 @@ GameTracker/
 │   │                               #   removes the token (FE-17); a 401 is the
 │   │                               #   interceptor's alone. A failure there means a page is
 │   │                               #   handling auth by itself again
-│   │                               #   AND, as a STOPGAP, shape pins for component fixes not
-│   │                               #   yet covered by frontend/src/*.test.jsx (FE-1/5/6);
-│   │                               #   FE-2, FE-7 and the login notice moved there (UP-20)
+│   │                               #   AND two WIRING pins no rendered output shows (no effect
+│   │                               #   keyed on `currentGames`, FE-1; every page passes the
+│   │                               #   detail dialog a focus fallback, FE-7). The component
+│   │                               #   fixes themselves are tested in *.test.jsx (UP-20, FE-10)
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -307,8 +308,8 @@ GameTracker/
 │   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx                 # The app shell, routes, LoginPage and LibraryPage;
-│   │   │                           #   every other page is in pages/ (FE-10, in progress)
+│   │   ├── App.jsx                 # The app shell, routes and LoginPage; every other page is
+│   │   │                           #   in pages/ (FE-10)
 │   │   ├── App.css                 # Global styles (glassmorphism theme, ~6700 lines)
 │   │   ├── GameDetailModal.jsx     # Game detail overlay
 │   │   ├── StatsPage.jsx           # Statistics. Charts are hand-rolled — CSS bars + an
@@ -369,6 +370,7 @@ GameTracker/
 │   │   │   ├── SystemStatusPage.jsx    #   the six dependency probes (admin)
 │   │   │   ├── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
 │   │   │   ├── SearchPage.jsx          #   catalog search; SearchPage.test.jsx pins FE-2
+│   │   │   ├── LibraryPage.jsx         #   the library; LibraryPage.test.jsx pins FE-1/5/6
 │   │   │   ├── CalendarPage.jsx        #   release calendar
 │   │   │   └── AccountPage.jsx         #   My Account: channels, reminders, API tokens
 │   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
@@ -453,7 +455,7 @@ GameTracker/
 
 ### Architectural Pattern
 - **Full-stack monolith**: All backend logic lives in a single `index.js`
-- **Single-page application**: React Router over `App.jsx` (the shell, login, library) and
+- **Single-page application**: React Router over `App.jsx` (the shell and login) and
   `src/pages/*` (every other page, extracted verbatim one per change, FE-10)
 - **File-based config**: Runtime settings (SMTP, LDAP, Telegram, API keys) in `settings.json`,
   read through a cached `loadSettings()` that revalidates on the file's mtime
@@ -1108,7 +1110,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
 | Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, any of the six `test/integration/` suites failing against the real Postgres, or the end-to-end check with a REAL library-scoped PAT minted in the stack (v2 401/read/write, MCP `whoami` through to the backend) failing (UP-7). Scratch files live in a per-run `mktemp -d` (`SMOKE_TMP`), never a fixed `/tmp` path on this production host |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
-| `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice, stale search responses (FE-2) |
+| `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice, stale search responses (FE-2), the library's crack checks, status rollback and card accessibility (FE-1/5/6) |
 
 ### Container Hardening
 
