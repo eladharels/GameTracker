@@ -352,6 +352,13 @@ jobs:
         working-directory: ./frontend
         run: npm run lint
 
+      # Component behaviour tests (Vitest + jsdom, ROADMAP UP-20). They replace source-text
+      # shape pins in test/runtime.test.js one by one; devDependencies only, so nothing of
+      # this reaches the nginx image.
+      - name: Run frontend component tests
+        working-directory: ./frontend
+        run: npm test
+
       - name: Vite build (compile + typecheck verification)
         working-directory: ./frontend
         run: npm run build

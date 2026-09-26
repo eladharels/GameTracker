@@ -3157,3 +3157,5 @@ function SettingsPage() {
 }
 
 export default App
+// Exported for its component tests (src/LoginPage.test.jsx) — not a second entry point.
+export { LoginPage }

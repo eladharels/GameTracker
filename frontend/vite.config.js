@@ -22,6 +22,14 @@ const API_PROXY_TIMEOUT_MS = 5 * 60 * 1000
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // Component tests (ROADMAP UP-20). jsdom, never a real browser: they pin behaviour the
+  // source-text checks in test/runtime.test.js could only approximate. Dev-only — none of
+  // this reaches the nginx image, which serves the built assets.
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{js,jsx}'],
+    restoreMocks: true,
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,

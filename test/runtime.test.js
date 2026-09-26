@@ -434,7 +434,9 @@ console.log('the SPA has one auth header and one way to end a session:');
     if (e.isDirectory()) return e.name === 'node_modules' || e.name === 'dist' ? [] : walk(rel);
     return /\.(jsx?|mjs)$/.test(e.name) ? [rel] : [];
   });
-  const files = walk('frontend').filter((f) => !/eslint\.config|vite\.config/.test(f));
+  // Component tests are excluded: they set up and reset storage and stub requests, which
+  // is exactly what a test harness does and exactly what app code must not.
+  const files = walk('frontend').filter((f) => !/eslint\.config|vite\.config|\.test\.jsx?$/.test(f));
   const src = Object.fromEntries(files.map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]));
 
   check('found the frontend sources (guards the guard)', () => {
@@ -468,15 +470,8 @@ console.log('the SPA has one auth header and one way to end a session:');
     assert.strictEqual((src['frontend/src/App.jsx'].match(/explain: false/g) || []).length, 1,
       'more than one path ends a session silently');
   });
-  check('the login page clears the "session ended" flag once it has shown it', () => {
-    // session.js#peekSessionEnd deliberately does NOT clear (StrictMode double-renders).
-    // Without the mount effect the notice would show on every visit to /login for the
-    // rest of the tab's life, and no pure-function test can see that.
-    const app = src['frontend/src/App.jsx'];
-    const login = app.slice(app.indexOf('function LoginPage('), app.indexOf('const handleLogin', app.indexOf('function LoginPage(')));
-    assert.ok(/useState\(\(\) => peekSessionEnd\(\)\)/.test(login), 'LoginPage no longer reads the flag with peekSessionEnd');
-    assert.ok(/useEffect\(\(\) => \{ clearSessionEnd\(\) \}, \[\]\)/.test(login), 'LoginPage no longer clears the flag on mount');
-  });
+  // The login page's "session ended" notice (shown once, cleared on mount) is covered by
+  // behaviour tests now: frontend/src/LoginPage.test.jsx (UP-20).
   check('no `window.setUser` fallback', () => {
     for (const f of files) assert.ok(!/window\.setUser/.test(src[f]), `${f} still reaches for window.setUser`);
   });
@@ -529,15 +524,8 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
       assert.ok(app.includes('aria-label={`' + name + '${game.game_name}'), `a card control lost its name: "${name}…"`);
     }
   });
-  check('the game detail dialog traps focus and returns it to the opener (FE-7)', () => {
-    const modal = fs.readFileSync(path.join(ROOT, 'frontend/src/GameDetailModal.jsx'), 'utf8');
-    assert.ok(/onKeyDown=\{handleModalFocusTrap\}/.test(modal), 'GameDetailModal no longer traps Tab');
-    assert.ok(/closeRef\.current\?\.focus\(\)/.test(modal), 'GameDetailModal no longer moves focus into itself on open');
-    assert.ok(/opener\.focus\(\)/.test(modal), 'GameDetailModal no longer returns focus to its opener');
-    assert.ok(/fallbackTarget\(\)\?\.focus\(\{ preventScroll: true \}\)/.test(modal),
-      'no focus fallback when the opener card is gone (or it scrolls the page on close)');
-    assert.strictEqual((app.match(/fallbackFocusRef=\{/g) || []).length, 2, 'a GameDetailModal is rendered without a focus fallback');
-  });
+  // FE-7 (the detail dialog's focus trap, focus on open, focus return and the fallback)
+  // is now covered by behaviour tests: frontend/src/GameDetailModal.test.jsx (UP-20).
   check('a failed status change rolls back that game only (FE-5)', () => {
     const app = src['frontend/src/App.jsx'];
     const fn = app.slice(app.indexOf('const setGameStatus'), app.indexOf('const removeGame'));
@@ -548,5 +536,15 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
       'the rollback is no longer per-game and conditional');
   });
 }
+
+// The pins retired above are covered by component tests; this keeps them from quietly
+// disappearing, and CI from quietly not running them (UP-20).
+check('the frontend component tests exist and CI runs them', () => {
+  for (const f of ['frontend/src/GameDetailModal.test.jsx', 'frontend/src/LoginPage.test.jsx']) {
+    assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is gone — its source-text pin was retired in its favour`);
+  }
+  const wf = fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8');
+  assert.ok(/working-directory: \.\/frontend\s*\n\s*run: npm test/.test(wf), 'frontend-quality no longer runs the component tests');
+});
 
 console.log(`\n${n} runtime assertions passed.`);

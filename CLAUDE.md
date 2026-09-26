@@ -219,9 +219,9 @@ GameTracker/
 │   │                               #   removes the token (FE-17); a 401 is the
 │   │                               #   interceptor's alone. A failure there means a page is
 │   │                               #   handling auth by itself again
-│   │                               #   AND, as a STOPGAP until the SPA has a DOM test harness
-│   │                               #   (ROADMAP UP-20), shape pins for component-level fixes
-│   │                               #   (FE-1/2/5/6/7): weaker than behaviour tests, by design
+│   │                               #   AND, as a STOPGAP, shape pins for component fixes not
+│   │                               #   yet covered by frontend/src/*.test.jsx (FE-1/2/5/6);
+│   │                               #   FE-7 and the login notice moved there (UP-20)
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -333,6 +333,11 @@ GameTracker/
 │   │   │                           #   never read as "wrong password" (FE-4)
 │   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap (App.jsx's dialogs
 │   │   │                           #   and GameDetailModal, FE-7); SharedLibrary's are FE-19
+│   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
+│   │   │                           #   (`cd frontend && npm test`, run by frontend-quality).
+│   │   │                           #   They replace test/runtime.test.js's source-text shape
+│   │   │                           #   pins one by one (UP-20). devDependencies only: nothing
+│   │   │                           #   here reaches the nginx image
 │   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2
 │   │   │                           #   contract from GET /api/openapi/v2, so the page and CI
 │   │   │                           #   validate the SAME document. VENDORED, never CDN-loaded:
@@ -924,7 +929,7 @@ push: main   |   pull_request -> main
 │
 ├── secret-scan      Gitleaks — full git history scan
 ├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
-├── frontend-quality npm test (backend + MCP unit tests) + ESLint + Vite build (= typecheck)
+├── frontend-quality npm test (backend + MCP unit + frontend component tests) + ESLint + Vite build
 └── build-images     Build backend + frontend + MCP Docker images
     │                  tag = `sha-<commit>` on push, `pr-<number>` on a pull request —
     │                  NEVER `latest` (only deploy promotes, after every gate)
@@ -1061,6 +1066,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
 | Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the six `test/integration/` suites failing against the real Postgres |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
+| `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice |
 
 ### Container Hardening
 
