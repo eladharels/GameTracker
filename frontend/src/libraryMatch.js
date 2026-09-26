@@ -22,6 +22,7 @@
 
 // Normalised as a STORED name already is: controls to spaces, whitespace collapsed. Held
 // EQUAL to services/library.js#normTitle by test/library-match-vectors.js (UP-19).
+// eslint-disable-next-line no-control-regex -- matching control characters IS the point
 const norm = (s) => String(s || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
   .replace(/\s+/g, ' ').trim().toLowerCase()
 const yearOf = (d) => {
