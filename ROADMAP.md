@@ -1332,7 +1332,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ## UP — Tidying & upkeep
 
-### [ ] FE-23 Keyboard reordering of the backlog has never moved anything (found by FE-10's tests)
+### [x] FE-23 Keyboard reordering of the backlog has never moved anything (found by FE-10's tests)
 - **Where:** `frontend/src/pages/LibraryPage.jsx`, the card's `onKeyDown` and `handleBacklogDrop`.
 - **Defect:** Enter/Space on a card sets `keyboardDragId`, and Enter on a second card calls
   `handleBacklogDrop(target)`. That function reads `draggedGameId`, which only a MOUSE drag
@@ -1345,6 +1345,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** `handleBacklogDrop(sourceId, targetId)`, with both paths passing the source
   explicitly, and a test asserting the `backlog-reorder` PUT carries the new order.
   Kept out of the FE-10 extraction, which changes no behaviour.
+- **Done:** `handleBacklogDrop(sourceGameId, targetGameId)`. The mouse passes
+  `draggedGameId` and the keyboard passes `keyboardDragId`.
+  - The live region used to go silent on drop. It now says "Moved Charlie to position 1 in
+    the backlog." once the server confirms the move, and clears when the next card is
+    picked up.
+  - **Tests** (`pages/LibraryPage.test.jsx`, three new):
+    - the keyboard move sends the right order and announces it;
+    - Enter twice on the same card sends nothing;
+    - the mouse drag still reorders.
+    Giving either path the other's id fails its test.
+  - **Verified in the built app:** Charlie → Alpha's place sends `[3, 1, 2]`; the cards
+    re-render in that order with badges #1–#3, and the move is announced. No page errors.
 
 ### [x] UP-1 Stale `.trivyignore` entry
 - **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,

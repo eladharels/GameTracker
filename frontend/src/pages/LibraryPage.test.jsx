@@ -150,3 +150,42 @@ describe('library cards and chips are reachable and named (FE-6)', () => {
     expect(card.className).not.toContain('card-keyboard-selected')
   })
 })
+
+describe('keyboard reordering of the backlog (FE-23)', () => {
+  it('Enter on one card, then Enter on another, moves the first to the second\'s place', async () => {
+    library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 }),
+      row('igdb_3', 'Charlie', 'backlog', { backlog_order: 3 })]
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 3/ })) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Charlie' }), { key: 'Enter' }) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Alpha' }), { key: 'Enter' }) })
+    await flush()
+    expect(puts).toHaveLength(1)
+    expect(puts[0].url).toMatch(/\/user\/alice\/backlog-reorder$/)
+    expect(puts[0].body).toEqual({ order: ['igdb_3', 'igdb_1', 'igdb_2'] })
+    expect(screen.getByRole('group', { name: 'Charlie' }).className).not.toContain('card-keyboard-selected')
+    // ...and a screen-reader user is told it landed, not left with a silent live region.
+    expect(screen.getByText('Moved Charlie to position 1 in the backlog.')).toBeTruthy()
+  })
+
+  it('a mouse drag still reorders through the same function', async () => {
+    library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 })]
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 2/ })) })
+    await act(async () => { fireEvent.dragStart(screen.getByRole('group', { name: 'Alpha' })) })
+    await act(async () => { fireEvent.drop(screen.getByRole('group', { name: 'Bravo' })) })
+    await flush()
+    expect(puts.map((p) => p.body)).toEqual([{ order: ['igdb_2', 'igdb_1'] }])
+  })
+
+  it('Enter twice on the SAME card releases it without sending anything', async () => {
+    library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 })]
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 2/ })) })
+    const card = screen.getByRole('group', { name: 'Bravo' })
+    await act(async () => { fireEvent.keyDown(card, { key: 'Enter' }) })
+    await act(async () => { fireEvent.keyDown(card, { key: 'Enter' }) })
+    await flush()
+    expect(puts).toHaveLength(0)
+  })
+})

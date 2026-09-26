@@ -42,6 +42,9 @@ export default function LibraryPage({ user }) {
   const [dragOverGameId, setDragOverGameId] = useState(null)
   const [isDraggingAny, setIsDraggingAny] = useState(false)
   const [keyboardDragId, setKeyboardDragId] = useState(null)
+  // What the keyboard move just did, for the live region. Without it the region went
+  // silent on drop and a screen-reader user had no way to know the move landed (FE-23).
+  const [reorderAnnouncement, setReorderAnnouncement] = useState('')
   const [openGame, setOpenGame] = useState(null)
   // The modal reads LIVE library state, not the object captured on click. `openGame` was
   // a snapshot and setGameStatus never refreshed it, so changing a status from inside the
@@ -361,15 +364,17 @@ export default function LibraryPage({ user }) {
     pendingDeleteRef.current[gameId] = [deleteTimer]
   }
 
-  // Drag-and-drop reorder for backlog
-  const handleBacklogDrop = async (targetGameId) => {
-    if (!draggedGameId || draggedGameId === targetGameId) {
+  // Backlog reorder, for BOTH the mouse and the keyboard. The source is a parameter
+  // (FE-23): this read `draggedGameId`, which only a mouse drag sets, so the keyboard
+  // path returned here on every drop and never moved anything.
+  const handleBacklogDrop = async (sourceGameId, targetGameId) => {
+    if (!sourceGameId || String(sourceGameId) === String(targetGameId)) {
       setDraggedGameId(null)
       setDragOverGameId(null)
       return
     }
     const sorted = [...filteredUserGames]
-    const fromIdx = sorted.findIndex(g => String(g.game_id) === String(draggedGameId))
+    const fromIdx = sorted.findIndex(g => String(g.game_id) === String(sourceGameId))
     const toIdx   = sorted.findIndex(g => String(g.game_id) === String(targetGameId))
     if (fromIdx === -1 || toIdx === -1) return
     const newOrder = sorted.map(g => g.game_id)
@@ -381,6 +386,7 @@ export default function LibraryPage({ user }) {
       await api.put(`${API_BASE}/user/${user.username}/backlog-reorder`, { order: newOrder })
       const res = await api.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
       setUserGames(res.data)
+      return { name: sorted[fromIdx].game_name, position: toIdx + 1 }
     } catch (err) {
       showToast('error', 'Failed to reorder backlog.')
     }
@@ -662,7 +668,7 @@ export default function LibraryPage({ user }) {
             <div aria-live="polite" aria-atomic="true" className="visually-hidden">
               {keyboardDragId
                 ? `Selected game for reordering. Press Enter on another game to move it there, or Escape to cancel.`
-                : ''}
+                : reorderAnnouncement}
             </div>
           )}
           <div key={`${filter}-${currentPage}`} ref={gamesListRef} tabIndex={-1} role="region" aria-label="Your games"
@@ -690,7 +696,7 @@ export default function LibraryPage({ user }) {
                   onClick={(e) => { if (e.target.closest('select,button,a,.status-select-wrapper')) return; setOpenGame(game) }}
                   onDragStart={() => { setDraggedGameId(game.game_id); setIsDraggingAny(true) }}
                   onDragOver={(e) => { if (filter === 'backlog') { e.preventDefault(); setDragOverGameId(game.game_id); } }}
-                  onDrop={() => handleBacklogDrop(game.game_id)}
+                  onDrop={() => handleBacklogDrop(draggedGameId, game.game_id)}
                   onDragEnd={() => { setDraggedGameId(null); setDragOverGameId(null); setIsDraggingAny(false) }}
                   onKeyDown={filter !== 'backlog' ? undefined : (e) => {
                     // Escape cancels a held card from ANYWHERE in it — including its title
@@ -702,9 +708,12 @@ export default function LibraryPage({ user }) {
                     if (e.key === ' ' || e.key === 'Enter') {
                       e.preventDefault()
                       if (!keyboardDragId) {
+                        setReorderAnnouncement('')
                         setKeyboardDragId(game.game_id)
                       } else if (String(keyboardDragId) !== String(game.game_id)) {
-                        handleBacklogDrop(game.game_id)
+                        handleBacklogDrop(keyboardDragId, game.game_id).then((moved) => {
+                          if (moved) setReorderAnnouncement(`Moved ${moved.name} to position ${moved.position} in the backlog.`)
+                        })
                         setKeyboardDragId(null)
                       }
                     }
