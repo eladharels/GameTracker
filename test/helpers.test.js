@@ -953,7 +953,7 @@ console.log('job-runner (ownership is the control; the id being unguessable is w
     // test/openapi.test.js from the other side; this is the half that fails if the
     // runner grows a reason nobody documented.
     assert.deepStrictEqual([...runner.REASONS].sort(),
-      ['internal', 'invalid_data', 'not_found', 'provider_unavailable', 'rate_limited']);
+      ['internal', 'invalid_data', 'not_found', 'provider_unavailable']);
   });
 }
 

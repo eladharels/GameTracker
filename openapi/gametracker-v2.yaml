@@ -2278,7 +2278,10 @@ components:
         reaching a caller; a free-text `error` field here would hand an implementer the
         obvious `err.message` and undo it. This deployment has already shipped a stack
         trace in a response body once.
-      enum: [provider_unavailable, rate_limited, not_found, invalid_data, internal]
+
+        A provider that rate-limits the sweep is reported as `provider_unavailable`: the
+        catalog does not distinguish an upstream 429 from an outage.
+      enum: [provider_unavailable, not_found, invalid_data, internal]
 
     JobResult:
       type: object

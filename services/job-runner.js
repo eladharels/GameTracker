@@ -44,7 +44,13 @@ const SCOPES = Object.freeze(['self', 'instance']);
 // services/catalog.js exists in large part to stop that reaching a caller, and a
 // free-text `error` here would hand the next implementer the obvious `err.message` and
 // undo it.
-const REASONS = Object.freeze(['provider_unavailable', 'rate_limited', 'not_found', 'invalid_data', 'internal']);
+//
+// `rate_limited` was listed here with NO producer (ROADMAP UP-14): no job throws
+// RATE_LIMITED, and a provider's 429 surfaces through catalog.js as `degraded`, so it is
+// reported as provider_unavailable. A value no server emits is a promise to clients that
+// something is handled when it is not; it was removed from here and from the spec's
+// FailureReason together. Re-add BOTH if the catalog ever tells a 429 from an outage.
+const REASONS = Object.freeze(['provider_unavailable', 'not_found', 'invalid_data', 'internal']);
 
 // A thrown error, as a reason. Everything unrecognised is `internal` — the safe end,
 // and the same fail-closed default services/problem.js applies to an unknown code.

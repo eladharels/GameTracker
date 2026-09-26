@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 24 | 14 |
-| **Total** | **84** | **62** |
+| UP — Tidying & upkeep | 24 | 15 |
+| **Total** | **84** | **63** |
 
 ---
 
@@ -1233,10 +1233,21 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - **Tests:** the lookup now goes through `db.promises.all`, so a test can assert the SQL
     and the single parameter. The old code fails both new tests.
 
-### [ ] UP-14 `rate_limited` in job `REASONS` has no producer
+### [x] UP-14 `rate_limited` in job `REASONS` has no producer
 - **Where:** `services/job-runner.js:47-55`.
 - **Fix:** produce it or remove it. It is in the spec enum, so update
   `openapi/gametracker-v2.yaml` together with `test/openapi.test.js`.
+- **Done: removed, not produced.** Nothing can emit it:
+  - no job throws `RATE_LIMITED`; only the request limiters do;
+  - a provider's 429 surfaces through `catalog.js` as `degraded`, so a whole-job failure and
+    a per-item failure both report `provider_unavailable`.
+
+  Producing it would mean the catalog classifying upstream 429s, which belongs with UP-11.
+  The value is removed from `job-runner.js#REASONS` and from the spec's `FailureReason`
+  together. The spec now says a rate-limited sweep reads as `provider_unavailable`. No
+  client can depend on a value no server has sent. `openapi.test.js` and `helpers.test.js`
+  still compare the two sets exactly. `Problem.code`'s own `rate_limited`, for 429
+  responses, is unaffected.
 
 ### [x] UP-15 Leftovers
 - `console.log('About to schedule cron job')` at `index.js:3354`.
@@ -1474,3 +1485,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-6 | this batch | 2026-09-26 | Smoke stack per run (project, no container_name) and smoke concurrency split main/PR with separate ports: a PR can no longer cancel a merge's deploy |
 | UP-8, UP-9 | this batch | 2026-09-26 | settings.json saved atomically where the mount allows, else write-then-truncate-then-fsync; production atomicity split out as UP-24. The IGDB token script stores through the settings service like the UI button |
 | UP-10, 12, 13, 15 | this batch | 2026-09-26 | v1 Steam price route adapted over the shared lookup (shape kept, no error.message); Telegram HTML mode; share list as one array param + the spec's 200 cap enforced; leftovers, backend lint at 0 |
+| UP-14 | this batch | 2026-09-26 | Unproduced `rate_limited` removed from job REASONS and the spec's FailureReason together |
