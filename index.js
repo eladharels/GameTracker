@@ -1086,43 +1086,34 @@ app.post('/api/user/:username/games', authRequired, ownershipRequired, libraryWr
   });
 });
 
-// Debug endpoint to check game status
+// GET /api/debug/user/:username/game/:gameId — ONE game's status (ROADMAP SEC-10).
+//
+// The name is historical and the route STAYS: v1 is frozen, "no route disappears", and
+// two of v1's three clients (the Android app, scripts) are not in this repo to grep, so
+// nothing here can prove it unused. What made it a debug endpoint is gone instead: it
+// logged every request -- the username, the raw :gameId path segment and the row -- at
+// info level, and carried its own SQL. It is an adapter over libraryService.findGame
+// now, the same read v2's GET /library/games/:gameId uses; owner-or-admin like every
+// other /api/user/:username route. Shape pinned in test/api-contract.test.js.
 app.get('/api/debug/user/:username/game/:gameId', authRequired, ownershipRequired, (req, res) => {
-  const { username, gameId } = req.params;
-  const normalizedUsername = username ? username.toLowerCase() : '';
-  
-  console.log(`[DEBUG] Debug request for user ${username}, game ${gameId}`);
-  
+  const normalizedUsername = req.params.username.toLowerCase();
   withExistingUser(res, normalizedUsername, (user) => {
-    
-    db.get('SELECT * FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], (err, row) => {
-      if (err) {
-        console.log(`[DEBUG] Error querying game:`, err);
-        return res.status(500).json({ error: 'DB error' });
-      }
-      
-      if (!row) {
-        console.log(`[DEBUG] Game not found for user ${normalizedUsername}, game ${gameId}`);
-        return res.status(404).json({ error: 'Game not found' });
-      }
-      
-      console.log(`[DEBUG] Game found:`, {
-        game_id: row.game_id,
-        game_name: row.game_name,
-        status: row.status,
-        user_id: row.user_id,
-        username: normalizedUsername
+    libraryService.findGame(user.id, req.params.gameId)
+      .then((row) => {
+        if (!row) return res.status(404).json({ error: 'Game not found' });
+        res.json({
+          game_id: row.game_id,
+          game_name: row.game_name,
+          status: row.status,
+          user_id: row.user_id,
+          username: normalizedUsername,
+          timestamp: new Date().toISOString(),
+        });
+      })
+      .catch((err) => {
+        console.error('[Library] Single-game read failed:', err.message);
+        res.status(500).json({ error: 'DB error' });
       });
-      
-      res.json({
-        game_id: row.game_id,
-        game_name: row.game_name,
-        status: row.status,
-        user_id: row.user_id,
-        username: normalizedUsername,
-        timestamp: new Date().toISOString()
-      });
-    });
   });
 });
 

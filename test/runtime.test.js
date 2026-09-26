@@ -390,4 +390,31 @@ console.log('the secret scan scans, and fails closed when it cannot:');
   });
 }
 
+// No .env variant reaches git or any image build context (ROADMAP SEC-11). The old
+// lines matched `.env`, `.env.local` and `.env.*.local` only, so `.env.production` was
+// committable and — the backend Dockerfile ends in `COPY . .` — baked into the image.
+console.log('no .env variant is committed or copied into an image:');
+{
+  const lines = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8').split('\n').map((l) => l.trim());
+  for (const f of ['.gitignore', '.dockerignore', 'frontend/.dockerignore', 'mcp/.dockerignore']) {
+    check(`${f} ignores every .env variant`, () => {
+      assert.ok(lines(f).includes('.env*'), `${f} has no '.env*' line`);
+      // A negation may re-admit ONLY the example file.
+      const negated = lines(f).filter((l) => /^!.*\.env/.test(l));
+      assert.deepStrictEqual(negated.filter((l) => l !== '!.env.example'), [],
+        `${f} re-admits an env file: ${negated.join(', ')}`);
+    });
+  }
+}
+
+// The break-glass root reset reads its password from the environment (ROADMAP SEC-9).
+// argv is readable in /proc by every process in the container that runs the public app.
+console.log('reset-root-password.js prefers the environment over argv:');
+check('the password comes from NEW_ROOT_PASSWORD first', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'reset-root-password.js'), 'utf8');
+  assert.match(src, /process\.env\.NEW_ROOT_PASSWORD \|\| ''/, 'the script no longer reads NEW_ROOT_PASSWORD');
+  assert.match(src, /envPassword \|\| process\.argv\[2\]/, 'argv is no longer the fallback behind the env var');
+  assert.match(src, /if \(!envPassword\)[\s\S]{0,80}WARNING/, 'an argv password is accepted without a warning');
+});
+
 console.log(`\n${n} runtime assertions passed.`);

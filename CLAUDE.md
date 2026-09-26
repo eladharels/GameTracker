@@ -845,7 +845,7 @@ docker compose -f docker-compose.yaml exec backend node <script> [args]
 |---|---|---|
 | `create-local-admin.js` | Create a new admin user from the CLI | — |
 | `create-api-token.js` | Mint a personal access token (printed ONCE, on stdout alone) | — |
-| `reset-root-password.js` | Reset the root user's password | — |
+| `reset-root-password.js` | Reset the root user's password, read from `NEW_ROOT_PASSWORD` (argv still accepted, with a warning — it lands in `/proc` and shell history) | — |
 | `update_library_prices.js` | Manually trigger a Steam price update | — |
 | `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token | — |
 | `backfill_steam_app_ids.js` | Populate missing Steam App IDs for existing library entries | yes |

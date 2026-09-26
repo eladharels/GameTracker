@@ -9,6 +9,8 @@ import GameDetailModal from './GameDetailModal'
 import { formatDurationShort, formatDurationLong, formatDateReadable, formatDateLocal } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
+import { readSession, msUntilExpiry } from './session'
+import { safeExternalUrl } from './safeUrl'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
 // Statically imported it would land in the main chunk and slow every login.
@@ -92,16 +94,11 @@ function useAuth() {
   const [user, setUser] = useState(null)
   useEffect(() => {
     const token = localStorage.getItem('token')
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]))
-        setUser(payload)
-      } catch {
-        setUser(null)
-      }
-    } else {
-      setUser(null)
-    }
+    // readSession checks `exp` (SEC-7): an expired or malformed token is dropped here
+    // instead of rendering the whole app until the first request comes back 401.
+    const payload = readSession(token)
+    if (token && !payload) localStorage.removeItem('token')
+    setUser(payload)
   }, [])
   return [user, setUser]
 }
@@ -131,11 +128,23 @@ function App() {
   }
 
   // Logout function
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem('token')
     setUser(null)
     navigate('/login')
-  }
+  }, [setUser, navigate])
+
+  // End the session when the token expires while the app is open, rather than when the
+  // next request happens to be refused. Re-armed whenever the signed-in user changes.
+  useEffect(() => {
+    if (!user) return undefined
+    const ms = msUntilExpiry(localStorage.getItem('token'))
+    if (ms === null) { logout(); return undefined }
+    // setTimeout overflows past ~24.8 days and fires at once; a 12-hour token never gets
+    // near that, but a clamp costs nothing and a re-check on wake is harmless.
+    const timer = setTimeout(logout, Math.min(ms, 2 ** 31 - 1))
+    return () => clearTimeout(timer)
+  }, [user, logout])
 
   // Determine page title
   let pageTitle = ''
@@ -293,8 +302,7 @@ function LoginPage({ setUser }) {
       const normalizedUsername = username.toLowerCase()
       const res = await axios.post(`${API_BASE}/auth/login`, { username: normalizedUsername, password })
       localStorage.setItem('token', res.data.token)
-      const payload = JSON.parse(atob(res.data.token.split('.')[1]))
-      setUser(payload)
+      setUser(readSession(res.data.token))
       navigate('/search')
     } catch (err) {
       setError('Invalid username or password')
@@ -2926,10 +2934,11 @@ function SettingsPage() {
                     {(crackInfo.status || 'unknown').toUpperCase()}
                   </span>
                 </div>
-                {crackInfo.url && (
+                {safeExternalUrl(crackInfo.url) && (
                   <div className="ent-result-row">
                     <span className="ent-result-label">Source</span>
-                    <a href={crackInfo.url} target="_blank" rel="noreferrer" className="ent-result-link">CrackRelease ↗</a>
+                    {/* safeExternalUrl: only http(s) reaches an href (SEC-8) */}
+                    <a href={safeExternalUrl(crackInfo.url)} target="_blank" rel="noopener noreferrer" className="ent-result-link">CrackRelease ↗</a>
                   </div>
                 )}
               </div>

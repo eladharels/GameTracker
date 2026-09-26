@@ -4,9 +4,7 @@
 # these are gitignored anyway — this is defense-in-depth and protects local builds.)
 
 # Secrets / credentials — never belong in an image
-.env
-.env.local
-.env.*.local
+.env*
 
 # Runtime state (volume-mounted at run time, not needed in the image)
 gametracker.db

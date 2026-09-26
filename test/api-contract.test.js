@@ -618,12 +618,12 @@ checkAsync('a PARTIAL outage with no match is "unavailable" too, not "not found"
 
 console.log('POST /api/user/:username/games/:gameId/crackrelease-status (CC-11):');
 
-async function crackRelease(fetchImpl) {
+async function crackRelease(fetchImpl, gameName = 'Halo') {
   const axiosMod = require('axios');
   const real = { axiosGet: axiosMod.get, get: db.get, run: db.promises.run };
   const writes = [];
   axiosMod.get = fetchImpl;
-  db.get = (sql, params, cb) => cb(null, /FROM user_games/.test(sql) ? { game_name: 'Halo' } : { id: 7, username: 'jane' });
+  db.get = (sql, params, cb) => cb(null, /FROM user_games/.test(sql) ? { game_name: gameName } : { id: 7, username: 'jane' });
   db.promises.run = async (sql, params) => { writes.push(params); return { changes: 1 }; };
   const res = recordingRes();
   try {
@@ -639,6 +639,16 @@ checkAsync('a CrackRelease outage leaves the stored status alone and leaks no up
   assert.strictEqual(writes.length, 0, 'an outage overwrote the stored crack status');
   assert.strictEqual(res.body.status, 'unknown');
   assert.ok(!JSON.stringify(res.body).includes('10.0.0.7'), 'the upstream error reached the caller');
+});
+checkAsync('the source link is always https://crackrelease.com/<slug>/, whatever the game is called (SEC-8)', async () => {
+  // The SPA renders `url` into an href. It is BUILT here from a slug, never taken from
+  // the page or the name, so no game name can make it a javascript: link. The client
+  // also refuses anything that is not http(s); this pins the server half.
+  for (const name of ['javascript:alert(document.domain)', 'Halo"><img src=x onerror=1>', '../../evil', 'data:text/html,x']) {
+    const { res } = await crackRelease(async () => ({ data: '<b>CRACKED</b>' }), name);
+    assert.match(String(res.body.url), /^https:\/\/crackrelease\.com\/[a-z0-9-]+\/$/,
+      `'${name}' produced a source URL outside the fixed origin: ${res.body.url}`);
+  }
 });
 checkAsync('a page that loads but carries no status word is not an answer', async () => {
   const parked = await crackRelease(async () => ({ data: '<html>This domain is for sale</html>' }));
@@ -946,6 +956,36 @@ checkAsync('a game history keeps the shape the modal reads', async () => {
     'the history response gained or lost a top-level field');
   assert.deepStrictEqual(keysOf(out.events[0]), ['at', 'from', 'source', 'to'],
     'the timeline renders every one of these, and labels rows by `source`');
+});
+
+console.log('GET /api/debug/user/:username/game/:gameId (SEC-10 — kept, frozen):');
+
+async function debugRead(row) {
+  const libraryService = require('../services/library');
+  const real = { get: db.get, find: libraryService.findGame };
+  const asked = [];
+  db.get = (sql, params, cb) => cb(null, { id: 7, username: 'jane' });
+  libraryService.findGame = async (userId, gameId) => { asked.push([userId, gameId]); return row; };
+  const res = recordingRes();
+  try {
+    await handlerFor('get', '/api/debug/user/:username/game/:gameId')(
+      { params: { username: 'Jane', gameId: 'igdb_1' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+  } finally { db.get = real.get; libraryService.findGame = real.find; }
+  return { res, asked };
+}
+
+checkAsync('the single-game read keeps its six-field shape and reads through the service', async () => {
+  const { res, asked } = await debugRead({ game_id: 'igdb_1', game_name: 'Halo', status: 'done', user_id: 7, steam_app_id: '1', last_price: 'x' });
+  assert.deepStrictEqual(asked, [[7, 'igdb_1']], 'the route no longer reads through libraryService.findGame');
+  assertKeys(res.body, ['game_id', 'game_name', 'status', 'user_id', 'username', 'timestamp'], 'debug game read');
+  assert.strictEqual(res.body.username, 'jane');
+});
+
+checkAsync('an absent game is still 404 {error}', async () => {
+  const { res } = await debugRead(undefined);
+  assert.strictEqual(res.statusCode, 404);
+  assertKeys(res.body, ['error'], 'debug game 404');
 });
 
 console.log('Token scopes (SEC-12 — admin does not imply library):');

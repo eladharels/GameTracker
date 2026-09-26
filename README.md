@@ -424,7 +424,7 @@ One job of a kind runs at a time. A user can refresh their own library with
 |---|---|
 | `create-local-admin.js` | Create a local admin from the CLI |
 | `create-api-token.js` | Mint / list / revoke personal access tokens |
-| `reset-root-password.js` | Reset the `root` password |
+| `reset-root-password.js` | Reset the `root` password — from `NEW_ROOT_PASSWORD`, not argv: `read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD`, then `exec -e NEW_ROOT_PASSWORD backend node reset-root-password.js` |
 | `run_notifications.js` | Run the release-notification check manually (mirrors the 08:00 job) |
 | `update_library_prices.js` | Trigger a Steam price update |
 | `refresh_igdb_token.js` | Refresh the IGDB OAuth bearer token |

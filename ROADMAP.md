@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 13 | 7 |
-| FE — Frontend | 13 | 0 |
+| SEC — Security (medium/low) | 14 | 12 |
+| FE — Frontend | 13 | 1 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **65** | **28** |
+| **Total** | **66** | **34** |
 
 ---
 
@@ -610,33 +610,60 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     On a runner that has already run out of disk once, consider also removing tags older than N
     days (CISO note).
 
-### [ ] SEC-7 Session JWT in localStorage, and `exp` is never checked on the client
+### [x] SEC-7 Session JWT in localStorage, and `exp` is never checked on the client
 - **Where:** `frontend/src/App.jsx:38,295,94-99`, `ApiTokensSection.jsx:52`.
 - **Mitigation already in place:** `script-src 'self'` (`nginx.conf:30`).
 - **Fix (short term):** check `exp` in `useAuth` and log out when it has expired.
 - **Fix (long term):** move to an `HttpOnly; Secure; SameSite=Strict` cookie with CSRF
   protection. Needs Architect and CISO review, because the Android client uses Bearer.
+- **Done (short term):** `frontend/src/session.js#readSession` checks `exp`. It is used at boot
+  and at login. An expired or malformed token is dropped, and a timer logs out at expiry
+  while the app is open. It also decodes base64URL correctly: the inline `atob()` threw on
+  payloads encoding to `-`/`_` and read those users as logged out. **The long-term cookie
+  move is split out as SEC-14.**
 
-### [ ] SEC-8 `crackInfo.url` goes straight into `href`
+### [x] SEC-8 `crackInfo.url` goes straight into `href`
 - **Where:** `frontend/src/App.jsx:2932`.
 - **Fix:** allow only `http:` and `https:` before rendering the link, and apply the same
   check on the backend where the URL is scraped.
+- **Done:** `frontend/src/safeUrl.js#safeExternalUrl` guards the link. On the backend the URL
+  is built as `https://crackrelease.com/<slug>/` from a `[a-z0-9-]` slug and never taken
+  from the page. A contract test pins that with hostile game names.
 
-### [ ] SEC-9 `reset-root-password.js` takes the password from argv
+### [x] SEC-9 `reset-root-password.js` takes the password from argv
 - **Where:** `reset-root-password.js:21`.
 - **Problem:** argv is visible in `/proc` and in shell history.
 - **Fix:** read it from an environment variable or stdin, as `create-local-admin.js` does.
+- **Done:** it reads `NEW_ROOT_PASSWORD`. argv is still accepted with a warning, because this
+  is the break-glass path and a runbook using it must not be stranded mid-lockout.
 
-### [ ] SEC-10 `/api/debug/...` route still shipped
+### [x] SEC-10 `/api/debug/...` route still shipped
 - **Where:** `index.js:1054`.
 - **Fix:** remove it, or gate it on `NODE_ENV !== 'production'`, and update
   `test/api-surface.test.js`.
+- **Resolved differently: kept.** v1 is frozen and "no route disappears". The Android app and
+  scripts cannot be grepped from here, so nothing proves it unused. The route is
+  owner-or-admin and returns five fields of the caller's own row, so its danger was not the
+  route itself. What is gone: logging every request (username, the raw `:gameId`, the row)
+  at info level, and its own SQL. It is now an adapter over `libraryService.findGame`, the
+  read v2 uses, with its six-field shape pinned in `test/api-contract.test.js`. Remove it
+  only if a v1 sunset is ever decided.
 
-### [ ] SEC-11 `.env` variants not ignored
+### [x] SEC-11 `.env` variants not ignored
 - **Where:** `.gitignore` and `.dockerignore` only cover `.env`, `.env.local` and
   `.env.*.local`.
 - **Failure:** a `.env.production` is committed and copied into the image.
 - **Fix:** ignore `.env*`, with an exception for `!.env.example` if one is added.
+- **Done:** `.env*` in `.gitignore` and in all three `.dockerignore` files; `test/runtime.test.js`
+  checks each and allows only `!.env.example` as a negation.
+
+### [ ] SEC-14 Move the web session to an HttpOnly cookie (split from SEC-7)
+- **Where:** `frontend/src/App.jsx` (`localStorage` token), `index.js#authRequired`.
+- **Why:** a token in `localStorage` is readable by any script that runs in the origin.
+  `script-src 'self'` makes that hard, not impossible.
+- **Fix:** an `HttpOnly; Secure; SameSite=Strict` cookie for the SPA, with CSRF protection,
+  and Bearer kept for Android, scripts and PATs. This is a design change: it needs Architect
+  and CISO sign-off before any code.
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
@@ -751,7 +778,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Status:** an accepted trade-off for inline styles and Swagger UI. Record the decision.
   Revisit if inline `style=` usage is removed.
 
-### [ ] FE-12 Expired token renders the app until the first 401
+### [x] FE-12 Expired token renders the app until the first 401
 - **Where:** `useAuth` (`App.jsx:94-99`).
 - **Fix:** covered by SEC-7's short-term fix. Tick both together.
 
@@ -941,3 +968,8 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | SEC-6 | `8fd5a87`, `cf46533` | 2026-09-25 | No `down` before `up`, and deploy rolls back to `:previous` on failure or cancel |
 | SEC-12 | `5520939` + review fix | 2026-09-26 | `library` enforced on v1 and v2; `admin` no longer implies it; job poll is `as-started` |
 | CI (PR #5) | review fix | 2026-09-26 | Semgrep pin installs with `pip --target` (the runner has no `python3-venv`); nodemailer 9.1 (GHSA-2x7j-588g-ccc2), fast-uri 3.1.8 (four SSRF CVEs), frontend `apk upgrade` + `--pull --no-cache` (libexpat CVE-2026-93990) |
+| SEC-7, FE-12 | this batch | 2026-09-26 | Client checks `exp` (boot, login, timer) and decodes base64URL; cookie move split out as SEC-14 |
+| SEC-8 | this batch | 2026-09-26 | Only http(s) reaches the CrackRelease `href`; server-built URL pinned |
+| SEC-9 | this batch | 2026-09-26 | Root reset reads `NEW_ROOT_PASSWORD`; argv warns |
+| SEC-10 | this batch | 2026-09-26 | Debug route kept (v1 freeze), logging removed, now a service adapter |
+| SEC-11 | this batch | 2026-09-26 | `.env*` ignored in git and every image build context |

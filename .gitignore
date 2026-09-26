@@ -1,9 +1,10 @@
 node_modules/
 
 # Secrets / credentials — never commit
-.env
-.env.local
-.env.*.local
+# Every .env variant (ROADMAP SEC-11): `.env.production` and friends matched none of
+# the old three lines. An example file, if one is ever added, is the one exception.
+.env*
+!.env.example
 
 # Runtime configuration. Holds SMTP + LDAP credentials and the Telegram bot token.
 # Volume-mounted in production (see docker-compose.yaml); seed a new install from

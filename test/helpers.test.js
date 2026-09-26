@@ -3492,6 +3492,52 @@ check('the cursor pins the query it was issued for', () => {
   assert.ok(!/^\d+$/.test(cursor), 'the cursor is a bare number — that is an offset, not a keyset position');
 });
 
+// --- frontend pure helpers (ESM, loaded with import()) --------------------------
+// Pure functions, no DOM: the SPA has no test runner of its own, and these two sit on
+// security boundaries (SEC-7, SEC-8), so they are pinned here with the backend's.
+
+const fakeJwt = (payload) => ['x', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'sig'].join('.');
+
+checkAsync('readSession: an expired, exp-less or malformed token is no session (SEC-7)', async () => {
+  const { readSession, msUntilExpiry } = await import('../frontend/src/session.js');
+  const now = Date.parse('2026-09-26T12:00:00Z');
+  const exp = now / 1000 + 3600;
+  assert.strictEqual(readSession(fakeJwt({ id: 1, username: 'jane', exp }), now).username, 'jane');
+  assert.strictEqual(readSession(fakeJwt({ id: 1, exp: now / 1000 - 1 }), now), null, 'an expired token still reads as a session');
+  assert.strictEqual(readSession(fakeJwt({ id: 1, exp: now / 1000 }), now), null, 'expiry is exclusive: exp == now is expired');
+  assert.strictEqual(readSession(fakeJwt({ id: 1 }), now), null, 'a token with no exp was accepted');
+  assert.strictEqual(readSession(fakeJwt({ id: 1, exp: String(exp) }), now), null, 'a string exp was accepted');
+  for (const bad of [null, undefined, '', 'a.b', 'a.!!!.c', 'a.b.c.d']) {
+    assert.strictEqual(readSession(bad, now), null, `malformed token ${JSON.stringify(bad)} was accepted`);
+  }
+  assert.strictEqual(msUntilExpiry(fakeJwt({ exp }), now), 3600 * 1000);
+  assert.strictEqual(msUntilExpiry(fakeJwt({ exp: 1 }), now), null);
+});
+
+checkAsync('readSession decodes base64URL, not base64 — `-` and `_` payloads are valid sessions', async () => {
+  const { readSession } = await import('../frontend/src/session.js');
+  const now = Date.parse('2026-09-26T12:00:00Z');
+  // Find a payload whose encoding contains '-' or '_': the inline atob() the app used
+  // threw on exactly these, and read the user as logged out.
+  let token = null;
+  for (let i = 0; i < 500 && !token; i++) {
+    const t = fakeJwt({ id: i, username: 'jäne>?', exp: now / 1000 + 60 });
+    if (/[-_]/.test(t.split('.')[1])) token = t;
+  }
+  assert.ok(token, 'could not construct a payload that encodes to base64url-only characters');
+  assert.strictEqual(readSession(token, now).username, 'jäne>?');
+});
+
+checkAsync('safeExternalUrl: only absolute http(s) reaches an href (SEC-8)', async () => {
+  const { safeExternalUrl } = await import('../frontend/src/safeUrl.js');
+  assert.strictEqual(safeExternalUrl('https://crackrelease.com/halo/'), 'https://crackrelease.com/halo/');
+  assert.strictEqual(safeExternalUrl('http://example.com/x'), 'http://example.com/x');
+  for (const bad of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', ' javascript:alert(1)', 'java\tscript:alert(1)',
+    'data:text/html,<script>1</script>', 'vbscript:x', '//evil.example/x', '/relative', '', null, 42, {}]) {
+    assert.strictEqual(safeExternalUrl(bad), null, `${JSON.stringify(bad)} was allowed into an href`);
+  }
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {
