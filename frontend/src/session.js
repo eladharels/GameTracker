@@ -94,3 +94,16 @@ export function peekSessionEnd() {
 export function clearSessionEnd() {
   try { sessionStorage.removeItem(END_KEY) } catch { /* nothing to clear */ }
 }
+
+// ── Ending a session: ONE function (ROADMAP FE-17) ─────────────────────────────────
+// Three places removed the token by hand — the 401 interceptor, the expiry check at boot
+// and the logout button — and a fourth, in a page, is how P0-6 happened. They all call
+// this now; test/runtime.test.js pins that nothing else touches the token.
+//
+// `explain`: record WHY for the login page (expiry, a refused credential). A manual
+// sign-out passes false: nothing went wrong, so the login page must say nothing.
+// Storage is touched only inside the function — helpers.test.js imports this module.
+export function endSession({ explain, fromPath } = {}) {
+  try { localStorage.removeItem('token') } catch { /* storage unavailable: nothing to clear */ }
+  if (explain) markSessionEnded(fromPath)
+}

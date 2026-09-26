@@ -9,7 +9,7 @@ import GameDetailModal from './GameDetailModal'
 import { formatDurationShort, formatDurationLong, formatDateReadable, formatDateLocal } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
-import { readSession, msUntilExpiry, markSessionEnded, peekSessionEnd, clearSessionEnd } from './session'
+import { readSession, msUntilExpiry, peekSessionEnd, clearSessionEnd, endSession } from './session'
 import { safeExternalUrl } from './safeUrl'
 import { libraryMatch } from './libraryMatch'
 import { loginErrorMessage } from './loginErrors'
@@ -58,10 +58,10 @@ axios.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err?.response?.status === 401 && localStorage.getItem('token')) {
-      localStorage.removeItem('token');
-      if (!window.location.pathname.startsWith('/login')) {
-        // Tells the login page why it is showing (the reload wipes React state).
-        markSessionEnded(window.location.pathname);
+      const onLogin = window.location.pathname.startsWith('/login');
+      // Tells the login page why it is showing (the reload wipes React state).
+      endSession({ explain: !onLogin, fromPath: window.location.pathname });
+      if (!onLogin) {
         window.location.assign('/login');
       }
     }
@@ -104,10 +104,7 @@ function useAuth() {
   const [user, setUser] = useState(() => {
     const token = localStorage.getItem('token')
     const payload = readSession(token)
-    if (token && !payload) {
-      localStorage.removeItem('token')
-      markSessionEnded(window.location.pathname)
-    }
+    if (token && !payload) endSession({ explain: true, fromPath: window.location.pathname })
     return payload
   })
   return [user, setUser]
@@ -140,7 +137,7 @@ function App() {
 
   // Logout function
   const logout = useCallback(() => {
-    localStorage.removeItem('token')
+    endSession({ explain: false })   // a manual sign-out: the login page says nothing
     setUser(null)
     navigate('/login')
   }, [setUser, navigate])
@@ -149,9 +146,10 @@ function App() {
   // way back. Separate from `logout`, which is also a click handler (`onClick={logout}`
   // would hand it the event) and must stay silent — a manual logout is not an expiry.
   const expireSession = useCallback(() => {
-    markSessionEnded(window.location.pathname)
-    logout()
-  }, [logout])
+    endSession({ explain: true, fromPath: window.location.pathname })
+    setUser(null)
+    navigate('/login')
+  }, [setUser, navigate])
 
   // End the session when the token expires while the app is open, rather than when the
   // next request happens to be refused. Re-armed whenever the signed-in user changes.
@@ -2541,7 +2539,6 @@ function SettingsPage() {
   const [apiKeysShow, setApiKeysShow] = useState({})   // which fields are revealed
   const [apiKeysSaving, setApiKeysSaving] = useState(false)
   const [apiKeysSaveStatus, setApiKeysSaveStatus] = useState(null)
-  const [apiKeysAuthError, setApiKeysAuthError] = useState(false)  // session expired
   const [saving, setSaving]       = useState({})
   const [saveStatus, setSaveStatus] = useState({})
   const [saveError, setSaveError] = useState({})   // per-section server message
@@ -2613,8 +2610,11 @@ function SettingsPage() {
   useEffect(() => {
     if (!isAdmin) return
     axios.get(`${API_BASE}/settings/apikeys`)
-      .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}); setApiKeysAuthError(false) })
-      .catch(err => { if (err.response?.status === 401) setApiKeysAuthError(true) })
+      .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}) })
+      // A 401 is the global interceptor's (FE-15): it ends the session and reloads to the
+      // login page, which says why. The "log out and log back in" banner this used to set
+      // either never rendered or raced that reload.
+      .catch(() => {})
   }, [])
 
   // ── Load user games for testing tab (available to all users)
@@ -2679,7 +2679,9 @@ function SettingsPage() {
   const apiErrMsg = (err) => {
     const status = err.response?.status
     const body   = err.response?.data?.error || err.response?.data?.message || err.message || 'Unknown error'
-    if (status === 401) { setApiKeysAuthError(true); return 'Session expired — log out and log back in.' }
+    // Only reachable without a stored token (a sign-out in another tab) — the interceptor
+    // handles every other 401 (FE-15). Same words as the other pages.
+    if (status === 401) return 'Your session has ended. Please sign in again.'
     if (status === 403) return 'Access denied — admin permission required.'
     return body
   }
@@ -2944,14 +2946,6 @@ function SettingsPage() {
         {/* API Keys */}
         {activeTab === 'apikeys' && (
           <SettingsSection icon={FaKey} title="API Provider Keys" description="Configure API credentials for game data providers. Settings here override environment variables. Leave a field blank to keep the existing value.">
-
-            {/* Session expired warning */}
-            {apiKeysAuthError && (
-              <div className="gt-alert gt-alert--danger" role="alert">
-                <FaExclamationCircle aria-hidden="true" />
-                <span><strong>Session expired.</strong> Please log out and log back in — your admin session needs to be refreshed before you can view or save API keys.</span>
-              </div>
-            )}
 
             {/* IGDB / Twitch section */}
             <div className="ak-section-header">IGDB — via Twitch Developer</div>

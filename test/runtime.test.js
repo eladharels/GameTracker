@@ -451,14 +451,16 @@ console.log('the SPA has one auth header and one way to end a session:');
     assert.strictEqual(built('frontend/src/App.jsx'), 1, 'App.jsx builds a Bearer header outside its interceptor');
     assert.strictEqual(built('frontend/src/ApiDocsPage.jsx'), 1, 'ApiDocsPage builds a second Bearer header');
   });
-  check('nothing but App.jsx\'s session code deletes the token', () => {
+  check('only session.js#endSession deletes the token (FE-17)', () => {
     for (const f of files) assert.ok(!/localStorage\.clear\(/.test(src[f]), `${f} clears ALL storage, token included`);
     const where = files.filter((f) => /removeItem\(['"]token['"]\)/.test(src[f]));
-    assert.deepStrictEqual(where, ['frontend/src/App.jsx'], `token deleted from: ${where.join(', ')}`);
-    // The interceptor (401), useAuth (expired at boot) and logout. A fourth is a page
-    // deciding on its own that the session is over.
-    assert.strictEqual((src['frontend/src/App.jsx'].match(/removeItem\(['"]token['"]\)/g) || []).length, 3,
-      'App.jsx removes the token somewhere other than the interceptor, useAuth and logout');
+    assert.deepStrictEqual(where, ['frontend/src/session.js'], `token deleted from: ${where.join(', ')}`);
+    assert.strictEqual((src['frontend/src/session.js'].match(/removeItem\(['"]token['"]\)/g) || []).length, 1,
+      'session.js removes the token somewhere other than endSession');
+    // The three ways a session ends — the 401 interceptor, expiry at boot, and sign-out /
+    // the expiry timer — all go through it. A page deciding on its own is P0-6 again.
+    assert.ok((src['frontend/src/App.jsx'].match(/endSession\(\{/g) || []).length >= 4,
+      'App.jsx no longer ends sessions through endSession');
   });
   check('the login page clears the "session ended" flag once it has shown it', () => {
     // session.js#peekSessionEnd deliberately does NOT clear (StrictMode double-renders).

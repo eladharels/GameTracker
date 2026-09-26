@@ -6486,6 +6486,8 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
    and it must not blend into whichever accent preset the user has chosen. */
 .token-badge--admin { background: rgba(252,161,48,0.14); border-color: rgba(252,161,48,0.45); color: #fcbe6b; }
 .token-badge--expired { background: rgba(249,62,62,0.12); border-color: rgba(249,62,62,0.4); color: #f98b8b; }
+/* Informational, not an error: muted, so it reads as a property of the token. */
+.token-badge--note { background: transparent; border-color: var(--border-default); color: var(--text-secondary); border-style: dashed; }
 
 .token-revoke-btn {
   flex-shrink: 0;

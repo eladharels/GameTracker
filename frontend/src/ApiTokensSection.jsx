@@ -200,6 +200,15 @@ export default function ApiTokensSection({ canManageUsers }) {
                   {t.scopes.map((s) => (
                     <span key={s} className={`token-badge token-badge--${s}`}>{SCOPE_COPY[s]?.label || s}</span>
                   ))}
+                  {/* FE-13: an admin-only token cannot reach any library (SEC-12). Tokens
+                      minted when the Admin copy said "everything above" look fine and
+                      then answer 403 everywhere; say so where the owner will see it. */}
+                  {t.scopes.length === 1 && t.scopes[0] === 'admin' && (
+                    <span className="token-badge token-badge--note"
+                      title="This token has only the Admin scope, so it cannot read or change any library. Mint one with Library and Admin if it needs both.">
+                      No library access
+                    </span>
+                  )}
                   <span>Created {fmt(t.created_at)}</span>
                   {/* "Never used" is the actionable state: a token nobody has used is one
                       that can be revoked without breaking anything. */}

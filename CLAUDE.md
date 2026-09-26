@@ -214,8 +214,8 @@ GameTracker/
 │   │                               #   its NOT_PASSED table with a reason
 │   │                               #   ALSO the SPA's auth invariants (P0-6, FE-8): only
 │   │                               #   App.jsx's interceptor and ApiDocsPage's spec-only
-│   │                               #   client build a Bearer header; only App.jsx removes the
-│   │                               #   token, at its three session paths; a 401 is the
+│   │                               #   client build a Bearer header; only session.js#endSession
+│   │                               #   removes the token (FE-17); a 401 is the
 │   │                               #   interceptor's alone. A failure there means a page is
 │   │                               #   handling auth by itself again
 │   │                               #   AND, as a STOPGAP until the SPA has a DOM test harness
@@ -320,6 +320,7 @@ GameTracker/
 │   │   │                           #   verifies: it decides what the UI shows, the server
 │   │   │                           #   decides everything else. Also records WHY a session
 │   │   │                           #   ended so the login page can say so (sessionStorage)
+│   │   │                           #   endSession() is the ONE way a session ends (FE-17)
 │   │   ├── safeUrl.js              # safeExternalUrl — the ONLY way a server-supplied URL
 │   │   │                           #   may reach an `href` (http/https only)
 │   │   ├── libraryMatch.js         # libraryMatch — 'same' (id, or name AND known year)

@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 15 | 12 |
-| FE — Frontend | 18 | 9 |
+| FE — Frontend | 18 | 12 |
 | UP — Tidying & upkeep | 21 | 0 |
-| **Total** | **76** | **43** |
+| **Total** | **76** | **46** |
 
 ---
 
@@ -864,11 +864,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Where:** `useAuth` (`App.jsx:94-99`).
 - **Fix:** covered by SEC-7's short-term fix. Tick both together.
 
-### [ ] FE-13 Flag admin-only tokens in the token list (from the SEC-12 UI/UX review)
+### [x] FE-13 Flag admin-only tokens in the token list (from the SEC-12 UI/UX review)
 - **Where:** `frontend/src/ApiTokensSection.jsx` (token badges).
 - **Why:** tokens minted under the old "Admin: everything above" copy show only an Admin
   badge, and nothing tells their owner they can no longer reach the library.
 - **Fix:** a muted "No library access" hint on tokens whose scopes are exactly `['admin']`.
+- **Done:** a dashed, muted "No library access" badge on tokens whose scopes are exactly
+  `['admin']`, with a tooltip saying why and what to mint instead.
 
 ### [ ] FE-14 Return path after an ended session ignores who signs in next (UI/UX review)
 - **Where:** `frontend/src/session.js#markSessionEnded`, `LoginPage` (`App.jsx`).
@@ -887,11 +889,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   feedback; give the sticky page banner `top: 1rem` and a more opaque background outside
   scrolling panels.
 
-### [ ] FE-15 SettingsPage still has 401 branches the interceptor makes unreachable
+### [x] FE-15 SettingsPage still has 401 branches the interceptor makes unreachable
 - **Where:** `App.jsx` API-keys loader and its `apiKeysAuthError` banner.
 - **Why:** since P0-6 a 401 is the interceptor's (it reloads to `/login`), so these branches
   either never run or race the reload.
 - **Fix:** remove them; keep the 403 messages.
+- **Done:** the API-keys loader and its "Session expired — log out and log back in" banner are
+  gone; a 401 reaching that page's error text now only happens without a stored token and
+  says "Your session has ended. Please sign in again.", like the other pages.
 
 ### [ ] FE-16 One `API_BASE` and one axios instance (pair with FE-9)
 - **Where:** `API_BASE` is defined five times (`${origin}/api` in four files, `'/api'` in
@@ -900,10 +905,14 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** a `frontend/src/api.js` owning `API_BASE` and the interceptors on an
   `axios.create()` instance, and update the "only App.jsx" pins in `test/runtime.test.js`.
 
-### [ ] FE-17 One `endSession()` in `session.js`
+### [x] FE-17 One `endSession()` in `session.js`
 - **Why:** three call sites remove the token, and a count of 3 is pinned. One function
   would make the claim "one way to end a session" literal and the pin 1. It must touch
   storage only inside the function: `helpers.test.js` imports `session.js`.
+- **Done:** `session.js#endSession({explain, fromPath})`; the 401 interceptor, the expiry check
+  at boot, sign-out and the expiry timer all call it. `test/runtime.test.js` now pins ONE
+  `removeItem('token')`, in session.js, and a unit test pins that a manual sign-out leaves no
+  "session ended" notice.
 
 ---
 
@@ -1126,3 +1135,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | P0-6, FE-8 | this batch | 2026-09-26 | A 403 no longer logs out; admin routes gated; one auth header, one session-ending path |
 | FE-1..FE-5 | this batch | 2026-09-26 | Crack requests once per game; stale searches dropped; library match by id or name+year; login errors by cause; per-game rollback |
 | FE-6, FE-7 | this batch | 2026-09-26 | Chips are buttons, cards focusable everywhere; the detail dialog traps and returns focus |
+| FE-13, FE-15, FE-17 | this batch | 2026-09-26 | Admin-only token badge; dead 401 banner removed; one endSession() |

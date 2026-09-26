@@ -3618,6 +3618,30 @@ checkAsync('loginErrorMessage: a lockout or an outage never reads as a wrong pas
   assert.notStrictEqual(loginErrorMessage(undefined), wrong);
 });
 
+checkAsync('endSession: clears the token, and explains only when asked (FE-17)', async () => {
+  const { endSession, peekSessionEnd } = await import('../frontend/src/session.js');
+  const mk = () => { const m = new Map(); return { m, getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
+  const had = { l: 'localStorage' in globalThis, s: 'sessionStorage' in globalThis };
+  const prev = { l: globalThis.localStorage, s: globalThis.sessionStorage };
+  try {
+    globalThis.localStorage = mk(); globalThis.sessionStorage = mk();
+    globalThis.localStorage.setItem('token', 't');
+    endSession({ explain: false });
+    assert.strictEqual(globalThis.localStorage.getItem('token'), null, 'the token survived a sign-out');
+    assert.strictEqual(peekSessionEnd(), null, 'a manual sign-out left a "session ended" notice');
+    globalThis.localStorage.setItem('token', 't');
+    endSession({ explain: true, fromPath: '/library' });
+    assert.strictEqual(globalThis.localStorage.getItem('token'), null);
+    assert.deepStrictEqual(peekSessionEnd(), { from: '/library' }, 'an ended session was not explained');
+    delete globalThis.localStorage; delete globalThis.sessionStorage;
+    endSession({ explain: true, fromPath: '/x' });   // no storage at all: must not throw
+  } finally {
+    if (had.l) globalThis.localStorage = prev.l; else delete globalThis.localStorage;
+    if (had.s) globalThis.sessionStorage = prev.s; else delete globalThis.sessionStorage;
+  }
+});
+
 checkAsync('handleModalFocusTrap: Tab wraps inside the dialog, both directions (FE-7)', async () => {
   const { handleModalFocusTrap } = await import('../frontend/src/focusTrap.js');
   const el = (name, disabled = false) => ({ name, disabled, focused: 0, focus() { this.focused++; globalThis.document.activeElement = this; } });
