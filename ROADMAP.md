@@ -1207,10 +1207,6 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   server-side rendering, and this SPA has none. The v7 future flags (`v7_startTransition`, `v7_relativeSplatPath`) already warn in
   the component tests.
 - **Fix:** opt in to the future flags on v6 first, run the component tests, then upgrade.
-
----
-
-## UP — Tidying & upkeep
 - **Done:** `react-router-dom` 7.18.4. **The full `npm audit`, dev and production, is at 0
   vulnerabilities**, clearing GHSA-wrjc-x8rr-h8h6 and GHSA-337j-9hxr-rhxg.
   - **What the app uses:** `BrowserRouter`, `Routes`, `Route`, `Link`, `Navigate`,
@@ -1234,7 +1230,26 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     future-flag warnings are gone.
   - **The same staging check as SEC-16 applies:** load the app and `/api-docs` on
     GameTracker-stg before promoting.
+  - **Review (Architect and UI/UX REJECTED the first cut):** React Router 7 wraps router
+    updates in `React.startTransition` by default, which v6 did not. LoginPage's
+    `setUser(session)` is an ordinary update, so the signed-in app rendered while the
+    location was still `/login`. It matched the signed-in catch-all
+    `<Navigate to="/search"/>`, which overtook `navigate(returnPath)`, still waiting in its
+    transition. **FE-14's "back to where you were" was broken.** My checks missed it
+    because `LoginPage.test.jsx` routes `*` to a location probe, not the real catch-all.
+    - **Fix:** `src/routerConfig.js#ROUTER_PROPS = { useTransitions: false }`, the v6
+      behaviour, used by `main.jsx` AND the routed tests, so a test renders the router the
+      app ships.
+    - **Test:** `App.relogin.test.jsx` renders the real `App` with its real route table:
+      the same user returns to `/calendar`, a different one lands on `/search`.
+      Mutation-checked: without the setting, the same-user test fails, reproducing the bug.
+    - **Pin:** `runtime.test.js` requires `main.jsx` to spread `ROUTER_PROPS`.
+    - **Staging:** add "sign in again after the session expires, and you return to the page
+      you were on" to the SEC-16 check.
 
+---
+
+## UP — Tidying & upkeep
 
 ### [x] UP-1 Stale `.trivyignore` entry
 - **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,

@@ -240,6 +240,16 @@ check('the smoke stage drives v2 and MCP with a real, masked, library-only token
   for (const st of steps) assert.ok(!/\/tmp\/smoke-/.test(st.run || ''), `"${st.name}" writes a fixed /tmp/smoke-* path`);
 });
 
+// FE-22 review. React Router 7's default transitions let the signed-in catch-all overtake
+// the post-login return path (FE-14). main.jsx must ship the ONE router config the routed
+// tests use, or the test proves a router nobody runs.
+check('main.jsx renders the router with the shared ROUTER_PROPS (FE-22)', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'frontend/src/main.jsx'), 'utf8');
+  assert.ok(/<BrowserRouter \{\.\.\.ROUTER_PROPS\}>/.test(main), 'main.jsx no longer spreads ROUTER_PROPS onto BrowserRouter');
+  const cfg = fs.readFileSync(path.join(ROOT, 'frontend/src/routerConfig.js'), 'utf8');
+  assert.ok(/useTransitions:\s*false/.test(cfg), 'routerConfig.js no longer turns off router transitions');
+});
+
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
 // every suite passed on an interpreter production never used. Keeping them equal is not
 // cosmetic — it is what makes a green `npm test` mean anything about the deployed thing.
