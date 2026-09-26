@@ -28,7 +28,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 
 ### Frontend
 - **Framework**: React 18 with React Router 6
-- **Build tool**: Vite 5
+- **Build tool**: Vite 6 (component tests: Vitest 4 + jsdom)
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)

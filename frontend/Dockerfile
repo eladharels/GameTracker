@@ -1,4 +1,5 @@
-# Use Node.js 20 LTS for better ES module support with Vite 5
+# Node.js 20 LTS build stage (Vite 6 and Vitest 4 both support ^20). Nothing from this
+# stage reaches production: nginx serves the emitted assets
 FROM node:20 AS build
 
 WORKDIR /app

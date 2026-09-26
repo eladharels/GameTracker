@@ -24,13 +24,13 @@
     "@testing-library/react": "^16.3.3",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "eslint": "^8.56.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
     "globals": "^13.24.0",
     "jsdom": "^25.0.1",
-    "vite": "^5.0.8",
-    "vitest": "^3.2.7"
+    "vite": "^6.4.3",
+    "vitest": "^4.1.11"
   }
 }

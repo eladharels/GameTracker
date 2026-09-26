@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 23 | 1 |
-| **Total** | **83** | **49** |
+| UP — Tidying & upkeep | 23 | 2 |
+| **Total** | **83** | **50** |
 
 ---
 
@@ -1151,7 +1151,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   GHSA-4w7w-66w2-5vf9, a path traversal through the optimized-deps `.map` handler on every OS.
   Also open: esbuild GHSA-67mh-4wv8-2f99 and GHSA-fx2h-pf6j-xcff (`server.fs.deny` on Windows).
   They matter because `server.host` is `0.0.0.0`, so `npm run dev` is reachable from the LAN.
-  `vitest run` opens no server, and none of this reaches the nginx image. Tracked as UP-23.
+  `vitest run` opens no server, and none of this reaches the nginx image. **Cleared by UP-23**
+  (Vite 6.4.3, Vitest 4.1.11).
 - **Review fixes:** the login tests render under `<StrictMode>` (as `main.jsx` does — the property
   the retired pin guarded); the wiring pin "both call sites pass `fallbackFocusRef`" is restored
   until FE-10, since the component test uses its own harness.
@@ -1190,7 +1191,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   and the hourly sweep into `rate-limits.js`, required at the top of index.js so nothing relies
   on function hoisting. A behaviour-preserving refactor: its own commit, not inside a fix.
 
-### [ ] UP-23 Vite ≥ 6.4.3 (HIGH dev-server advisories; unblocks Vitest 4) (CISO, UP-20 review)
+### [x] UP-23 Vite ≥ 6.4.3 (HIGH dev-server advisories; unblocks Vitest 4) (CISO, UP-20 review)
 - **Why:** `npm audit` rates `vite <=6.4.2` HIGH. The issues are the dev server's path
   traversal (GHSA-4w7w-66w2-5vf9) and esbuild's GHSA-67mh-4wv8-2f99, and `vite.config.js`
   binds the dev server to `0.0.0.0`. They are dev-only: production is nginx serving the
@@ -1200,6 +1201,29 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   the component tests and the `/api-docs` browser check. Until then, prefer
   `npm run dev -- --host 127.0.0.1` on an untrusted network. **Do it before the next
   frontend-dependency change** (CISO).
+- **Done:**
+  - **Versions:** `vite` 6.4.3, `@vitejs/plugin-react` 4.7.0, `vitest` 4.1.11 (and
+    `@vitest/mocker` 4.1.11), `esbuild` 0.25.12. Vite 6 is the smallest step that clears the
+    HIGH. Vite 7/8 and plugin-react 5/6 are later, separate upgrades.
+  - **Audit:** the full `npm audit`, devDependencies included, is down to the two moderate
+    React Router advisories that FE-22 tracks.
+  - **No production entry moved:** the lockfile diff was checked entry by entry, and every
+    changed package is dev-only.
+  - **Resolved with npm 11:** npm 10's arborist crashes on Vitest 4's peer set
+    (`Cannot read properties of null (reading 'edgesOut')` in `#loadPeerSet`), both on a
+    fresh install and with the stale entries removed. `npx npm@11 install` resolved it, and
+    the result was then verified with npm 10's `npm ci` on a clean `node_modules`, which is
+    what CI and the Dockerfile run. **If a later `npm install` on npm 10 fails the same way,
+    use npm 11 for the resolve. Never delete the lockfile:** a full re-resolve would move
+    production dependencies too.
+  - **Verified:**
+    - the 14 component tests
+    - lint, 0 errors
+    - `vite build`
+    - `/api-docs` in a real browser against the built bundle: 35 operations, the title, an
+      operation expands
+    - the dev server routes `/api-docs` to the SPA and `/api/*` to the proxy
+    - the frontend image build is left to CI, since this environment has no Docker daemon
 
 ---
 
@@ -1283,3 +1307,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | SEC-15 | this batch | 2026-09-26 | Per-user limit on both crack-status routes |
 | UP-20 | this batch | 2026-09-26 | Vitest + jsdom component tests in CI; FE-7 and the login page converted from shape pins |
 | SEC-16 | this batch | 2026-09-26 | React Router 6.30.6; npm audit fix clears 4 HIGH/moderate advisories in the shipped SPA |
+| UP-23 | this batch | 2026-09-26 | Vite 6.4.3 + Vitest 4.1.11: clears the HIGH dev-server and the mocker advisories; no production entry moved |
