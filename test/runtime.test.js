@@ -260,15 +260,21 @@ check('CI installs tools from a private dir, checksum-verified before sudo insta
   for (const [jobName, job] of Object.entries(wf.jobs)) {
     for (const st of job.steps || []) {
       const run = (st.run || '').replace(/^\s*#.*$/gm, '');
-      assert.ok(!/(?:-o|>|-C)\s+\/tmp\//.test(run) && !/\s\/tmp\/[\w.-]+/.test(run),
+      // Quoted or not, as an argument or an assignment (review of SEC-17: `-o "/tmp/x"`,
+      // `-C "/tmp"` and `DL=/tmp/fixed` all slipped past the first version).
+      assert.ok(!/(?:\s|=)["']?\/tmp(?:\/|["'\s]|$)/m.test(run),
         `${jobName} / "${st.name}" uses a fixed /tmp path`);
       if (/sudo install\b/.test(run)) {
         installs++;
         const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
         assert.ok(check >= 0 && check < untar && untar < inst,
           `${jobName} / "${st.name}" installs as root without checking a pinned SHA-256 first`);
-        const env = JSON.stringify(st.env || {}) + run;
-        assert.ok(/[0-9a-f]{64}/.test(env), `${jobName} / "${st.name}" has no pinned SHA-256`);
+        // The PINNED value must be what feeds sha256sum -c — not merely a hash somewhere.
+        const fed = /echo "\$\{(\w+)\}\s+[^"]*" \| sha256sum -c/.exec(run);
+        assert.ok(fed, `${jobName} / "${st.name}" does not feed a named pin to sha256sum -c`);
+        const pinned = { ...(st.env || {}) };
+        for (const m of run.matchAll(/^\s*(\w+)="([0-9a-f]{64})"/gm)) pinned[m[1]] = m[2];
+        assert.ok(/^[0-9a-f]{64}$/.test(pinned[fed[1]] || ''), `${jobName} / "${st.name}": ${fed[1]} is not a pinned 64-hex SHA-256`);
       }
     }
   }

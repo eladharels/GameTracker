@@ -768,6 +768,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - **Pinned in `runtime.test.js`:** no step uses a fixed `/tmp` path; every
     `sudo install` has `sha256sum -c` before `tar -x`, before `sudo install`, with a
     64-hex pin. Mutation-checked: dropping a check, or restoring a `/tmp` path, fails.
+  - **Review fixes:** the pin now catches quoted and assigned `/tmp` paths (`-o "/tmp/x"`,
+    `DL=/tmp/fixed`), and requires that the variable fed to `sha256sum -c` is itself a
+    pinned 64-hex value, not merely that a hash appears somewhere. All three evasions are
+    mutation-checked. A comment records that the hash protects the DOWNLOAD; a binary
+    already installed at the pinned version is not re-hashed, and the version check
+    still fails closed.
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).

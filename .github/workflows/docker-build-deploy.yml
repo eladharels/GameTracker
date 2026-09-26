@@ -130,6 +130,9 @@ jobs:
           GITLEAKS_SHA256="5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
           # Reinstall unless the pinned version is already on PATH, so a stubbed
           # binary cannot silently disable the secret scan on a persistent runner.
+          # The SHA-256 below protects the DOWNLOAD. A binary already installed at the pinned
+          # version is not re-hashed; /usr/local/bin is root-owned, and the version check
+          # after this block still fails closed on anything else.
           if [ "$(gitleaks version 2>/dev/null)" != "${GITLEAKS_VERSION}" ]; then
             echo "[gitleaks] Downloading pinned v${GITLEAKS_VERSION}..."
             # A private mktemp -d, never a fixed /tmp path: this runner is the production
