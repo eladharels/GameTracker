@@ -1232,6 +1232,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     `test/openapi.test.js` ties the constant to the spec.
   - **Tests:** the lookup now goes through `db.promises.all`, so a test can assert the SQL
     and the single parameter. The old code fails both new tests.
+  - **Why v1's new 400 fits the freeze:** v1's `POST /api/user/:u/shares` now answers 400 for
+    more than 200 recipients. It already answered 400 (a non-array) through the same
+    `problem.send` and the frozen `{error}` envelope. No list a person builds comes near
+    200. The only requests whose status changes are ones that were abuse, or that already
+    failed with 500 past the parameter limit. That is the same test CLAUDE.md applies to
+    the per-user limiters.
+  - **Review fixes:**
+    - v2's adapter check now reads `sharesService.MAX_SHARE_RECIPIENTS` instead of its own
+      literal 200. It stays only to name v2's field in `details`.
+    - `isSteamAppId` moved above `fetchSteamPrice`'s doc comment, which it had split.
+    - v2's price-failure log goes through `safeForLog`, like v1's.
 
 ### [x] UP-14 `rate_limited` in job `REASONS` has no producer
 - **Where:** `services/job-runner.js:47-55`.

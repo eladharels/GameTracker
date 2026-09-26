@@ -2503,7 +2503,7 @@ v2Router.get('/catalog/prices/:steamAppId', requireLibraryScope, (req, res) => {
       if (!result.ok) {
         // The upstream message is logged, never returned — it is a third party's error
         // text about a request this caller did not make.
-        console.error(`[v2] Steam price lookup failed for ${safeForLog(steamAppId, 20)}:`, result.error);
+        console.error(`[v2] Steam price lookup failed for ${safeForLog(steamAppId, 20)}:`, safeForLog(result.error, 200));
         return v2.send(res, { code: SVC.PROVIDER_UNAVAILABLE, message: 'Steam could not be reached' });
       }
       res.json({ steamAppId, region, price: result.price, reason: result.reason });
@@ -2540,9 +2540,12 @@ v2Router.put('/shares/outgoing', requireLibraryScope, (req, res) => {
       details: { field: 'usernames' },
     });
   }
-  if (usernames.length > 200) {
+  // The service enforces the same cap (MAX_SHARE_RECIPIENTS, tied to the spec's maxItems
+  // by openapi.test.js). Checked here too ONLY to name v2's field in `details`; the
+  // number is the service's, never a second literal.
+  if (usernames.length > sharesService.MAX_SHARE_RECIPIENTS) {
     return v2.send(res, {
-      code: SVC.VALIDATION, message: 'usernames may contain at most 200 entries',
+      code: SVC.VALIDATION, message: `usernames may contain at most ${sharesService.MAX_SHARE_RECIPIENTS} entries`,
       details: { field: 'usernames' },
     });
   }

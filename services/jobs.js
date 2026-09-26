@@ -244,6 +244,10 @@ function priceString(value) {
   return trimmed || null;
 }
 
+// A Steam application id: 1-10 digits. The ONE rule, for both v1 and v2 — the value is
+// interpolated into an outbound request, so it is checked before it leaves.
+const isSteamAppId = (v) => /^[0-9]{1,10}$/.test(String(v ?? ''));
+
 // One Steam lookup. Extracted because there are now two callers — the weekly sweep
 // below and `GET /api/v2/catalog/prices/{steamAppId}` — and the alternative was the
 // route re-implementing the request, the timeout, the redirect refusal and the
@@ -258,10 +262,6 @@ function priceString(value) {
 //   { ok: true,  price }              a formatted price for that region
 //   { ok: true,  price: null, reason } Steam answered; the game has no price there
 //   { ok: false, error }              Steam could not be reached or was unusable
-// A Steam application id: 1-10 digits. The ONE rule, for both v1 and v2 — the value is
-// interpolated into an outbound request, so it is checked before it leaves.
-const isSteamAppId = (v) => /^[0-9]{1,10}$/.test(String(v ?? ''));
-
 async function fetchSteamPrice(steamAppId, { region = steamRegion() } = {}) {
   const id = String(steamAppId);
   try {
