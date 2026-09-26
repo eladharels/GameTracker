@@ -1909,6 +1909,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     - `recordingRes` now records headers;
     - the old route fails the first new test ("an outage answered as a credential
       failure").
+  - **Review (CISO APPROVE, one condition; Architect and UI/UX APPROVE):**
+    - **The condition:** a mutation marking `not_found` as an outage survived, turning every
+      unknown username into a 503 on a WORKING directory. A control test now pins a
+      reachable directory's `not_found` and `bad_password` at 401.
+    - **Enumeration was judged acceptable:** bcrypt timing already split "local hash" from
+      "no hash", with the directory up or down.
+    - The freeze note in CLAUDE.md now cross-references this exception.
+    - The SPA's 5xx text says "in a few minutes" to match `Retry-After`.
+    - **Not done:** the suggested username length cap. A 400 for an over-long name would
+      move a status on the frozen route for no user benefit; the filter escaping already
+      handles it.
 
 ### [x] UP-22 One `perUserLimit()` factory and a `rate-limits.js` module (Architect, SEC-15)
 - **Why:** `libraryWriteLimit`, `testNotificationLimit` and `crackCheckLimit` are the same

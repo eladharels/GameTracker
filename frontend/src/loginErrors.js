@@ -27,6 +27,8 @@ export function loginErrorMessage(err) {
   // on a frozen v1 route. Retrying never helps, so say who can.
   if (status === 403) return 'Your account isn\'t allowed to sign in to GameTracker. Ask an administrator for access.'
   if (status === 400 && serverMsg) return serverMsg
-  if (status >= 500) return 'Sign-in is temporarily unavailable. Please try again in a moment.'
+  // "A few minutes", not "a moment" (UP-21 review): the server's own Retry-After is 60s, and
+  // quick retries during an outage end in a confusing 15-minute lockout.
+  if (status >= 500) return 'Sign-in is temporarily unavailable. Please try again in a few minutes.'
   return 'Sign-in failed. Please try again.'
 }

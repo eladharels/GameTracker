@@ -873,6 +873,16 @@ checkAsync('directory unreachable + a LOCAL account: bcrypt still decides (UP-21
   assert.strictEqual(res.statusCode, 200, 'a directory outage locked out a LOCAL account');
 });
 
+checkAsync('a REACHABLE directory: unknown user and wrong directory password stay 401 (UP-21 control)', async () => {
+  // The outage flag is the whole boundary. Without these, marking `not_found` as an
+  // outage turned every unknown username into a 503 with the suite green (CISO review).
+  const nf = await ldapLoginAs('nobody', undefined, '203.0.113.51', { verify: { ok: false, reason: 'not_found' } });
+  assert.strictEqual(nf.res.statusCode, 401, 'an unknown user on a working directory was not a plain 401');
+  const row = { id: 10, username: 'dave', can_manage_users: 0, origin: 'ldap', password: null };
+  const bp = await ldapLoginAs('dave', row, '203.0.113.52', { verify: { ok: false, reason: 'bad_password' } });
+  assert.strictEqual(bp.res.statusCode, 401, 'a wrong directory password was not a plain 401');
+});
+
 checkAsync('outage retries never lock the ACCOUNT out, but still count against the IP (UP-21)', async () => {
   const row = { id: 9, username: 'dana', can_manage_users: 0, origin: 'ldap', password: null };
   // Eight tries for one account from eight addresses: the owner is never locked out.

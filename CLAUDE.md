@@ -810,6 +810,12 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 > `{error}` envelope, it carries `Retry-After`, and no existing status changes meaning for a
 > request within budget. The limiter must sit AFTER authentication in the chain — before it,
 > `req.user` is unset and the limiter fails open (`test/api-surface.test.js` pins the order).
+>
+> **The second exception is a 503, not a 429:** `POST /api/auth/login` answers 503 when an
+> unreachable directory is the only thing that could decide (UP-21, owner-approved; see
+> "Directory outage at login" below). Same `{error}` envelope, `Retry-After`, and no status
+> changes for a request the directory CAN answer. Pinned, together with its 401 controls,
+> in `test/api-contract.test.js`.
 - **User-chosen notification servers (SSRF)**: private/LAN ntfy and Gotify URLs are allowed on
   purpose (self-hosting is the feature); cloud-metadata and link-local addresses are not. The
   refusal is enforced on the **resolved address at connect time**
