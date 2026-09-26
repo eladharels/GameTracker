@@ -147,7 +147,14 @@ function guardedLookup(hostname, options, callback) {
 // `proxy: false` is part of the guard, not a preference: axios honours HTTP(S)_PROXY,
 // and through a proxy the agent would resolve and check the PROXY's host while the
 // proxy fetched the user's URL -- the guard silently checking the wrong name.
+//
+// The http agent does not ADD plain http: axios already spoke it for http:// URLs with
+// its default agent. Plain http to a self-hosted ntfy/Gotify on the LAN is a supported
+// configuration (CLAUDE.md, "User-chosen notification servers"); this agent exists only
+// so those requests get the same connect-time SSRF check as https ones. Removing it
+// would leave http:// URLs unguarded, not make them https.
 const GUARDED_AGENTS = Object.freeze({
+  // nosemgrep: problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
   httpAgent: new http.Agent({ lookup: guardedLookup }),
   httpsAgent: new https.Agent({ lookup: guardedLookup }),
   proxy: false,

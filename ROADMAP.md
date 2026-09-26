@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 13 | 7 |
-| FE — Frontend | 12 | 0 |
+| FE — Frontend | 13 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **28** |
+| **Total** | **65** | **28** |
 
 ---
 
@@ -754,6 +754,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 ### [ ] FE-12 Expired token renders the app until the first 401
 - **Where:** `useAuth` (`App.jsx:94-99`).
 - **Fix:** covered by SEC-7's short-term fix. Tick both together.
+
+### [ ] FE-13 Flag admin-only tokens in the token list (from the SEC-12 UI/UX review)
+- **Where:** `frontend/src/ApiTokensSection.jsx` (token badges).
+- **Why:** tokens minted under the old "Admin: everything above" copy show only an Admin
+  badge, and nothing tells their owner they can no longer reach the library.
+- **Fix:** a muted "No library access" hint on tokens whose scopes are exactly `['admin']`.
 
 ---
 

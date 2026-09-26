@@ -29,7 +29,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 8080
 
-# nginx-unprivileged already sets USER nginx in its base image.
-# Declared explicitly so static analysis tools (Semgrep) can verify it.
+# Restores the unprivileged user after the root `apk upgrade` layer above — this line,
+# not the base image's own USER, is what the container runs as. Semgrep verifies it.
 USER nginx
 CMD ["nginx", "-g", "daemon off;"]

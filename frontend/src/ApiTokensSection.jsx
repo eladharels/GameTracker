@@ -24,7 +24,7 @@ const SCOPE_COPY = {
     label: 'Admin',
     // NOT "everything above": the scopes are independent (ROADMAP SEC-12), and this
     // copy is how admin-only tokens that could not reach any library got minted.
-    desc: 'User management, server settings and instance-wide jobs. Does not include Library — select both if this token also needs your games.',
+    desc: 'User management, server settings and instance-wide jobs. Does not include Library — select both if the token also needs your library.',
   },
 }
 
