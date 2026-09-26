@@ -140,7 +140,10 @@ GameTracker/
 │   │                               #   read from `users` — never grant. Deliberately does
 │   │                               #   NOT contain the interactive LDAP login
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
-│   ├── library.js                  # Game library + backlog ordering + the upsert
+│   ├── library.js                  # Game library + backlog ordering + the upsert, and the
+│   │                               #   ONE "already in the library?" rule (UP-19). The SPA's
+│   │                               #   libraryMatch.js is a second copy held EQUAL by the shared
+│   │                               #   vectors in test/library-match-vectors.js
 │   ├── catalog.js                  # IGDB/RAWG/TheGamesDB search, normalise, merge.
 │                                   #   Degrades: a provider that is down contributes
 │                                   #   zero results, never an error — but reports its

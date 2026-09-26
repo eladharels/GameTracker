@@ -1007,16 +1007,99 @@ async function setStatus(userId, gameId, status) {
 // outcome while the row has to be read back.
 const DEFAULT_NEW_STATUS = 'wishlist';
 
+// "Is this game already in the library under ANOTHER id?" (ROADMAP UP-19)
+//
+// The SPA has asked this since FE-3 (frontend/src/libraryMatch.js), but only the SPA: v2,
+// the MCP and Android deduped by id alone, so "add Hades" from an agent could create a
+// second row for a game the user already had from another provider. The rule now lives
+// here, and the SPA's copy is held EQUAL to it by shared test vectors
+// (test/fixtures/library-match.json, run over both by test/helpers.test.js). Two copies,
+// because the backend cannot import a frontend source file without coupling the images.
+//
+// The rule is the FE-3 one, deliberately STRICTER than catalog.js's merging rules (see
+// libraryMatch.js's header): a false positive here refuses a legitimate add.
+//   'same'     -- same id, or same name AND the same KNOWN release year;
+//   'possible' -- same name, a year unknown on either side;
+//   nothing    -- different names, or both years known and different (a remake).
+const normTitle = (s) => String(s || '').trim().toLowerCase();
+const releaseYear = (d) => {
+  const m = /^(\d{4})/.exec(String(d || ''));
+  return m ? m[1] : null;
+};
+
+// Rows under a DIFFERENT id that may be the same game. The same id is excluded: that is
+// the idempotent re-add, not a duplicate. `same` matches sort first.
+// rows: library rows (game_id, game_name, release_date); game: { id, name, releaseDate }.
+function findPossibleDuplicates(rows, game) {
+  if (!Array.isArray(rows) || !game) return [];
+  const id = String(game.id ?? '');
+  const name = normTitle(game.name);
+  const year = releaseYear(game.releaseDate);
+  if (!name) return [];
+  const found = [];
+  for (const r of rows) {
+    if (id && String(r.game_id) === id) continue;
+    if (normTitle(r.game_name) !== name) continue;
+    const rYear = releaseYear(r.release_date);
+    if (year && rYear && year !== rYear) continue;       // a remake, not a duplicate
+    found.push({
+      gameId: String(r.game_id),
+      name: r.game_name,
+      releaseDate: r.release_date || null,
+      match: year && rYear ? 'same' : 'possible',
+    });
+  }
+  return found.sort((a, b) => (a.match === b.match ? 0 : a.match === 'same' ? -1 : 1));
+}
+
+// The SPA's three-way answer, from the same rule. Exported so the shared vectors can hold
+// frontend/src/libraryMatch.js to it.
+function libraryMatch(rows, game) {
+  if (!Array.isArray(rows) || !game) return null;
+  const id = String(game.id ?? '');
+  if (id && rows.some((r) => String(r.game_id) === id)) return 'same';
+  const dups = findPossibleDuplicates(rows, game);
+  if (!dups.length) return null;
+  return dups[0].match;
+}
+
+// The three columns the rule reads, for one user. Through the module so a test can stub it.
+function listMatchRows(userId) {
+  return db.promises.all(
+    'SELECT game_id, game_name, release_date FROM user_games WHERE user_id = ?', [userId]);
+}
+
+const DUPLICATE_POLICIES = Object.freeze(['warn', 'reject']);
+
 // `deps` is a TEST SEAM (see services/catalog.js#search for the same pattern and the
 // same reason): findGame and upsertGame are called directly from inside this module,
 // so a test that stubs db.promises observes nothing — the documented false-pass trap.
 // The rule below is one branch, and one branch nothing can reach is one that decays.
-async function addResolvedGame(userId, game, requestedStatus, deps = {}) {
+//
+// `options.onPossibleDuplicate` (UP-19): 'warn' (the default) stores the game and returns
+// `possibleDuplicates`; 'reject' refuses with CONFLICT carrying them, BEFORE anything is
+// written -- so an agent that wants to ask first never has to undo a write. Only a game
+// NEW to the library is checked: re-adding one already there by id is the idempotent
+// update, whatever else shares its name.
+async function addResolvedGame(userId, game, requestedStatus, deps = {}, options = {}) {
   const read = deps.findGame || findGame;
   const write = deps.upsertGame || upsertGame;
+  const policy = options.onPossibleDuplicate ?? 'warn';
+  if (!DUPLICATE_POLICIES.includes(policy)) {
+    throw serviceError(CODES.VALIDATION, `onPossibleDuplicate must be one of: ${DUPLICATE_POLICIES.join(', ')}`);
+  }
+  const prior = await read(userId, game.id);
+  let possibleDuplicates = [];
+  if (!prior) {
+    possibleDuplicates = findPossibleDuplicates(await (deps.listMatchRows || listMatchRows)(userId), game);
+    if (policy === 'reject' && possibleDuplicates.length) {
+      throw serviceError(CODES.CONFLICT,
+        `"${game.name}" may already be in the library under another id`,
+        { possibleDuplicates });
+    }
+  }
   let status = requestedStatus;
   if (status === undefined || status === null || status === '') {
-    const prior = await read(userId, game.id);
     status = prior ? prior.status : DEFAULT_NEW_STATUS;
   }
   const result = await write(userId, {
@@ -1031,7 +1114,7 @@ async function addResolvedGame(userId, game, requestedStatus, deps = {}) {
   // sent (crack_status, last_price, added_at) and the status upsertGame may have
   // coerced. Building the response from the request is how a client learns a value the
   // database does not hold.
-  return { ...result, game: await read(userId, game.id) };
+  return { ...result, game: await read(userId, game.id), possibleDuplicates };
 }
 
 // AT THE END OF THE FILE, deliberately. This block used to sit above the v2
@@ -1055,4 +1138,5 @@ module.exports = {
   reorderBacklog,
   listPage, SORTS, MAX_PAGE, DEFAULT_PAGE, encodeCursor, setStatus,
   addResolvedGame, DEFAULT_NEW_STATUS,
+  findPossibleDuplicates, libraryMatch, listMatchRows, DUPLICATE_POLICIES,
 };

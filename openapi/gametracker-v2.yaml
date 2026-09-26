@@ -516,6 +516,14 @@ paths:
 
         Idempotent by `gameId`: re-adding a game already in the library updates it rather
         than failing, which is what makes a retried tool call safe.
+
+        **Possible duplicates.** A game NEW to the library is checked against the ones
+        already there under OTHER ids: the same name with the same known release year
+        (`match: same`), or the same name with a year unknown on either side
+        (`match: possible`). A remake -- same name, a different known year -- is never
+        one. The default, `onPossibleDuplicate: warn`, adds the game and lists them in
+        `possibleDuplicates`; `reject` refuses with 409 BEFORE writing anything, so a
+        caller that wants to ask first never has to undo an add.
       requestBody:
         required: true
         content:
@@ -537,11 +545,16 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: |
-            The name did not resolve to exactly one game. `candidates` holds what was
-            found; resolve it client-side and retry with a `gameId`.
+            Either the name did not resolve to exactly one game (`candidates`: resolve it
+            client-side and retry with a `gameId`), or `onPossibleDuplicate: reject` was
+            sent and the game may already be in the library (`possibleDuplicates`; retry
+            with `warn` to add it anyway). Nothing was written.
           content:
             application/problem+json:
-              schema: { $ref: '#/components/schemas/AmbiguousGameProblem' }
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/AmbiguousGameProblem' }
+                  - { $ref: '#/components/schemas/PossibleDuplicateProblem' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '502':
           description: No catalog provider answered, so "not found" could not be distinguished from "unreachable".
@@ -1575,6 +1588,31 @@ components:
               description: What the name matched. Pick one and retry with its `gameId`.
               items: { $ref: '#/components/schemas/CatalogGame' }
 
+    PossibleDuplicateProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [possibleDuplicates]
+          properties:
+            possibleDuplicates:
+              type: array
+              description: Games already in the library that may be this one.
+              items: { $ref: '#/components/schemas/PossibleDuplicate' }
+
+    PossibleDuplicate:
+      type: object
+      description: A game in the caller's library, under another id, that may be the one being added.
+      required: [gameId, name, releaseDate, match]
+      properties:
+        gameId: { $ref: '#/components/schemas/GameRef' }
+        name: { type: string }
+        releaseDate: { type: [string, 'null'], format: date }
+        match:
+          type: string
+          enum: [same, possible]
+          description: "`same`: same name and the same known year. `possible`: same name, a year unknown."
+      additionalProperties: false
+
     UnknownUsersProblem:
       allOf:
         - $ref: '#/components/schemas/Problem'
@@ -1653,6 +1691,12 @@ components:
             - { type: 'null' }
         backlogOrder: { type: [integer, 'null'], description: Position in the backlog. Null unless status is `backlog`. }
         addedAt: { type: [string, 'null'], format: date-time }
+        possibleDuplicates:
+          type: array
+          description: |
+            Only on `addLibraryGame`'s response, and only when the added game may already
+            be in the library under another id. Absent everywhere else.
+          items: { $ref: '#/components/schemas/PossibleDuplicate' }
       additionalProperties: false
 
     LibraryGameCreate:
@@ -1681,6 +1725,14 @@ components:
             already out stores `wishlist`. Both corrections are silent on this operation —
             it returns the resulting resource, so read the `status` you got back rather
             than assuming the one you sent.
+        onPossibleDuplicate:
+          type: string
+          enum: [warn, reject]
+          default: warn
+          description: |
+            What to do when the game may already be in the library under another id.
+            `warn` adds it and lists them in `possibleDuplicates`; `reject` answers 409
+            with them and writes nothing.
       oneOf:
         - required: [gameId]
         - required: [name]

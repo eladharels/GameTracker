@@ -82,6 +82,11 @@ function toProblem(err, { fallbackStatus = 500 } = {}) {
     // membership oracle; see the shares adapter, which is careful to keep it that way.
     body.unknownUsers = err.details.unknownUsers.map((u) => String(u));
   }
+  // The third (UP-19): rows from the CALLER's own library that may be the game they
+  // asked to add. Re-shaped field by field, like the other two.
+  if (Array.isArray(err.details?.possibleDuplicates)) {
+    body.possibleDuplicates = err.details.possibleDuplicates.map(possibleDuplicate);
+  }
   return { status: spec.status, body };
 }
 
@@ -220,6 +225,28 @@ function catalogGame(row) {
     source: row.source,
     steamAppId: row.steamAppId ?? null,
   };
+}
+
+// A library row that may be the game being added (UP-19). Pinned field by field: the
+// service's object is internal, and PossibleDuplicate is `additionalProperties: false`.
+function possibleDuplicate(d) {
+  return {
+    gameId: String(d.gameId),
+    name: String(d.name ?? ''),
+    releaseDate: d.releaseDate ?? null,
+    match: d.match === 'same' ? 'same' : 'possible',
+  };
+}
+
+// The add's response (UP-19): the stored game, plus `possibleDuplicates` ONLY when there
+// are some. Absent rather than [] on the common path, so every other LibraryGame
+// response is unchanged.
+function libraryGameAdded(row, possibleDuplicates) {
+  const body = libraryGame(row);
+  if (Array.isArray(possibleDuplicates) && possibleDuplicates.length) {
+    body.possibleDuplicates = possibleDuplicates.map(possibleDuplicate);
+  }
+  return body;
 }
 
 // Provider status as an ARRAY of objects, not the service's keyed map. A map keyed by
@@ -447,7 +474,7 @@ function settingsUpdate(body) {
 
 module.exports = {
   toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings, backlogEntry,
-  catalogGame, searchMeta, share, user, userWrite, job, maskedSettings, settingsUpdate,
+  catalogGame, possibleDuplicate, libraryGameAdded, searchMeta, share, user, userWrite, job, maskedSettings, settingsUpdate,
   SETTINGS_FIELDS, API_KEY_FIELDS, USER_WRITE_FIELDS,
   PLANNED_CODES, WWW_AUTHENTICATE,
 };

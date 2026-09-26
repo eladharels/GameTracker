@@ -879,6 +879,20 @@ check('the job enums match the runner and the service, in BOTH directions', () =
   assert.deepStrictEqual([...started.properties.kind.enum].sort(), [...jobs.JOB_KINDS].sort());
 });
 
+check('the duplicate-detection enums match the service (UP-19)', () => {
+  const lib = require('../services/library');
+  const create = spec.components.schemas.LibraryGameCreate.properties.onPossibleDuplicate;
+  assert.deepStrictEqual([...create.enum].sort(), [...lib.DUPLICATE_POLICIES].sort());
+  assert.strictEqual(create.default, 'warn', 'the documented default is not the service default');
+  assert.deepStrictEqual([...spec.components.schemas.PossibleDuplicate.properties.match.enum].sort(),
+    ['possible', 'same']);
+  // The shape the service emits is the shape the spec publishes, key for key.
+  const emitted = lib.findPossibleDuplicates(
+    [{ game_id: 'igdb_1', game_name: 'Halo', release_date: null }], { id: 'rawg_1', name: 'Halo' });
+  assert.deepStrictEqual(Object.keys(emitted[0]).sort(),
+    [...spec.components.schemas.PossibleDuplicate.required].sort());
+});
+
 check('PUT /shares/outgoing maxItems is the cap the service ENFORCES (UP-13)', () => {
   // The spec said 200 from the start and nothing enforced it; v1 reaches the same
   // function with no bound. One number, stated twice, has to be checked twice.

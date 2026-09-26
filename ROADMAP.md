@@ -1803,7 +1803,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - **Deploy warning:** a non-numeric `TRUST_PROXY` now explains what actually happens.
     `Number()` gives NaN, so no proxy hop is trusted and everyone shares one limiter key.
 
-### [ ] UP-19 Library duplicate detection belongs in the service (Architect, FE-3 review)
+### [x] UP-19 Library duplicate detection belongs in the service (Architect, FE-3 review)
 - **Why:** cross-provider "same game" detection on add lives only in the SPA
   (`frontend/src/libraryMatch.js`). v1 POST, v2 `POST /library/games`, the MCP and Android
   dedupe by id alone, through the upsert — "adapters own no rules" says it belongs in
@@ -1832,6 +1832,43 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
       as the default;
     - keeping the two copies equal through shared JSON test vectors rather than one test
       running both codebases.
+- **Decided (owner, 2026-09-26):** go ahead. Built as the proposal, taking both review
+  alternatives.
+- **Done:**
+  - **One rule in `services/library.js`:** `findPossibleDuplicates` and `libraryMatch`,
+    with the same `same`/`possible` semantics as the SPA. It is still stricter than
+    catalog.js: a remake is never flagged, and the same id is the idempotent re-add, not a
+    duplicate.
+  - **Two copies held equal by shared vectors.** `test/library-match-vectors.js` has 11
+    cases, and `test/helpers.test.js` runs BOTH the service and
+    `frontend/src/libraryMatch.js` over every one.
+  - **`addResolvedGame(..., options.onPossibleDuplicate)`** checks only a game NEW to the
+    library, against its rows under other ids:
+    - `warn`, the default, stores the game and returns `possibleDuplicates`;
+    - `reject` throws CONFLICT carrying them BEFORE anything is written, so an agent that
+      asks first never has to undo;
+    - an unknown policy is a VALIDATION error.
+  - **v2.** `POST /library/games` takes `onPossibleDuplicate`. The response carries
+    `possibleDuplicates` only when there are some, so it is absent, not `[]`, on the common
+    path and every other LibraryGame response is unchanged. A reject is a 409
+    `PossibleDuplicateProblem`. The spec's enums are pinned to the service in
+    `test/openapi.test.js`, and the v2 mapper re-shapes the field on both the body and the
+    problem, like the other two extensions.
+  - **MCP `add_game`** takes `onPossibleDuplicate` and tells the agent to relay the hint.
+    - **Fixed on the way (pre-existing):** the MCP's error renderer dropped a 409's
+      `candidates`, so "an ambiguous title returns a conflict listing the candidates" was
+      true of the API and false of the tool.
+    - Both extensions are now listed, re-shaped to name, id and year: capped at 10,
+      control characters stripped, names truncated.
+  - **v1 is unchanged,** because its response key set is pinned.
+- **Tests:**
+  - the shared vectors, run over both copies;
+  - five policy cases;
+  - the owner-scoped SQL;
+  - the v2 re-shaping;
+  - a v2 adapter test that the policy goes in and the hint comes out;
+  - the spec enums;
+  - the MCP rendering.
 
 ### [x] UP-20 A DOM test harness for the SPA (Architect; pair with FE-10)
 - **Why:** component fixes (FE-1, FE-2, FE-5, FE-6, FE-7, the session notice) can only be

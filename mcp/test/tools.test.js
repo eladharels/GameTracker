@@ -473,6 +473,28 @@ check('401 and 403 are DIFFERENT answers', () => {
   assert.match(forbidden, /Retrying will not help/);
 });
 
+check('a 409 LISTS its candidates and possible duplicates, re-shaped (UP-19)', () => {
+  // add_game's description promises the conflict lists the candidates; this renderer
+  // used to drop them, so an agent was told "ambiguous" and given nothing to ask about.
+  const amb = api.toolError({ response: { status: 409, data: {
+    code: 'conflict', title: 'Conflict', detail: 'ambiguous',
+    candidates: [{ id: 'igdb_1', name: 'Doom', releaseDate: '1993-12-10', internalNote: 'x' },
+      { id: 'igdb_2', name: 'Doom\u0007', releaseDate: null }],
+  } } });
+  assert.match(amb, /Doom \(igdb_1, 1993\)/);
+  assert.match(amb, /igdb_2, year unknown/);
+  assert.ok(!amb.includes('internalNote') && !amb.includes('\u0007'), 'an unlisted field or a control character crossed');
+  const dup = api.toolError({ response: { status: 409, data: {
+    code: 'conflict', title: 'Conflict', detail: 'may already be in the library',
+    possibleDuplicates: [{ gameId: 'igdb_9', name: 'Halo', releaseDate: '2001-11-15', match: 'same' }],
+  } } });
+  assert.match(dup, /Halo \(igdb_9, 2001, same year\)/);
+  assert.match(dup, /onPossibleDuplicate "warn"/);
+  const many = api.toolError({ response: { status: 409, data: { code: 'conflict', title: 'Conflict',
+    candidates: Array.from({ length: 50 }, (_, i) => ({ id: `igdb_${i}`, name: `G${i}` })) } } });
+  assert.strictEqual((many.match(/^- /gm) || []).length, 10, 'the candidate list is not capped');
+});
+
 check('5xx says retrying is reasonable; 4xx does not', () => {
   assert.match(api.toolError({ response: { status: 503, data: {} } }), /transient|retrying/i);
   const validation = api.toolError({ response: { status: 400, data: { code: 'validation', title: 'Invalid request' } } });

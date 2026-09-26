@@ -198,6 +198,12 @@ const TOOLS = [
         + 'status untouched. Only pass `status` when the user actually asked to set one, or you will '
         + 'demote a game they are playing back to wishlist. A game whose release date is in the '
         + 'future is stored as `unreleased` whatever you ask for.\n\n'
+        + 'POSSIBLE DUPLICATES: the server checks a new game against the library under other ids '
+        + '(the same name and year from another database, or the same name with a year unknown). '
+        + 'By default it adds the game and returns them in `possibleDuplicates` — if that is present, '
+        + 'tell the user. Pass `onPossibleDuplicate: "reject"` to be asked first instead: nothing is '
+        + 'written and the conflict lists them; after the user confirms, call again with "warn". '
+        + 'A remake (same name, different year) is never flagged.\n\n'
         + 'Safe to repeat as far as the data goes, but each call notifies the user — do not retry '
         + 'a call that may already have succeeded just to be sure.',
       inputSchema: {
@@ -207,16 +213,19 @@ const TOOLS = [
           .describe('Exact game title, resolved server-side. Exactly one of gameId or name.'),
         status: z.enum(STATUSES).optional()
           .describe('Only set this if the user asked for a specific status. Omit otherwise — see the description.'),
+        onPossibleDuplicate: z.enum(['warn', 'reject']).optional()
+          .describe('"reject" refuses, writing nothing, when the game may already be in the library under another id. Default "warn".'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    handler: tool(({ gameId, name, status }, token) => {
+    handler: tool(({ gameId, name, status, onPossibleDuplicate }, token) => {
       if (!gameId && !name) throw new Error('Pass either gameId or name.');
       if (gameId && name) throw new Error('Pass gameId OR name, not both.');
       const data = gameId ? { gameId } : { name };
       // `status` only when asked for. Sending it unconditionally is what demotes a game
       // the user is already playing back to wishlist.
       if (status) data.status = status;
+      if (onPossibleDuplicate) data.onPossibleDuplicate = onPossibleDuplicate;
       return api.call(token, 'post', '/library/games', { data });
     }),
   },

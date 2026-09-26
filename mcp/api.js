@@ -20,11 +20,34 @@ const API_BASE = (process.env.GAMETRACKER_API_URL || 'http://backend:3000/api/v2
 //
 // The RAW body is never passed through. It is JSON from another service and an agent
 // will read whatever is in it as instruction-shaped text; only these three fields cross.
+// A game for a model to read: name, id and year only, the name capped and stripped of
+// control characters. Game titles come from third-party databases.
+function gameLine(name, id, date, extra) {
+  const clean = String(name ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120);
+  const year = /^(\d{4})/.exec(String(date || ''))?.[1] || 'year unknown';
+  return `- ${clean} (${String(id ?? '').slice(0, 64)}, ${year}${extra ? `, ${extra}` : ''})`;
+}
+const MAX_LISTED = 10;
+
 function describeProblem(status, body) {
   if (body && typeof body === 'object' && typeof body.code === 'string') {
     const parts = [`${body.title || 'Request failed'} (${body.code})`];
     if (typeof body.detail === 'string' && body.detail) parts.push(body.detail);
-    return parts.join(': ');
+    let text = parts.join(': ');
+    // The two 409 extensions the add_game description PROMISES, re-shaped field by field.
+    // Everything else in the body still stays out (see the test that pins that). Before
+    // UP-19 the candidates were dropped here, so "the conflict lists the candidates" was
+    // true of the API and false of this tool.
+    if (Array.isArray(body.candidates) && body.candidates.length) {
+      text += '\nCandidates (ask the user which one, then add it by gameId):\n'
+        + body.candidates.slice(0, MAX_LISTED).map((g) => gameLine(g?.name, g?.id, g?.releaseDate)).join('\n');
+    }
+    if (Array.isArray(body.possibleDuplicates) && body.possibleDuplicates.length) {
+      text += '\nAlready in the library under another id (ask the user; to add anyway, call again with onPossibleDuplicate "warn"):\n'
+        + body.possibleDuplicates.slice(0, MAX_LISTED)
+          .map((g) => gameLine(g?.name, g?.gameId, g?.releaseDate, g?.match === 'same' ? 'same year' : 'year unknown on one side')).join('\n');
+    }
+    return text;
   }
   return `Request failed with HTTP ${status}`;
 }

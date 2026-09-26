@@ -2243,12 +2243,16 @@ v2Router.post('/library/games', requireLibraryScope, libraryWriteLimit, (req, re
     // `status` is passed through UNDEFAULTED. The default — and the rule that omitting
     // it must not demote a game already in the library — belongs to the service; a
     // `?? 'wishlist'` here would silently override the stored status on every re-add.
-    .then((game) => libraryService.addResolvedGame(req.user.id, game, body.status)
+    // The duplicate POLICY is passed through, like `status`: the rule, its default and
+    // its validation are the service's (UP-19).
+    .then((game) => libraryService.addResolvedGame(req.user.id, game, body.status, undefined,
+      { onPossibleDuplicate: body.onPossibleDuplicate })
       .then((result) => {
         // 201 vs 200 is the ONLY signal that a retried call did not create a second
         // entry. Idempotent by gameId is what makes an agent's retry safe; saying so
         // is what stops it reporting the game as newly added twice.
-        res.status(result.created ? 201 : 200).json(v2.libraryGame(result.game));
+        res.status(result.created ? 201 : 200)
+          .json(v2.libraryGameAdded(result.game, result.possibleDuplicates));
 
         // AFTER the response, chained, terminally caught — the same three properties
         // the v1 adapter needs and for the same reasons (see POST

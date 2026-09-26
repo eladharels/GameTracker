@@ -1243,6 +1243,7 @@ console.log('library.addResolvedGame (an omitted status must not DEMOTE a stored
       deps: {
         findGame: async () => prior,
         upsertGame: async (userId, fields) => { written.push(fields); return { created: !prior, events: [] }; },
+        listMatchRows: async () => [],
       },
     };
   };
@@ -1274,7 +1275,87 @@ console.log('library.addResolvedGame (an omitted status must not DEMOTE a stored
   });
 }
 
-console.log('v2 problem extensions (the ONLY two members allowed past the mapper):');
+console.log('library duplicate detection (UP-19: one rule, two copies held equal):');
+{
+  const lib = require('../services/library');
+  const vectors = require('./library-match-vectors');
+  checkAsync('the SERVICE and the SPA give the same answer on every shared vector', async () => {
+    const { libraryMatch: spaMatch } = await import('../frontend/src/libraryMatch.js');
+    assert.ok(vectors.length >= 10, 'the shared vectors went missing');
+    for (const v of vectors) {
+      assert.strictEqual(lib.libraryMatch(v.rows, v.game), v.want, `service: ${v.name}`);
+      assert.strictEqual(spaMatch(v.rows, v.game), v.want, `SPA: ${v.name}`);
+    }
+  });
+  check('findPossibleDuplicates never reports the SAME id (that is the idempotent re-add)', () => {
+    const rows = [{ game_id: 'igdb_1', game_name: 'Hades', release_date: '2020-09-17' },
+      { game_id: 'rawg_9', game_name: 'Hades', release_date: null }];
+    const d = lib.findPossibleDuplicates(rows, { id: 'igdb_1', name: 'Hades', releaseDate: '2020-09-17' });
+    assert.deepStrictEqual(d, [{ gameId: 'rawg_9', name: 'Hades', releaseDate: null, match: 'possible' }]);
+  });
+  const halo = { id: 'rawg_7', name: 'Halo', releaseDate: '2001-11-15', coverUrl: null, steamAppId: null };
+  const libRows = [{ game_id: 'igdb_1', game_name: 'Halo', release_date: '2001-11-15' }];
+  const depsFor = (prior, rows) => {
+    const written = [];
+    return { written, deps: {
+      findGame: async () => prior,
+      upsertGame: async (u, f) => { written.push(f); return { created: !prior, events: [] }; },
+      listMatchRows: async () => rows,
+    } };
+  };
+  checkAsync('warn (the default) stores the game AND returns the possible duplicates', async () => {
+    const { written, deps } = depsFor(null, libRows);
+    const out = await lib.addResolvedGame(1, halo, undefined, deps);
+    assert.strictEqual(written.length, 1, 'warn must still store the game');
+    assert.deepStrictEqual(out.possibleDuplicates.map((d) => [d.gameId, d.match]), [['igdb_1', 'same']]);
+  });
+  checkAsync('reject refuses with CONFLICT carrying the duplicates, BEFORE anything is written', async () => {
+    const { written, deps } = depsFor(null, libRows);
+    await assert.rejects(lib.addResolvedGame(1, halo, undefined, deps, { onPossibleDuplicate: 'reject' }),
+      (e) => e.code === 'conflict' && Array.isArray(e.details?.possibleDuplicates)
+        && e.details.possibleDuplicates[0].gameId === 'igdb_1');
+    assert.strictEqual(written.length, 0, 'reject wrote the game anyway -- the caller would have to undo it');
+  });
+  checkAsync('reject still adds a game with NO possible duplicate', async () => {
+    const { written, deps } = depsFor(null, [{ game_id: 'igdb_2', game_name: 'Halo', release_date: '2021-01-01' }]);
+    const out = await lib.addResolvedGame(1, halo, undefined, deps, { onPossibleDuplicate: 'reject' });
+    assert.strictEqual(written.length, 1);
+    assert.deepStrictEqual(out.possibleDuplicates, []);
+  });
+  checkAsync('re-adding a game ALREADY in the library by id is never checked or refused', async () => {
+    const { written, deps } = depsFor({ status: 'playing', game_id: 'rawg_7' }, libRows);
+    const out = await lib.addResolvedGame(1, halo, undefined, deps, { onPossibleDuplicate: 'reject' });
+    assert.strictEqual(written.length, 1);
+    assert.deepStrictEqual(out.possibleDuplicates, []);
+  });
+  checkAsync('an unknown policy is a VALIDATION error, never silently "warn"', async () => {
+    const { written, deps } = depsFor(null, libRows);
+    await assert.rejects(lib.addResolvedGame(1, halo, undefined, deps, { onPossibleDuplicate: 'maybe' }),
+      (e) => e.code === 'validation');
+    assert.strictEqual(written.length, 0);
+  });
+  check('listMatchRows reads three columns, owner-scoped (the SQL is the property)', () => {
+    const dbMod = require('../db');
+    const real = dbMod.promises.all;
+    let seen;
+    dbMod.promises.all = async (sql, params) => { seen = { sql, params }; return []; };
+    try { lib.listMatchRows(42); } finally { dbMod.promises.all = real; }
+    assert.match(seen.sql, /^SELECT game_id, game_name, release_date FROM user_games WHERE user_id = \?$/);
+    assert.deepStrictEqual(seen.params, [42]);
+  });
+  check('v2: possibleDuplicates is RE-SHAPED on the problem body and on the add response', () => {
+    const dup = { gameId: 'igdb_1', name: 'Halo', releaseDate: '2001-11-15', match: 'same', user_id: 9, secret: 'x' };
+    const { status, body } = v2map.toProblem({ code: 'conflict', message: 'dup', details: { possibleDuplicates: [dup] } });
+    assert.strictEqual(status, 409);
+    assert.deepStrictEqual(Object.keys(body.possibleDuplicates[0]).sort(), ['gameId', 'match', 'name', 'releaseDate']);
+    const row = { game_id: 'rawg_7', game_name: 'Halo', status: 'wishlist' };
+    assert.ok(!('possibleDuplicates' in v2map.libraryGameAdded(row, [])), 'an empty hint changed the common response');
+    assert.deepStrictEqual(Object.keys(v2map.libraryGameAdded(row, [dup]).possibleDuplicates[0]).sort(),
+      ['gameId', 'match', 'name', 'releaseDate']);
+  });
+}
+
+console.log('v2 problem extensions (the ONLY three members allowed past the mapper):');
 check('candidates are RE-SHAPED, never spread from err.details', () => {
   const { body } = v2map.toProblem({
     code: 'conflict',

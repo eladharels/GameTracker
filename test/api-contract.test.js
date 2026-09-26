@@ -1236,6 +1236,36 @@ checkAsync('v2: a job is readable with the scope that STARTED it, and no other',
   assert.strictEqual(poll('instance', ['library'], false, 8).statusCode, 404, "another account's job answered other than 404");
 });
 
+checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes OUT (UP-19)', async () => {
+  // The adapter owns no rule, but it must carry both: a dropped `onPossibleDuplicate`
+  // silently turns an agent's "ask first" into "add anyway", and a dropped hint hides
+  // the duplicate it exists to report.
+  const catalogService = require('../services/catalog');
+  const libraryService = require('../services/library');
+  const realResolve = catalogService.resolveGame;
+  const realAdd = libraryService.addResolvedGame;
+  let seenOptions;
+  catalogService.resolveGame = async () => ({ id: 'rawg_7', name: 'Halo', releaseDate: '2001-11-15' });
+  libraryService.addResolvedGame = async (userId, game, status, deps, options) => {
+    seenOptions = options;
+    return { created: true, events: [], game: { game_id: 'rawg_7', game_name: 'Halo', status: 'wishlist' },
+      possibleDuplicates: [{ gameId: 'igdb_1', name: 'Halo', releaseDate: '2001-11-15', match: 'same' }] };
+  };
+  const handler = routeChain(v2Stack(), 'post', '/library/games').stack.slice(-1)[0].handle;
+  const res = v2Res();
+  try {
+    handler({ body: { name: 'Halo', onPossibleDuplicate: 'reject' }, user: { id: 7, username: 'u' }, auth: { scopes: ['library'] } }, res);
+    for (let i = 0; i < 100 && !res.body; i++) await new Promise((r) => setTimeout(r, 5));
+  } finally {
+    catalogService.resolveGame = realResolve;
+    libraryService.addResolvedGame = realAdd;
+  }
+  assert.deepStrictEqual(seenOptions, { onPossibleDuplicate: 'reject' }, 'the policy did not reach the service');
+  assert.strictEqual(res.statusCode, 201);
+  assert.deepStrictEqual(res.body.possibleDuplicates,
+    [{ gameId: 'igdb_1', name: 'Halo', releaseDate: '2001-11-15', match: 'same' }], 'the hint did not reach the caller');
+});
+
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.
 (async () => {
