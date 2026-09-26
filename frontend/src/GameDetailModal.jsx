@@ -44,7 +44,7 @@ const KICKER = {
   unreleased: 'Unreleased',
 }
 
-export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, username }) {
+export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, username, fallbackFocusRef }) {
   // This game's status history. Fetched per-open rather than carried in the library
   // response: the timeline is unbounded per game and only ever one game is on screen.
   //
@@ -91,7 +91,17 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
     if (!isOpen) return
     const opener = document.activeElement
     closeRef.current?.focus()
-    return () => { if (opener && typeof opener.focus === 'function' && document.contains(opener)) opener.focus() }
+    // Read at CLOSE time on purpose: the list is re-keyed on filter/page, so the node that
+    // existed when the dialog opened may have been replaced by the one to focus now.
+    const fallbackTarget = () => fallbackFocusRef && fallbackFocusRef.current
+    return () => {
+      // The opener may be GONE: Remove deletes the card, and a status change under a filter
+      // unmounts it. Focus then goes to the list the card was in, not to <body>.
+      if (opener && typeof opener.focus === 'function' && opener !== document.body && document.contains(opener)) opener.focus()
+      else fallbackTarget()?.focus()
+    }
+    // fallbackFocusRef is a ref object (stable); only isOpen should re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
 
   // Close on Escape + lock background scroll while open.
@@ -114,7 +124,7 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
 
   return (
     <div className="gdm-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="gdm-modal" role="dialog" aria-modal="true" aria-label={game.game_name || game.name} onKeyDown={handleModalFocusTrap}>
+      <div className="gdm-modal" role="dialog" aria-modal="true" aria-labelledby="gdm-title" onKeyDown={handleModalFocusTrap}>
         {cover && <img className="gdm-bg" src={cover} alt="" aria-hidden />}
         <div className="gdm-scrim" />
         <button ref={closeRef} className="gdm-close" onClick={onClose} aria-label="Close"><FaTimes /></button>
@@ -128,7 +138,7 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
 
           <div className="gdm-info">
             <div className="gdm-kicker">{KICKER[status] || 'In your library'}</div>
-            <h1 className="gdm-title">{game.game_name || game.name}</h1>
+            <h1 id="gdm-title" className="gdm-title">{game.game_name || game.name}</h1>
 
             <div className="gdm-meta">
               <div><span className="meta-label">Released</span><span>{date}</span></div>

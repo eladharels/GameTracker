@@ -506,14 +506,23 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
     const chips = (app.match(/<button type="button" className="stats-chip /g) || []).length;
     const pressed = (app.match(/aria-pressed=\{filter === '/g) || []).length;
     assert.ok(chips === 6 && pressed >= 6, `stats chips: ${chips} buttons, ${pressed} with aria-pressed (want 6/6)`);
-    assert.ok(/tabIndex=\{0\}\s*\n\s*aria-label=\{filter === 'backlog'/.test(app),
-      'library cards are no longer focusable outside the backlog');
+    // Details open from a real TITLE BUTTON on every library and search card (UI/UX review:
+    // an aria-label on a role-less card div is invalid ARIA and hid the card's contents).
+    assert.ok((app.match(/className="game-title-btn"/g) || []).length >= 2,
+      'library and search cards no longer open their details from a title button');
+    assert.ok(/role="group"\s*\n\s*aria-labelledby=\{`lib-title-/.test(app), 'library cards are no longer labelled groups');
+    assert.ok(!/aria-label=\{filter === 'backlog'/.test(app), 'a card div carries an aria-label again');
+    for (const name of ['Status for ', 'Refresh metadata for ', 'Remove ']) {
+      assert.ok(app.includes('aria-label={`' + name + '${game.game_name}'), `a card control lost its name: "${name}…"`);
+    }
   });
   check('the game detail dialog traps focus and returns it to the opener (FE-7)', () => {
     const modal = fs.readFileSync(path.join(ROOT, 'frontend/src/GameDetailModal.jsx'), 'utf8');
     assert.ok(/onKeyDown=\{handleModalFocusTrap\}/.test(modal), 'GameDetailModal no longer traps Tab');
     assert.ok(/closeRef\.current\?\.focus\(\)/.test(modal), 'GameDetailModal no longer moves focus into itself on open');
     assert.ok(/opener\.focus\(\)/.test(modal), 'GameDetailModal no longer returns focus to its opener');
+    assert.ok(/fallbackTarget\(\)\?\.focus\(\)/.test(modal), 'no focus fallback when the opener card is gone');
+    assert.strictEqual((app.match(/fallbackFocusRef=\{/g) || []).length, 2, 'a GameDetailModal is rendered without a focus fallback');
   });
   check('a failed status change rolls back that game only (FE-5)', () => {
     const app = src['frontend/src/App.jsx'];

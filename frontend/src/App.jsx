@@ -802,6 +802,16 @@ function SearchPage({ user }) {
   // Which search is current (FE-2). A slow answer to an EARLIER query used to replace the
   // results of the one on screen; every response now checks it is still the latest.
   const searchSeq = useRef(0)
+  // Where focus goes when the detail dialog closes and its opener is gone (FE-7).
+  const resultsListRef = useRef(null)
+  const openResult = (game, unreleased) => setOpenGame({
+    ...game,
+    game_id: game.id,
+    game_name: game.name,
+    cover_url: game.coverUrl,
+    release_date: game.releaseDate,
+    status: unreleased ? 'unreleased' : 'wishlist',
+  })
 
   // Fetch price for a game by Steam App ID. `seq` ties it to the search that asked.
   const fetchGamePrice = async (gameId, steamAppId, seq) => {
@@ -926,7 +936,8 @@ function SearchPage({ user }) {
       {searchResults.length > 0 && (
         <>
           <h2>Search Results</h2>
-          <div className={`games-list ${viewMode === 'list' ? 'list-view' : 'grid-view'}`}>
+          <div ref={resultsListRef} tabIndex={-1} aria-label="Search results"
+            className={`games-list ${viewMode === 'list' ? 'list-view' : 'grid-view'}`}>
             {searchResults.map(game => {
               // Determine if unreleased (dateless or future release date)
               const unreleased = isGameUnreleased(game);
@@ -945,14 +956,7 @@ function SearchPage({ user }) {
                   style={{ animationDelay: `${searchResults.indexOf(game) * 0.04}s` }}
                   onClick={(e) => {
                     if (e.target.closest('select,button,a')) return;
-                    setOpenGame({
-                      ...game,
-                      game_id: game.id,
-                      game_name: game.name,
-                      cover_url: game.coverUrl,
-                      release_date: game.releaseDate,
-                      status: unreleased ? 'unreleased' : 'wishlist',
-                    });
+                    openResult(game, unreleased);
                   }}
                 >
                   <div className="game-cover-container">
@@ -966,7 +970,12 @@ function SearchPage({ user }) {
                     )}
                   </div>
                   <div className="game-info">
-                    <div className="game-title">{game.name}</div>
+                    <div className="game-title">
+                      <button type="button" className="game-title-btn"
+                        onClick={(e) => { e.stopPropagation(); openResult(game, unreleased) }}>
+                        {game.name}
+                      </button>
+                    </div>
                     <div className="game-release-date">
                       Release: {game.releaseDate ? game.releaseDate : 'Unreleased'}
                       {unreleased && <span className="unreleased-pill">Unreleased</span>}
@@ -990,6 +999,7 @@ function SearchPage({ user }) {
         onClose={() => setOpenGame(null)}
         onSetStatus={(g, status) => { addToLibrary(g, false, status); setOpenGame(null); }}
         onRemove={() => setOpenGame(null)}
+        fallbackFocusRef={resultsListRef}
       />
     </div>
   )
@@ -1207,6 +1217,9 @@ function LibraryPage({ user }) {
   // add one without changing any id, and the price would never load.
   const currentPriceKey = currentGames.map(g => `${g.game_id}:${g.steamAppId || ''}`).join('\u0001')
   const crackInFlight = useRef(new Set())
+  // Where focus goes when the detail dialog closes and the card that opened it is gone —
+  // removed, or filtered out by a status change made in the dialog (FE-7, UI/UX review).
+  const gamesListRef = useRef(null)
 
   // Fetch price for a game by Steam App ID
   const fetchGamePrice = async (gameId, steamAppId) => {
@@ -1471,28 +1484,28 @@ function LibraryPage({ user }) {
       </div>
       {userGames.length > 0 && (
         <div className="library-stats-bar">
-          <button type="button" className="stats-chip stats-chip--wishlist" onClick={() => setFilter('wishlist')} title="Wishlist"
+          <button type="button" className="stats-chip stats-chip--wishlist" onClick={() => { setFilter('wishlist'); setCurrentPage(1) }} title="Wishlist"
             aria-pressed={filter === 'wishlist'} aria-label={`Wishlist: ${statusCounts.wishlist} — show only these`}>
             <FaHeart aria-hidden="true" /> <span>{statusCounts.wishlist}</span>
           </button>
-          <button type="button" className="stats-chip stats-chip--playing" onClick={() => setFilter('playing')} title="Playing"
+          <button type="button" className="stats-chip stats-chip--playing" onClick={() => { setFilter('playing'); setCurrentPage(1) }} title="Playing"
             aria-pressed={filter === 'playing'} aria-label={`Playing: ${statusCounts.playing} — show only these`}>
             <FaPlay aria-hidden="true" /> <span>{statusCounts.playing}</span>
           </button>
-          <button type="button" className="stats-chip stats-chip--done" onClick={() => setFilter('done')} title="Done"
+          <button type="button" className="stats-chip stats-chip--done" onClick={() => { setFilter('done'); setCurrentPage(1) }} title="Done"
             aria-pressed={filter === 'done'} aria-label={`Done: ${statusCounts.done} — show only these`}>
             <FaCheck aria-hidden="true" /> <span>{statusCounts.done}</span>
           </button>
-          <button type="button" className="stats-chip stats-chip--backlog" onClick={() => setFilter('backlog')} title="Backlog"
+          <button type="button" className="stats-chip stats-chip--backlog" onClick={() => { setFilter('backlog'); setCurrentPage(1) }} title="Backlog"
             aria-pressed={filter === 'backlog'} aria-label={`Backlog: ${statusCounts.backlog} — show only these`}>
             <FaList aria-hidden="true" /> <span>{statusCounts.backlog}</span>
           </button>
-          <button type="button" className="stats-chip stats-chip--unreleased" onClick={() => setFilter('unreleased')} title="Unreleased"
+          <button type="button" className="stats-chip stats-chip--unreleased" onClick={() => { setFilter('unreleased'); setCurrentPage(1) }} title="Unreleased"
             aria-pressed={filter === 'unreleased'} aria-label={`Unreleased: ${statusCounts.unreleased} — show only these`}>
             <FaLock aria-hidden="true" /> <span>{statusCounts.unreleased}</span>
           </button>
-          <button type="button" className="stats-chip stats-chip--total" onClick={() => setFilter('all')} title="All games"
-            aria-pressed={filter === 'all'} aria-label={`All games: ${userGames.length} — show everything`}>
+          <button type="button" className="stats-chip stats-chip--total" onClick={() => { setFilter('all'); setCurrentPage(1) }} title="All games"
+            aria-pressed={filter === 'all'} aria-label={`${userGames.length} total — show all games`}>
             <FaGamepad aria-hidden="true" /> <span>{userGames.length} total</span>
           </button>
         </div>
@@ -1520,6 +1533,7 @@ function LibraryPage({ user }) {
           <button
             key={f.value}
             className={`filter-btn${filter === f.value ? ' active' : ''}`}
+            aria-pressed={filter === f.value}
             onClick={() => { setFilter(f.value); setCurrentPage(1); }}
           >
             {f.label}
@@ -1628,13 +1642,19 @@ function LibraryPage({ user }) {
       ) : (
         <>
           {filter === 'backlog' && (
+            <span id="backlog-reorder-hint" className="visually-hidden">
+              Press Enter or Space to pick this game up, then on another game to move it there. Escape cancels.
+            </span>
+          )}
+          {filter === 'backlog' && (
             <div aria-live="polite" aria-atomic="true" className="visually-hidden">
               {keyboardDragId
                 ? `Selected game for reordering. Press Enter on another game to move it there, or Escape to cancel.`
                 : ''}
             </div>
           )}
-          <div key={`${filter}-${currentPage}`} className={`games-list ${viewMode === 'list' ? 'list-view' : ''}${isDraggingAny ? ' backlog-drag-active' : ''}`}>
+          <div key={`${filter}-${currentPage}`} ref={gamesListRef} tabIndex={-1} aria-label="Your games"
+            className={`games-list ${viewMode === 'list' ? 'list-view' : ''}${isDraggingAny ? ' backlog-drag-active' : ''}`}>
             {currentGames.map((game, index) => {
               const isUnreleased = isGameUnreleased(game);
               const effectiveCrackStatus = game.crackStatus || crackStatusMap[game.game_id] || 'unknown';
@@ -1647,23 +1667,23 @@ function LibraryPage({ user }) {
                   className={`game-card status-${normalizeStatus(game.status)} ${viewMode === 'list' ? 'list-item' : ''}${isDragging ? ' card-dragging' : ''}${isDragOver ? ' card-drag-over' : ''}${isKbSelected ? ' card-keyboard-selected' : ''}`}
                   style={{ animationDelay: `${index * 0.04}s` }}
                   draggable={filter === 'backlog'}
-                  // Focusable in EVERY view (FE-6): cards opened on click only, and took focus
-                  // only in the backlog. Enter/Space opens the details outside the backlog;
-                  // inside it they pick up / drop for keyboard reordering, as before.
-                  tabIndex={0}
-                  aria-label={filter === 'backlog'
-                    ? `${game.game_name} — Enter to pick up or drop for reordering`
-                    : `${game.game_name} — press Enter for details`}
+                  // A labelled GROUP (FE-6, UI/UX review): an aria-label on a role-less div is
+                  // invalid ARIA and, where honoured, hid the card's date, price and status.
+                  // Details open from the TITLE button below, in every view. The card itself
+                  // takes focus only in the backlog, where Enter/Space pick up and drop.
+                  role="group"
+                  aria-labelledby={`lib-title-${index}`}
+                  aria-describedby={filter === 'backlog' ? 'backlog-reorder-hint' : undefined}
+                  tabIndex={filter === 'backlog' ? 0 : undefined}
                   onClick={(e) => { if (e.target.closest('select,button,a,.status-select-wrapper')) return; setOpenGame(game) }}
                   onDragStart={() => { setDraggedGameId(game.game_id); setIsDraggingAny(true) }}
                   onDragOver={(e) => { if (filter === 'backlog') { e.preventDefault(); setDragOverGameId(game.game_id); } }}
                   onDrop={() => handleBacklogDrop(game.game_id)}
                   onDragEnd={() => { setDraggedGameId(null); setDragOverGameId(null); setIsDraggingAny(false) }}
-                  onKeyDown={filter !== 'backlog' ? (e) => {
-                    // Only when the CARD has focus — not a status select or button inside it.
+                  onKeyDown={filter !== 'backlog' ? undefined : (e) => {
+                    // Same guard as the other branch: Space on the status select inside a
+                    // backlog card must not also pick the card up.
                     if (e.target !== e.currentTarget) return
-                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenGame(game) }
-                  } : (e) => {
                     if (e.key === 'Escape') { setKeyboardDragId(null); return }
                     if (e.key === ' ' || e.key === 'Enter') {
                       e.preventDefault()
@@ -1707,7 +1727,16 @@ function LibraryPage({ user }) {
                   </div>
                   <div className="game-info">
                     <div>
-                      <div className="game-title">{game.game_name}</div>
+                      <div className="game-title">
+                        {/* THE way to the details from the keyboard, in every view — including
+                            the backlog, where Enter on the card reorders instead. A real
+                            button also activates Space on key-UP natively, so the dialog can
+                            no longer be opened and immediately closed by one Space press. */}
+                        <button type="button" id={`lib-title-${index}`} className="game-title-btn"
+                          onClick={(e) => { e.stopPropagation(); setOpenGame(game) }}>
+                          {game.game_name}
+                        </button>
+                      </div>
                       <div className="game-release-date">Release: {game.release_date ? game.release_date : 'Unreleased'}</div>
                       {/* HOW LONG THIS GAME TOOK, on the card. The event log is the only
                           place that knows; the library row carries a status but never a
@@ -1776,6 +1805,7 @@ function LibraryPage({ user }) {
                           <span className={`status-dot status-dot--${normalizeStatus(game.status)}`} aria-hidden="true" />
                           <select
                             className="status-select"
+                            aria-label={`Status for ${game.game_name}`}
                             value={normalizeStatus(game.status)}
                             onChange={(e) => {
                               e.stopPropagation();
@@ -1796,7 +1826,7 @@ function LibraryPage({ user }) {
                             handleMoveToTopOfBacklog(game.game_id);
                           }}
                           title="Move to top of backlog"
-                          aria-label="Move to top of backlog"
+                          aria-label={`Move ${game.game_name} to the top of the backlog`}
                         >
                           <FaArrowUp />
                         </button>
@@ -1809,6 +1839,7 @@ function LibraryPage({ user }) {
                         }}
                         disabled={!!refreshingGameIds[game.game_id]}
                         title="Refresh metadata for this game"
+                        aria-label={`Refresh metadata for ${game.game_name}`}
                       >
                         <FaSync style={{ animation: refreshingGameIds[game.game_id] ? 'spin 1s linear infinite' : 'none' }} />
                       </button>
@@ -1819,6 +1850,7 @@ function LibraryPage({ user }) {
                           removeGame(game.game_id);
                         }}
                         title="Remove game (undo available)"
+                        aria-label={`Remove ${game.game_name}`}
                       >
                         <FaTrash />
                       </button>
@@ -1860,6 +1892,7 @@ function LibraryPage({ user }) {
         onSetStatus={setGameStatus}
         onRemove={(g) => removeGame(g.game_id)}
         username={user?.username}
+        fallbackFocusRef={gamesListRef}
       />
     </div>
   )

@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 15 | 12 |
-| FE — Frontend | 18 | 12 |
+| FE — Frontend | 20 | 12 |
 | UP — Tidying & upkeep | 21 | 0 |
-| **Total** | **76** | **46** |
+| **Total** | **78** | **46** |
 
 ---
 
@@ -823,18 +823,26 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - The stats chips are `<div onClick>` with no role (`:1353-1368`).
 - **Fix:** use a `<button>` (or `role="button"` + `tabIndex=0` + Enter/Space handling).
 - **Done:** the six chips are `<button>`s with `aria-pressed` and a label that says what they
-  do; the pressed chip now has a visible state (it had none). Cards take focus in every view:
-  Enter/Space opens the details, except in the backlog, where they keep picking up and dropping
-  for keyboard reordering (so there the details open by click only — a known limit). Both show
-  a `:focus-visible` ring. Pinned in `test/runtime.test.js`.
+  do; the pressed chip now has a visible state (it had none), and choosing one returns to page 1.
+- **Revised after UI/UX review:** the first version put an `aria-label` on the focusable card
+  `<div>` — invalid ARIA with no role, and where honoured it hid the date, price and status.
+  Now every library and search card has a real title BUTTON that opens the details (in every
+  view, the backlog included), and the library card is a `role="group"` labelled by it. The
+  card takes focus only in the backlog, for reordering, with the instructions in
+  `aria-describedby`. The status select and the icon buttons are named per game ("Status for
+  X", "Remove X"). The reorder-held card has a dashed ring, distinct from focus. The filter
+  buttons also expose `aria-pressed`. Pinned in `test/runtime.test.js`.
 
 ### [x] FE-7 GameDetailModal: no initial focus, no focus trap, no focus return
 - **Where:** `frontend/src/GameDetailModal.jsx:84-103`.
 - **Fix:** reuse the `handleModalFocusTrap` pattern (`App.jsx:343`). Focus the dialog when it
   opens and restore focus to the opener when it closes.
-- **Done:** the trap moved to `frontend/src/focusTrap.js`, shared by every modal and tested in
-  `helpers.test.js`. The dialog focuses its close button on open and returns focus to the
+- **Done:** the trap moved to `frontend/src/focusTrap.js`, shared by App.jsx's dialogs and
+  GameDetailModal and tested in `helpers.test.js` (SharedLibrary's dialogs: FE-19). The dialog focuses its close button on open and returns focus to the
   opener (the card) on close, keyed on open/closed, so the library's refetches do not steal it.
+  When the opener is gone (Remove, or a status change that filters the card out), focus goes
+  to the list it was in (`fallbackFocusRef`), not `<body>` (UI/UX review). Named by its heading
+  (`aria-labelledby`).
 
 ### [x] FE-8 Duplicated Bearer headers and 403-logout logic
 - **Where:** `App.jsx:366`, `:2001`, `:2188`, `:2434`, and `SharedLibrary.jsx`.
@@ -913,6 +921,25 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   at boot, sign-out and the expiry timer all call it. `test/runtime.test.js` now pins ONE
   `removeItem('token')`, in session.js, and a unit test pins that a manual sign-out leaves no
   "session ended" notice.
+
+### [ ] FE-19 One `useDialogFocus()` hook for every dialog (Architect, FE-7 review)
+- **Where:** the user-management dialogs set focus with `setTimeout(…, 50)` and never return it;
+  the delete-confirm `alertdialog` gets no initial focus at all (an alertdialog needs one);
+  SharedLibrary.jsx's two `aria-modal` dialogs have no trap, no initial focus and no return.
+- **Fix:** a `frontend/src/useDialogFocus.js` hook, `(isOpen, initialRef) → { onKeyDown }`,
+  owning focus-on-open, focus-return and the trap (focusTrap.js stays React-free for its
+  `import()` test). It can put `tabIndex=-1` on the container, which closes a gap in the
+  trap: a click on a non-focusable area moves focus out of the dialog. Migrate
+  GameDetailModal to it. **Until then, no dialog copies GameDetailModal's effect by hand.**
+- **Also (UI/UX):** make the page behind an open dialog `inert`; the trap only wraps at the
+  first and last focusable elements.
+
+### [ ] FE-20 Accent presets collide with the fixed status colours (UI/UX, pre-existing)
+- **Where:** `App.css` `.stats-chip--*` and the status colours. Under Violet, Wishlist and Done
+  are both purple; under Emerald, Wishlist and Playing are both green; under Amber, Wishlist is
+  close to Backlog's orange. The chips stay distinguishable only by icon.
+- **Fix:** give Wishlist a colour independent of `--color-accent`, or pick the status palette
+  so no preset collides.
 
 ---
 
@@ -1040,9 +1067,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Optional, same area:** a batch crack-status read, if the library page size grows.
 
 ### [ ] UP-20 A DOM test harness for the SPA (Architect; pair with FE-10)
-- **Why:** component fixes (FE-1, FE-2, FE-5, the session notice) can only be pinned by
-  source text in `test/runtime.test.js`, a stopgap that an equivalent rewrite can fail and
-  a differently-shaped regression can pass. Eleven FE items remain.
+- **Why:** component fixes (FE-1, FE-2, FE-5, FE-6, FE-7, the session notice) can only be
+  pinned by source text in `test/runtime.test.js`, a stopgap that an equivalent rewrite can
+  fail and a differently-shaped regression can pass. **Do this before the next frontend batch**
+  (Architect): it is now the cheapest way to retire those pins.
 - **Fix:** Vitest, happy-dom or jsdom, and `@testing-library/react` as frontend
   devDependencies (never in the nginx image), a CI step in `frontend-quality`, then turn the
   shape pins into behaviour tests. Easiest once FE-10 splits `App.jsx` into pages.

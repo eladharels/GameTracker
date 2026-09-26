@@ -186,8 +186,9 @@ GameTracker/
 │   │                               #   what a stub CANNOT see — ON CONFLICT semantics,
 │   │                               #   CHECK constraints, what a query RETURNS — is why
 │   │                               #   test/integration/ exists
-│   │                               #   It also pins the DOM-free frontend helpers
-│   │                               #   (session.js, safeUrl.js, libraryMatch.js,
+│   │                               #   It also pins the frontend helpers with NO DOM AT MODULE
+│   │                               #   SCOPE — any DOM or storage they read at call time is
+│   │                               #   stubbed per test (session.js, safeUrl.js, libraryMatch.js,
 │   │                               #   loginErrors.js, focusTrap.js) through import(); a module
 │   │                               #   loaded that way must not touch window, document or
 │   │                               #   storage at MODULE scope, or this suite breaks.
@@ -330,8 +331,8 @@ GameTracker/
 │   │   │                           #   stricter than catalog.js's merge rules — see header
 │   │   ├── loginErrors.js          # loginErrorMessage — a 429 lockout or an outage must
 │   │   │                           #   never read as "wrong password" (FE-4)
-│   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap every modal
-│   │   │                           #   uses (FE-7); it lived in App.jsx, so GameDetailModal had none
+│   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap (App.jsx's dialogs
+│   │   │                           #   and GameDetailModal, FE-7); SharedLibrary's are FE-19
 │   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2
 │   │   │                           #   contract from GET /api/openapi/v2, so the page and CI
 │   │   │                           #   validate the SAME document. VENDORED, never CDN-loaded:

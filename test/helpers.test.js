@@ -3493,8 +3493,9 @@ check('the cursor pins the query it was issued for', () => {
 });
 
 // --- frontend pure helpers (ESM, loaded with import()) --------------------------
-// Pure functions, no DOM: the SPA has no test runner of its own, and these two sit on
-// security boundaries (SEC-7, SEC-8), so they are pinned here with the backend's.
+// No DOM at MODULE scope: the SPA has no test runner of its own, so its helpers are
+// pinned here with the backend's. Any DOM or storage one reads when CALLED (focusTrap's
+// `document`, session.js's storage) is stubbed per test and restored in `finally`.
 
 const fakeJwt = (payload) => ['x', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'sig'].join('.');
 

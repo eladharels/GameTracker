@@ -1,8 +1,10 @@
 // Keep Tab inside a dialog: from the last focusable element wrap to the first, and back.
-// Attach as the dialog container's onKeyDown. Shared by every modal (ROADMAP FE-7) — it
-// lived inside App.jsx, which is why GameDetailModal, in its own file, had none.
+// Attach as the dialog container's onKeyDown. Shared by App.jsx's dialogs and
+// GameDetailModal (ROADMAP FE-7) — it lived inside App.jsx, which is why GameDetailModal,
+// in its own file, had none. SharedLibrary's two dialogs do not use it yet (FE-19).
 //
-// Pure DOM-event logic, nothing at module scope.
+// Reads `document` when it RUNS, never at module scope — so helpers.test.js can import it
+// in plain Node and stub `document` per test.
 const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
 
 export function handleModalFocusTrap(e) {
