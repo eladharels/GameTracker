@@ -685,6 +685,26 @@ checkAsync('the 11th test notification in the window is 429, keyed per user', as
   assert.ok(call(91002).passed, "one user's budget throttled another user");
 });
 
+checkAsync('the 61st crack-status check in the window is 429 {error}, keyed per user (SEC-15)', async () => {
+  const { app } = require('../index.js');
+  const layer = (app.router || app._router).stack.find((l) => l.route
+    && l.route.path === '/api/user/:username/games/:gameId/crackrelease-status' && l.route.methods.post);
+  const limiter = layer.route.stack.find((s) => s.handle.name === 'crackCheckLimit').handle;
+  const call = (userId) => {
+    const res = recordingRes();
+    res.set = () => res;
+    let passed = false;
+    limiter({ user: { id: userId } }, res, () => { passed = true; });
+    return { res, passed };
+  };
+  for (let i = 0; i < 60; i++) assert.ok(call(92001).passed, `crack check ${i + 1} was throttled`);
+  const over = call(92001);
+  assert.strictEqual(over.passed, false, 'the 61st check was allowed');
+  assert.strictEqual(over.res.statusCode, 429);
+  assertKeys(over.res.body, ['error'], 'crack-status 429');
+  assert.ok(call(92002).passed, "one user's budget throttled another user");
+});
+
 console.log('POST /api/auth/login (the LDAP verification ladder):');
 
 checkAsync('an UNRECOGNISED verification result never issues a session', async () => {

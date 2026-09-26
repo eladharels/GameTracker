@@ -747,7 +747,7 @@ async function scrapeCrackRelease(gameName) {
 const STORABLE_CRACK_STATUS = Object.freeze({ cracked: 'cracked', uncracked: 'uncracked' });
 
 // Admin: check CrackRelease status for a specific game name (used only for testing in staging UI)
-app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_manage_users'), async (req, res) => {
+app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_manage_users'), crackCheckLimit, async (req, res) => {
   const { gameName } = req.body || {};
   if (!gameName || typeof gameName !== 'string' || !gameName.trim()) {
     return res.status(400).json({ error: 'Missing or invalid gameName' });
@@ -762,7 +762,7 @@ app.post('/api/admin/crackrelease-status', authRequired, requirePermission('can_
 });
 
 // Update a specific user's game with CrackRelease status and persist to DB
-app.post('/api/user/:username/games/:gameId/crackrelease-status', authRequired, ownershipRequired, async (req, res) => {
+app.post('/api/user/:username/games/:gameId/crackrelease-status', authRequired, ownershipRequired, crackCheckLimit, async (req, res) => {
   const { username, gameId } = req.params;
   const normalizedUsername = username ? username.toLowerCase() : '';
   if (!normalizedUsername || !gameId) {
@@ -1736,6 +1736,35 @@ function testNotificationLimit(req, res, next) {
     });
   }
   trackFailures(keys);   // every attempt counts: the outbound request is the cost
+  return next();
+}
+
+// --- CrackRelease check limiter (ROADMAP SEC-15) -----------------------------------
+//
+// Each check writes to user_games AND fetches a third-party site (crackrelease.com), so
+// an unbounded loop from a script or a PAT is both a database write loop and outbound
+// traffic this server originates. The SPA's in-flight dedupe (FE-1) is a courtesy in one
+// client, not a control. A library page can legitimately ask for up to 24 at once and a
+// user paging through asks for more, so the budget is generous for a person and far
+// below a loop. Every attempt counts: the outbound request is the cost.
+const CRACK_CHECK_KEYS = (userId) => [`crackcheck:${userId}`];
+const CRACK_CHECK_MAX = 60;
+const CRACK_CHECK_WINDOW_MS = 5 * 60 * 1000;
+
+function crackCheckLimit(req, res, next) {
+  const userId = req.user && req.user.id;
+  if (!userId) return next();   // authRequired runs first; see libraryWriteLimit
+  const keys = CRACK_CHECK_KEYS(userId);
+  const lockedFor = lockoutMinutes(keys, CRACK_CHECK_MAX, CRACK_CHECK_WINDOW_MS);
+  if (lockedFor > 0) {
+    console.warn(`[RateLimit] crack-status checks throttled for user ${userId}`);
+    res.set('Retry-After', String(lockedFor * 60));
+    return problem.send(res, {
+      code: SVC.RATE_LIMITED,
+      message: `Too many crack-status checks. Try again in ${lockedFor} minute${lockedFor === 1 ? '' : 's'}.`,
+    });
+  }
+  trackFailures(keys);
   return next();
 }
 

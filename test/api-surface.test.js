@@ -465,6 +465,15 @@ check('the test-notification route carries its per-user limiter', () => {
     `the test-notification route has no limiter. Its chain is: ${route.names.join(' -> ')}`);
 });
 
+// SEC-15: each CrackRelease check writes to the database AND fetches a third-party site.
+check('both crack-status routes carry the per-user limiter', () => {
+  for (const key of ['POST /api/user/:username/games/:gameId/crackrelease-status', 'POST /api/admin/crackrelease-status']) {
+    const route = liveRoutes().find((r) => r.key === key);
+    assert.ok(route, `${key} is not a live route — update this pin with the rename`);
+    assert.ok(route.names.includes('crackCheckLimit'), `${key} has no limiter. Its chain is: ${route.names.join(' -> ')}`);
+  }
+});
+
 const live = new Set(liveRoutes().map((r) => r.key));
   for (const key of specKeys.keys()) {
     assert.ok(live.has(key),

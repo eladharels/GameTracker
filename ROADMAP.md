@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 15 | 12 |
+| SEC — Security (medium/low) | 15 | 13 |
 | FE — Frontend | 20 | 12 |
 | UP — Tidying & upkeep | 21 | 0 |
-| **Total** | **78** | **46** |
+| **Total** | **78** | **47** |
 
 ---
 
@@ -702,12 +702,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Constraint (CISO):** `/api/v2` must never accept the cookie. v2 is PAT-only by design, and a
   session cookie there is exactly the scope-less JWT that design excludes.
 
-### [ ] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
+### [x] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
 - **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).
 - **Why:** each call writes to the database and fetches a third-party site. FE-1's
   in-flight dedupe is a courtesy in one client, not a control: a script or a PAT can loop.
 - **Fix:** a per-user budget, like `testNotificationLimit`, pinned in
   `test/api-surface.test.js`.
+- **Done:** `crackCheckLimit` — 60 checks per user per 5 minutes, every attempt counted, 429
+  `{error}` with `Retry-After` — on the per-game route AND the admin variant (same outbound
+  cost). Pinned on both chains in `test/api-surface.test.js`; the 61st call is a 429 in
+  `test/api-contract.test.js`. The SPA already treats a failed check as `unknown`.
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
@@ -1164,3 +1168,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-1..FE-5 | this batch | 2026-09-26 | Crack requests once per game; stale searches dropped; library match by id or name+year; login errors by cause; per-game rollback |
 | FE-6, FE-7 | this batch | 2026-09-26 | Chips are buttons, cards focusable everywhere; the detail dialog traps and returns focus |
 | FE-13, FE-15, FE-17 | this batch | 2026-09-26 | Admin-only token badge; dead 401 banner removed; one endSession() |
+| SEC-15 | this batch | 2026-09-26 | Per-user limit on both crack-status routes |

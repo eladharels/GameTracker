@@ -761,6 +761,10 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   a text-only check let `169.254.169.254.nip.io` and DNS rebinding through (ROADMAP SEC-1). The
   Diagnostics test button is limited to 10 per user per 5 minutes (`testNotificationLimit`,
   pinned in `test/api-surface.test.js`)
+- **CrackRelease checks** (`POST /api/user/:u/games/:id/crackrelease-status` and the admin
+  variant) are limited to 60 per user per 5 minutes (`crackCheckLimit`, ROADMAP SEC-15): each
+  one writes to `user_games` and fetches a third-party site, and the SPA's in-flight dedupe is
+  a courtesy, not a control. Same 429 `{error}` + `Retry-After` shape as the other limiters
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.
