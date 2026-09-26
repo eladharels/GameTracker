@@ -979,19 +979,32 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   scrolling panels.
 - **Done:**
   - **Success messages go to the global toast,** the app's usual feedback, which dismisses
-    itself: user created, deleted, updated, the LDAP sync result, and the rest (nine
-    calls). The solid, centred green blocks, in the dialog and on the page, and their
+    itself: user created, deleted, updated, the LDAP sync result (four calls). The solid, centred green blocks, in the dialog and on the page, and their
     `.success-msg` CSS are gone.
   - **The Add User dialog's errors** use the same translucent `gt-alert--danger` as the
     page banner, with `role="alert"`.
   - **The sticky page banner** sits at `top: 1rem` and is opaque (12% danger over
     `--surface-1`), so content scrolling under it no longer shows through its text.
   - **Found while checking:** Add User answered every failure "Failed to create user". It
-    now shows the server's own 4xx reason, such as "Username already exists", or the
+    now shows the server's own 4xx reason, such as "User already exists", or the
     permission text for a 403, and stays generic otherwise. The backend only exposes
     `expose: true` messages.
   - **Screenshots and measurements from the built app** cover the page banner (at
     `top: 16px`, opaque) and the dialog error ("Username already exists").
+  - **Review fixes (UI/UX Shoulds):**
+    - **Delete is disabled while it runs** (`aria-busy`, "Deleting…"). The dialog now
+      stays open across the delete, and a double-click sent a second DELETE, which 404'd
+      into "Failed to delete user" right after the success toast. Verified: a double-click
+      sends one request.
+    - **The password dialog stays open on failure and says why.** The error sits under the
+      field (`aria-describedby`, `aria-invalid`) and clears on edit. It used to close
+      regardless, with a generic page error. Verified: a policy rejection shows "Password
+      must be at least 8 characters." in the open dialog.
+    - **One rule for the message:** `userApiError()` is shared by create and edit. It gives
+      the server's exposed 4xx text, a fixed sentence for 403, and a generic message
+      otherwise.
+    - **The LDAP sync toast** stays up for 10 s: a sentence with two numbers must be read
+      before it goes.
   - **Left:** `.error-msg` is still used by the login page, search, library and
     SharedLibrary for single-line inline errors. That is a separate component (inline, not
     a page banner) and was not in this item's scope.
