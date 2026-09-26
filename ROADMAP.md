@@ -735,12 +735,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   (which parses the spec in the browser) and `dompurify`. Lint, the build and the component
   tests pass. **Remaining:** one moderate React Router advisory whose fix is v7, a breaking
   upgrade (FE-22).
-
-### [ ] FE-22 React Router 7 (moderate advisory; breaking upgrade)
-- **Why:** `npm audit --omit=dev` still reports `react-router 6.0.0–7.17.0` (moderate); the fix
-  is v7. The v7 future flags (`v7_startTransition`, `v7_relativeSplatPath`) already warn in
-  the component tests.
-- **Fix:** opt in to the future flags on v6 first, run the component tests, then upgrade.
+- **What that fix changed in production (CISO review):** `npm audit fix` moved more than the
+  advisories: `swagger-ui-react` 5.33.0, `immutable` **4 → 5** and `swagger-client`'s
+  `neotraverse` **0 → 1** (both major bumps), a new `@tanstack/react-virtual`, and
+  `redux-immutable` dropped. All of it is the API Reference page's lazy chunk. Checked in a
+  real browser (Playwright, built bundle under `vite preview`, the real spec routed in): all
+  35 operations render, the title reads `GameTracker API 2.0.0`, an operation expands, and there
+  are no page errors. **Still load `/api-docs` on GameTracker-stg** before promoting: that
+  check stubbed every other `/api` call.
+- **Found along the way:** the Vite dev proxy key `'/api'` also matched the SPA's own
+  `/api-docs`, so reloading that page under `npm run dev` or `vite preview` was proxied to the
+  backend. It is now `'^/api/'`, the same boundary as nginx's `location /api/`. This was never
+  a production defect.
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
@@ -983,6 +989,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `transform`. Then mind the cascade: `.game-card:hover` (0,2,0) beats
   `.card-keyboard-selected` (0,1,0).
 
+### [ ] FE-22 React Router 7 (moderate advisory; breaking upgrade)
+- **Why:** `npm audit --omit=dev` still reports `react-router 6.0.0–7.17.0` (moderate,
+  GHSA-wrjc-x8rr-h8h6: open redirect via a backslash in `<Link>`/`useNavigate`); the fix is v7.
+  Exposure: the one storage-driven `navigate()` goes through `safeReturnPath`, which already
+  refuses `/\` (`session.js` sanitises it both when storing and when reading back). Every other
+  `<Link>`/`<Navigate>`/`navigate()` target is a string literal, so no attacker-supplied path
+  reaches the router. GHSA-337j-9hxr-rhxg (same range) does not apply at all: it needs
+  server-side rendering, and this SPA has none. The v7 future flags (`v7_startTransition`, `v7_relativeSplatPath`) already warn in
+  the component tests.
+- **Fix:** opt in to the future flags on v6 first, run the component tests, then upgrade.
+
 ---
 
 ## UP — Tidying & upkeep
@@ -1116,7 +1133,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** Vitest, happy-dom or jsdom, and `@testing-library/react` as frontend
   devDependencies (never in the nginx image), a CI step in `frontend-quality`, then turn the
   shape pins into behaviour tests. Easiest once FE-10 splits `App.jsx` into pages.
-- **Done (the harness, and the first two conversions):** Vitest 2 + jsdom + Testing Library as
+- **Done (the harness, and the first two conversions):** Vitest + jsdom + Testing Library as
   frontend devDependencies, `cd frontend && npm test`, a CI step in `frontend-quality`.
   `GameDetailModal.test.jsx` covers FE-7 behaviourally (focus in, trap both ways, return to the
   opener, the list fallback when the opener is gone, Escape); `LoginPage.test.jsx` covers FE-4's
@@ -1126,8 +1143,29 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   fails exactly one test each.
 - **Still shape-pinned:** FE-1, FE-2, FE-5, FE-6 live inside `LibraryPage`/`SearchPage` in
   App.jsx; converting them is easiest as FE-10 extracts those pages.
-- **Known (dev-only):** `vitest@2` carries a moderate advisory (GHSA-82fw-gwwq-j7x9, mocker
-  path traversal); the fix is vitest 5, which needs Vite 6+. Test runner only, never shipped.
+- **Versions (Architect review):** Vitest **3.2.7** — the first cut used Vitest 2, which the full
+  audit rates CRITICAL (GHSA-5xrq-8626-4rwp, the UI server; <3.2.6). Vitest 3 runs on this Vite 5.
+- **Known (dev-only, never shipped):** the moderate `@vitest/mocker` advisory
+  (GHSA-82fw-gwwq-j7x9, <4.1.11) remains until Vitest 4, which needs Vite 6+; so do the older
+  Vite 5.4 / esbuild dev-server advisories (e.g. GHSA-fx2h-pf6j-xcff, a `server.fs.deny` bypass
+  on Windows). `vitest run` opens no server; none of this reaches the nginx image.
+- **Review fixes:** the login tests render under `<StrictMode>` (as `main.jsx` does — the property
+  the retired pin guarded); the wiring pin "both call sites pass `fallbackFocusRef`" is restored
+  until FE-10, since the component test uses its own harness.
+- **Code-review fixes:**
+  - **jsdom's origin is pinned to `http://gametracker.test/`.** The default,
+    `http://localhost:3000`, is the backend's port on the self-hosted runner, and that runner IS
+    production. App.jsx builds `API_BASE` from it, so an unstubbed test would have sent a real
+    login to the live backend.
+  - Fake tokens are base64URL, as real ones are.
+  - The trap test asserts the dialog has more than one focusable element.
+  - The CI pin finds the step inside `frontend-quality`, in either key order, and refuses
+    `continue-on-error`, `if:` and `||`. It also pins `npm test` to `vitest run`.
+  - A new check refuses an app module that imports a `*.test.*` file, since the auth scan
+    excludes those files by name.
+  - Mutation-checked: `|| true` on the step and three import shapes each fail.
+  - Known, and not a defect: running with `--isolate=false` breaks the suite. The config uses
+    the isolated default.
 
 ### [ ] UP-21 An unreachable directory answers "wrong password" at login (code review, FE-4)
 - **Where:** the login route in `index.js`. When `verifyLdapCredentials` returns

@@ -29,12 +29,20 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.{js,jsx}'],
     restoreMocks: true,
+    // App.jsx builds API_BASE from window.location.origin, and jsdom's default origin is
+    // http://localhost:3000 — the backend's port. frontend-quality runs on the self-hosted
+    // runner, which IS the production host, so a test that forgot to stub axios would
+    // POST to the live /api/auth/login. `.test` is reserved (RFC 2606) and never resolves.
+    environmentOptions: { jsdom: { url: 'http://gametracker.test/' } },
   },
   server: {
     host: '0.0.0.0',
     port: 5173,
     proxy: {
-      '/api': {
+      // '^/api/' (a RegExp key), not '/api': a bare prefix also matches the SPA's own
+      // /api-docs route, so reloading that page proxied it to the backend. Same boundary
+      // as nginx.conf's `location /api/`.
+      '^/api/': {
         target: apiProxyTarget,
         changeOrigin: true,
         // timeout: browser -> proxy socket; proxyTimeout: proxy -> backend socket.

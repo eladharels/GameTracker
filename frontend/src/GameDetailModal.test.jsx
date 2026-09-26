@@ -1,7 +1,7 @@
 // Behaviour tests for the detail dialog's focus handling (FE-7). These replace the
 // source-text shape pins that stood in for them in test/runtime.test.js (ROADMAP UP-20).
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import GameDetailModal from './GameDetailModal'
 
@@ -62,22 +62,25 @@ describe('GameDetailModal focus (FE-7)', () => {
   })
 
   it('closes on Escape', () => {
-    const { container } = render(<Harness />)
+    render(<Harness />)
     fireEvent.click(screen.getByRole('button', { name: 'Open Hades' }))
     fireEvent.keyDown(document, { key: 'Escape' })
-    expect(container.ownerDocument.querySelector('[role="dialog"]')).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('keeps Tab inside the dialog', () => {
     render(<Harness />)
     fireEvent.click(screen.getByRole('button', { name: 'Open Hades' }))
-    const dialog = screen.getByRole('dialog')
-    const focusable = dialog.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')
-    const last = focusable[focusable.length - 1]
+    // The dialog's buttons are its only focusable elements; a real key event starts at
+    // the focused element and bubbles to the dialog's handler.
+    const buttons = within(screen.getByRole('dialog')).getAllByRole('button')
+    // With one focusable element first === last and this test would pass with no trap.
+    expect(buttons.length).toBeGreaterThan(1)
+    const [first, last] = [buttons[0], buttons[buttons.length - 1]]
     last.focus()
-    fireEvent.keyDown(dialog, { key: 'Tab' })
-    expect(document.activeElement).toBe(focusable[0])
-    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    fireEvent.keyDown(last, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(last)
   })
 

@@ -436,8 +436,17 @@ console.log('the SPA has one auth header and one way to end a session:');
   });
   // Component tests are excluded: they set up and reset storage and stub requests, which
   // is exactly what a test harness does and exactly what app code must not.
-  const files = walk('frontend').filter((f) => !/eslint\.config|vite\.config|\.test\.jsx?$/.test(f));
+  const isTest = (f) => /\.test\.jsx?$/.test(f);
+  const files = walk('frontend').filter((f) => !/eslint\.config|vite\.config/.test(f) && !isTest(f));
   const src = Object.fromEntries(files.map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]));
+
+  // The exclusion above is by NAME, so it holds only while a `.test.` file is really a
+  // test: app code importing one would ship it unscanned.
+  check('no app module imports a *.test.* file (the scan exclusion stays honest)', () => {
+    for (const [f, text] of Object.entries(src)) {
+      assert.ok(!/(?:from\s*|import\s*\(?\s*|require\s*\(\s*)['"][^'"]*\.test(?:\.jsx?)?['"]/.test(text), `${f} imports a test file`);
+    }
+  });
 
   check('found the frontend sources (guards the guard)', () => {
     assert.ok(src['frontend/src/App.jsx'] && src['frontend/SharedLibrary.jsx'], 'the frontend walk found nothing');
@@ -477,11 +486,11 @@ console.log('the SPA has one auth header and one way to end a session:');
   });
 }
 
-// STOPGAP: shape pins for component-level frontend fixes. The SPA has no DOM test harness
-// (ROADMAP UP-20), so these assert the ABSENCE of each regression's shape as it shipped,
+// STOPGAP: shape pins for the component fixes NOT yet covered by frontend/src/*.test.jsx
+// (FE-1/2/5/6, inside LibraryPage/SearchPage — they convert as FE-10 extracts those pages). They assert the ABSENCE of each regression's shape as it shipped,
 // plus a positive form where one exists. They are weaker than behaviour tests: an
 // equivalent rewrite can fail them, and a differently-shaped regression can pass them.
-console.log('frontend component fixes keep their shape (stopgap until a DOM harness):');
+console.log('frontend component fixes keep their shape (stopgap until FE-10 extracts the pages):');
 {
   const app = fs.readFileSync(path.join(ROOT, 'frontend/src/App.jsx'), 'utf8');
   const src = { 'frontend/src/App.jsx': app };
@@ -525,7 +534,13 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
     }
   });
   // FE-7 (the detail dialog's focus trap, focus on open, focus return and the fallback)
-  // is now covered by behaviour tests: frontend/src/GameDetailModal.test.jsx (UP-20).
+  // is covered by behaviour tests: frontend/src/GameDetailModal.test.jsx (UP-20). Those use
+  // their own harness, so the WIRING stays pinned here until FE-10 extracts the pages and a
+  // page-level test can cover it: both real call sites must hand the dialog a fallback.
+  check('both GameDetailModal call sites pass a focus fallback (FE-7 wiring)', () => {
+    assert.strictEqual((app.match(/fallbackFocusRef=\{/g) || []).length, 2,
+      'a GameDetailModal is rendered without a focus fallback');
+  });
   check('a failed status change rolls back that game only (FE-5)', () => {
     const app = src['frontend/src/App.jsx'];
     const fn = app.slice(app.indexOf('const setGameStatus'), app.indexOf('const removeGame'));
@@ -543,8 +558,16 @@ check('the frontend component tests exist and CI runs them', () => {
   for (const f of ['frontend/src/GameDetailModal.test.jsx', 'frontend/src/LoginPage.test.jsx']) {
     assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is gone — its source-text pin was retired in its favour`);
   }
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'frontend/package.json'), 'utf8'));
+  assert.equal(pkg.scripts.test, 'vitest run', 'frontend `npm test` no longer runs vitest');
   const wf = fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8');
-  assert.ok(/working-directory: \.\/frontend\s*\n\s*run: npm test/.test(wf), 'frontend-quality no longer runs the component tests');
+  // The step, located INSIDE frontend-quality (the next top-level job ends it), with its
+  // keys in either order — and nothing that lets it fail green.
+  const job = wf.split(/\n {2}frontend-quality:\n/)[1]?.split(/\n {2}[a-z][\w-]*:\n/)[0] ?? '';
+  const step = job.split(/\n\s*- name: /).find((st) => /^Run frontend component tests\b/.test(st)) ?? '';
+  assert.ok(/working-directory: \.\/frontend\b/.test(step) && /\brun: npm test\s*$/m.test(step),
+    'frontend-quality no longer runs the component tests');
+  assert.ok(!/continue-on-error|\bif:|\|\|/.test(step), 'the component-test step can no longer fail the job');
 });
 
 console.log(`\n${n} runtime assertions passed.`);

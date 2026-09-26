@@ -2,18 +2,25 @@
 // source-text pin for the "session ended" notice in test/runtime.test.js (UP-20).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import axios from 'axios'
 import { LoginPage } from './App'
 import { markSessionEnded } from './session'
 
-const fakeJwt = (payload) => ['x', btoa(JSON.stringify(payload)).replace(/=+$/, ''), 'sig'].join('.')
+// base64URL, as a real JWT is — `-`/`_` in place of `+`/`/` is the case the old inline
+// atob() threw on (session.js). TextEncoder so a non-Latin-1 username cannot throw here.
+const b64url = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+const fakeJwt = (payload) => ['x', b64url(JSON.stringify(payload)), 'sig'].join('.')
 
 beforeEach(() => { localStorage.clear(); sessionStorage.clear() })
 afterEach(cleanup)
 
 function renderLogin(setUser = vi.fn()) {
-  render(<MemoryRouter initialEntries={['/login']}><LoginPage setUser={setUser} /></MemoryRouter>)
+  // StrictMode, as main.jsx renders it: it double-invokes state initializers and effects on
+  // mount, which is exactly why peekSessionEnd must not consume the flag (see session.js).
+  render(<StrictMode><MemoryRouter initialEntries={['/login']}><LoginPage setUser={setUser} /></MemoryRouter></StrictMode>)
   return setUser
 }
 function submit(username = 'jane', password = 'pw') {
@@ -33,10 +40,11 @@ describe('LoginPage errors (FE-4)', () => {
     rejectWith(429, 'Too many sign-in attempts. Please try again in 3 minutes.'); renderLogin(); submit()
     expect((await screen.findByRole('alert')).textContent).toContain('3 minutes')
   })
-  it('never blames the password for an outage or a network failure', async () => {
+  it('never blames the password for an outage', async () => {
     rejectWith(503); renderLogin(); submit()
     expect((await screen.findByRole('alert')).textContent).toMatch(/temporarily unavailable/)
-    cleanup(); vi.restoreAllMocks()
+  })
+  it('never blames the password for a network failure', async () => {
     rejectWith(null); renderLogin(); submit()
     expect((await screen.findByRole('alert')).textContent).toMatch(/reach the server/)
   })
