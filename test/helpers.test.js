@@ -3618,6 +3618,35 @@ checkAsync('loginErrorMessage: a lockout or an outage never reads as a wrong pas
   assert.notStrictEqual(loginErrorMessage(undefined), wrong);
 });
 
+checkAsync('handleModalFocusTrap: Tab wraps inside the dialog, both directions (FE-7)', async () => {
+  const { handleModalFocusTrap } = await import('../frontend/src/focusTrap.js');
+  const el = (name, disabled = false) => ({ name, disabled, focused: 0, focus() { this.focused++; globalThis.document.activeElement = this; } });
+  const [a, b, c, off] = [el('a'), el('b'), el('c'), el('off', true)];
+  const hadDoc = 'document' in globalThis;
+  const prevDoc = globalThis.document;
+  globalThis.document = { activeElement: null };
+  const press = (shiftKey) => {
+    let prevented = false;
+    handleModalFocusTrap({ key: 'Tab', shiftKey, preventDefault() { prevented = true; },
+      currentTarget: { querySelectorAll: () => [a, b, c, off] } });
+    return prevented;
+  };
+  try {
+    globalThis.document.activeElement = c;          // last ENABLED element; `off` is skipped
+    assert.strictEqual(press(false), true);
+    assert.strictEqual(globalThis.document.activeElement, a, 'Tab from the last element did not wrap to the first');
+    assert.strictEqual(press(true), true);
+    assert.strictEqual(globalThis.document.activeElement, c, 'Shift+Tab from the first did not wrap to the last');
+    globalThis.document.activeElement = b;          // the middle: the browser handles it
+    assert.strictEqual(press(false), false, 'Tab in the middle of the dialog was intercepted');
+    let other = false;
+    handleModalFocusTrap({ key: 'Enter', preventDefault() { other = true; }, currentTarget: { querySelectorAll: () => [a] } });
+    assert.strictEqual(other, false, 'a non-Tab key was intercepted');
+  } finally {
+    if (hadDoc) globalThis.document = prevDoc; else delete globalThis.document;
+  }
+});
+
 checkAsync('safeExternalUrl: only absolute http(s) reaches an href (SEC-8)', async () => {
   const { safeExternalUrl } = await import('../frontend/src/safeUrl.js');
   assert.strictEqual(safeExternalUrl('https://crackrelease.com/halo/'), 'https://crackrelease.com/halo/');

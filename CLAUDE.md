@@ -188,7 +188,7 @@ GameTracker/
 │   │                               #   test/integration/ exists
 │   │                               #   It also pins the DOM-free frontend helpers
 │   │                               #   (session.js, safeUrl.js, libraryMatch.js,
-│   │                               #   loginErrors.js) through import(); a module
+│   │                               #   loginErrors.js, focusTrap.js) through import(); a module
 │   │                               #   loaded that way must not touch window, document or
 │   │                               #   storage at MODULE scope, or this suite breaks.
 │   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks the BACKEND
@@ -220,7 +220,7 @@ GameTracker/
 │   │                               #   handling auth by itself again
 │   │                               #   AND, as a STOPGAP until the SPA has a DOM test harness
 │   │                               #   (ROADMAP UP-20), shape pins for component-level fixes
-│   │                               #   (FE-1/2/5): weaker than behaviour tests, by design
+│   │                               #   (FE-1/2/5/6/7): weaker than behaviour tests, by design
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -329,6 +329,8 @@ GameTracker/
 │   │   │                           #   stricter than catalog.js's merge rules — see header
 │   │   ├── loginErrors.js          # loginErrorMessage — a 429 lockout or an outage must
 │   │   │                           #   never read as "wrong password" (FE-4)
+│   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap every modal
+│   │   │                           #   uses (FE-7); it lived in App.jsx, so GameDetailModal had none
 │   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2
 │   │   │                           #   contract from GET /api/openapi/v2, so the page and CI
 │   │   │                           #   validate the SAME document. VENDORED, never CDN-loaded:

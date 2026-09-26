@@ -13,6 +13,7 @@ import { readSession, msUntilExpiry, markSessionEnded, peekSessionEnd, clearSess
 import { safeExternalUrl } from './safeUrl'
 import { libraryMatch } from './libraryMatch'
 import { loginErrorMessage } from './loginErrors'
+import { handleModalFocusTrap } from './focusTrap'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
 // Statically imported it would land in the main chunk and slow every login.
@@ -421,22 +422,6 @@ function LoginPage({ setUser }) {
       </form>
     </div>
   )
-}
-
-// Reusable focus-trap handler for modal keydown events
-function handleModalFocusTrap(e) {
-  if (e.key !== 'Tab') return
-  const focusable = Array.from(
-    e.currentTarget.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')
-  ).filter(el => !el.disabled)
-  if (focusable.length === 0) return
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (e.shiftKey) {
-    if (document.activeElement === first) { e.preventDefault(); last.focus() }
-  } else {
-    if (document.activeElement === last) { e.preventDefault(); first.focus() }
-  }
 }
 
 function UserManagementPage({ user }) {
@@ -1488,24 +1473,30 @@ function LibraryPage({ user }) {
       </div>
       {userGames.length > 0 && (
         <div className="library-stats-bar">
-          <div className="stats-chip stats-chip--wishlist" onClick={() => setFilter('wishlist')} title="Wishlist">
-            <FaHeart /> <span>{statusCounts.wishlist}</span>
-          </div>
-          <div className="stats-chip stats-chip--playing" onClick={() => setFilter('playing')} title="Playing">
-            <FaPlay /> <span>{statusCounts.playing}</span>
-          </div>
-          <div className="stats-chip stats-chip--done" onClick={() => setFilter('done')} title="Done">
-            <FaCheck /> <span>{statusCounts.done}</span>
-          </div>
-          <div className="stats-chip stats-chip--backlog" onClick={() => setFilter('backlog')} title="Backlog">
-            <FaList /> <span>{statusCounts.backlog}</span>
-          </div>
-          <div className="stats-chip stats-chip--unreleased" onClick={() => setFilter('unreleased')} title="Unreleased">
-            <FaLock /> <span>{statusCounts.unreleased}</span>
-          </div>
-          <div className="stats-chip stats-chip--total" onClick={() => setFilter('all')} title="All games">
-            <FaGamepad /> <span>{userGames.length} total</span>
-          </div>
+          <button type="button" className="stats-chip stats-chip--wishlist" onClick={() => setFilter('wishlist')} title="Wishlist"
+            aria-pressed={filter === 'wishlist'} aria-label={`Wishlist: ${statusCounts.wishlist} — show only these`}>
+            <FaHeart aria-hidden="true" /> <span>{statusCounts.wishlist}</span>
+          </button>
+          <button type="button" className="stats-chip stats-chip--playing" onClick={() => setFilter('playing')} title="Playing"
+            aria-pressed={filter === 'playing'} aria-label={`Playing: ${statusCounts.playing} — show only these`}>
+            <FaPlay aria-hidden="true" /> <span>{statusCounts.playing}</span>
+          </button>
+          <button type="button" className="stats-chip stats-chip--done" onClick={() => setFilter('done')} title="Done"
+            aria-pressed={filter === 'done'} aria-label={`Done: ${statusCounts.done} — show only these`}>
+            <FaCheck aria-hidden="true" /> <span>{statusCounts.done}</span>
+          </button>
+          <button type="button" className="stats-chip stats-chip--backlog" onClick={() => setFilter('backlog')} title="Backlog"
+            aria-pressed={filter === 'backlog'} aria-label={`Backlog: ${statusCounts.backlog} — show only these`}>
+            <FaList aria-hidden="true" /> <span>{statusCounts.backlog}</span>
+          </button>
+          <button type="button" className="stats-chip stats-chip--unreleased" onClick={() => setFilter('unreleased')} title="Unreleased"
+            aria-pressed={filter === 'unreleased'} aria-label={`Unreleased: ${statusCounts.unreleased} — show only these`}>
+            <FaLock aria-hidden="true" /> <span>{statusCounts.unreleased}</span>
+          </button>
+          <button type="button" className="stats-chip stats-chip--total" onClick={() => setFilter('all')} title="All games"
+            aria-pressed={filter === 'all'} aria-label={`All games: ${userGames.length} — show everything`}>
+            <FaGamepad aria-hidden="true" /> <span>{userGames.length} total</span>
+          </button>
         </div>
       )}
       <div className="library-search-bar">
@@ -1658,13 +1649,23 @@ function LibraryPage({ user }) {
                   className={`game-card status-${normalizeStatus(game.status)} ${viewMode === 'list' ? 'list-item' : ''}${isDragging ? ' card-dragging' : ''}${isDragOver ? ' card-drag-over' : ''}${isKbSelected ? ' card-keyboard-selected' : ''}`}
                   style={{ animationDelay: `${index * 0.04}s` }}
                   draggable={filter === 'backlog'}
-                  tabIndex={filter === 'backlog' ? 0 : undefined}
+                  // Focusable in EVERY view (FE-6): cards opened on click only, and took focus
+                  // only in the backlog. Enter/Space opens the details outside the backlog;
+                  // inside it they pick up / drop for keyboard reordering, as before.
+                  tabIndex={0}
+                  aria-label={filter === 'backlog'
+                    ? `${game.game_name} — Enter to pick up or drop for reordering`
+                    : `${game.game_name} — press Enter for details`}
                   onClick={(e) => { if (e.target.closest('select,button,a,.status-select-wrapper')) return; setOpenGame(game) }}
                   onDragStart={() => { setDraggedGameId(game.game_id); setIsDraggingAny(true) }}
                   onDragOver={(e) => { if (filter === 'backlog') { e.preventDefault(); setDragOverGameId(game.game_id); } }}
                   onDrop={() => handleBacklogDrop(game.game_id)}
                   onDragEnd={() => { setDraggedGameId(null); setDragOverGameId(null); setIsDraggingAny(false) }}
-                  onKeyDown={filter === 'backlog' ? (e) => {
+                  onKeyDown={filter !== 'backlog' ? (e) => {
+                    // Only when the CARD has focus — not a status select or button inside it.
+                    if (e.target !== e.currentTarget) return
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenGame(game) }
+                  } : (e) => {
                     if (e.key === 'Escape') { setKeyboardDragId(null); return }
                     if (e.key === ' ' || e.key === 'Enter') {
                       e.preventDefault()
@@ -1675,7 +1676,7 @@ function LibraryPage({ user }) {
                         setKeyboardDragId(null)
                       }
                     }
-                  } : undefined}
+                  }}
                 >
                   {filter === 'backlog' && game.backlog_order != null && (
                     <div className="backlog-position-badge">#{game.backlog_order}</div>

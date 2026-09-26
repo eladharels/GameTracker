@@ -10,10 +10,11 @@
 // status). Wire the status buttons to your existing setGameStatus / removeGame
 // handlers.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { FaGamepad, FaTimes, FaHourglassHalf } from 'react-icons/fa'
 import { formatDurationLong, formatDateTimeReadable, statusProse } from './dateUtils'
+import { handleModalFocusTrap } from './focusTrap'
 
 const API_BASE = `${window.location.origin}/api`
 
@@ -80,6 +81,19 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
     // while the modal sits open.
   }, [gameId, game?.status, username])
 
+  // Focus (FE-7): move it INTO the dialog on open and give it BACK to whatever opened it
+  // (the card) on close. It stayed on the page behind, so a keyboard user's next Tab
+  // walked the hidden page under an aria-modal dialog, and closing dropped focus to <body>.
+  // Keyed on whether a game is open, not on the object, which refetches replace.
+  const closeRef = useRef(null)
+  const isOpen = !!game
+  useEffect(() => {
+    if (!isOpen) return
+    const opener = document.activeElement
+    closeRef.current?.focus()
+    return () => { if (opener && typeof opener.focus === 'function' && document.contains(opener)) opener.focus() }
+  }, [isOpen])
+
   // Close on Escape + lock background scroll while open.
   useEffect(() => {
     if (!game) return
@@ -100,10 +114,10 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
 
   return (
     <div className="gdm-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="gdm-modal" role="dialog" aria-modal="true" aria-label={game.game_name || game.name}>
+      <div className="gdm-modal" role="dialog" aria-modal="true" aria-label={game.game_name || game.name} onKeyDown={handleModalFocusTrap}>
         {cover && <img className="gdm-bg" src={cover} alt="" aria-hidden />}
         <div className="gdm-scrim" />
-        <button className="gdm-close" onClick={onClose} aria-label="Close"><FaTimes /></button>
+        <button ref={closeRef} className="gdm-close" onClick={onClose} aria-label="Close"><FaTimes /></button>
 
         <div className="gdm-body">
           <div className="gdm-cover">

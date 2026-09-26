@@ -499,6 +499,20 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
         .match(/if \(seq !== searchSeq\.current\) return/g) || []).length;
     assert.ok(guards >= 4, `stale-response guards: ${guards} of 4 (result, error, price ok, price error)`);
   });
+  check('stats chips are buttons and every library card is keyboard-focusable (FE-6)', () => {
+    assert.ok(!/<div className="stats-chip/.test(app), 'a stats chip is a <div onClick> again — not reachable by keyboard');
+    const chips = (app.match(/<button type="button" className="stats-chip /g) || []).length;
+    const pressed = (app.match(/aria-pressed=\{filter === '/g) || []).length;
+    assert.ok(chips === 6 && pressed >= 6, `stats chips: ${chips} buttons, ${pressed} with aria-pressed (want 6/6)`);
+    assert.ok(/tabIndex=\{0\}\s*\n\s*aria-label=\{filter === 'backlog'/.test(app),
+      'library cards are no longer focusable outside the backlog');
+  });
+  check('the game detail dialog traps focus and returns it to the opener (FE-7)', () => {
+    const modal = fs.readFileSync(path.join(ROOT, 'frontend/src/GameDetailModal.jsx'), 'utf8');
+    assert.ok(/onKeyDown=\{handleModalFocusTrap\}/.test(modal), 'GameDetailModal no longer traps Tab');
+    assert.ok(/closeRef\.current\?\.focus\(\)/.test(modal), 'GameDetailModal no longer moves focus into itself on open');
+    assert.ok(/opener\.focus\(\)/.test(modal), 'GameDetailModal no longer returns focus to its opener');
+  });
   check('a failed status change rolls back that game only (FE-5)', () => {
     const app = src['frontend/src/App.jsx'];
     const fn = app.slice(app.indexOf('const setGameStatus'), app.indexOf('const removeGame'));

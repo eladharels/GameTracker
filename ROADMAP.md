@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 15 | 12 |
-| FE — Frontend | 18 | 7 |
+| FE — Frontend | 18 | 9 |
 | UP — Tidying & upkeep | 21 | 0 |
-| **Total** | **76** | **41** |
+| **Total** | **76** | **43** |
 
 ---
 
@@ -817,16 +817,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   "wishlist". The old snapshot restore was wrong here too. Re-fetching that game on
   failure would close it.
 
-### [ ] FE-6 Keyboard access: library cards and stats chips
+### [x] FE-6 Keyboard access: library cards and stats chips
 - **Where:**
   - Cards only get `tabIndex` in backlog view (`App.jsx:1523`), and open only on click (`:1524`).
   - The stats chips are `<div onClick>` with no role (`:1353-1368`).
 - **Fix:** use a `<button>` (or `role="button"` + `tabIndex=0` + Enter/Space handling).
+- **Done:** the six chips are `<button>`s with `aria-pressed` and a label that says what they
+  do; the pressed chip now has a visible state (it had none). Cards take focus in every view:
+  Enter/Space opens the details, except in the backlog, where they keep picking up and dropping
+  for keyboard reordering (so there the details open by click only — a known limit). Both show
+  a `:focus-visible` ring. Pinned in `test/runtime.test.js`.
 
-### [ ] FE-7 GameDetailModal: no initial focus, no focus trap, no focus return
+### [x] FE-7 GameDetailModal: no initial focus, no focus trap, no focus return
 - **Where:** `frontend/src/GameDetailModal.jsx:84-103`.
 - **Fix:** reuse the `handleModalFocusTrap` pattern (`App.jsx:343`). Focus the dialog when it
   opens and restore focus to the opener when it closes.
+- **Done:** the trap moved to `frontend/src/focusTrap.js`, shared by every modal and tested in
+  `helpers.test.js`. The dialog focuses its close button on open and returns focus to the
+  opener (the card) on close, keyed on open/closed, so the library's refetches do not steal it.
 
 ### [x] FE-8 Duplicated Bearer headers and 403-logout logic
 - **Where:** `App.jsx:366`, `:2001`, `:2188`, `:2434`, and `SharedLibrary.jsx`.
@@ -1117,3 +1125,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | SEC-11 | this batch | 2026-09-26 | `.env*` ignored in git and every image build context |
 | P0-6, FE-8 | this batch | 2026-09-26 | A 403 no longer logs out; admin routes gated; one auth header, one session-ending path |
 | FE-1..FE-5 | this batch | 2026-09-26 | Crack requests once per game; stale searches dropped; library match by id or name+year; login errors by cause; per-game rollback |
+| FE-6, FE-7 | this batch | 2026-09-26 | Chips are buttons, cards focusable everywhere; the detail dialog traps and returns focus |
