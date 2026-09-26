@@ -378,11 +378,9 @@ async function verifyPassword(userId, password) {
     // unverifiable from here, and both are the administrator's to fix.
     const { settings } = settingsStore.readSettings();
     const ldapSettings = settings.ldap || {};
-    // Same completeness test the login route applies. Without a service account there
-    // is no way to resolve the username to a DN, so there is nothing to bind as.
-    const configured = ['url', 'base', 'bindDn', 'bindPass']
-      .every((k) => typeof ldapSettings[k] === 'string' && ldapSettings[k].trim() !== '');
-    if (!configured) {
+    // The SAME completeness rule the login and the sync apply (ldap-helpers.js). Without a
+    // service account there is no way to resolve the username to a DN, so nothing to bind as.
+    if (!ldapHelpers.isLdapConfigured(ldapSettings)) {
       // An account with no local password on an instance with no directory cannot
       // authenticate at all. Fails closed and says which it is.
       return { ok: false, reason: 'no_directory', origin: row.origin || 'ldap' };

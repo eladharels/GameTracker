@@ -2105,7 +2105,27 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
        drive `authenticate()` with the directory, database and limiter stood in for; all 16
        rule mutations tried are now caught. A new contract test maps each outcome through the
        real route (two adapter mutations had survived). Checked against a real Postgres too.
-     - 3,180 → 2,888 lines.
+     - 3,180 → 2,876 lines (the commit message said 2,888; the Architect counted).
+     - **Review of 258189f and 5aa6275 (CISO/Architect APPROVE WITH CONDITIONS, UI/UX
+       APPROVE), all met.** The rule-by-rule comparison found every branch identical, and
+       the await chain fails closed in three places the callbacks did not (an exception in
+       provisioning or in the response used to hang the request).
+       - CISO (blocking): nothing drove the real login route to a 429, so a no-op `fail` or
+         `clear` in the adapter's `limits` passed CI. A contract test now fails five times
+         to a 429 with `Retry-After`, and proves a success clears the count. Both mutations
+         are caught.
+       - CISO: the four fallback paths (claim refusal, provisioning-time refusal, a
+         zero-row profile write, an unrecognised reason) are now tested with the CORRECT
+         local password, which must sign in. As INVALID they had survived: fail-closed, but
+         breaking "the local password decides". A bcrypt failure's "Authentication error"
+         is pinned too.
+       - CISO: the adapter renders only the three fixed 500 texts (`LOGIN_ERROR_TEXTS`),
+         whatever the service returns. Pinned.
+       - Architect: `services/users.js`'s sudo re-check was a THIRD copy of the
+         "LDAP configured" rule; it now calls `ldapHelpers.isLdapConfigured` too. A stale
+         comment naming `getOrCreateUser` is fixed.
+       - Accepted: lowercasing inside `getOrCreateDirectoryUser` is untested; its one
+         caller already passes a normalised name. Now 2,882 lines.
 
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with

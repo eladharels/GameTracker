@@ -261,7 +261,8 @@ const schemaReady = isServerProcess
 
 // Helper: look up a user WITHOUT creating one.
 //
-// Use this everywhere except the LDAP login path. `getOrCreateUser` below INSERTs
+// Use this everywhere except the LDAP login path. `getOrCreateDirectoryUser`
+// (services/login.js) INSERTs
 // on a miss, so using it to *read* meant any request naming an unknown user
 // silently provisioned a passwordless account — which then showed up in
 // /api/all-users and the library-sharing picker. Reads call this and 404 instead.
@@ -1464,6 +1465,8 @@ const clearFailedAttempts = (clientIP, username) => clearFailures(attemptKeys(cl
 
 
 // --- Auth Endpoints ---
+// The 500 texts v1's login has always answered; nothing else is rendered.
+const LOGIN_ERROR_TEXTS = new Set(['Database error', 'DB error', 'Authentication error']);
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   const clientIP = req.ip || req.connection.remoteAddress;
@@ -1544,8 +1547,11 @@ app.post('/api/auth/login', async (req, res) => {
         error: 'Sign-in is temporarily unavailable: the directory could not be reached. Please try again in a few minutes.'
       });
     default:
-      // ERROR carries one of the route's three fixed texts; anything else is a defect.
-      return res.status(500).json({ error: outcome.message || 'Authentication error' });
+      // Only the route's three fixed texts ever reach the wire: a future service change
+      // must not be able to put an exception message here (CISO review of 5aa6275).
+      return res.status(500).json({
+        error: LOGIN_ERROR_TEXTS.has(outcome.message) ? outcome.message : 'Authentication error',
+      });
   }
 });
 

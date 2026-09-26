@@ -1556,6 +1556,8 @@ checkAsync('each outcome maps to the status and {error} text v1 always answered'
     [{ status: O.ERROR, message: 'Database error' }, 500, { error: 'Database error' }],
     [{ status: O.ERROR, message: 'DB error' }, 500, { error: 'DB error' }],
     [{ status: O.ERROR, message: 'Authentication error' }, 500, { error: 'Authentication error' }],
+    // Only the three fixed texts reach the wire, whatever a future service puts here.
+    [{ status: O.ERROR, message: 'connect ECONNREFUSED 10.0.0.9:5432' }, 500, { error: 'Authentication error' }],
   ];
   const errors = console.error; console.error = () => {};
   try {
@@ -1574,6 +1576,41 @@ checkAsync('each outcome maps to the status and {error} text v1 always answered'
     assertKeys(ok.body, ['token'], 'login OK');
     assert.strictEqual(seen.username, 'outcome-map-user', 'the service was not given the normalised username');
   } finally { loginService.authenticate = real; console.error = errors; }
+});
+
+// The lockout, through the REAL handler and the real limiter (CISO review of 5aa6275). The
+// service calls back into index.js through `limits`, and a no-op `fail` or `clear` there
+// passed every test: nothing drove a login to a 429.
+checkAsync('five wrong passwords lock the account out (429 + Retry-After); a success clears the count', async () => {
+  const dbMod = require('../db');
+  const hash = require('bcryptjs').hashSync('right-pw', 4);
+  const realGet = dbMod.get;
+  const settingsStore = require('../settings-store');
+  const realLoad = settingsStore.loadSettings;
+  dbMod.get = (sql, params, cb) => cb(null, { id: 61, username: params[0], password: hash, origin: 'local', can_manage_users: 0 });
+  settingsStore.loadSettings = () => ({});   // no directory: the local password decides
+  const quiet = console.log; console.log = () => {};
+  const attempt = async (username, password, ip) => {
+    const res = recordingRes();
+    await handlerFor('post', '/api/auth/login')({ body: { username, password }, headers: {}, ip, connection: {} }, res);
+    return res;
+  };
+  try {
+    for (let i = 1; i <= 5; i++) {
+      assert.strictEqual((await attempt('lockout-a', 'wrong', '203.0.113.90')).statusCode, 401, `wrong attempt ${i}`);
+    }
+    const locked = await attempt('lockout-a', 'right-pw', '203.0.113.90');
+    assert.strictEqual(locked.statusCode, 429, 'five failures did not lock the account -- the limiter is not wired');
+    assert.ok(Number(locked.headers['retry-after']) > 0, 'the lockout carries no Retry-After');
+    assertKeys(locked.body, ['error'], 'lockout');
+    // Four failures, a success, four more: the success must have cleared the first four.
+    for (let i = 0; i < 4; i++) await attempt('lockout-b', 'wrong', '203.0.113.91');
+    assert.strictEqual((await attempt('lockout-b', 'right-pw', '203.0.113.91')).statusCode, 200);
+    for (let i = 0; i < 4; i++) {
+      assert.strictEqual((await attempt('lockout-b', 'wrong', '203.0.113.91')).statusCode, 401,
+        'a success did not clear the failure count');
+    }
+  } finally { dbMod.get = realGet; settingsStore.loadSettings = realLoad; console.log = quiet; }
 });
 
 // The async cases run last. A rejection here must fail the process — an async

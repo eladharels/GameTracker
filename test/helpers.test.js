@@ -3300,14 +3300,16 @@ console.log('services/login.js (UP-16: the login decision out of index.js; every
   //   verify:  what verifyLdapCredentials resolves (or a function to throw)
   //   row:     the users row every lookup sees (null = none); claimRow: the claim check's
   //   syncChanges: rows the profile UPDATE reports
-  async function run({ verify, row = null, claimRow, syncChanges = 1, ldap = LDAP, password = 'dir-pw',
+  //   rows:    instead of `row`, one row per db.get call in order (provisioning, then local)
+  async function run({ verify, row = null, rows, claimRow, syncChanges = 1, ldap = LDAP, password = 'dir-pw',
     getErr, insertErr, claimErr } = {}) {
     const calls = [];
     const writes = [];
     const real = { verify: ldapHelpers.verifyLdapCredentials, get: db.get, run: db.run, pget: db.promises.get, prun: db.promises.run,
       log: console.log, warn: console.warn, error: console.error };
     ldapHelpers.verifyLdapCredentials = async () => { if (typeof verify === 'function') return verify(); return verify; };
-    db.get = (sql, params, cb) => (getErr ? cb(getErr) : cb(null, row || undefined));
+    const queue = rows ? [...rows] : null;
+    db.get = (sql, params, cb) => (getErr ? cb(getErr) : cb(null, (queue ? queue.shift() : row) || undefined));
     db.run = (sql, params, cb) => { writes.push(['insert', params]); if (insertErr) cb.call({}, insertErr); else cb.call({ lastID: 77 }, null); };
     db.promises.get = async () => { if (claimErr) throw claimErr; return (claimRow === undefined ? row : claimRow) || undefined; };
     db.promises.run = async (sql, params) => { writes.push(['update', sql, params]); return { changes: syncChanges }; };
@@ -3381,6 +3383,32 @@ console.log('services/login.js (UP-16: the login decision out of index.js; every
     const r2 = await run({ verify: { ok: true, entry: entry() }, row: LOCAL, claimRow: null, password: 'wrong' });
     assert.strictEqual(r2.outcome.status, O.INVALID, 'provisioning claimed a row that became local');
     assert.ok(!r2.writes.some(([k]) => k === 'insert' || k === 'update'));
+  });
+  // Every fallback must let the CORRECT local password in: "the LOCAL password decides" is
+  // the rule, and INVALID there would fail closed but lock root out whenever the directory
+  // holds a same-named entry (CISO review of 5aa6275: all four survived as INVALID).
+  checkAsync('each fallback path signs in with the correct LOCAL password', async () => {
+    const claim = await run({ verify: { ok: true, entry: entry() }, row: LOCAL, password: 'local-pw' });
+    assert.deepStrictEqual([claim.outcome.status, claim.outcome.user && claim.outcome.user.id, claim.calls], [O.OK, 3, ['clear']],
+      'the claim refusal did not hand the decision to the local password');
+    const provisioning = await run({ verify: { ok: true, entry: entry() }, row: LOCAL, claimRow: null, password: 'local-pw' });
+    assert.deepStrictEqual([provisioning.outcome.status, provisioning.outcome.user && provisioning.outcome.user.id], [O.OK, 3],
+      'the provisioning-time claim refusal did not fall back to the local password');
+    // The claim check and provisioning saw a directory row; by the profile write it holds a
+    // hash (zero rows updated), and the local lookup finds it.
+    const raced = await run({ verify: { ok: true, entry: entry() }, rows: [DIRROW, LOCAL], claimRow: DIRROW, syncChanges: 0, password: 'local-pw' });
+    assert.deepStrictEqual([raced.outcome.status, raced.outcome.user && raced.outcome.user.id, raced.calls], [O.OK, 3, ['clear', 'clear']],
+      'a zero-row profile write did not fall back to the local password');
+    const unknown = await run({ verify: { ok: false, reason: 'password_expired', entry: entry() }, row: LOCAL, password: 'local-pw' });
+    assert.deepStrictEqual([unknown.outcome.status, unknown.outcome.user && unknown.outcome.user.id, unknown.calls], [O.OK, 3, ['clear']],
+      'an unrecognised reason did not fall back to local auth, or counted a failure');
+  });
+  checkAsync('a bcrypt failure is 500 "Authentication error", not the lookup\'s "Database error"', async () => {
+    const realCompare = bcrypt.compare;
+    bcrypt.compare = async () => { throw new Error('Invalid salt version'); };
+    let r;
+    try { r = await run({ ldap: { url: '' }, row: LOCAL, password: 'x' }); } finally { bcrypt.compare = realCompare; }
+    assert.deepStrictEqual(r.outcome, { status: O.ERROR, message: 'Authentication error' });
   });
   checkAsync('a provisioning database failure is 500 "DB error", never a fallback', async () => {
     const r = await run({ verify: { ok: true, entry: entry() }, row: null, claimRow: null, insertErr: new Error('23505') });
