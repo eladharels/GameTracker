@@ -634,6 +634,20 @@ console.log('the SPA has one auth header and one way to end a session:');
   });
   // The login page's "session ended" notice (shown once, cleared on mount) is covered by
   // behaviour tests now: frontend/src/LoginPage.test.jsx (UP-20).
+  // FE-19: every modal dialog gets focus-in, focus-return and the Tab trap from ONE hook.
+  // Each dialog used to carry its own partial copy, and three had none. A file may not
+  // render more dialogs than it has useDialogFocus() calls, and nothing focuses on a timer.
+  check('every dialog gets its focus handling from useDialogFocus (FE-19)', () => {
+    let dialogs = 0;
+    for (const f of files) {
+      const roles = (src[f].match(/role=["'](?:alert)?dialog["']/g) || []).length;
+      const hooks = (src[f].match(/\buseDialogFocus\(/g) || []).length;
+      dialogs += roles;
+      assert.ok(roles <= hooks, `${f} renders ${roles} dialog(s) but calls useDialogFocus ${hooks} time(s)`);
+      assert.ok(!/setTimeout\(\s*\(\)\s*=>[^)]*\.focus\(/.test(src[f]), `${f} focuses on a timer instead of useDialogFocus`);
+    }
+    assert.ok(dialogs >= 6, `found only ${dialogs} dialogs — the scan is broken`);
+  });
   check('no `window.setUser` fallback', () => {
     for (const f of files) assert.ok(!/window\.setUser/.test(src[f]), `${f} still reaches for window.setUser`);
   });

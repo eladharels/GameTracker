@@ -3253,17 +3253,6 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
   font-size: 1.1rem;
 }
 
-.unreleased-badge {
-  background: #ff6b35;
-  color: white;
-  padding: 0.25rem 0.75rem;
-  border-radius: 20px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  margin-left: 1rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
 
 .genre-tags,
 .platform-tags {
@@ -6072,7 +6061,6 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
 .game-detail-page .status-playing  { color: var(--color-status-playing); }
 .game-detail-page .status-done     { color: var(--color-status-done); }
 .game-detail-page .status-unreleased { color: var(--color-status-unreleased); }
-.unreleased-badge { background: var(--accent-soft-strong); color: var(--color-accent-hover); border: 1px solid var(--accent-border); }
 
 /* ── Login wordmark: tasteful, display face ── */
 .login-form h2 { display: none; } /* old plain heading, replaced by wordmark in JSX */

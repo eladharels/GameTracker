@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, API_BASE } from './api'
 import { FaGamepad, FaTimes, FaHourglassHalf } from 'react-icons/fa'
 import { formatDurationLong, formatDateTimeReadable, statusProse } from './dateUtils'
-import { handleModalFocusTrap } from './focusTrap'
+import { useDialogFocus } from './useDialogFocus'
 
 
 // How a single transition reads in prose. `from` is null for the row that records the
@@ -80,33 +80,11 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
     // while the modal sits open.
   }, [gameId, game?.status, username])
 
-  // Focus (FE-7): move it INTO the dialog on open and give it BACK to whatever opened it
-  // (the card) on close. It stayed on the page behind, so a keyboard user's next Tab
-  // walked the hidden page under an aria-modal dialog, and closing dropped focus to <body>.
-  // Keyed on whether a game is open, not on the object, which refetches replace.
+  // Focus (FE-7): INTO the dialog on open, BACK to whatever opened it on close — or, when
+  // Remove or a filter took the opener away, to the list (fallbackFocusRef), then the page
+  // heading, never <body>. The shared hook since FE-19; this dialog had the first copy.
   const closeRef = useRef(null)
-  const isOpen = !!game
-  useEffect(() => {
-    if (!isOpen) return
-    const opener = document.activeElement
-    closeRef.current?.focus()
-    // Read at CLOSE time on purpose: the list is re-keyed on filter/page, so the node that
-    // existed when the dialog opened may have been replaced by the one to focus now.
-    // Removing the LAST game (or the last one matching the filter) replaces the list with
-    // the empty state, so the ref is null — then the page's main heading, never <body>.
-    const fallbackTarget = () => (fallbackFocusRef && fallbackFocusRef.current)
-      || document.querySelector('.page-title')
-    return () => {
-      // The opener may be GONE: Remove deletes the card, and a status change under a filter
-      // unmounts it. Focus then goes to the list the card was in, not to <body>.
-      if (opener && typeof opener.focus === 'function' && opener !== document.body && document.contains(opener)) opener.focus()
-      // preventScroll: a mouse user's opener is <body> (the card is not focusable), so this
-      // runs for them too — and must not jump the page on close.
-      else fallbackTarget()?.focus({ preventScroll: true })
-    }
-    // fallbackFocusRef is a ref object (stable); only isOpen should re-run this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen])
+  const { onKeyDown: dialogKeyDown } = useDialogFocus(!!game, { initialRef: closeRef, fallbackRef: fallbackFocusRef })
 
   // Close on Escape + lock background scroll while open.
   useEffect(() => {
@@ -128,7 +106,7 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
 
   return (
     <div className="gdm-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="gdm-modal" role="dialog" aria-modal="true" aria-labelledby="gdm-title" onKeyDown={handleModalFocusTrap}>
+      <div className="gdm-modal" role="dialog" aria-modal="true" aria-labelledby="gdm-title" onKeyDown={dialogKeyDown}>
         {cover && <img className="gdm-bg" src={cover} alt="" aria-hidden />}
         <div className="gdm-scrim" />
         <button ref={closeRef} className="gdm-close" onClick={onClose} aria-label="Close"><FaTimes /></button>

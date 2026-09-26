@@ -346,8 +346,14 @@ GameTracker/
 │   │   │                           #   stricter than catalog.js's merge rules — see header
 │   │   ├── loginErrors.js          # loginErrorMessage — a 429 lockout or an outage must
 │   │   │                           #   never read as "wrong password" (FE-4)
-│   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap (App.jsx's dialogs
-│   │   │                           #   and GameDetailModal, FE-7); SharedLibrary's are FE-19
+│   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap (FE-7), React-free
+│   │   │                           #   for its import() test; wraps from the container too
+│   │   ├── useDialogFocus.js       # The ONE dialog focus hook (FE-19): focus in on open (the
+│   │   │                           #   SAFE action for an alertdialog), back to the opener on
+│   │   │                           #   close (else the list, else the page heading — never
+│   │   │                           #   <body>), and the trap. Every role=dialog/alertdialog
+│   │   │                           #   uses it; runtime.test.js pins that, and bans focusing
+│   │   │                           #   on a setTimeout
 │   │   ├── api.js                  # The ONE client for our API (FE-16): API_BASE and an
 │   │   │                           #   axios.create() instance owning BOTH interceptors (the
 │   │   │                           #   token on /api/ only; a 401 ends the session). Pages

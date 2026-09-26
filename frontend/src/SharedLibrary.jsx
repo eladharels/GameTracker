@@ -3,6 +3,7 @@ import { api, API_BASE } from './api'
 import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
 import { useToast } from './contexts/ToastContext';
 import { readSession } from './session';
+import { useDialogFocus } from './useDialogFocus';
 
 // Requests go through ./api's client, always to our own origin's /api. A hardcoded
 // host/port once sent staging to the PRODUCTION backend (:3000), and being cross-origin
@@ -62,6 +63,13 @@ function SharedLibrary() {
 
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const shareModalRef = React.useRef();
+  // Both dialogs: focus in on open (their Close button), back to the opener on close, Tab
+  // kept inside (FE-19). They had none of the three, under aria-modal. Escape stays with
+  // the window listeners below.
+  const shareCloseRef = React.useRef(null);
+  const libraryCloseRef = React.useRef(null);
+  const shareDialog = useDialogFocus(shareModalOpen, { initialRef: shareCloseRef });
+  const libraryDialog = useDialogFocus(modalOpen, { initialRef: libraryCloseRef });
 
   const { showToast } = useToast();
 
@@ -211,10 +219,10 @@ function SharedLibrary() {
             <FaShareAlt style={{marginRight: 8}} /> Manage Sharing
           </button>
           {shareModalOpen && (
-            <div className="user-modal-bg" ref={shareModalRef} onClick={handleShareModalBgClick} tabIndex={-1} aria-modal="true" role="dialog">
-              <div className="user-modal-window" style={{ maxWidth: 520, minWidth: 320, borderRadius: 18, background: 'var(--surface-2)', boxShadow: '0 8px 40px var(--accent-soft-strong)', padding: '2.2rem 2.2rem 1.5rem 2.2rem' }}>
-                <button className="user-modal-close" aria-label="Close" onClick={() => setShareModalOpen(false)}>&times;</button>
-                <h3 style={{ marginTop: 0, marginBottom: 18, color: 'var(--color-accent)', fontWeight: 800, fontSize: '1.4em', letterSpacing: 0.5 }}>Manage Library Sharing</h3>
+            <div className="user-modal-bg" ref={shareModalRef} onClick={handleShareModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="share-dialog-title">
+              <div className="user-modal-window" onKeyDown={shareDialog.onKeyDown} style={{ maxWidth: 520, minWidth: 320, borderRadius: 18, background: 'var(--surface-2)', boxShadow: '0 8px 40px var(--accent-soft-strong)', padding: '2.2rem 2.2rem 1.5rem 2.2rem' }}>
+                <button ref={shareCloseRef} className="user-modal-close" aria-label="Close" onClick={() => setShareModalOpen(false)}>&times;</button>
+                <h3 id="share-dialog-title" style={{ marginTop: 0, marginBottom: 18, color: 'var(--color-accent)', fontWeight: 800, fontSize: '1.4em', letterSpacing: 0.5 }}>Manage Library Sharing</h3>
                 {loading ? <p>Loading users...</p> : (
                   <>
                     {/* Currently sharing with */}
@@ -354,10 +362,10 @@ function SharedLibrary() {
       )}
       {/* Modal for viewing shared library */}
       {modalOpen && (
-        <div className="user-modal-bg" onClick={e => { if (e.target.className === 'user-modal-bg') closeModal(); }} tabIndex={-1} aria-modal="true" role="dialog">
-          <div className="user-modal-window" style={{ maxWidth: 700, minWidth: 320 }}>
-            <button className="user-modal-close" aria-label="Close" onClick={closeModal}>&times;</button>
-            <h3 style={{ marginTop: 0, marginBottom: 16 }}>
+        <div className="user-modal-bg" onClick={e => { if (e.target.className === 'user-modal-bg') closeModal(); }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="shared-library-dialog-title">
+          <div className="user-modal-window" onKeyDown={libraryDialog.onKeyDown} style={{ maxWidth: 700, minWidth: 320 }}>
+            <button ref={libraryCloseRef} className="user-modal-close" aria-label="Close" onClick={closeModal}>&times;</button>
+            <h3 id="shared-library-dialog-title" style={{ marginTop: 0, marginBottom: 16 }}>
               {modalUser && (modalUser.display_name || modalUser.username)}'s Library
             </h3>
             {modalLoading ? (

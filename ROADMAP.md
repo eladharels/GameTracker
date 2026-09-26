@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
-| FE — Frontend | 22 | 18 |
+| FE — Frontend | 22 | 19 |
 | UP — Tidying & upkeep | 24 | 19 |
-| **Total** | **84** | **73** |
+| **Total** | **84** | **74** |
 
 ---
 
@@ -1037,7 +1037,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   `removeItem('token')`, in session.js, and a unit test pins that a manual sign-out leaves no
   "session ended" notice.
 
-### [ ] FE-19 One `useDialogFocus()` hook for every dialog (Architect, FE-7 review)
+### [x] FE-19 One `useDialogFocus()` hook for every dialog (Architect, FE-7 review)
 - **Where:** the user-management dialogs set focus with `setTimeout(…, 50)` and never return it;
   the delete-confirm `alertdialog` gets no initial focus at all (an alertdialog needs one);
   SharedLibrary.jsx's two `aria-modal` dialogs have no trap, no initial focus and no return.
@@ -1048,6 +1048,32 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   GameDetailModal to it. **Until then, no dialog copies GameDetailModal's effect by hand.**
 - **Also (UI/UX):** make the page behind an open dialog `inert`; the trap only wraps at the
   first and last focusable elements.
+- **Done:**
+  - **The hook:** `frontend/src/useDialogFocus.js`, `(isOpen, { initialRef, dialogRef,
+    fallbackRef, onEscape }) → { onKeyDown }`. It is GameDetailModal's FE-7 effect,
+    generalised: focus in on open; back to the opener on close; else the fallback, else
+    `.page-title`, never `<body>`; plus the trap.
+  - **The dialogs on it:**
+    - GameDetailModal, whose six tests pass unchanged;
+    - the three user-management dialogs, whose 50 ms `setTimeout` focus is gone. The
+      delete `alertdialog` now opens on **Cancel**, its least destructive action;
+    - SharedLibrary's two dialogs, which had no focus handling at all. They also gain
+      `aria-labelledby`, so they have an accessible name.
+  - **Trap gap closed:** focus on the dialog container itself, after a click on a
+    non-focusable area or when the container took the initial focus, used to let Shift+Tab
+    leave. It now wraps inside.
+  - **Tests:** a hook harness covers initial focus, container focus, return, the fallback
+    when the opener is gone, the trap from the container, and Escape.
+    - Mutation-checked: removing the container wrap fails exactly that test.
+    - `runtime.test.js` refuses a file with more dialogs than `useDialogFocus` calls, and
+      any `setTimeout(() => ….focus())`.
+  - **Checked in the built app:** Manage Sharing opens on Close, is announced by name,
+    keeps Shift+Tab inside, and Escape returns focus to the button.
+  - **Not done: `inert` on the page behind.** Every dialog is rendered INSIDE its page, so
+    making the page inert would disable the dialog too. That needs the dialogs portalled
+    out first; recorded for FE-10's page extraction.
+  - **FE-20 review nit:** the unused `.unreleased-badge` CSS (no element carries it) is
+    deleted.
 
 ### [x] FE-20 Accent presets collide with the fixed status colours (UI/UX, pre-existing)
 - **Where:** `App.css` `.stats-chip--*` and the status colours. Under Violet, Wishlist and Done
@@ -1728,3 +1754,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-14 | this batch | 2026-09-26 | The post-login return path is honoured only for the user whose session ended |
 | FE-9, FE-16 | this batch | 2026-09-26 | SharedLibrary.jsx into src/; one API client (api.js, axios.create) owning both interceptors, pages no longer depend on App.jsx patching the global axios |
 | FE-20 | this batch | 2026-09-26 | Every status colour (chips, hover glows, detail block) now from the --color-status-* tokens; no accent preset makes two statuses look alike |
+| FE-19 | this batch | 2026-09-26 | One useDialogFocus() hook for all six dialogs: focus in/back, trap (now also from the container); alertdialog opens on Cancel |

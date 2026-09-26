@@ -13,7 +13,7 @@ import { readSession, msUntilExpiry, peekSessionEnd, clearSessionEnd, endSession
 import { safeExternalUrl } from './safeUrl'
 import { libraryMatch } from './libraryMatch'
 import { loginErrorMessage } from './loginErrors'
-import { handleModalFocusTrap } from './focusTrap'
+import { useDialogFocus } from './useDialogFocus'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
 // Statically imported it would land in the main chunk and slow every login.
@@ -533,19 +533,15 @@ function UserManagementPage({ user }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [modalOpen, confirmOpen, pwModalOpen])
 
-  // Focus first input when add-user modal opens
-  useEffect(() => {
-    if (modalOpen && addUserFirstInputRef.current) {
-      setTimeout(() => addUserFirstInputRef.current?.focus(), 50)
-    }
-  }, [modalOpen])
-
-  // Focus password input when pw modal opens
-  useEffect(() => {
-    if (pwModalOpen && pwInputRef.current) {
-      setTimeout(() => pwInputRef.current?.focus(), 50)
-    }
-  }, [pwModalOpen])
+  // Focus in on open, back to the opener on close, Tab kept inside (FE-19). These focused
+  // an input after a 50 ms setTimeout and never gave focus back; the delete confirmation
+  // got no initial focus at all. An alertdialog opens on its LEAST destructive action, so
+  // an Enter pressed out of habit cancels rather than deletes. Escape stays with the
+  // window listener above, which knows which dialog is on top.
+  const confirmCancelRef = useRef(null)
+  const confirmDialog = useDialogFocus(confirmOpen, { initialRef: confirmCancelRef })
+  const pwDialog = useDialogFocus(pwModalOpen, { initialRef: pwInputRef })
+  const addUserDialog = useDialogFocus(modalOpen, { initialRef: addUserFirstInputRef })
 
   function handleModalBgClick(e) {
     if (e.target === modalRef.current) setModalOpen(false)
@@ -581,11 +577,11 @@ function UserManagementPage({ user }) {
       </div>
       {confirmOpen && (
         <div className="user-modal-bg" ref={confirmModalRef} onClick={e => { if (e.target === confirmModalRef.current) setConfirmOpen(false) }} tabIndex={-1} aria-modal="true" role="alertdialog" aria-labelledby="confirm-dialog-title">
-          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={handleModalFocusTrap}>
+          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={confirmDialog.onKeyDown}>
             <h3 id="confirm-dialog-title" style={{marginTop:0}}>Delete User</h3>
             <p style={{color:'var(--color-fg-muted)'}}>Are you sure you want to delete this user? This cannot be undone.</p>
             <div style={{display:'flex', gap:'1rem', justifyContent:'flex-end', marginTop:'1.5rem'}}>
-              <button className="icon-btn enhanced-icon-btn" style={{padding:'0.6em 1.4em'}} onClick={() => setConfirmOpen(false)}>Cancel</button>
+              <button ref={confirmCancelRef} className="icon-btn enhanced-icon-btn" style={{padding:'0.6em 1.4em'}} onClick={() => setConfirmOpen(false)}>Cancel</button>
               <button
                 className="create-user-btn enhanced-btn"
                 style={{background:'#ef4444', padding:'0.6em 1.4em'}}
@@ -597,7 +593,7 @@ function UserManagementPage({ user }) {
       )}
       {pwModalOpen && (
         <div className="user-modal-bg" ref={pwModalRef} onClick={e => { if (e.target === pwModalRef.current) setPwModalOpen(false) }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="pw-dialog-title">
-          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={handleModalFocusTrap}>
+          <div className="user-modal-window" style={{maxWidth: 400}} onKeyDown={pwDialog.onKeyDown}>
             <button className="user-modal-close" aria-label="Close" onClick={() => setPwModalOpen(false)}>&times;</button>
             <h3 id="pw-dialog-title" style={{marginTop:0}}>Change Password</h3>
             <div className="user-form-group" style={{flexDirection:'column'}}>
@@ -626,7 +622,7 @@ function UserManagementPage({ user }) {
       )}
       {modalOpen && (
         <div className="user-modal-bg" ref={modalRef} onClick={handleModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="add-user-dialog-title">
-          <div className="user-modal-window" onKeyDown={handleModalFocusTrap}>
+          <div className="user-modal-window" onKeyDown={addUserDialog.onKeyDown}>
             <button className="user-modal-close" aria-label="Close" onClick={() => setModalOpen(false)}>&times;</button>
             <h3 id="add-user-dialog-title" style={{marginTop:0, marginBottom:'1rem'}}>Add User</h3>
             <form className="user-form-modern user-form-vertical user-form-enhanced" onSubmit={handleCreate}>
