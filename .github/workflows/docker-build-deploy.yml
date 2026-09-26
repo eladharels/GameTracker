@@ -456,16 +456,21 @@ jobs:
       # entries, and nothing pruned it. The only prunes are `docker image prune -f`,
       # which leaves the build cache alone.
       #
-      # This removes BUILD CACHE ONLY, older than a day: never an image, container,
+      # MEASURED on the first run of this step: / at 100% (87G, 0 available), Build Cache
+      # 19.44GB with 0 active and all of it reclaimable. `builder prune` WITHOUT -a removes
+      # only DANGLING cache and freed 59MB, even with an age filter; -a is what reclaims.
+      #
+      # This removes BUILD CACHE ONLY -- every unused entry: never an image, container,
       # network or volume, so production's running stack and its database are
-      # untouched. It prints the numbers first, so the next failure is diagnosable.
-      - name: Report disk and reclaim stale build cache
+      # untouched. The cost is speed only: backend and frontend build --no-cache anyway.
+      # It prints the numbers first and after, so the next failure is diagnosable.
+      - name: Report disk and reclaim build cache
         run: |
           echo "[disk] Before:"
           df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
           docker system df 2>&1 || true
-          docker builder prune -f --filter until=24h 2>&1 | tail -n 1 || true
-          echo "[disk] After reclaiming build cache older than 24h:"
+          docker builder prune -af 2>&1 | tail -n 1 || true
+          echo "[disk] After reclaiming unused build cache:"
           df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
 
       - name: Build backend Docker image

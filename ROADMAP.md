@@ -1962,6 +1962,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     are untouched.
   - The smoke stack's start-failure handler now prints `ps -a`, every service's logs and
     `df`, instead of the backend's logs alone.
+- **Measured (9219883, the first run of the step):** `/` at **100%**, 87G with 0 available.
+  Build Cache was **19.44 GB**, 0 active and all reclaimable; Images 13.1 GB; Local Volumes
+  2.2 GB, 1.9 GB of it unreferenced. The first prune freed 59 MB: `builder prune` without
+  `-a` removes only DANGLING cache. It is now `docker builder prune -af`, which still
+  touches build cache only.
+- **This is a production incident, not only a CI one:** the runner is the production host,
+  so production's Postgres was on a full disk. The operator should check the live app,
+  then look at the rest of the disk. The four Docker stores total about 35 GB of the 83 GB
+  used, and CI cannot see the other ~48 GB. Unreferenced volumes are left for the operator
+  on purpose: CI must never prune volumes on the host that holds the production database.
 - **Open:** confirm the disk numbers from the next run. If the build cache is not what
   fills the disk, the operator needs to look at the host (volumes, logs, other projects),
   which CI cannot and should not do.
