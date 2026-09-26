@@ -714,6 +714,35 @@ checkAsync('crackrelease-status: an unknown game is 404, a DB error 500, both wi
     assert.deepStrictEqual([down.statusCode, down.body], [500, { error: 'DB error' }]);
   } finally { db.get = real.get; }
 });
+checkAsync('a crack_status write that FAILS is logged, and the caller still gets the scraped answer (CC-11)', async () => {
+  // The write is awaited inside its own try: a database failure must neither become the
+  // response (a 500) nor escape as an unhandled rejection (review of 057f22b).
+  const axiosMod = require('axios');
+  const real = { axiosGet: axiosMod.get, get: db.get, run: db.promises.run, error: console.error };
+  const logged = [];
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  axiosMod.get = async () => ({ data: '<b>CRACKED</b>' });
+  db.get = (sql, params, cb) => cb(null, /FROM user_games/.test(sql) ? { game_name: 'Halo' } : { id: 7, username: 'jane' });
+  db.promises.run = () => new Promise((resolve, reject) => setTimeout(() => reject(new Error('deadlock detected')), 20));
+  console.error = (...a) => logged.push(a.join(' '));
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/user/:username/games/:gameId/crackrelease-status')(
+      { params: { username: 'jane', gameId: 'igdb_1' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 40));   // past the write's rejection
+  } finally {
+    axiosMod.get = real.axiosGet; db.get = real.get; db.promises.run = real.run; console.error = real.error;
+    process.removeListener('unhandledRejection', onUnhandled);
+  }
+  assert.strictEqual(res.statusCode, 200, 'a failed crack_status write became the response');
+  assert.strictEqual(res.body.status, 'cracked');
+  assert.ok(logged.some((l) => l.includes('Failed to update crack_status')), 'the failed write was not logged');
+  assert.deepStrictEqual(unhandled, [], 'the failed write escaped as an unhandled rejection');
+});
+
 console.log('POST /api/admin/test-notification (SEC-1 per-user limiter):');
 
 checkAsync('the 11th test notification in the window is 429, keyed per user', async () => {

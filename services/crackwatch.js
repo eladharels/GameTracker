@@ -1,15 +1,20 @@
 // The DRM-status sources (ROADMAP UP-16, the first slice out of index.js): the CrackWatch
 // cache -- a daily-refreshed map of title -> cracked -- and the CrackRelease page scraper
-// for a single game. Moved VERBATIM from index.js; the routes there are adapters now.
+// for a single game, moved from index.js; the routes there are adapters now. Since UP-26
+// it also owns the two LIBRARY-facing operations on `user_games.crack_status`
+// (libraryStatuses, checkLibraryGame), every statement scoped to the owner.
 //
 // Module state, deliberately: there is one cache per process, and index.js's cron, its
 // admin refresh route, the v2 job and the library read all have to see the SAME one.
 // `init()` names the cache file (under CACHE_DIR, a tmpfs in production) before the
-// first load; nothing else here touches the filesystem.
+// first load; nothing else here touches the filesystem. The database is reached through
+// the `db` MODULE (see the UP-26 section below for why in two forms).
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const { safeForLog } = require('../user-rules');
+const db = require('../db');
+const { serviceError, CODES } = require('./errors');
 
 // History worth keeping: these two constants were once deleted by accident (a slice of
 // index.js cut at the wrong boundary). Every reference sat inside a try/catch, so nothing
@@ -243,8 +248,6 @@ function statusForRow(row) {
 // The rows come from user_games; the answer from the cache or the scraper above. Through the
 // db MODULE, in the callback form the routes used, so the contract suite's stubs still see
 // them. Like every service: no req/res.
-const db = require('../db');
-const { serviceError, CODES } = require('./errors');
 const dbGet = (sql, params) => new Promise((resolve, reject) => {
   db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
 });
@@ -274,6 +277,8 @@ async function checkLibraryGame(userId, gameId) {
   try {
     scraped = await scrapeCrackRelease(row.game_name);
   } catch (err) {
+    // DEFENSIVE: scrapeCrackRelease catches everything itself, so this cannot fire today. It
+    // keeps the route's own 500 text (not 'DB error') if that ever changes.
     throw Object.assign(new Error(`CrackRelease scrape failed: ${err.message}`), { scrapeFailed: true });
   }
   if (scraped.fetched) {

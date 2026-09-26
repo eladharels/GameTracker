@@ -2172,6 +2172,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     game lookup, was not, since the tests stub the rows. A unit test now asserts all three
     statements and their parameters, owner-scoped. The UP-16 note above about inline SQL
     left is resolved by this item.
+  - **Review of cc64a3a and 057f22b (CISO/Architect APPROVE WITH CONDITIONS, UI/UX APPROVE),
+    met:** CC-11's third rule, "a failed write is logged and the caller still gets the
+    answer", had never been pinned, so removing the write's `try` or its `await` passed.
+    A contract test now fails the write and asserts a 200 with the scraped body, the log
+    line, and no unhandled rejection; both mutations are caught. The crackwatch header now
+    says it owns the library-facing statements, its requires are at the top, and the
+    unreachable scrape-failure branch is labelled defensive.
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with
   `BACKEND_BIND=127.0.0.1`. Set on its own, a client connecting directly can spoof
