@@ -773,11 +773,22 @@ body, html {
 }
 
 /* === Status-colored card glow on hover === */
-.game-card.status-playing:hover  { box-shadow: 0 16px 40px -8px rgba(34,197,94,0.28),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(34,197,94,0.35); }
-.game-card.status-wishlist:hover  { box-shadow: 0 16px 40px -8px color-mix(in srgb, var(--color-accent) 28%, transparent),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: color-mix(in srgb, var(--color-accent) 35%, transparent); }
-.game-card.status-done:hover      { box-shadow: 0 16px 40px -8px rgba(168,85,247,0.28),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(168,85,247,0.35); }
-.game-card.status-backlog:hover   { box-shadow: 0 16px 40px -8px rgba(249,115,22,0.28),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(249,115,22,0.35); }
-.game-card.status-unreleased:hover{ box-shadow: 0 16px 40px -8px rgba(156,163,175,0.22), 0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(156,163,175,0.3); }
+/* From the --color-status-* tokens, like the dots, card edges and the stats page (FE-20).
+   Wishlist used --color-accent, so under Violet it glowed like Done and under Emerald like
+   Playing; the others were a second, hard-coded palette that matched nothing else. */
+.game-card.status-wishlist:hover,
+.game-card.status-playing:hover,
+.game-card.status-done:hover,
+.game-card.status-backlog:hover,
+.game-card.status-unreleased:hover {
+  box-shadow: 0 16px 40px -8px color-mix(in srgb, var(--status-c) 28%, transparent), 0 4px 12px -4px rgba(0,0,0,0.3);
+  border-color: color-mix(in srgb, var(--status-c) 35%, transparent);
+}
+.game-card.status-wishlist   { --status-c: var(--color-status-wishlist); }
+.game-card.status-playing    { --status-c: var(--color-status-playing); }
+.game-card.status-done       { --status-c: var(--color-status-done); }
+.game-card.status-backlog    { --status-c: var(--color-status-backlog); }
+.game-card.status-unreleased { --status-c: var(--color-status-unreleased); }
 
 /* === Card actions — always visible in grid view === */
 /* Previously hover-reveal; removed because the hidden state made the delete button
@@ -1845,11 +1856,17 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
 /* The filter currently applied — it had no visible state at all. */
 .stats-chip[aria-pressed="true"] { box-shadow: 0 0 0 1.5px currentColor inset; }
 .stats-chip:active { transform: scale(0.96); }
-.stats-chip--wishlist  { background: color-mix(in srgb, var(--color-accent) 12%, transparent);  color: var(--color-accent); border-color: color-mix(in srgb, var(--color-accent) 25%, transparent); }
-.stats-chip--playing   { background: rgba(34,197,94,0.12);   color: #22c55e; border-color: rgba(34,197,94,0.25); }
-.stats-chip--done      { background: rgba(168,85,247,0.12);  color: #a855f7; border-color: rgba(168,85,247,0.25); }
-.stats-chip--backlog   { background: rgba(249,115,22,0.12);  color: #f97316; border-color: rgba(249,115,22,0.25); }
-.stats-chip--unreleased{ background: rgba(156,163,175,0.1);  color: #9ca3af; border-color: rgba(156,163,175,0.2); }
+/* The status chips use the SAME tokens as everything else that means a status (FE-20). */
+.stats-chip--wishlist, .stats-chip--playing, .stats-chip--done, .stats-chip--backlog, .stats-chip--unreleased {
+  background: color-mix(in srgb, var(--chip-c) 12%, transparent);
+  color: var(--chip-c);
+  border-color: color-mix(in srgb, var(--chip-c) 25%, transparent);
+}
+.stats-chip--wishlist   { --chip-c: var(--color-status-wishlist); }
+.stats-chip--playing    { --chip-c: var(--color-status-playing); }
+.stats-chip--done       { --chip-c: var(--color-status-done); }
+.stats-chip--backlog    { --chip-c: var(--color-status-backlog); }
+.stats-chip--unreleased { --chip-c: var(--color-status-unreleased); }
 .stats-chip--total     { background: rgba(255,255,255,0.05); color: var(--color-fg-muted); border-color: var(--color-border); }
 .toggle-feature-btn {
   background: var(--color-card);
@@ -3450,24 +3467,26 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
   transform: translateY(-2px);
 }
 
-/* Status styling for the detail page */
+/* Status styling for the detail page — the tokens, like everywhere else (FE-20). These
+   selectors are unscoped, so they also reach every .game-card.status-*; a fourth palette
+   here (pink wishlist, ACCENT playing, green done) is how Playing matched the accent. */
 .status-wishlist {
-  color: #e91e63;
+  color: var(--color-status-wishlist);
   font-weight: 700;
 }
 
 .status-playing {
-  color: var(--color-accent);
+  color: var(--color-status-playing);
   font-weight: 700;
 }
 
 .status-done {
-  color: #4caf50;
+  color: var(--color-status-done);
   font-weight: 700;
 }
 
 .status-unreleased {
-  color: #ff6b35;
+  color: var(--color-status-unreleased);
   font-weight: 700;
 }
 

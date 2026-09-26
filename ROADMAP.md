@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
-| FE — Frontend | 22 | 17 |
+| FE — Frontend | 22 | 18 |
 | UP — Tidying & upkeep | 24 | 19 |
-| **Total** | **84** | **72** |
+| **Total** | **84** | **73** |
 
 ---
 
@@ -1037,12 +1037,27 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Also (UI/UX):** make the page behind an open dialog `inert`; the trap only wraps at the
   first and last focusable elements.
 
-### [ ] FE-20 Accent presets collide with the fixed status colours (UI/UX, pre-existing)
+### [x] FE-20 Accent presets collide with the fixed status colours (UI/UX, pre-existing)
 - **Where:** `App.css` `.stats-chip--*` and the status colours. Under Violet, Wishlist and Done
   are both purple; under Emerald, Wishlist and Playing are both green; under Amber, Wishlist is
   close to Backlog's orange. The chips stay distinguishable only by icon.
 - **Fix:** give Wishlist a colour independent of `--color-accent`, or pick the status palette
   so no preset collides.
+- **Done:** the app already had the answer. The `--color-status-*` tokens (Wishlist
+  `#38bdf8`) were used by the status dots, the card edges and the stats page. Three places
+  did not use them, and now do:
+  - the library's stats chips: a second, hard-coded palette, with Wishlist on the accent;
+  - the card hover glows: the same;
+  - an unscoped "detail page" block: pink Wishlist, ACCENT Playing, green Done.
+  - **Measured in Chromium on the real library page** (one game per status), old then new:
+    - Old: under Violet the Wishlist chip was `rgb(139,92,246)` beside Done's
+      `rgb(168,85,247)`; under Emerald it was `rgb(16,185,129)` beside Playing's
+      `rgb(34,197,94)`.
+    - New: all five are fixed and distinct under every preset.
+    - Screenshots also showed the Backlog chip (orange) did not match the Backlog card edge
+      (amber); now it does. The cards themselves are unchanged.
+  - **Left as is:** `.unreleased-badge` still uses the accent. It is a release badge, not a
+    status chip, and it sits beside no other status colour.
 
 ### [x] FE-21 `.game-card`'s entry animation overrides every card transform (UI/UX, code review)
 - **Where:** `App.css` — `.game-card { animation: cardEnter 0.3s ease both }`. Fill-mode `both`
@@ -1700,3 +1715,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-11, FE-21 (+UP-22 review) | this batch | 2026-09-26 | CSP style-src drops 'unsafe-inline' (measured: zero violations; React styles are CSSOM); card animation no longer pins transform; router's URIError 400 kept |
 | FE-14 | this batch | 2026-09-26 | The post-login return path is honoured only for the user whose session ended |
 | FE-9, FE-16 | this batch | 2026-09-26 | SharedLibrary.jsx into src/; one API client (api.js, axios.create) owning both interceptors, pages no longer depend on App.jsx patching the global axios |
+| FE-20 | this batch | 2026-09-26 | Every status colour (chips, hover glows, detail block) now from the --color-status-* tokens; no accent preset makes two statuses look alike |
