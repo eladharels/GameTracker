@@ -979,7 +979,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   scrolling panels.
 - **Done:**
   - **Success messages go to the global toast,** the app's usual feedback, which dismisses
-    itself: user created, deleted, updated, the LDAP sync result (four calls). The solid, centred green blocks, in the dialog and on the page, and their
+    itself: user created, deleted, updated, the LDAP sync result (four calls). The
+    solid, centred green blocks, in the dialog and on the page, and their
     `.success-msg` CSS are gone.
   - **The Add User dialog's errors** use the same translucent `gt-alert--danger` as the
     page banner, with `role="alert"`.
@@ -990,7 +991,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     permission text for a 403, and stays generic otherwise. The backend only exposes
     `expose: true` messages.
   - **Screenshots and measurements from the built app** cover the page banner (at
-    `top: 16px`, opaque) and the dialog error ("Username already exists").
+    `top: 16px`, opaque) and the dialog error ("User already exists").
   - **Review fixes (UI/UX Shoulds):**
     - **Delete is disabled while it runs** (`aria-busy`, "Deleting…"). The dialog now
       stays open across the delete, and a double-click sent a second DELETE, which 404'd
