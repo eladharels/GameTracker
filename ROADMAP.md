@@ -1911,6 +1911,29 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ---
 
+### [ ] UP-25 CI fills the runner's disk: BuildKit's build cache is never pruned (CI, PR #5)
+- **Where:** `.github/workflows/docker-build-deploy.yml`, `build-images`. The runner is the
+  production host.
+- **Symptom (2026-09-26):** two consecutive runs failed as only a full disk explains:
+  - the smoke stack's Postgres exited 1 on start (fb203d9);
+  - `apt-get update` in the backend build rejected every Debian index with "At least one
+    invalid signature was encountered" (f9ae700). apt verifies signatures through /tmp.
+
+  Neither commit touched the images.
+- **Cause (likely):** backend and frontend build with `--no-cache`, which still writes new
+  build-cache entries, and the only prunes anywhere are `docker image prune -f`, which never
+  touches the build cache.
+- **Done so far:**
+  - A step before the builds prints `df` and `docker system df`, then runs
+    `docker builder prune -f --filter until=24h`. That removes build cache only: never an
+    image, container, network or volume, so the running production stack and its database
+    are untouched.
+  - The smoke stack's start-failure handler now prints `ps -a`, every service's logs and
+    `df`, instead of the backend's logs alone.
+- **Open:** confirm the disk numbers from the next run. If the build cache is not what
+  fills the disk, the operator needs to look at the host (volumes, logs, other projects),
+  which CI cannot and should not do.
+
 ## Suggested order of work
 
 1. **P0-1 to P0-4.** Small, contained, and security- or data-affecting. One PR each.

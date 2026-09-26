@@ -446,6 +446,28 @@ jobs:
           echo "mcp_image=${MCP_IMAGE_BASE}:${TAG}" >> $GITHUB_OUTPUT
           echo "[build] Tagging images :${TAG} (event=${{ github.event_name }})"
 
+      # DISK. This runner is the production host, and it has run out before. On
+      # 2026-09-26 two runs in a row failed in ways that only a full disk explains:
+      # Postgres exited 1 on start, and apt-get inside a build rejected every Debian
+      # index with "invalid signature" (apt cannot verify without writing to /tmp).
+      #
+      # BuildKit's build cache is the one store that only ever grows here: backend and
+      # frontend build with --no-cache, which bypasses the cache but still records new
+      # entries, and nothing pruned it. The only prunes are `docker image prune -f`,
+      # which leaves the build cache alone.
+      #
+      # This removes BUILD CACHE ONLY, older than a day: never an image, container,
+      # network or volume, so production's running stack and its database are
+      # untouched. It prints the numbers first, so the next failure is diagnosable.
+      - name: Report disk and reclaim stale build cache
+        run: |
+          echo "[disk] Before:"
+          df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
+          docker system df 2>&1 || true
+          docker builder prune -f --filter until=24h 2>&1 | tail -n 1 || true
+          echo "[disk] After reclaiming build cache older than 24h:"
+          df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
+
       - name: Build backend Docker image
         run: |
           docker build \
