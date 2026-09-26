@@ -956,9 +956,22 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
      - App.jsx is now **1,517 lines, down from 3,168**.
      - Verified in the built app: the calendar shows a mocked release, and the account page
        shows its reminder options and the API Tokens section, with no page errors.
+  5. `SearchPage` → `src/pages/`. The status helpers it shares with the library
+     (`STATUSES`, `isGameReleaseInFuture`, `isGameUnreleased`, `normalizeStatus`) move
+     verbatim to `src/gameStatus.js` rather than being imported back from App.
+     - **The FE-2 source-text pin is retired.** It counted `seq !== searchSeq.current`
+       guards. `pages/SearchPage.test.jsx` now drives the page instead, with four tests:
+       a stale search's late results, late error, late price and late price failure must
+       each change nothing. Removing each guard fails its own test.
+     - The FE-6 title-button pin reads App.jsx plus SearchPage.jsx. The FE-7 wiring pin no
+       longer names a file: every `<GameDetailModal` in `src/` and `src/pages/` must pass
+       `fallbackFocusRef`. Deleting SearchPage's fallback fails it.
+     - App.jsx is now **1,276 lines**.
+     - Verified in the built app: a search shows its result and Steam price, the detail
+       dialog opens, and Escape returns focus to the title, with no page errors.
   - **Remaining in App.jsx:** the shell, `LoginPage` (its component tests import it from
-    App), and `SearchPage`/`LibraryPage`. Those two carry the FE-1/2/5/6 source-text pins,
-    which should become behaviour tests as they move. That is the rest of FE-10.
+    App), and `LibraryPage`. LibraryPage carries the FE-1/5/6 source-text pins, which
+    should become behaviour tests as it moves. That is the rest of FE-10.
 
 ### [x] FE-11 CSP allows `style-src 'unsafe-inline'`
 - **Where:** `frontend/nginx.conf:30`.

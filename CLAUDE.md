@@ -34,7 +34,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~1500 lines — the shell, login, search and library; the other pages are in `src/pages/`, FE-10)
+- **Entry point**: `frontend/src/App.jsx` (~1300 lines — the shell, login and library; the other pages are in `src/pages/`, FE-10)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -307,7 +307,7 @@ GameTracker/
 │   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx                 # The app shell, routes, LoginPage, SearchPage and LibraryPage;
+│   │   ├── App.jsx                 # The app shell, routes, LoginPage and LibraryPage;
 │   │   │                           #   every other page is in pages/ (FE-10, in progress)
 │   │   ├── App.css                 # Global styles (glassmorphism theme, ~6700 lines)
 │   │   ├── GameDetailModal.jsx     # Game detail overlay
@@ -362,10 +362,13 @@ GameTracker/
 │   │   │                           #   axios (pinned). Touches `window` at module scope, so
 │   │   │                           #   helpers.test.js must never import it
 │   │   ├── SharedLibrary.jsx       # Shared-library page (moved into src/, FE-9)
+│   │   ├── gameStatus.js           # STATUSES + the unreleased/normalise helpers the search
+│   │   │                           #   and library pages share (pages never import App.jsx)
 │   │   ├── pages/                  # Pages extracted from App.jsx, one per change (FE-10):
 │   │   │   ├── UserManagementPage.jsx  #   admin user table, dialogs, LDAP sync
 │   │   │   ├── SystemStatusPage.jsx    #   the six dependency probes (admin)
 │   │   │   ├── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
+│   │   │   ├── SearchPage.jsx          #   catalog search; SearchPage.test.jsx pins FE-2
 │   │   │   ├── CalendarPage.jsx        #   release calendar
 │   │   │   └── AccountPage.jsx         #   My Account: channels, reminders, API tokens
 │   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
@@ -450,7 +453,7 @@ GameTracker/
 
 ### Architectural Pattern
 - **Full-stack monolith**: All backend logic lives in a single `index.js`
-- **Single-page application**: React Router over `App.jsx` (the shell, login, search, library) and
+- **Single-page application**: React Router over `App.jsx` (the shell, login, library) and
   `src/pages/*` (every other page, extracted verbatim one per change, FE-10)
 - **File-based config**: Runtime settings (SMTP, LDAP, Telegram, API keys) in `settings.json`,
   read through a cached `loadSettings()` that revalidates on the file's mtime

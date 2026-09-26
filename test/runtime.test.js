@@ -729,15 +729,9 @@ console.log('frontend component fixes keep their shape (stopgap until FE-10 extr
       'an effect depends on currentGames, a new array every render — use currentPageKey');
     assert.ok(/crackInFlight\.current\.has\(/.test(app), 'crack-status requests are no longer tracked in flight');
   });
-  check('a search response is dropped unless it answers the latest query (FE-2)', () => {
-    const app = src['frontend/src/App.jsx'];
-    const search = app.slice(app.indexOf('const handleSearch'), app.indexOf('const addToLibrary'));
-    // All THREE guards: the results, the error branch, and each price.
-    const guards = (search.match(/if \(seq !== searchSeq\.current\) return/g) || []).length
-      + (app.slice(app.indexOf('const fetchGamePrice = async (gameId, steamAppId, seq)'), app.indexOf('const handleSearch'))
-        .match(/if \(seq !== searchSeq\.current\) return/g) || []).length;
-    assert.ok(guards >= 4, `stale-response guards: ${guards} of 4 (result, error, price ok, price error)`);
-  });
+  // FE-2 (a stale search response changes nothing) is covered by BEHAVIOUR now:
+  // frontend/src/pages/SearchPage.test.jsx drives all four guards — results, error, price,
+  // price error — and each fails its own test when removed (FE-10).
   check('stats chips are buttons; card details open from a title button (FE-6)', () => {
     assert.ok(!/<div className="stats-chip/.test(app), 'a stats chip is a <div onClick> again — not reachable by keyboard');
     const chips = (app.match(/<button type="button" className="stats-chip /g) || []).length;
@@ -745,7 +739,8 @@ console.log('frontend component fixes keep their shape (stopgap until FE-10 extr
     assert.ok(chips === 6 && pressed >= 6, `stats chips: ${chips} buttons, ${pressed} with aria-pressed (want 6/6)`);
     // Details open from a real TITLE BUTTON on every library and search card (UI/UX review:
     // an aria-label on a role-less card div is invalid ARIA and hid the card's contents).
-    assert.ok((app.match(/className="game-title-btn"/g) || []).length >= 2,
+    const searchPage = fs.readFileSync(path.join(ROOT, 'frontend/src/pages/SearchPage.jsx'), 'utf8');
+    assert.ok((app + searchPage).match(/className="game-title-btn"/g).length >= 2,
       'library and search cards no longer open their details from a title button');
     assert.ok(/role="group"\s*\n\s*aria-labelledby=\{`lib-title-/.test(app), 'library cards are no longer labelled groups');
     assert.ok(!/aria-label=\{filter === 'backlog'/.test(app), 'a card div carries an aria-label again');
@@ -764,9 +759,21 @@ console.log('frontend component fixes keep their shape (stopgap until FE-10 extr
   // is covered by behaviour tests: frontend/src/GameDetailModal.test.jsx (UP-20). Those use
   // their own harness, so the WIRING stays pinned here until FE-10 extracts the pages and a
   // page-level test can cover it: both real call sites must hand the dialog a fallback.
-  check('both GameDetailModal call sites pass a focus fallback (FE-7 wiring)', () => {
-    assert.strictEqual((app.match(/fallbackFocusRef=\{/g) || []).length, 2,
-      'a GameDetailModal is rendered without a focus fallback');
+  check('every GameDetailModal call site passes a focus fallback (FE-7 wiring)', () => {
+    // Across every page, not App.jsx alone: FE-10 moves call sites into src/pages/.
+    const dir = path.join(ROOT, 'frontend/src');
+    const files = [...fs.readdirSync(dir).map((f) => path.join(dir, f)),
+      ...fs.readdirSync(path.join(dir, 'pages')).map((f) => path.join(dir, 'pages', f))]
+      .filter((f) => /\.jsx$/.test(f) && !/\.test\./.test(f) && !/GameDetailModal\.jsx$/.test(f));
+    let sites = 0;
+    for (const f of files) {
+      const text = fs.readFileSync(f, 'utf8');
+      const renders = (text.match(/<GameDetailModal\b/g) || []).length;
+      const fallbacks = (text.match(/fallbackFocusRef=\{/g) || []).length;
+      sites += renders;
+      assert.strictEqual(fallbacks, renders, `${path.relative(ROOT, f)}: a GameDetailModal is rendered without a focus fallback`);
+    }
+    assert.ok(sites >= 2, `found ${sites} GameDetailModal call sites — the scan is broken`);
   });
   check('a failed status change rolls back that game only (FE-5)', () => {
     const app = src['frontend/src/App.jsx'];
@@ -782,7 +789,8 @@ console.log('frontend component fixes keep their shape (stopgap until FE-10 extr
 // The pins retired above are covered by component tests; this keeps them from quietly
 // disappearing, and CI from quietly not running them (UP-20).
 check('the frontend component tests exist and CI runs them', () => {
-  for (const f of ['frontend/src/GameDetailModal.test.jsx', 'frontend/src/LoginPage.test.jsx']) {
+  for (const f of ['frontend/src/GameDetailModal.test.jsx', 'frontend/src/LoginPage.test.jsx',
+    'frontend/src/pages/SearchPage.test.jsx', 'frontend/src/App.relogin.test.jsx', 'frontend/src/useDialogFocus.test.jsx']) {
     assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is gone — its source-text pin was retired in its favour`);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'frontend/package.json'), 'utf8'));
