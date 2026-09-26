@@ -1321,7 +1321,7 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
       runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'cookie-user', password: 'pw-cookie-2', session: 'cookie' }, headers: CSRF, ip: '198.51.100.202' }));
     assertKeys(res.body, ['session'], 'cookie login');
     assert.strictEqual(res.headers['cache-control'], 'no-store', 'a Set-Cookie response is cacheable');
-    assertKeys(res.body.session, ['can_manage_users', 'display_name', 'exp', 'expiresIn', 'origin', 'username'], 'cookie login session');
+    assertKeys(res.body.session, ['can_manage_users', 'cookieSecure', 'display_name', 'exp', 'expiresIn', 'origin', 'username'], 'cookie login session');
     assert.ok(!JSON.stringify(res.body).includes('eyJ'), 'a JWT reached the cookie-mode body');
     const [c] = setCookies(res);
     assert.ok(c && c.startsWith('__Host-gt_session=') && /HttpOnly/.test(c) && /Secure/.test(c) && /SameSite=Strict/.test(c) && /Path=\//.test(c), `cookie: ${c}`);

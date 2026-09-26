@@ -2,19 +2,19 @@ import React, { useEffect, useState } from 'react';
 import { api, API_BASE } from './api'
 import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
 import { useToast } from './contexts/ToastContext';
-import { readSession } from './session';
+import { getSession } from './session';
 import { useDialogFocus } from './useDialogFocus';
 
 // Requests go through ./api's client, always to our own origin's /api. A hardcoded
 // host/port once sent staging to the PRODUCTION backend (:3000), and being cross-origin
 // it bypassed the auth interceptor.
 
-// Token and user from localStorage, decoded by session.js — the ONE client-side JWT
-// decode. The inline atob() this replaced threw on base64URL payloads, and this page
-// then never loaded for those users.
+// Who is signed in, from session.js's one in-memory store (SEC-14). The page never sees
+// the credential: it is an HttpOnly cookie. `token` is kept as a presence flag only, so
+// the effect below still re-runs when the session changes.
 function getAuth() {
-  const token = localStorage.getItem('token');
-  return { token, user: readSession(token) };
+  const user = getSession();
+  return { token: user ? user.username : null, user };
 }
 
 // Helper to generate a color from a string (username)

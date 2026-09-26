@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { FaCheckCircle, FaExclamationCircle, FaMinusCircle, FaSpinner, FaSync, FaTimesCircle } from 'react-icons/fa'
 import { api, API_BASE } from '../api'
+import { getSession } from '../session'
 
 // ── SystemStatusPage ────────────────────────────────────────────────────────
 export default function SystemStatusPage() {
@@ -89,6 +90,19 @@ export default function SystemStatusPage() {
           {loading ? 'Checking…' : 'Refresh'}
         </button>
       </div>
+
+      {/* SEC-14 condition 10: an instance running with SESSION_COOKIE_INSECURE=1 says so
+          where an administrator looks, not only in a boot log line nobody reads. */}
+      {getSession()?.cookieSecure === false && (
+        <div className="ss-security-warning" role="status">
+          <FaExclamationCircle aria-hidden="true" />
+          <span>
+            Sign-in cookies are <strong>not</strong> marked Secure (SESSION_COOKIE_INSECURE=1).
+            Sessions can be read on the network and tossed by sibling subdomains. Serve
+            GameTracker over HTTPS and unset it.
+          </span>
+        </div>
+      )}
 
       {status && (
         <>

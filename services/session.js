@@ -117,8 +117,10 @@ function clearCookie(mode) {
 // What GET /api/auth/session and a cookie login answer. `user` is the privilege RE-READ from
 // the database (req.user), never the JWT's claims, so a revoked admin sees it at once
 // (condition 7). `expiresIn` is the server's clock, so the SPA's expiry timer does not
-// depend on the device's (condition 17).
-function sessionView(user, exp, nowMs = Date.now()) {
+// depend on the device's (condition 17). `cookieSecure` lets the System Status page warn an
+// administrator that the instance runs in insecure mode (condition 10); it is no secret --
+// anyone signed in can see whether their own cookie is Secure.
+function sessionView(user, exp, nowMs = Date.now(), mode = 'secure') {
   return {
     username: user.username,
     can_manage_users: !!user.can_manage_users,
@@ -126,6 +128,7 @@ function sessionView(user, exp, nowMs = Date.now()) {
     display_name: user.display_name || user.username,
     exp,
     expiresIn: Math.max(0, Math.floor(exp - nowMs / 1000)),
+    cookieSecure: mode !== 'insecure',
   };
 }
 

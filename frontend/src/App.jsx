@@ -12,7 +12,11 @@ import SearchPage from './pages/SearchPage'
 import LibraryPage from './pages/LibraryPage'
 import CalendarPage from './pages/CalendarPage'
 import AccountPage from './pages/AccountPage'
-import { readSession, msUntilExpiry, endSession } from './session'
+import {
+  msUntilExpiry, endSession, sessionFromView, setSession, writeHint, readHint, dropLegacyToken,
+  markSignInUpdated, onSessionAnnounced,
+} from './session'
+import { probeSession } from './api'
 import LoginPage from './pages/LoginPage'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
@@ -33,23 +37,52 @@ const ACCENT_PRESETS = [
 // global axios on import, which every page used to depend on silently.
 
 // ${window.location.protocol} ${window.location.hostname}
+// The session is an HttpOnly cookie this page cannot read (SEC-14), so who is signed in is
+// the SERVER's answer: GET /api/auth/session, asked once at boot. Until it answers, the app
+// shows neither the login page nor the library -- a flash of either would be a lie.
+//
+// Three outcomes, and the difference between the last two is the whole point of the
+// loading state (sign-off condition 16):
+//   200          -> signed in;
+//   401          -> signed out. The "session ended" notice shows only when this browser
+//                   knew of a session that has since EXPIRED (the hint); otherwise nobody
+//                   was signed in and the login page says nothing;
+//   anything else -> the server could not answer. That is NOT "signed out": an outage
+//                   rendered as the login page, or as an empty library, is how a user once
+//                   concluded their games had been deleted. It gets its own screen.
 function useAuth() {
-  // Read during the FIRST render, not in an effect: with `null` on the first pass the
-  // logged-out `*` route redirected every deep link to /login before the token was read.
-  //
-  // readSession checks `exp` (SEC-7): an expired or malformed token is dropped here
-  // instead of rendering the whole app until the first request comes back 401.
-  const [user, setUser] = useState(() => {
-    const token = localStorage.getItem('token')
-    const payload = readSession(token)
-    if (token && !payload) endSession({ explain: true, fromPath: window.location.pathname })
-    return payload
-  })
-  return [user, setUser]
+  const [state, setState] = useState({ status: 'loading', user: null })
+  const probe = useCallback(() => {
+    setState((s) => ({ ...s, status: 'loading' }))
+    return probeSession()
+      .then((view) => {
+        const session = setSession(sessionFromView(view))
+        writeHint(session)
+        setState({ status: 'ready', user: session })
+      })
+      .catch((err) => {
+        if (err?.response?.status === 401) {
+          const hint = readHint()
+          const expired = !!hint && typeof hint.exp === 'number' && hint.exp * 1000 <= Date.now()
+          endSession({ explain: expired, fromPath: window.location.pathname, announce: false })
+          setState({ status: 'ready', user: null })
+        } else {
+          setState({ status: 'unreachable', user: null })
+        }
+      })
+  }, [])
+  useEffect(() => {
+    // The pre-SEC-14 token in localStorage: removed, and the login page says so once.
+    if (dropLegacyToken()) markSignInUpdated()
+    probe()
+  }, [probe])
+  const setUser = useCallback((user) => setState({ status: 'ready', user }), [])
+  return [state, setUser, probe]
 }
 
 function App() {
-  const [user, setUser] = useAuth()
+  const [auth, setUser, probe] = useAuth()
+  const user = auth.user
   const { showToast } = useToast()
   const location = useLocation()
   const navigate = useNavigate()
@@ -96,7 +129,9 @@ function App() {
   // is no token refresh, so a warning is the only thing that can save the work.
   useEffect(() => {
     if (!user) return undefined
-    const ms = msUntilExpiry(localStorage.getItem('token'))
+    // The SERVER's expiresIn, not this device's clock (condition 17): a clock running hours
+    // fast used to read a fresh session as expired.
+    const ms = msUntilExpiry(user)
     if (ms === null) { expireSession(); return undefined }
     const WARN_AHEAD_MS = 2 * 60 * 1000
     // setTimeout overflows past ~24.8 days and fires at once; a 12-hour token never gets
@@ -104,9 +139,6 @@ function App() {
     // background tab fires late, not never — and until it does, the 401 interceptor is
     // the backstop for any request made on the expired token.
     //
-    // Known trade-off: `exp` is compared with the CLIENT clock. A clock running more than
-    // 12 hours fast reads a fresh token as expired and sends the user back to login.
-    // The server's check is the real one; this only decides what the UI shows.
     const clamp = (v) => Math.min(v, 2 ** 31 - 1)
     const timers = [setTimeout(expireSession, clamp(ms))]
     if (ms > WARN_AHEAD_MS) {
@@ -130,6 +162,46 @@ function App() {
   else if (location.pathname.startsWith('/system-status')) pageTitle = 'System Status'
   else if (location.pathname.startsWith('/api-docs')) pageTitle = 'API Reference'
   else if (location.pathname.startsWith('/game/')) pageTitle = 'Game Details'
+
+  // Other tabs (condition 18). A sign-out elsewhere ends this tab's session too; a sign-in
+  // elsewhere is re-asked of the server, and a DIFFERENT user reloads the page rather than
+  // leave one account's data on screen under another's session.
+  useEffect(() => onSessionAnnounced((msg) => {
+    if (msg.type === 'logout') {
+      if (!user) return
+      endSession({ explain: false, announce: false })
+      setUser(null)
+      navigate('/login')
+    } else if (msg.type === 'login') {
+      if (user && msg.username && msg.username.toLowerCase() !== user.username.toLowerCase()) {
+        window.location.reload()
+      } else if (!user) {
+        probe()
+      }
+    }
+  }), [user, setUser, navigate, probe])
+
+  if (auth.status === 'loading') {
+    return (
+      <div className="login-page">
+        <div className="login-form app-boot" role="status" aria-live="polite">
+          <div className="login-wordmark-title">GameTracker</div>
+          <p className="app-boot-text">Loading…</p>
+        </div>
+      </div>
+    )
+  }
+  if (auth.status === 'unreachable') {
+    return (
+      <div className="login-page">
+        <div className="login-form app-boot" role="alert">
+          <div className="login-wordmark-title">GameTracker</div>
+          <p className="app-boot-text">Can&apos;t reach the server. Your library is unchanged.</p>
+          <button type="button" onClick={probe} autoFocus>Retry</button>
+        </div>
+      </div>
+    )
+  }
 
   // If not logged in, render only the login page/route
   if (!user) {

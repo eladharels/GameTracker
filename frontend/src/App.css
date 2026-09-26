@@ -1536,6 +1536,18 @@ body, html {
   letter-spacing: 0.02em;
 }
 
+/* SEC-14: the boot probe and the "server unreachable" screens reuse the login card, so
+   the first thing on screen matches what follows it. Centred, no form fields. */
+.app-boot {
+  align-items: center;
+  text-align: center;
+  gap: 1rem;
+}
+.app-boot-text {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
 .login-notice {
   /* Informational, not an error: accent-tinted glass, never the danger colour. */
   background: var(--accent-soft);
@@ -5485,6 +5497,23 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
   margin: 2rem auto;
   padding: 0 1rem;
 }
+
+/* SEC-14: the insecure-cookie warning. Amber, not red: a configuration choice to review,
+   not an outage. */
+.ss-security-warning {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.ss-security-warning svg { color: #f59e0b; flex-shrink: 0; margin-top: 0.15rem; }
 
 .ss-header {
   display: flex;

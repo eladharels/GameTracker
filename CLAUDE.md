@@ -237,12 +237,13 @@ GameTracker/
 │   │                               #   ALSO: every env var the backend reads must be in the
 │   │                               #   backend `environment:` of BOTH compose files, or in
 │   │                               #   its NOT_PASSED table with a reason
-│   │                               #   ALSO the SPA's auth invariants (P0-6, FE-8): only
-│   │                               #   api.js's interceptor and ApiDocsPage's spec-only
-│   │                               #   client build a Bearer header; only session.js#endSession
-│   │                               #   removes the token (FE-17); a 401 is the
-│   │                               #   interceptor's alone. A failure there means a page is
-│   │                               #   handling auth by itself again
+│   │                               #   ALSO the SPA's auth invariants (P0-6, FE-8, SEC-14):
+│   │                               #   the SPA builds NO Authorization header; only api.js and
+│   │                               #   ApiDocsPage's spec fetch set the CSRF header; the old
+│   │                               #   `token` key is only ever DELETED, in session.js;
+│   │                               #   every ending goes through endSession (two silent); a 401
+│   │                               #   is the interceptor's alone. A failure there means a page
+│   │                               #   is handling auth by itself again
 │   │                               #   AND two WIRING pins no rendered output shows (no effect
 │   │                               #   keyed on `currentGames`, FE-1; every page passes the
 │   │                               #   detail dialog a focus fallback, FE-7). The component
@@ -342,12 +343,14 @@ GameTracker/
 │   │   │                           #   an instant belongs to, or when a week starts.
 │   │   │                           #   Bucketing is CLIENT-side on purpose: date_trunc
 │   │   │                           #   would bucket in the server's timezone
-│   │   ├── session.js              # The ONE client-side JWT decode (readSession): checks
-│   │   │                           #   `exp` and decodes base64URL — the inline atob() it
-│   │   │                           #   replaced threw on `-`/`_` payloads. DECODES, never
-│   │   │                           #   verifies: it decides what the UI shows, the server
-│   │   │                           #   decides everything else. Also records WHY a session
-│   │   │                           #   ended so the login page can say so (sessionStorage)
+│   │   ├── session.js              # The session as the SERVER describes it (SEC-14): the
+│   │   │                           #   credential is an HttpOnly cookie this page cannot read,
+│   │   │                           #   so nothing here decodes a JWT. One in-memory store
+│   │   │                           #   (get/setSession), expiry from the server's `expiresIn`,
+│   │   │                           #   a non-secret `session_hint` {username, exp}, the one
+│   │   │                           #   deletion of the legacy `token` key, and the cross-tab
+│   │   │                           #   broadcast. Also records WHY a session ended so the
+│   │   │                           #   login page can say so (sessionStorage)
 │   │   │                           #   endSession() is the ONE way a session ends (FE-17),
 │   │   │                           #   and records WHOSE session it was: returnPathFor()
 │   │   │                           #   sends only that same user back to the old page,
@@ -371,7 +374,9 @@ GameTracker/
 │   │   │                           #   on a setTimeout
 │   │   ├── api.js                  # The ONE client for our API (FE-16): API_BASE and an
 │   │   │                           #   axios.create() instance owning BOTH interceptors (the
-│   │   │                           #   token on /api/ only; a 401 ends the session). Pages
+│   │   │                           #   CSRF header on /api/ only -- never an Authorization
+│   │   │                           #   header, SEC-14; a 401 ends the session while one exists),
+│   │   │                           #   plus probeSession() and serverLogout(). Pages
 │   │   │                           #   import { api, API_BASE }; only this file imports
 │   │   │                           #   axios (pinned). Touches `window` at module scope, so
 │   │   │                           #   helpers.test.js must never import it
@@ -799,7 +804,15 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
     - An XSS can still USE the session while the tab is open. It cannot take it away, or mint
       a PAT without the password.
     - In insecure mode, a sibling subdomain can toss a cookie.
-  - **Phase 2** switches the SPA from localStorage to the cookie.
+  - **Phase 2 (the SPA) is done.**
+    - The page never holds the credential: `session.js` keeps the server's description of the
+      session in memory, and the boot probe (`GET /api/auth/session`) restores it on reload.
+    - A 5xx or network failure at boot shows "Can't reach the server", NEVER the login page.
+    - Expiry runs on the server's `expiresIn`.
+    - Sign-in and sign-out are broadcast to other tabs.
+    - A pre-SEC-14 `token` in localStorage is deleted at boot, with a one-time "sign-in has
+      been updated" line.
+    - System Status warns when `cookieSecure` is false.
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns

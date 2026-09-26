@@ -2,8 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, API_BASE } from '../api'
-import { readSession, peekSessionEnd, clearSessionEnd, returnPathFor } from '../session'
+import { api, API_BASE, probeSession } from '../api'
+import {
+  peekSessionEnd, clearSessionEnd, returnPathFor, sessionFromView, setSession, writeHint,
+  announceSession, peekSignInUpdated, clearSignInUpdated,
+} from '../session'
 import { loginErrorMessage } from '../loginErrors'
 
 export default function LoginPage({ setUser }) {
@@ -19,6 +22,10 @@ export default function LoginPage({ setUser }) {
   const [signingIn, setSigningIn] = useState(false)
   useEffect(() => { clearSessionEnd() }, [])   // cleared AFTER mount: see peekSessionEnd
   const [showEndNotice, setShowEndNotice] = useState(!!sessionEnd)
+  // SEC-14: shown once after the old localStorage session was removed at boot. Neutral --
+  // it is not the "session ended" notice, and it never shows alongside it.
+  const [showUpdated] = useState(() => !sessionEnd && peekSignInUpdated())
+  useEffect(() => { clearSignInUpdated() }, [])
 
   const handleLogin = async (e) => {
     e.preventDefault()
@@ -35,26 +42,30 @@ export default function LoginPage({ setUser }) {
     try {
       // Convert username to lowercase to prevent case sensitivity issues
       const normalizedUsername = username.toLowerCase()
-      const res = await api.post(`${API_BASE}/auth/login`, { username: normalizedUsername, password })
-      const session = readSession(res.data.token)
-      if (!session) {
-        // The server just issued this token, so "expired" can only mean this device's
-        // clock is wrong. Say so: returning to a blank login form looked like a failure
-        // with no reason, and the user could never get in.
-        setError('Can\'t start your session: this device\'s date and time look wrong. Correct them, then sign in again.')
-        return
-      }
+      // SEC-14: a COOKIE session. The server sets an HttpOnly cookie this page cannot read,
+      // and answers who signed in; no token ever reaches JavaScript.
+      await api.post(`${API_BASE}/auth/login`, { username: normalizedUsername, password, session: 'cookie' })
+      // The session is real only once the SERVER sees the cookie come back. A browser that
+      // refused it (a plain-HTTP install without the insecure opt-out) answers 401 here --
+      // said as such, rather than looping back to this form with no reason (condition 17).
+      let view
       try {
-        localStorage.setItem('token', res.data.token)
-      } catch {
-        // The server accepted the sign-in; the BROWSER refused to store it (storage
-        // blocked or full). Not "can't reach the server", which is what it read as.
-        setError('Signed-in sessions need browser storage, and this browser blocked it. Allow site data for this site, then sign in again.')
+        view = await probeSession()
+      } catch (probeErr) {
+        if (probeErr?.response?.status === 401) {
+          setError('Your browser refused the sign-in cookie. This GameTracker needs to be served over HTTPS; an administrator can also allow plain HTTP with SESSION_COOKIE_INSECURE=1.')
+        } else {
+          setError(loginErrorMessage(probeErr))
+        }
         return
       }
+      const session = setSession(sessionFromView(view))
+      if (!session) { setError('Sign-in failed. Please try again.'); return }
+      writeHint(session)
+      announceSession('login', session.username)
       setUser(session)
       // Back to where the session ended only for the SAME user (FE-14).
-      navigate(returnPathFor(sessionEnd, res.data.token) || '/search')
+      navigate(returnPathFor(sessionEnd, session.username) || '/search')
     } catch (err) {
       // Distinct answers for a lockout, an outage and a wrong password (FE-4).
       setError(loginErrorMessage(err))
@@ -77,6 +88,11 @@ export default function LoginPage({ setUser }) {
           // role="status", not "alert": nothing the user typed is wrong.
           <div className="login-notice" role="status">
             Your session has ended. Please sign in again.
+          </div>
+        )}
+        {showUpdated && (
+          <div className="login-notice" role="status">
+            Sign-in has been updated for better security. Please sign in again.
           </div>
         )}
         <div className="login-field-group">

@@ -852,6 +852,51 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     dropping the duplicate or Sec-Fetch-Site checks. Each is caught.
   - **Deferred to phase 2:** showing insecure mode on System Status, which needs a frontend
     change and a decision on which response carries the flag.
+- **Phase 1 review (CISO APPROVE with conditions; Architect REJECT for one lint error, fixed):**
+  - The header-logging pin's regex failed `npm run lint` (`no-useless-escape`); fixed in
+    2bc831a.
+  - Three surviving mutations are now pinned:
+    - an EMPTY Authorization header next to a cookie is a 401;
+    - a duplicated cookie is cleared;
+    - a cookie login sends `no-store`.
+- **Phase 2 done (SPA, 2026-09-26):** conditions 13-18, the SPA half of 19, and 10(b).
+  - `session.js` holds the SERVER's view of the session in ONE in-memory store, and
+    decodes no JWT. It also keeps:
+    - expiry from `expiresIn`;
+    - the non-secret `session_hint`;
+    - `dropLegacyToken` (the only touch of the `token` key);
+    - the cross-tab BroadcastChannel;
+    - `endSession`, which also runs the registered server logout, best-effort.
+  - `api.js` sets the CSRF header on own-API calls, never Authorization. The 401 handler
+    runs only while a session exists, and the probe and logout pass `skipSessionEnd`.
+  - `App.jsx` boots on `GET /api/auth/session` behind a loading screen:
+    - 200 = signed in;
+    - 401 = signed out, with the ended notice only for an EXPIRED hint;
+    - anything else = "Can't reach the server — Retry", never the login page.
+    - Other tabs' sign-in and sign-out are followed.
+  - `LoginPage` asks for the cookie and then CONFIRMS it with the probe. A refused cookie
+    says so, with the admin fix. The old clock-skew error is gone with the client clock.
+  - `SharedLibrary`, `SettingsPage` and `UserManagementPage` read the one store.
+    `ApiDocsPage` sends only the CSRF header, and only on the spec fetch.
+  - **System Status** warns when the session view says `cookieSecure: false`. That field
+    was added to the NEW session route, because the v1 system-status shape is frozen.
+  - **Tests:**
+    - api (the CSRF header, no Authorization, a 401 with and without a session, logout
+      once);
+    - LoginPage (cookie login stores no credential, refused cookie, updated notice, FE-14);
+    - App through the real routes: boot signed in, unreachable + Retry, the expired-hint
+      notice, legacy token removal, another tab's sign-out;
+    - helpers for the new session.js;
+    - runtime pins rewritten, and four mutations of them caught.
+  - **Verified end to end in Chromium** against the real backend and Postgres through the
+    Vite proxy:
+    - the `__Host-gt_session` cookie is HttpOnly/Secure/Strict/Path=/ and invisible to JS;
+    - no JWT in storage;
+    - a reload restores the session;
+    - a second tab's sign-out signs the first out and clears the cookie;
+    - no request carries Authorization, and every one carries the CSRF header;
+    - with the backend down, the app shows the unreachable screen with Retry;
+    - no page errors.
 
 ### [x] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
 - **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).

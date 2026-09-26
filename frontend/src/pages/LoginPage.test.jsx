@@ -1,20 +1,25 @@
-// Behaviour tests for the login page (FE-4, SEC-7 notice, clock skew). These replace the
-// source-text pin for the "session ended" notice in test/runtime.test.js (UP-20).
+// Behaviour tests for the login page (FE-4, the SEC-7 notice, SEC-14's cookie session).
+// These replace the source-text pin for the "session ended" notice in
+// test/runtime.test.js (UP-20).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { api } from '../api'
 import LoginPage from './LoginPage'
-import { markSessionEnded } from '../session'
+import { getSession, markSessionEnded, markSignInUpdated, readHint, setSession } from '../session'
 
-// base64URL, as a real JWT is — `-`/`_` in place of `+`/`/` is the case the old inline
-// atob() threw on (session.js). TextEncoder so a non-Latin-1 username cannot throw here.
-const b64url = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
-  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-const fakeJwt = (payload) => ['x', b64url(JSON.stringify(payload)), 'sig'].join('.')
+// What the server answers: POST /api/auth/login {session} sets the cookie, then
+// GET /api/auth/session says who is signed in (SEC-14). No token reaches the page.
+const view = (username) => ({ username, can_manage_users: false, origin: 'local', display_name: username, exp: 9e9, expiresIn: 3600 })
+const signsInAs = (username) => {
+  const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { session: view(username) } })
+  vi.spyOn(api, 'get').mockResolvedValue({ data: { session: view(username) } })
+  return post
+}
 
-beforeEach(() => { localStorage.clear(); sessionStorage.clear() })
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); setSession(null) })
+afterEach(() => vi.restoreAllMocks())
 afterEach(cleanup)
 
 function renderLogin(setUser = vi.fn()) {
@@ -54,7 +59,8 @@ describe('LoginPage errors (FE-4)', () => {
     renderLogin(); submit()
     const button = screen.getByRole('button', { name: /signing in/i })
     expect(button.disabled).toBe(true)
-    resolve({ data: { token: fakeJwt({ id: 1, username: 'jane', exp: Date.now() / 1000 + 3600 }) } })
+    vi.spyOn(api, 'get').mockResolvedValue({ data: { session: view('jane') } })
+    resolve({ data: { session: view('jane') } })
     await waitFor(() => expect(screen.queryByRole('button', { name: /signing in/i })).toBeNull())
   })
 })
@@ -68,20 +74,31 @@ describe('LoginPage session handling (SEC-7)', () => {
     renderLogin()   // a second visit: the flag was cleared on mount
     expect(screen.queryByRole('status')).toBeNull()
   })
-  it('stores a valid token and signs the user in', async () => {
-    const token = fakeJwt({ id: 1, username: 'jane', exp: Date.now() / 1000 + 3600 })
-    vi.spyOn(api, 'post').mockResolvedValue({ data: { token } })
+  it('signs in with a COOKIE session: asks for one, confirms it, stores no credential (SEC-14)', async () => {
+    const post = signsInAs('jane')
     const setUser = renderLogin(); submit()
     await waitFor(() => expect(setUser).toHaveBeenCalledWith(expect.objectContaining({ username: 'jane' })))
-    expect(localStorage.getItem('token')).toBe(token)
-  })
-  it('refuses a token the device clock says is expired, and says why', async () => {
-    const token = fakeJwt({ id: 1, username: 'jane', exp: Date.now() / 1000 - 60 })
-    vi.spyOn(api, 'post').mockResolvedValue({ data: { token } })
-    const setUser = renderLogin(); submit()
-    expect((await screen.findByRole('alert')).textContent).toMatch(/date and time/)
-    expect(setUser).not.toHaveBeenCalled()
+    expect(post.mock.calls[0][1]).toMatchObject({ username: 'jane', session: 'cookie' })
+    expect(getSession()).toMatchObject({ username: 'jane' })
+    expect(readHint()).toEqual({ username: 'jane', exp: 9e9 })       // a hint, not a credential
     expect(localStorage.getItem('token')).toBeNull()
+    expect(JSON.stringify({ ...localStorage })).not.toMatch(/eyJ/)   // no JWT anywhere in storage
+  })
+  it('says so when the BROWSER refused the cookie, instead of looping (condition 17)', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { session: view('jane') } })
+    vi.spyOn(api, 'get').mockRejectedValue({ response: { status: 401, data: {} } })
+    const setUser = renderLogin(); submit()
+    expect((await screen.findByRole('alert')).textContent).toMatch(/refused the sign-in cookie/)
+    expect(setUser).not.toHaveBeenCalled()
+    expect(getSession()).toBeNull()
+  })
+  it('shows the one-time "sign-in has been updated" line after the old token was removed', () => {
+    markSignInUpdated()
+    renderLogin()
+    expect(screen.getByRole('status').textContent).toMatch(/Sign-in has been updated/)
+    cleanup()
+    renderLogin()
+    expect(screen.queryByRole('status')).toBeNull()
   })
 })
 
@@ -101,16 +118,15 @@ function renderRouted() {
   )
 }
 describe('the return path after an ended session (FE-14)', () => {
-  const soon = () => Date.now() / 1000 + 3600
   it('takes the SAME user back to where their session ended', async () => {
     markSessionEnded('/user/alice/library', 'alice')
-    vi.spyOn(api, 'post').mockResolvedValue({ data: { token: fakeJwt({ id: 1, username: 'alice', exp: soon() }) } })
+    signsInAs('alice')
     renderRouted(); submit('alice')
     expect((await screen.findByTestId('where')).textContent).toBe('/user/alice/library')
   })
   it("never sends a DIFFERENT user to the previous user's page", async () => {
     markSessionEnded('/user/alice/library', 'alice')
-    vi.spyOn(api, 'post').mockResolvedValue({ data: { token: fakeJwt({ id: 2, username: 'bob', exp: soon() }) } })
+    signsInAs('bob')
     renderRouted(); submit('bob')
     expect((await screen.findByTestId('where')).textContent).toBe('/search')
   })

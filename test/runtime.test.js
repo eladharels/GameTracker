@@ -682,35 +682,51 @@ console.log('the SPA has one auth header and one way to end a session:');
     const defs = files.filter((f) => /\bconst API_BASE\s*=/.test(src[f]));
     assert.deepStrictEqual(defs, ['frontend/src/api.js'], `API_BASE defined in: ${defs.join(', ')}`);
   });
-  check('only the axios interceptor (and Swagger UI\'s own client) set a Bearer header', () => {
-    // Matches the VALUE being built, whatever the key is spelled like: a template
-    // (`Bearer ${t}`) or a concatenation ('Bearer ' + t, "Bearer " + t). A label such
-    // as 'Bearer Token' is neither. Pinned to ONE per allowed file.
-    const built = (f) => (src[f].match(/`Bearer \$\{|['"`]Bearer ['"`]\s*\+/g) || []).length;
-    const where = files.filter((f) => built(f) > 0);
-    assert.deepStrictEqual(where.sort(), ['frontend/src/ApiDocsPage.jsx', 'frontend/src/api.js'],
-      `hand-built Bearer headers in: ${where.join(', ')} — the interceptor in api.js adds it to every /api call`);
-    assert.strictEqual(built('frontend/src/api.js'), 1, 'api.js builds a Bearer header outside its interceptor');
-    assert.strictEqual(built('frontend/src/ApiDocsPage.jsx'), 1, 'ApiDocsPage builds a second Bearer header');
+  // SEC-14: the session is an HttpOnly COOKIE the page cannot read. So nothing in the SPA
+  // builds an Authorization header at all any more -- Swagger UI's Try-it-out attaches the
+  // PAT the user typed from inside the library, never from our source -- and the one
+  // header our code adds is the CSRF header: api.js on every own-API call, ApiDocsPage on
+  // the spec fetch alone (sign-off condition 15).
+  check('the SPA builds no Authorization header; only api.js and the spec fetch set the CSRF header (SEC-14)', () => {
+    const built = files.filter((f) => /`Bearer \$\{|['"`]Bearer ['"`]\s*\+|Authorization['"]?\s*[:=]\s*[`'"]Bearer/.test(src[f]));
+    assert.deepStrictEqual(built, [], `an Authorization header is built in: ${built.join(', ')} -- the session is a cookie now`);
+    const csrf = (f) => (src[f].match(/['"]X-Requested-With['"]\s*\]?\s*[:=]\s*['"]GameTracker['"]/g) || []).length;
+    const where = files.filter((f) => csrf(f) > 0).sort();
+    assert.deepStrictEqual(where, ['frontend/src/ApiDocsPage.jsx', 'frontend/src/api.js'], `CSRF header set in: ${where.join(', ')}`);
+    assert.strictEqual(csrf('frontend/src/api.js'), 1);
+    assert.strictEqual(csrf('frontend/src/ApiDocsPage.jsx'), 1);
+    const docs = src['frontend/src/ApiDocsPage.jsx'];
+    const setAt = docs.indexOf("'X-Requested-With'");
+    assert.ok(docs.lastIndexOf('if (!isSpecRequest) return req', setAt) !== -1 && docs.lastIndexOf('if (!isSpecRequest) return req', setAt) < setAt,
+      'ApiDocsPage sets the CSRF header on requests other than the spec fetch (Try-it-out would carry it to v2)');
   });
-  check('only session.js#endSession deletes the token (FE-17)', () => {
-    for (const f of files) assert.ok(!/localStorage\.clear\(/.test(src[f]), `${f} clears ALL storage, token included`);
-    const where = files.filter((f) => /removeItem\(['"]token['"]\)/.test(src[f]));
-    assert.deepStrictEqual(where, ['frontend/src/session.js'], `token deleted from: ${where.join(', ')}`);
-    assert.strictEqual((src['frontend/src/session.js'].match(/removeItem\(['"]token['"]\)/g) || []).length, 1,
-      'session.js removes the token somewhere other than endSession');
-    // The ways a session ends — the 401 interceptor (api.js), expiry at boot, sign-out and
-    // the expiry timer (App.jsx) — all go through it. A page deciding on its own is P0-6.
+  check('no credential in browser storage: the old `token` key is only ever DELETED, in one place (SEC-14, FE-17)', () => {
+    for (const f of files) assert.ok(!/localStorage\.clear\(/.test(src[f]), `${f} clears ALL storage`);
+    const touches = (f) => (src[f].match(/(?:getItem|setItem|removeItem)\(\s*['"]token['"]/g) || []);
+    const where = files.filter((f) => touches(f).length > 0);
+    assert.deepStrictEqual(where, ['frontend/src/session.js'], `the token key is touched in: ${where.join(', ')}`);
+    assert.ok(!/setItem\(\s*['"]token['"]/.test(src['frontend/src/session.js']), 'session.js WRITES a token again');
+    const sess = src['frontend/src/session.js'];
+    const fn = sess.slice(sess.indexOf('export function dropLegacyToken'), sess.indexOf('\n}\n', sess.indexOf('export function dropLegacyToken')));
+    assert.strictEqual(touches('frontend/src/session.js').length, (fn.match(/(?:getItem|removeItem)\(\s*['"]token['"]/g) || []).length,
+      'the legacy token key is touched outside dropLegacyToken');
+  });
+  check('every session ending goes through endSession, and only two are silent (FE-17)', () => {
+    // The ways a session ends -- the 401 interceptor (api.js); boot, sign-out, expiry and
+    // another tab's sign-out (App.jsx) -- all go through it. A page deciding on its own is P0-6.
     assert.strictEqual((src['frontend/src/api.js'].match(/endSession\(\{/g) || []).length, 1,
       "api.js's 401 interceptor no longer ends the session through endSession");
     assert.ok((src['frontend/src/App.jsx'].match(/endSession\(\{/g) || []).length >= 3,
       'App.jsx no longer ends sessions through endSession');
-    // A manual sign-out must stay SILENT; every other ending explains itself.
-    const logoutFn = src['frontend/src/App.jsx'].slice(src['frontend/src/App.jsx'].indexOf('const logout = useCallback'),
-      src['frontend/src/App.jsx'].indexOf('}, [setUser, navigate])'));
+    // SILENT endings: a manual sign-out, and another tab's sign-out. Counted across EVERY
+    // file (review: a page adding a silent endSession would have passed an App.jsx-only count).
+    const silent = files.flatMap((f) => (src[f].match(/explain: false/g) || []).map(() => f));
+    assert.deepStrictEqual(silent, ['frontend/src/App.jsx', 'frontend/src/App.jsx'], `silent session endings in: ${silent.join(', ')}`);
+    const app = src['frontend/src/App.jsx'];
+    const logoutFn = app.slice(app.indexOf('const logout = useCallback'), app.indexOf('}, [setUser, navigate])'));
     assert.ok(/endSession\(\{ explain: false \}\)/.test(logoutFn), 'sign-out now shows a "session ended" notice');
-    assert.strictEqual((src['frontend/src/App.jsx'].match(/explain: false/g) || []).length, 1,
-      'more than one path ends a session silently');
+    const tabFn = app.slice(app.indexOf('onSessionAnnounced('), app.indexOf('[user, setUser, navigate, probe]'));
+    assert.ok(/explain: false, announce: false/.test(tabFn), "another tab's sign-out is no longer the other silent ending");
   });
   // The login page's "session ended" notice (shown once, cleared on mount) is covered by
   // behaviour tests now: frontend/src/pages/LoginPage.test.jsx (UP-20).

@@ -392,7 +392,7 @@ export default function UserManagementPage({ user }) {
                           type="checkbox"
                           aria-label={`Admin permission for ${u.username}`}
                           checked={!!u.can_manage_users}
-                          disabled={u.username === 'root' || u.id === user.id}
+                          disabled={u.username === 'root' || u.username === user.username}
                           onChange={e => handleEdit(u.id, { can_manage_users: e.target.checked })}
                         />
                         <span className="slider-modern enhanced-slider"></span>

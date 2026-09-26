@@ -3114,7 +3114,9 @@ console.log('services/session.js (SEC-14: the browser session cookie):');
   });
   check('sessionView: exact keys, server-clock expiresIn, privilege from the row given', () => {
     const v = sess.sessionView({ username: 'jane', can_manage_users: 0 }, 2_000, 1_000_000);
-    assert.deepStrictEqual(Object.keys(v).sort(), ['can_manage_users', 'display_name', 'exp', 'expiresIn', 'origin', 'username']);
+    assert.deepStrictEqual(Object.keys(v).sort(), ['can_manage_users', 'cookieSecure', 'display_name', 'exp', 'expiresIn', 'origin', 'username']);
+    assert.strictEqual(v.cookieSecure, true);
+    assert.strictEqual(sess.sessionView({ username: 'jane' }, 2_000, 1_000_000, 'insecure').cookieSecure, false);
     assert.strictEqual(v.expiresIn, 1_000);
     assert.strictEqual(v.can_manage_users, false);
   });
@@ -3855,36 +3857,64 @@ check('the cursor pins the query it was issued for', () => {
 // pinned here with the backend's. Any DOM or storage one reads when CALLED (focusTrap's
 // `document`, session.js's storage) is stubbed per test and restored in `finally`.
 
-const fakeJwt = (payload) => ['x', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'sig'].join('.');
-
-checkAsync('readSession: an expired, exp-less or malformed token is no session (SEC-7)', async () => {
-  const { readSession, msUntilExpiry } = await import('../frontend/src/session.js');
-  const now = Date.parse('2026-09-26T12:00:00Z');
-  const exp = now / 1000 + 3600;
-  assert.strictEqual(readSession(fakeJwt({ id: 1, username: 'jane', exp }), now).username, 'jane');
-  assert.strictEqual(readSession(fakeJwt({ id: 1, exp: now / 1000 - 1 }), now), null, 'an expired token still reads as a session');
-  assert.strictEqual(readSession(fakeJwt({ id: 1, exp: now / 1000 }), now), null, 'expiry is exclusive: exp == now is expired');
-  assert.strictEqual(readSession(fakeJwt({ id: 1 }), now), null, 'a token with no exp was accepted');
-  assert.strictEqual(readSession(fakeJwt({ id: 1, exp: String(exp) }), now), null, 'a string exp was accepted');
-  for (const bad of [null, undefined, '', 'a.b', 'a.!!!.c', 'a.b.c.d']) {
-    assert.strictEqual(readSession(bad, now), null, `malformed token ${JSON.stringify(bad)} was accepted`);
+// SEC-14: the SPA no longer decodes a JWT (the credential is an HttpOnly cookie it cannot
+// read). What session.js holds is the SERVER's description of the session.
+const mkStorage = () => { const m = new Map(); return { m, getItem: (k) => (m.has(k) ? m.get(k) : null),
+  setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
+async function withStorage(fn) {
+  const had = { l: 'localStorage' in globalThis, s: 'sessionStorage' in globalThis };
+  const prev = { l: globalThis.localStorage, s: globalThis.sessionStorage };
+  globalThis.localStorage = mkStorage(); globalThis.sessionStorage = mkStorage();
+  try { return await fn(); } finally {
+    if (had.l) globalThis.localStorage = prev.l; else delete globalThis.localStorage;
+    if (had.s) globalThis.sessionStorage = prev.s; else delete globalThis.sessionStorage;
   }
-  assert.strictEqual(msUntilExpiry(fakeJwt({ exp }), now), 3600 * 1000);
-  assert.strictEqual(msUntilExpiry(fakeJwt({ exp: 1 }), now), null);
+}
+
+checkAsync('sessionFromView: the server\'s view, with expiry from ITS clock (SEC-14 cond. 17)', async () => {
+  const { sessionFromView, msUntilExpiry } = await import('../frontend/src/session.js');
+  const now = 1_700_000_000_000;
+  const s = sessionFromView({ username: 'jane', can_manage_users: 1, exp: 123, expiresIn: 3600 }, now);
+  assert.strictEqual(s.username, 'jane');
+  assert.strictEqual(s.can_manage_users, true);
+  assert.strictEqual(s.expiresAtMs, now + 3600 * 1000, 'expiry must come from expiresIn, not the device clock vs exp');
+  assert.strictEqual(msUntilExpiry(s, now), 3600 * 1000);
+  assert.strictEqual(msUntilExpiry(s, now + 4000 * 1000), 0);
+  assert.strictEqual(msUntilExpiry(null, now), null);
+  assert.strictEqual(s.cookieSecure, true);
+  assert.strictEqual(sessionFromView({ username: 'j', expiresIn: 1, cookieSecure: false }).cookieSecure, false);
+  for (const bad of [null, {}, { username: '' }, { username: 'j' }, { username: 'j', expiresIn: 0 }, { username: 'j', expiresIn: 'x' }]) {
+    assert.strictEqual(sessionFromView(bad, now), null, `accepted ${JSON.stringify(bad)}`);
+  }
 });
 
-checkAsync('readSession decodes base64URL, not base64 — `-` and `_` payloads are valid sessions', async () => {
-  const { readSession } = await import('../frontend/src/session.js');
-  const now = Date.parse('2026-09-26T12:00:00Z');
-  // Find a payload whose encoding contains '-' or '_': the inline atob() the app used
-  // threw on exactly these, and read the user as logged out.
-  let token = null;
-  for (let i = 0; i < 500 && !token; i++) {
-    const t = fakeJwt({ id: i, username: 'jäne>?', exp: now / 1000 + 60 });
-    if (/[-_]/.test(t.split('.')[1])) token = t;
-  }
-  assert.ok(token, 'could not construct a payload that encodes to base64url-only characters');
-  assert.strictEqual(readSession(token, now).username, 'jäne>?');
+checkAsync('the hint holds {username, exp} and NEVER a credential; a bad hint reads as none', async () => {
+  const { writeHint, readHint } = await import('../frontend/src/session.js');
+  await withStorage(async () => {
+    writeHint({ username: 'Jane', exp: 42, expiresAtMs: 1, can_manage_users: true, token: 'eyJ.secret' });
+    const raw = globalThis.localStorage.getItem('session_hint');
+    assert.deepStrictEqual(JSON.parse(raw), { username: 'Jane', exp: 42 });
+    assert.ok(!raw.includes('eyJ'), 'a credential reached storage');
+    assert.deepStrictEqual(readHint(), { username: 'jane', exp: 42 });
+    for (const junk of ['nope', '{"username":7}', '[]', 'null']) {
+      globalThis.localStorage.setItem('session_hint', junk);
+      assert.strictEqual(readHint(), null, `a junk hint ${junk} was trusted`);
+    }
+    writeHint(null);
+    assert.strictEqual(globalThis.localStorage.getItem('session_hint'), null);
+  });
+});
+
+checkAsync('dropLegacyToken removes the pre-SEC-14 token and says whether one was there', async () => {
+  const { dropLegacyToken } = await import('../frontend/src/session.js');
+  await withStorage(async () => {
+    assert.strictEqual(dropLegacyToken(), false);
+    globalThis.localStorage.setItem('token', 'eyJ.old');
+    assert.strictEqual(dropLegacyToken(), true);
+    assert.strictEqual(globalThis.localStorage.getItem('token'), null);
+  });
+  delete globalThis.localStorage;
+  assert.strictEqual(dropLegacyToken(), false, 'no storage at all must not throw');
 });
 
 checkAsync('the login page is told why a session ended, once, and returns only to in-app paths', async () => {
@@ -3977,60 +4007,40 @@ checkAsync('loginErrorMessage: a lockout or an outage never reads as a wrong pas
   assert.notStrictEqual(loginErrorMessage(undefined), wrong);
 });
 
-checkAsync('endSession: clears the token, and explains only when asked (FE-17)', async () => {
-  const { endSession, peekSessionEnd } = await import('../frontend/src/session.js');
-  const mk = () => { const m = new Map(); return { m, getItem: (k) => (m.has(k) ? m.get(k) : null),
-    setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
-  const had = { l: 'localStorage' in globalThis, s: 'sessionStorage' in globalThis };
-  const prev = { l: globalThis.localStorage, s: globalThis.sessionStorage };
+checkAsync('endSession: clears the session and hint, explains only when asked, logs out server-side (FE-17)', async () => {
+  const { endSession, peekSessionEnd, setSession, sessionFromView, getSession, writeHint, readHint, setServerLogout } =
+    await import('../frontend/src/session.js');
+  let logouts = 0;
+  setServerLogout(() => { logouts++; return Promise.reject(new Error('offline')); });   // must be swallowed
   try {
-    globalThis.localStorage = mk(); globalThis.sessionStorage = mk();
-    globalThis.localStorage.setItem('token', 't');
-    endSession({ explain: false });
-    assert.strictEqual(globalThis.localStorage.getItem('token'), null, 'the token survived a sign-out');
-    assert.strictEqual(peekSessionEnd(), null, 'a manual sign-out left a "session ended" notice');
-    globalThis.localStorage.setItem('token', 't');
-    endSession({ explain: true, fromPath: '/library' });
-    assert.strictEqual(globalThis.localStorage.getItem('token'), null);
-    assert.deepStrictEqual(peekSessionEnd(), { from: '/library', owner: null }, 'an ended session was not explained');
+    await withStorage(async () => {
+      const signIn = () => { const s = setSession(sessionFromView({ username: 'jane', expiresIn: 60, exp: 1 })); writeHint(s); };
+      signIn();
+      endSession({ explain: false, announce: false });
+      assert.strictEqual(getSession(), null, 'the session survived a sign-out');
+      assert.strictEqual(readHint(), null, 'the hint survived a sign-out');
+      assert.strictEqual(peekSessionEnd(), null, 'a manual sign-out left a "session ended" notice');
+      signIn();
+      endSession({ explain: true, fromPath: '/library', announce: false });
+      assert.deepStrictEqual(peekSessionEnd(), { from: '/library', owner: 'jane' }, 'an ended session was not explained, or lost its owner');
+      assert.strictEqual(logouts, 2, 'endSession did not clear the cookie server-side');
+    });
     delete globalThis.localStorage; delete globalThis.sessionStorage;
-    endSession({ explain: true, fromPath: '/x' });   // no storage at all: must not throw
-  } finally {
-    if (had.l) globalThis.localStorage = prev.l; else delete globalThis.localStorage;
-    if (had.s) globalThis.sessionStorage = prev.s; else delete globalThis.sessionStorage;
-  }
+    endSession({ explain: true, fromPath: '/x', announce: false });   // no storage at all: must not throw
+  } finally { setServerLogout(null); }
 });
 
 checkAsync('the return path after an ended session is honoured only for the SAME user (FE-14)', async () => {
-  const { endSession, peekSessionEnd, returnPathFor, sessionOwner } = await import('../frontend/src/session.js');
-  const tok = (payload) => ['x', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'sig'].join('.');
-  const past = Math.floor(Date.now() / 1000) - 60, future = past + 7200;
-  // The EXPIRED token still names its owner; readSession refuses it, sessionOwner must not.
-  assert.strictEqual(sessionOwner(tok({ username: 'Alice', exp: past })), 'alice');
-  for (const bad of [null, 'x', 'a.b', tok({ exp: past }), tok({ username: 7 })]) assert.strictEqual(sessionOwner(bad), null);
-
-  const mk = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null),
-    setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
-  const had = { l: 'localStorage' in globalThis, s: 'sessionStorage' in globalThis };
-  const prev = { l: globalThis.localStorage, s: globalThis.sessionStorage };
-  try {
-    globalThis.localStorage = mk(); globalThis.sessionStorage = mk();
-    globalThis.localStorage.setItem('token', tok({ username: 'alice', exp: past }));
-    endSession({ explain: true, fromPath: '/user/alice/library' });
-    const ended = peekSessionEnd();
-    assert.deepStrictEqual(ended, { from: '/user/alice/library', owner: 'alice' });
-    assert.strictEqual(returnPathFor(ended, tok({ username: 'alice', exp: future })), '/user/alice/library');
-    assert.strictEqual(returnPathFor(ended, tok({ username: 'ALICE', exp: future })), '/user/alice/library');
-    // The shared-machine case: bob signs in after alice's session expired.
-    assert.strictEqual(returnPathFor(ended, tok({ username: 'bob', exp: future })), null,
-      "the next user was sent to the previous user's page");
-    // A record with no owner (written before FE-14) is never honoured.
-    assert.strictEqual(returnPathFor({ from: '/library', owner: null }, tok({ username: 'alice', exp: future })), null);
-    assert.strictEqual(returnPathFor(null, tok({ username: 'alice', exp: future })), null);
-  } finally {
-    if (had.l) globalThis.localStorage = prev.l; else delete globalThis.localStorage;
-    if (had.s) globalThis.sessionStorage = prev.s; else delete globalThis.sessionStorage;
-  }
+  const { returnPathFor } = await import('../frontend/src/session.js');
+  const ended = { from: '/user/alice/library', owner: 'alice' };
+  assert.strictEqual(returnPathFor(ended, 'alice'), '/user/alice/library');
+  assert.strictEqual(returnPathFor(ended, 'ALICE'), '/user/alice/library');
+  // The shared-machine case: bob signs in after alice's session expired.
+  assert.strictEqual(returnPathFor(ended, 'bob'), null, "the next user was sent to the previous user's page");
+  // A record with no owner is never honoured, nor a missing username.
+  assert.strictEqual(returnPathFor({ from: '/library', owner: null }, 'alice'), null);
+  assert.strictEqual(returnPathFor(null, 'alice'), null);
+  assert.strictEqual(returnPathFor(ended, undefined), null);
 });
 
 checkAsync('handleModalFocusTrap: Tab wraps inside the dialog, both directions (FE-7)', async () => {

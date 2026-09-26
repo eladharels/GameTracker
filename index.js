@@ -1764,7 +1764,7 @@ app.post('/api/auth/login', (req, res) => {
     res.set('Cache-Control', 'no-store');
     if (!wantsCookie) return res.json({ token });
     res.append('Set-Cookie', sessionService.setCookie(token, exp, SESSION_COOKIE_MODE));
-    return res.json({ session: sessionService.sessionView(sessionService.claimsFor(user), exp) });
+    return res.json({ session: sessionService.sessionView(sessionService.claimsFor(user), exp, Date.now(), SESSION_COOKIE_MODE) });
   };
 
   // Normalize username to lowercase to prevent case sensitivity issues
@@ -2089,7 +2089,7 @@ function parseRouteId(value) {
 // with the server-clock `expiresIn` the SPA's expiry timer runs on.
 app.get('/api/auth/session', authRequired, cookieSessionOnly, (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ session: sessionService.sessionView(req.user, req.auth.exp) });
+  res.json({ session: sessionService.sessionView(req.user, req.auth.exp, Date.now(), SESSION_COOKIE_MODE) });
 });
 
 // Clears the cookie. The JWT it held stays valid until its exp if it was COPIED -- HttpOnly

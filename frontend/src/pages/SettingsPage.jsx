@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { FaBell, FaCheck, FaCheckCircle, FaChevronDown, FaCog, FaEnvelope, FaExclamationCircle, FaEye, FaEyeSlash, FaGamepad, FaKey, FaLock, FaSync, FaTelegram } from 'react-icons/fa'
 import { api, API_BASE } from '../api'
-import { readSession } from '../session'
+import { getSession } from '../session'
 import { safeExternalUrl } from '../safeUrl'
 
 // ── Settings sub-components ────────────────────────────────────────────────
@@ -205,10 +205,8 @@ export default function SettingsPage() {
   const [crackError, setCrackError]           = useState('')
   const [testError, setTestError]             = useState('')
 
-  const token   = localStorage.getItem('token')
-  // session.js is the one client-side JWT decode. The inline atob() here threw on
-  // base64URL payloads and showed those admins the non-admin Settings page.
-  const isAdmin = !!readSession(token)?.can_manage_users
+  // From session.js's one store: the privilege the SERVER re-read from `users` (SEC-14).
+  const isAdmin = !!getSession()?.can_manage_users
   // Admins land on Email; non-admins only have the Diagnostics tab in Settings
   // (all notification config moved to My Account).
   const [activeTab, setActiveTab] = useState(() => (isAdmin ? 'email' : 'testing'))
