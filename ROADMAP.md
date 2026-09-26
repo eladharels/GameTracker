@@ -1006,6 +1006,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
       otherwise.
     - **The LDAP sync toast** stays up for 10 s: a sentence with two numbers must be read
       before it goes.
+  - **Second review round:**
+    - Delete uses `aria-disabled`, not `disabled`. Disabling the FOCUSED button dropped
+      focus to `<body>`: the trap stopped and "Deleting…" was never announced. The useless
+      `aria-busy` is removed, and a CSS rule gives `aria-disabled` buttons the disabled
+      look.
+    - Cancel, Escape and a background click cannot close the dialog mid-delete.
+    - The password dialog ignores a second submit while one is in flight.
+    - Verified in the built app: mid-delete, focus stays on the button, which reads
+      "Deleting…" with `aria-disabled`; Escape leaves the dialog open; one request is sent.
   - **Left:** `.error-msg` is still used by the login page, search, library and
     SharedLibrary for single-line inline errors. That is a separate component (inline, not
     a page banner) and was not in this item's scope.
@@ -1341,6 +1350,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - **A silent failure fixed along the way:** under `set -e` plus `pipefail`, a failed mint
     killed the step with no output. It is now caught and reported with the script's
     stderr.
+  - **Review fixes:**
+    - **Least privilege:** the token is `library` only. Every call is a library operation,
+      and a library-only token working is itself worth proving.
+    - **No fixed `/tmp` paths on the production host,** in this step or in the older smoke
+      steps (`smoke-404.json`, `smoke-stats.json`, `smoke-hist.json`, `smoke-mcp.txt`).
+      `curl -o` and `2>` follow a symlink. They now use a per-run `mktemp -d` under
+      `RUNNER_TEMP` (`SMOKE_TMP`, mode 0700), which teardown removes.
+    - **Failures say why:** a curl that cannot connect no longer ends the step silently.
+    - **Pinned in `runtime.test.js`:**
+      - the step exists;
+      - the mask comes before the first use of the token;
+      - the scope is exactly `library`;
+      - the MCP call is a `tools/call` that reaches the backend;
+      - no smoke step writes `/tmp/smoke-*`.
+
+      Mutation-checked for the scope and the `/tmp` path.
+    - **Rehearsed again locally:** it passes with the library-only token, and an
+      unreachable MCP server now fails with a clear message.
 
 ### [x] UP-8 `saveSettings` is not atomic
 - **Where:** `settings-store.js`.

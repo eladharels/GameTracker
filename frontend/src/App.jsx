@@ -507,10 +507,14 @@ function UserManagementPage({ user }) {
   // The dialog stays OPEN on failure and says why, next to the field (FE-18 review): it
   // used to close regardless and put a generic "Failed to update user" on the page, so a
   // password the policy rejected looked like a success that had not happened.
+  const pwSubmitting = useRef(false)   // a double Enter sent two PUTs (and two toasts)
   const submitPasswordChange = async () => {
-    if (!newPassword.trim()) return
+    if (!newPassword.trim() || pwSubmitting.current) return
+    pwSubmitting.current = true
     setPwError('')
-    const ok = await handleEdit(pwTarget, { password: newPassword }, { onError: setPwError })
+    let ok
+    try { ok = await handleEdit(pwTarget, { password: newPassword }, { onError: setPwError }) }
+    finally { pwSubmitting.current = false }
     if (!ok) return
     setPwModalOpen(false)
     setNewPassword('')
@@ -561,13 +565,13 @@ function UserManagementPage({ user }) {
     function onKey(e) {
       if (e.key === 'Escape') {
         if (pwModalOpen) { setPwModalOpen(false); return }
-        if (confirmOpen) { setConfirmOpen(false); return }
+        if (confirmOpen) { if (!deleting) setConfirmOpen(false); return }   // not mid-delete
         setModalOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [modalOpen, confirmOpen, pwModalOpen])
+  }, [modalOpen, confirmOpen, pwModalOpen, deleting])
 
   // Focus in on open, back to the opener on close, Tab kept inside (FE-19). These focused
   // an input after a 50 ms setTimeout and never gave focus back; the delete confirmation
@@ -612,17 +616,19 @@ function UserManagementPage({ user }) {
         </div>
       </div>
       {confirmOpen && (
-        <div className="user-modal-bg" ref={confirmModalRef} onClick={e => { if (e.target === confirmModalRef.current) setConfirmOpen(false) }} tabIndex={-1} aria-modal="true" role="alertdialog" aria-labelledby="confirm-dialog-title" onKeyDown={confirmDialog.onKeyDown}>
+        <div className="user-modal-bg" ref={confirmModalRef} onClick={e => { if (e.target === confirmModalRef.current && !deleting) setConfirmOpen(false) }} tabIndex={-1} aria-modal="true" role="alertdialog" aria-labelledby="confirm-dialog-title" onKeyDown={confirmDialog.onKeyDown}>
           <div className="user-modal-window" style={{maxWidth: 400}}>
             <h3 id="confirm-dialog-title" style={{marginTop:0}}>Delete User</h3>
             <p style={{color:'var(--color-fg-muted)'}}>Are you sure you want to delete this user? This cannot be undone.</p>
             <div style={{display:'flex', gap:'1rem', justifyContent:'flex-end', marginTop:'1.5rem'}}>
-              <button ref={confirmCancelRef} className="icon-btn enhanced-icon-btn" style={{padding:'0.6em 1.4em'}} onClick={() => setConfirmOpen(false)}>Cancel</button>
+              <button ref={confirmCancelRef} className="icon-btn enhanced-icon-btn" style={{padding:'0.6em 1.4em'}} aria-disabled={deleting || undefined} onClick={() => { if (!deleting) setConfirmOpen(false) }}>Cancel</button>
               <button
                 className="create-user-btn enhanced-btn"
                 style={{background:'#ef4444', padding:'0.6em 1.4em'}}
-                disabled={deleting}
-                aria-busy={deleting}
+                // aria-disabled, NOT disabled (FE-18 review): disabling the FOCUSED button
+                // dropped focus to <body> mid-request — the trap stopped working and
+                // "Deleting…" was never announced. The guard below blocks a second click.
+                aria-disabled={deleting || undefined}
                 onClick={async () => {
                   if (deleting) return
                   setDeleting(true)

@@ -6982,3 +6982,11 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
   color: var(--color-status-done);
   font-weight: 600;
 }
+
+/* A button that is busy but must keep focus (FE-18 review): `disabled` would drop focus to
+   <body>, so these use aria-disabled — and need the disabled LOOK the attribute alone does
+   not give them. */
+button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}

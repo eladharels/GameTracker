@@ -735,6 +735,12 @@ jobs:
           set -euo pipefail
           SMOKE_DATA_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gametracker-smoke.XXXXXXXX")"
           echo "SMOKE_DATA_DIR=${SMOKE_DATA_DIR}" >> "$GITHUB_ENV"
+          # The steps' own scratch files (response bodies, the mint's stderr) — never fixed
+          # /tmp paths (review of UP-7): `curl -o` and `2>` follow a symlink, and this runner
+          # is the production host, so a pre-planted ${SMOKE_TMP}/smoke-*.json could be pointed at a
+          # production file. Same reasoning as SMOKE_DATA_DIR above. Mode 0700, per run.
+          SMOKE_TMP="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gametracker-smoke-tmp.XXXXXXXX")"
+          echo "SMOKE_TMP=${SMOKE_TMP}" >> "$GITHUB_ENV"
           # No gametracker.db any more — the smoke stack brings up its own
           # throwaway Postgres container and the backend creates the schema.
           echo '{}' > "${SMOKE_DATA_DIR}/settings.json"
@@ -848,14 +854,14 @@ jobs:
       - name: Verify unknown API routes return JSON 404
         run: |
           set -euo pipefail
-          STATUS=$(curl -o /tmp/smoke-404.json -sw "%{http_code}" \
+          STATUS=$(curl -o ${SMOKE_TMP}/smoke-404.json -sw "%{http_code}" \
             "http://localhost:${{ env.FRONTEND_TEST_PORT }}/api/definitely-not-a-route")
-          echo "[smoke] Unknown API route status: $STATUS, body: $(cat /tmp/smoke-404.json)"
-          [ "$STATUS" -eq 404 ] && grep -q '"error"' /tmp/smoke-404.json || {
+          echo "[smoke] Unknown API route status: $STATUS, body: $(cat ${SMOKE_TMP}/smoke-404.json)"
+          [ "$STATUS" -eq 404 ] && grep -q '"error"' ${SMOKE_TMP}/smoke-404.json || {
             echo "[smoke] ERROR: expected a JSON 404 from an unknown /api route."
             exit 1
           }
-          rm -f /tmp/smoke-404.json
+          rm -f ${SMOKE_TMP}/smoke-404.json
           echo "[smoke] API 404 handling check PASSED"
 
       # Status history, against the real Postgres, inside the real backend container.
@@ -932,9 +938,9 @@ jobs:
             | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
           [ -n "$TOKEN" ] || { echo "[smoke] ERROR: could not log in as root"; exit 1; }
 
-          STATUS=$(curl -o /tmp/smoke-stats.json -sw "%{http_code}" \
+          STATUS=$(curl -o ${SMOKE_TMP}/smoke-stats.json -sw "%{http_code}" \
             -H "Authorization: Bearer $TOKEN" "$BASE/api/user/root/stats")
-          echo "[smoke] authenticated GET -> $STATUS: $(head -c 200 /tmp/smoke-stats.json)"
+          echo "[smoke] authenticated GET -> $STATUS: $(head -c 200 ${SMOKE_TMP}/smoke-stats.json)"
           [ "$STATUS" -eq 200 ] || {
             echo "[smoke] ERROR: authenticated stats request returned $STATUS"
             docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend 2>&1 | tail -30 || true
@@ -943,12 +949,12 @@ jobs:
           # Shape, not just a 200 — an empty body or an HTML error page is also a 200
           # from some proxies, and the page renders a missing field as a confident zero.
           for key in coverage completions durations trackingSince inProgress; do
-            grep -q "\"$key\"" /tmp/smoke-stats.json || {
+            grep -q "\"$key\"" ${SMOKE_TMP}/smoke-stats.json || {
               echo "[smoke] ERROR: stats response is missing \"$key\""
               exit 1
             }
           done
-          rm -f /tmp/smoke-stats.json
+          rm -f ${SMOKE_TMP}/smoke-stats.json
 
           # The per-game history, through Express. UNAUTHENTICATED FIRST: this route
           # returns one user's play history, and a route that loses its middleware still
@@ -960,9 +966,9 @@ jobs:
             echo "[smoke] ERROR: the history route answered $HUNAUTH without a token, expected 401."
             exit 1
           }
-          HSTATUS=$(curl -o /tmp/smoke-hist.json -sw "%{http_code}" \
+          HSTATUS=$(curl -o ${SMOKE_TMP}/smoke-hist.json -sw "%{http_code}" \
             -H "Authorization: Bearer $TOKEN" "$BASE/api/user/root/games/igdb_smoke/history")
-          echo "[smoke] authenticated GET .../history -> $HSTATUS: $(head -c 160 /tmp/smoke-hist.json)"
+          echo "[smoke] authenticated GET .../history -> $HSTATUS: $(head -c 160 ${SMOKE_TMP}/smoke-hist.json)"
           [ "$HSTATUS" -eq 200 ] || {
             echo "[smoke] ERROR: history request returned $HSTATUS"
             exit 1
@@ -970,12 +976,12 @@ jobs:
           # A game with no recorded transitions is an EMPTY history, never a 404 -- the
           # normal case for anything added before migration 005.
           for key in events daysToFinish gameId; do
-            grep -q "\"$key\"" /tmp/smoke-hist.json || {
+            grep -q "\"$key\"" ${SMOKE_TMP}/smoke-hist.json || {
               echo "[smoke] ERROR: history response is missing \"$key\""
               exit 1
             }
           done
-          rm -f /tmp/smoke-hist.json
+          rm -f ${SMOKE_TMP}/smoke-hist.json
           echo "[smoke] Statistics + history route checks PASSED"
 
       # A real MCP handshake against the real container, on the image's own Node.
@@ -1009,14 +1015,14 @@ jobs:
           echo "[smoke] MCP reachable after ${ELAPSED}s"
 
           BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
-          STATUS=$(curl -o /tmp/smoke-mcp.txt -sw "%{http_code}" \
+          STATUS=$(curl -o ${SMOKE_TMP}/smoke-mcp.txt -sw "%{http_code}" \
             -X POST "http://127.0.0.1:${{ env.MCP_TEST_PORT }}/mcp" \
             -H 'content-type: application/json' \
             -H 'accept: application/json, text/event-stream' \
             -H 'authorization: Bearer gt_pat_smoke-test-not-a-real-token' \
             -d "$BODY")
           echo "[smoke] MCP initialize status: $STATUS"
-          echo "[smoke] MCP initialize body: $(head -c 400 /tmp/smoke-mcp.txt)"
+          echo "[smoke] MCP initialize body: $(head -c 400 ${SMOKE_TMP}/smoke-mcp.txt)"
           [ "$STATUS" -eq 200 ] || {
             echo "[smoke] ERROR: MCP initialize returned $STATUS, expected 200."
             docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
@@ -1024,16 +1030,16 @@ jobs:
           }
           # A JSON-RPC error is delivered with HTTP 200 in some paths, so the status
           # code alone would not have caught the crypto failure. Assert the RESULT.
-          grep -q '"serverInfo"' /tmp/smoke-mcp.txt && grep -q '"name":"gametracker"' /tmp/smoke-mcp.txt || {
+          grep -q '"serverInfo"' ${SMOKE_TMP}/smoke-mcp.txt && grep -q '"name":"gametracker"' ${SMOKE_TMP}/smoke-mcp.txt || {
             echo "[smoke] ERROR: MCP initialize did not return a serverInfo result."
             docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
             exit 1
           }
-          grep -q '"error"' /tmp/smoke-mcp.txt && {
+          grep -q '"error"' ${SMOKE_TMP}/smoke-mcp.txt && {
             echo "[smoke] ERROR: MCP initialize returned a JSON-RPC error."
             exit 1
           } || true
-          rm -f /tmp/smoke-mcp.txt
+          rm -f ${SMOKE_TMP}/smoke-mcp.txt
           echo "[smoke] MCP handshake check PASSED"
 
       # END TO END with a REAL credential (ROADMAP UP-7). Every step above is v1, and the
@@ -1041,8 +1047,9 @@ jobs:
       # nothing proved that a token minted by create-api-token.js is accepted by /api/v2,
       # that a v2 WRITE lands, or that the MCP server forwards a caller's token to the
       # backend — the whole design of both. This mints one inside the throwaway stack
-      # (scopes library,admin, expires in a day, stack destroyed at teardown anyway),
-      # masks it in the log, and drives both paths.
+      # (scope `library` ONLY — every call below is a library operation, and a library-only
+      # token working is itself worth proving; expires in a day, stack destroyed at
+      # teardown anyway), masks it in the log, and drives both paths.
       - name: Verify /api/v2 and the MCP-to-backend path with a real token
         run: |
           set -euo pipefail
@@ -1054,34 +1061,35 @@ jobs:
           # `|| true`: under set -e + pipefail a failed mint would kill the step SILENTLY;
           # the case below reports it with the script's own stderr instead.
           PAT=$(docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml exec -T backend \
-                  node create-api-token.js root "smoke-e2e-${GITHUB_RUN_ID:-local}-$$" library,admin --expires-in-days 1 \
-                  2>/tmp/smoke-mint.err | tail -n 1) || true
-          case "$PAT" in gt_pat_*) ;; *) fail "create-api-token.js did not print a token: $(tail -n 3 /tmp/smoke-mint.err 2>/dev/null)" ;; esac
+                  node create-api-token.js root "smoke-e2e-${GITHUB_RUN_ID:-local}-$$" library --expires-in-days 1 \
+                  2>${SMOKE_TMP}/smoke-mint.err | tail -n 1) || true
+          case "$PAT" in gt_pat_*) ;; *) fail "create-api-token.js did not print a token: $(tail -n 3 ${SMOKE_TMP}/smoke-mint.err 2>/dev/null)" ;; esac
           echo "::add-mask::${PAT}"
 
           # 1. v2 refuses a missing credential with problem+json 401 (never the v1 envelope).
-          CODE=$(curl -s -o /tmp/smoke-v2.json -w "%{http_code} %{content_type}" "$B/api/v2/library/games")
+          CODE=$(curl -s -o "${SMOKE_TMP}/smoke-v2.json" -w "%{http_code} %{content_type}" "$B/api/v2/library/games") || CODE="curl failed"
           case "$CODE" in "401 application/problem+json"*) ;; *) fail "unauthenticated v2 answered: $CODE" ;; esac
 
           # 2. A v2 READ with the minted token.
-          CODE=$(curl -s -o /tmp/smoke-v2.json -w "%{http_code}" -H "Authorization: Bearer $PAT" "$B/api/v2/library/games?limit=5")
-          [ "$CODE" = "200" ] && grep -q '"data"' /tmp/smoke-v2.json || fail "v2 library read answered $CODE: $(head -c 300 /tmp/smoke-v2.json)"
+          CODE=$(curl -s -o "${SMOKE_TMP}/smoke-v2.json" -w "%{http_code}" -H "Authorization: Bearer $PAT" "$B/api/v2/library/games?limit=5") || CODE="curl failed"
+          [ "$CODE" = "200" ] && grep -q '"data"' ${SMOKE_TMP}/smoke-v2.json || fail "v2 library read answered $CODE: $(head -c 300 ${SMOKE_TMP}/smoke-v2.json)"
 
           # 3. A v2 WRITE that needs no external provider (no API keys here): replace the
           #    outgoing share list, then read it back through the same token.
-          CODE=$(curl -s -o /tmp/smoke-v2.json -w "%{http_code}" -X PUT -H "Authorization: Bearer $PAT" \
-                   -H 'content-type: application/json' -d '{"usernames":[]}' "$B/api/v2/shares/outgoing")
-          [ "$CODE" = "200" ] && grep -q '"data":\[\]' /tmp/smoke-v2.json || fail "v2 share write answered $CODE: $(head -c 300 /tmp/smoke-v2.json)"
+          CODE=$(curl -s -o ${SMOKE_TMP}/smoke-v2.json -w "%{http_code}" -X PUT -H "Authorization: Bearer $PAT" \
+                   -H 'content-type: application/json' -d '{"usernames":[]}' "$B/api/v2/shares/outgoing") || CODE="curl failed"
+          [ "$CODE" = "200" ] && grep -q '"data":\[\]' ${SMOKE_TMP}/smoke-v2.json || fail "v2 share write answered $CODE: $(head -c 300 ${SMOKE_TMP}/smoke-v2.json)"
 
           # 4. An MCP TOOL CALL that reaches the backend: whoami can only answer with the
           #    caller's identity if the MCP server forwarded this token and v2 accepted it.
-          curl -s -o /tmp/smoke-mcp-e2e.txt -X POST "$M/mcp" -H 'content-type: application/json' \
+          curl -s -o ${SMOKE_TMP}/smoke-mcp-e2e.txt -X POST "$M/mcp" -H 'content-type: application/json' \
                -H 'accept: application/json, text/event-stream' -H "authorization: Bearer $PAT" \
-               -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}'
-          grep -q 'username\\":\\"root' /tmp/smoke-mcp-e2e.txt || fail "MCP whoami did not return the token's user: $(head -c 400 /tmp/smoke-mcp-e2e.txt)"
-          grep -q '"isError":true' /tmp/smoke-mcp-e2e.txt && fail "MCP whoami returned a tool error" || true
+               -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}' \
+            || fail "could not reach the MCP server"
+          grep -q 'username\\":\\"root' ${SMOKE_TMP}/smoke-mcp-e2e.txt || fail "MCP whoami did not return the token's user: $(head -c 400 ${SMOKE_TMP}/smoke-mcp-e2e.txt)"
+          grep -q '"isError":true' ${SMOKE_TMP}/smoke-mcp-e2e.txt && fail "MCP whoami returned a tool error" || true
 
-          rm -f /tmp/smoke-v2.json /tmp/smoke-mcp-e2e.txt
+          rm -f ${SMOKE_TMP}/smoke-v2.json ${SMOKE_TMP}/smoke-mcp-e2e.txt
           echo "[smoke] v2 read, v2 write and MCP -> backend with a real token PASSED"
 
       - name: Tear down smoke test stack
@@ -1099,6 +1107,9 @@ jobs:
           # Refuse to delete anything that isn't the mktemp -d directory we created.
           if [ -n "${SMOKE_DATA_DIR:-}" ] && [ -d "${SMOKE_DATA_DIR}" ] && [ ! -L "${SMOKE_DATA_DIR}" ]; then
             sudo rm -rf --one-file-system "${SMOKE_DATA_DIR}"
+          fi
+          if [ -n "${SMOKE_TMP:-}" ] && [ -d "${SMOKE_TMP}" ] && [ ! -L "${SMOKE_TMP}" ]; then
+            rm -rf --one-file-system "${SMOKE_TMP}"
           fi
           echo "[smoke] Stack torn down and temp data wiped"
 

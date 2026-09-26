@@ -221,6 +221,25 @@ check("the SPA's CSP has no 'unsafe-inline' and nothing in the SPA needs it (FE-
   }
 });
 
+// UP-7. The one smoke step that proves a REAL token works on v2 and through the MCP
+// server. Deleting it, or letting the token print before it is masked, would leave CI
+// green; so would minting a broader token than the checks need.
+check('the smoke stage drives v2 and MCP with a real, masked, library-only token (UP-7)', () => {
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  const steps = wf.jobs['smoke-test'].steps;
+  const e2e = steps.find((st) => /real token/i.test(st.name || ''));
+  assert.ok(e2e, 'the end-to-end smoke step is gone');
+  const run = e2e.run;
+  const mint = run.search(/create-api-token\.js/), mask = run.indexOf('::add-mask::'), use = run.indexOf('Bearer $PAT');
+  assert.ok(mint >= 0 && mask > mint && use > mask, 'the token is used before it is masked (or is not minted here)');
+  assert.ok(/create-api-token\.js root "[^"]+" library --expires-in-days 1/.test(run),
+    'the smoke token is minted with more than the library scope, or without an expiry');
+  assert.ok(/tools\/call[\s\S]*whoami/.test(run), 'the MCP step no longer calls a tool that reaches the backend');
+  // No smoke step writes a fixed /tmp path on the production host (symlink target).
+  for (const st of steps) assert.ok(!/\/tmp\/smoke-/.test(st.run || ''), `"${st.name}" writes a fixed /tmp/smoke-* path`);
+});
+
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
 // every suite passed on an interpreter production never used. Keeping them equal is not
 // cosmetic — it is what makes a green `npm test` mean anything about the deployed thing.
