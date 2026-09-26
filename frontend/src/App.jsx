@@ -388,6 +388,19 @@ function LoginPage({ setUser }) {
   )
 }
 
+// The message to show for a failed user-management request (FE-18). The server's own 4xx
+// text where there is one — "User already exists", the username and password rules — is
+// an `expose: true` message by construction (services/problem.js); a 403 gets a fixed
+// sentence; anything else stays generic. Hiding every reason behind "Failed to …" meant
+// an admin could not tell a taken username from an outage.
+function userApiError(err, fallback) {
+  const status = err?.response?.status
+  const reason = err?.response?.data?.error
+  if (status === 403) return 'You do not have permission to manage users.'
+  if (status >= 400 && status < 500 && typeof reason === 'string' && reason) return reason
+  return fallback
+}
+
 function UserManagementPage({ user }) {
   const [users, setUsers] = useState([])
   const [, setLoading] = useState(true)
@@ -408,6 +421,11 @@ function UserManagementPage({ user }) {
   const [pwModalOpen, setPwModalOpen] = useState(false)
   const [pwTarget, setPwTarget] = useState(null)
   const [newPassword, setNewPassword] = useState('')
+  const [pwError, setPwError] = useState('')
+  // While a delete is in flight the confirm dialog stays open (it closes after the refetch,
+  // for focus). Its Delete button is disabled meanwhile: a double-click sent a second
+  // DELETE, which 404'd into "Failed to delete user" right after the success toast.
+  const [deleting, setDeleting] = useState(false)
   const modalRef = useRef()
   const confirmModalRef = useRef()
   const pwModalRef = useRef()
@@ -457,11 +475,7 @@ function UserManagementPage({ user }) {
       // The server's reason, next to the form it concerns (FE-18): "Username already
       // exists" and the username rules are exposed 4xx messages (services/problem.js), and
       // "Failed to create user" hid every one of them. Anything else stays generic.
-      const status = err.response?.status
-      const reason = err.response?.data?.error
-      setFormError(status === 403 ? 'You do not have permission to manage users.'
-        : status >= 400 && status < 500 && typeof reason === 'string' && reason ? reason
-          : 'Failed to create user.')
+      setFormError(userApiError(err, 'Failed to create user.'))
     }
   }
   const handleDelete = async (id) => {
@@ -486,24 +500,35 @@ function UserManagementPage({ user }) {
   const handlePasswordChange = (id) => {
     setPwTarget(id)
     setNewPassword('')
+    setPwError('')   // a previous attempt's error must not greet the next one
     setPwModalOpen(true)
   }
 
+  // The dialog stays OPEN on failure and says why, next to the field (FE-18 review): it
+  // used to close regardless and put a generic "Failed to update user" on the page, so a
+  // password the policy rejected looked like a success that had not happened.
   const submitPasswordChange = async () => {
     if (!newPassword.trim()) return
-    await handleEdit(pwTarget, { password: newPassword })
+    setPwError('')
+    const ok = await handleEdit(pwTarget, { password: newPassword }, { onError: setPwError })
+    if (!ok) return
     setPwModalOpen(false)
     setNewPassword('')
     setPwTarget(null)
   }
-  const handleEdit = async (id, updates) => {
+  // Returns whether it succeeded. `onError` routes the message to a dialog instead of the page.
+  const handleEdit = async (id, updates, { onError } = {}) => {
     setError('')
     try {
       await api.put(`${API_BASE}/users/${id}`, updates)
       showToast('success', 'User updated!')
       fetchUsers()
+      return true
     } catch (err) {
-      setError('Failed to update user')
+      const message = userApiError(err, 'Failed to update user.')
+      if (onError) onError(message)
+      else setError(message)
+      return false
     }
   }
 
@@ -516,7 +541,9 @@ function UserManagementPage({ user }) {
       
       const result = response.data
       if (result.success) {
-        showToast('success', `LDAP sync completed! ${result.results.updated} users updated out of ${result.results.total} LDAP users.`)
+        // Longer than the default: a sentence with two numbers in it must be READ before
+        // it dismisses itself (FE-18 review).
+        showToast('success', `LDAP sync completed! ${result.results.updated} users updated out of ${result.results.total} LDAP users.`, { duration: 10000 })
         fetchUsers() // Refresh the user list to show updated information
       } else {
         setError('LDAP sync failed')
@@ -594,8 +621,14 @@ function UserManagementPage({ user }) {
               <button
                 className="create-user-btn enhanced-btn"
                 style={{background:'#ef4444', padding:'0.6em 1.4em'}}
-                onClick={async () => { await handleDelete(confirmTarget); setConfirmOpen(false) }}
-              >Delete</button>
+                disabled={deleting}
+                aria-busy={deleting}
+                onClick={async () => {
+                  if (deleting) return
+                  setDeleting(true)
+                  try { await handleDelete(confirmTarget) } finally { setDeleting(false); setConfirmOpen(false) }
+                }}
+              >{deleting ? 'Deleting…' : 'Delete'}</button>
             </div>
           </div>
         </div>
@@ -614,10 +647,13 @@ function UserManagementPage({ user }) {
                 className="ent-input"
                 placeholder="Enter new password"
                 value={newPassword}
-                onChange={e => setNewPassword(e.target.value)}
+                onChange={e => { setNewPassword(e.target.value); if (pwError) setPwError('') }}
                 onKeyDown={e => { if (e.key === 'Enter') submitPasswordChange() }}
+                aria-invalid={pwError ? true : undefined}
+                aria-describedby={pwError ? 'pw-error' : undefined}
               />
             </div>
+            {pwError && <div id="pw-error" className="gt-alert gt-alert--danger" role="alert"><FaExclamationCircle aria-hidden="true" /><div>{pwError}</div></div>}
             <div style={{display:'flex', gap:'1rem', justifyContent:'flex-end', marginTop:'1.5rem'}}>
               <button className="icon-btn enhanced-icon-btn" style={{padding:'0.6em 1.4em'}} onClick={() => setPwModalOpen(false)}>Cancel</button>
               <button
