@@ -226,7 +226,7 @@ GameTracker/
 │   │                               #   backend `environment:` of BOTH compose files, or in
 │   │                               #   its NOT_PASSED table with a reason
 │   │                               #   ALSO the SPA's auth invariants (P0-6, FE-8): only
-│   │                               #   App.jsx's interceptor and ApiDocsPage's spec-only
+│   │                               #   api.js's interceptor and ApiDocsPage's spec-only
 │   │                               #   client build a Bearer header; only session.js#endSession
 │   │                               #   removes the token (FE-17); a 401 is the
 │   │                               #   interceptor's alone. A failure there means a page is
@@ -348,6 +348,13 @@ GameTracker/
 │   │   │                           #   never read as "wrong password" (FE-4)
 │   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap (App.jsx's dialogs
 │   │   │                           #   and GameDetailModal, FE-7); SharedLibrary's are FE-19
+│   │   ├── api.js                  # The ONE client for our API (FE-16): API_BASE and an
+│   │   │                           #   axios.create() instance owning BOTH interceptors (the
+│   │   │                           #   token on /api/ only; a 401 ends the session). Pages
+│   │   │                           #   import { api, API_BASE }; only this file imports
+│   │   │                           #   axios (pinned). Touches `window` at module scope, so
+│   │   │                           #   helpers.test.js must never import it
+│   │   ├── SharedLibrary.jsx       # Shared-library page (moved into src/, FE-9)
 │   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
 │   │   │                           #   (`cd frontend && npm test`, run by frontend-quality).
 │   │   │                           #   They replace test/runtime.test.js's source-text shape
@@ -368,7 +375,6 @@ GameTracker/
 │   │   └── styles/
 │   │       ├── Toast.css
 │   │       └── ApiDocs.css         # Swagger UI restyled into the glassmorphism theme
-│   ├── SharedLibrary.jsx           # Shared-library page (NOTE: lives outside src/)
 │   ├── nginx.conf                  # Serves the SPA + proxies /api to the backend
 │   ├── vite.config.js              # Dev server + /api proxy for local development
 │   ├── eslint.config.js

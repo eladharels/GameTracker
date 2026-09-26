@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom'
-import axios from 'axios'
 import './App.css'
 import { FaSearch, FaBook, FaUsers, FaSignOutAlt, FaLock, FaSortAlphaDown, FaSortNumericDown, FaSortAmountDown, FaCog, FaEnvelope, FaBell, FaCheckCircle, FaRegCalendarAlt, FaArrowLeft, FaPlay, FaHeart, FaEye, FaCheck, FaTh, FaList, FaTrash, FaExclamationCircle, FaShareAlt, FaSync, FaArrowUp, FaArrowDown, FaGamepad, FaGripVertical, FaExpand, FaCompress, FaUser, FaTelegram, FaChevronDown, FaServer, FaTimesCircle, FaMinusCircle, FaSpinner, FaKey, FaEyeSlash, FaCode, FaChartBar, FaHourglassHalf } from 'react-icons/fa'
 import { useToast } from './contexts/ToastContext'
-import SharedLibrary from '../SharedLibrary'
+import SharedLibrary from './SharedLibrary'
+import { api, API_BASE } from './api'
 import GameDetailModal from './GameDetailModal'
 import { formatDurationShort, formatDurationLong, formatDateReadable, formatDateLocal } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
@@ -28,47 +28,9 @@ const ACCENT_PRESETS = [
   { name: 'Cyan',    value: '#06b6d4' },
 ]
 
-// Dynamic API base URL: always hit the current origin's /api
-const API_BASE = `${window.location.origin}/api`;
-
-// Global auth: attach the stored JWT to every request to our own API so the many
-// call sites don't each have to add the Authorization header (the backend now
-// requires auth on the library/search/settings routes). Only same-origin /api
-// requests get the token — never leak it to external hosts (IGDB/Steam/etc.).
-axios.interceptors.request.use((config) => {
-  try {
-    const url = config.url || '';
-    // Trailing slash: a bare '/api' prefix also matches the SPA's own /api-docs route.
-    const isOwnApi = url.startsWith(`${API_BASE}/`) || url.startsWith('/api/');
-    if (isOwnApi) {
-      const token = localStorage.getItem('token');
-      if (token) {
-        config.headers = config.headers || {};
-        if (!config.headers.Authorization) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-      }
-    }
-  } catch { /* never let header wiring break a request */ }
-  return config;
-});
-
-// If the server rejects our token (expired/invalid/secret rotated), drop it and send
-// the user back to login instead of leaving the app in a broken half-authed state.
-axios.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    if (err?.response?.status === 401 && localStorage.getItem('token')) {
-      const onLogin = window.location.pathname.startsWith('/login');
-      // Tells the login page why it is showing (the reload wipes React state).
-      endSession({ explain: !onLogin, fromPath: window.location.pathname });
-      if (!onLogin) {
-        window.location.assign('/login');
-      }
-    }
-    return Promise.reject(err);
-  }
-);
+// API_BASE and the ONE authenticated client live in ./api (FE-16): the token is attached,
+// and a 401 ends the session, by that client's interceptors — not by patching the
+// global axios on import, which every page used to depend on silently.
 
 const STATUSES = ['wishlist', 'playing', 'done', 'backlog']
 
@@ -351,7 +313,7 @@ function LoginPage({ setUser }) {
     try {
       // Convert username to lowercase to prevent case sensitivity issues
       const normalizedUsername = username.toLowerCase()
-      const res = await axios.post(`${API_BASE}/auth/login`, { username: normalizedUsername, password })
+      const res = await api.post(`${API_BASE}/auth/login`, { username: normalizedUsername, password })
       const session = readSession(res.data.token)
       if (!session) {
         // The server just issued this token, so "expired" can only mean this device's
@@ -452,7 +414,7 @@ function UserManagementPage({ user }) {
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      const res = await axios.get(`${API_BASE}/users`)
+      const res = await api.get(`${API_BASE}/users`)
       setUsers(res.data)
       setLoadFailed(false)
       setLoading(false)
@@ -485,7 +447,7 @@ function UserManagementPage({ user }) {
       return
     }
     try {
-      await axios.post(`${API_BASE}/users`, newUser)
+      await api.post(`${API_BASE}/users`, newUser)
       setSuccess('User created!')
       setNewUser({ username: '', password: '', can_manage_users: false })
       fetchUsers()
@@ -497,7 +459,7 @@ function UserManagementPage({ user }) {
     setError('')
     setSuccess('')
     try {
-      await axios.delete(`${API_BASE}/users/${id}`)
+      await api.delete(`${API_BASE}/users/${id}`)
       setSuccess('User deleted!')
       fetchUsers()
     } catch (err) {
@@ -527,7 +489,7 @@ function UserManagementPage({ user }) {
     setError('')
     setSuccess('')
     try {
-      await axios.put(`${API_BASE}/users/${id}`, updates)
+      await api.put(`${API_BASE}/users/${id}`, updates)
       setSuccess('User updated!')
       fetchUsers()
     } catch (err) {
@@ -541,7 +503,7 @@ function UserManagementPage({ user }) {
     setSuccess('')
     
     try {
-      const response = await axios.post(`${API_BASE}/admin/ldap-sync`, {})
+      const response = await api.post(`${API_BASE}/admin/ldap-sync`, {})
       
       const result = response.data
       if (result.success) {
@@ -821,7 +783,7 @@ function SearchPage({ user }) {
   const fetchGamePrice = async (gameId, steamAppId, seq) => {
     setGamePrices(prev => ({ ...prev, [gameId]: { loading: true } }))
     try {
-      const res = await axios.get(`${API_BASE}/game-price/${steamAppId}`)
+      const res = await api.get(`${API_BASE}/game-price/${steamAppId}`)
       if (seq !== searchSeq.current) return
       setGamePrices(prev => ({ ...prev, [gameId]: { price: res.data.price, loading: false } }))
     } catch (err) {
@@ -838,7 +800,7 @@ function SearchPage({ user }) {
     setLoading(true)
     setSearchError('')
     try {
-      const res = await axios.get(`${API_BASE}/games/search?q=${encodeURIComponent(search)}`)
+      const res = await api.get(`${API_BASE}/games/search?q=${encodeURIComponent(search)}`)
       if (seq !== searchSeq.current) return   // a newer search owns the screen now
       // Ensure res.data is an array
       const results = Array.isArray(res.data) ? res.data : []
@@ -873,14 +835,14 @@ function SearchPage({ user }) {
       // Check for duplicate: by id, or by name AND year (FE-3) — by name alone a remake
       // was refused because the original was in the library. The five-column own-games
       // read, not the whole library with every alias.
-      const res = await axios.get(`${API_BASE}/user/me/games`);
+      const res = await api.get(`${API_BASE}/user/me/games`);
       const match = libraryMatch(res.data, game);
       if (match === 'same') {
         // 'info', not 'error': nothing failed — the game is simply already there.
         showToast('info', 'This game is already in your library.');
         return;
       }
-      await axios.post(`${API_BASE}/user/${user.username}/games`, {
+      await api.post(`${API_BASE}/user/${user.username}/games`, {
         gameId: game.id,
         gameName: game.name,
         coverUrl: game.coverUrl,
@@ -1070,7 +1032,7 @@ function LibraryPage({ user }) {
     setLoadError(null)
     try {
       // Timestamp to defeat caching.
-      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
+      const res = await api.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
       // Guard the SHAPE: a reverse proxy answering with an HTML error page yields a
       // string, and setUserGames("<html>...") renders as an empty library rather than
       // as the failure it is.
@@ -1124,7 +1086,7 @@ function LibraryPage({ user }) {
   useEffect(() => {
     if (!user) { setGameTimings({ done: {}, playing: {} }); return }
     let cancelled = false
-    axios.get(`${API_BASE}/user/${encodeURIComponent(user.username)}/stats`)
+    api.get(`${API_BASE}/user/${encodeURIComponent(user.username)}/stats`)
       .then((res) => {
         if (cancelled || !res.data) return
         const done = {}
@@ -1234,7 +1196,7 @@ function LibraryPage({ user }) {
   const fetchGamePrice = async (gameId, steamAppId) => {
     setGamePrices(prev => ({ ...prev, [gameId]: { loading: true } }))
     try {
-      const res = await axios.get(`${API_BASE}/game-price/${steamAppId}`)
+      const res = await api.get(`${API_BASE}/game-price/${steamAppId}`)
       setGamePrices(prev => ({ ...prev, [gameId]: { price: res.data.price, loading: false } }))
     } catch (err) {
       setGamePrices(prev => ({ ...prev, [gameId]: { price: null, loading: false, error: true } }))
@@ -1258,7 +1220,7 @@ function LibraryPage({ user }) {
     if (crackInFlight.current.has(id)) return   // one request per game at a time
     crackInFlight.current.add(id)
     try {
-      const res = await axios.post(`${API_BASE}/user/${user.username}/games/${game.game_id}/crackrelease-status`);
+      const res = await api.post(`${API_BASE}/user/${user.username}/games/${game.game_id}/crackrelease-status`);
       setCrackStatusMap(prev => ({ ...prev, [game.game_id]: res.data.status || 'unknown' }));
     } catch (err) {
       if (err.response?.status === 429) {
@@ -1294,7 +1256,7 @@ function LibraryPage({ user }) {
     const previousStatus = game.status
     setUserGames(prev => prev.map(g => sameGame(g) ? { ...g, status } : g))
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/games`, {
+      await api.post(`${API_BASE}/user/${user.username}/games`, {
         gameId: game.game_id,
         gameName: game.game_name,
         coverUrl: game.cover_url,
@@ -1348,7 +1310,7 @@ function LibraryPage({ user }) {
     const deleteTimer = setTimeout(async () => {
       delete pendingDeleteRef.current[gameId]
       try {
-        await axios.delete(`${API_BASE}/user/${user.username}/games/${gameId}`)
+        await api.delete(`${API_BASE}/user/${user.username}/games/${gameId}`)
         refreshTimings()
       } catch (err) {
         // Server delete failed — restore the game
@@ -1381,8 +1343,8 @@ function LibraryPage({ user }) {
     setDraggedGameId(null)
     setDragOverGameId(null)
     try {
-      await axios.put(`${API_BASE}/user/${user.username}/backlog-reorder`, { order: newOrder })
-      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
+      await api.put(`${API_BASE}/user/${user.username}/backlog-reorder`, { order: newOrder })
+      const res = await api.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
       setUserGames(res.data)
     } catch (err) {
       showToast('error', 'Failed to reorder backlog.')
@@ -1397,8 +1359,8 @@ function LibraryPage({ user }) {
     const [moved] = newOrder.splice(fromIdx, 1)
     newOrder.unshift(moved)
     try {
-      await axios.put(`${API_BASE}/user/${user.username}/backlog-reorder`, { order: newOrder })
-      const res = await axios.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
+      await api.put(`${API_BASE}/user/${user.username}/backlog-reorder`, { order: newOrder })
+      const res = await api.get(`${API_BASE}/user/${user.username}/games?t=${Date.now()}`)
       setUserGames(res.data)
       setCurrentPage(1)
       showToast('success', `Moved to top of backlog.`)
@@ -1413,11 +1375,11 @@ function LibraryPage({ user }) {
     const id = game.game_id
     setRefreshingGameIds(prev => ({ ...prev, [id]: true }))
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/games/${id}/refresh-metadata`)
+      await api.post(`${API_BASE}/user/${user.username}/games/${id}/refresh-metadata`)
 
       // Refresh the library data after successful metadata refresh for this game
       const timestamp = Date.now()
-      const gamesRes = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
+      const gamesRes = await api.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
       setUserGames(gamesRes.data)
 
       showToast('success', `Metadata refreshed for "${game.game_name}".`)
@@ -1443,7 +1405,7 @@ function LibraryPage({ user }) {
     setRefreshingMetadata(true)
     setRefreshMetadataResult(null)
     try {
-      const res = await axios.post(`${API_BASE}/user/${user.username}/refresh-metadata`, null, {
+      const res = await api.post(`${API_BASE}/user/${user.username}/refresh-metadata`, null, {
         timeout: 300000 // 5 minutes for bulk refresh (many games = many API calls)
       })
       setRefreshMetadataResult(res.data)
@@ -1451,7 +1413,7 @@ function LibraryPage({ user }) {
       
       // Refresh the library data after successful metadata refresh
       const timestamp = Date.now()
-      const gamesRes = await axios.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
+      const gamesRes = await api.get(`${API_BASE}/user/${user.username}/games?t=${timestamp}`)
       setUserGames(gamesRes.data)
     } catch (err) {
       const errorMsg =
@@ -1934,7 +1896,7 @@ function CalendarPage({ user }) {
     if (!user) return;
     let cancelled = false;
     setLoadError(false);
-    axios.get(`${API_BASE}/user/${user.username}/games`).then(res => {
+    api.get(`${API_BASE}/user/${user.username}/games`).then(res => {
       if (cancelled) return;
       if (!Array.isArray(res.data)) throw new Error('unexpected library response');
       setUserGames(res.data);
@@ -2198,7 +2160,7 @@ function AccountPage({ user }) {
   const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
-    axios.get(`${API_BASE}/user/me`)
+    api.get(`${API_BASE}/user/me`)
       .then(res => setProfile({
         email:             res.data.email || '',
         ntfy_url:          res.data.ntfy_url || '',
@@ -2224,7 +2186,7 @@ function AccountPage({ user }) {
     setError(p => ({ ...p, [section]: null }))
     setSaved(p => ({ ...p, [section]: null }))
     try {
-      await axios.put(`${API_BASE}/user/me/settings`, body)
+      await api.put(`${API_BASE}/user/me/settings`, body)
       setSaved(p => ({ ...p, [section]: true }))
       setTimeout(() => setSaved(p => ({ ...p, [section]: null })), 3000)
     } catch (err) {
@@ -2402,7 +2364,7 @@ function SystemStatusPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await axios.get(`${API_BASE}/system-status`)
+      const res = await api.get(`${API_BASE}/system-status`)
       setStatus(res.data)
     } catch (err) {
       const s = err.response?.status
@@ -2619,7 +2581,7 @@ function SettingsPage() {
   // every OTHER section is still holding the blank degraded read. Clearing the flag
   // alone would leave those blanks on screen with the explanation removed.
   const fetchSettings = useCallback(() => (
-    axios.get(`${API_BASE}/settings`)
+    api.get(`${API_BASE}/settings`)
       .then(res => {
         const s = res.data || {}
         setSettingsLoadError(false)
@@ -2659,7 +2621,7 @@ function SettingsPage() {
   // ── Load API keys meta (admin only)
   useEffect(() => {
     if (!isAdmin) return
-    axios.get(`${API_BASE}/settings/apikeys`)
+    api.get(`${API_BASE}/settings/apikeys`)
       .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}) })
       // A 401 is the global interceptor's (FE-15): it ends the session and reloads to the
       // login page, which says why. The "log out and log back in" banner this used to set
@@ -2669,7 +2631,7 @@ function SettingsPage() {
 
   // ── Load user games for testing tab (available to all users)
   useEffect(() => {
-    axios.get(`${API_BASE}/user/me/games`)
+    api.get(`${API_BASE}/user/me/games`)
       .then(r => setUserGames(r.data))
       .catch(() => {})
   }, [])
@@ -2696,7 +2658,7 @@ function SettingsPage() {
     setSaveStatus(p => ({ ...p, [key]: null }))
     setSaveError(p => ({ ...p, [key]: null }))
     try {
-      await axios.post(`${API_BASE}/settings`, { [key]: data })
+      await api.post(`${API_BASE}/settings`, { [key]: data })
       setServerSettings(p => ({ ...p, [key]: { ...data } }))
       // A save cannot succeed while the file is unreadable, so reaching here with the
       // banner up means it was repaired on disk. Refetch: the other sections are still
@@ -2740,8 +2702,8 @@ function SettingsPage() {
     if (!Object.keys(apiKeysEdit).length) return
     setApiKeysSaving(true); setApiKeysSaveStatus(null)
     try {
-      await axios.post(`${API_BASE}/settings/apikeys`, apiKeysEdit)
-      const r = await axios.get(`${API_BASE}/settings/apikeys`)
+      await api.post(`${API_BASE}/settings/apikeys`, apiKeysEdit)
+      const r = await api.get(`${API_BASE}/settings/apikeys`)
       setApiKeysMeta(r.data); setApiKeysEdit({}); setApiKeysShow({})
       setApiKeysSaveStatus('saved')
       setTimeout(() => setApiKeysSaveStatus(null), 3000)
@@ -2757,10 +2719,10 @@ function SettingsPage() {
   const refreshIgdbToken = async () => {
     setIgdbRefreshing(true); setIgdbRefreshResult(null)
     try {
-      const r = await axios.post(`${API_BASE}/settings/apikeys/refresh-igdb-token`, {})
+      const r = await api.post(`${API_BASE}/settings/apikeys/refresh-igdb-token`, {})
       const expiresInDays = r.data.expires_in ? Math.floor(r.data.expires_in / 86400) : null
       setIgdbRefreshResult({ ok: true, msg: `New token saved (${r.data.masked}). Expires in ~${expiresInDays ?? '?'} days.` })
-      const meta = await axios.get(`${API_BASE}/settings/apikeys`)
+      const meta = await api.get(`${API_BASE}/settings/apikeys`)
       setApiKeysMeta(meta.data)
     } catch (err) {
       setIgdbRefreshResult({ ok: false, msg: apiErrMsg(err) })
@@ -2776,7 +2738,7 @@ function SettingsPage() {
     try {
       const game = userGames.find(g => g.game_id.toString() === selectedGame)
       if (!game) { setCrackError('Game not found'); return }
-      const r = await axios.post(`${API_BASE}/admin/crackrelease-status`, { gameName: game.game_name })
+      const r = await api.post(`${API_BASE}/admin/crackrelease-status`, { gameName: game.game_name })
       setCrackInfo(r.data)
     } catch (err) { setCrackError(err.response?.data?.error || err.message || 'Failed') }
     finally { setCrackLoading(false) }
@@ -2787,7 +2749,7 @@ function SettingsPage() {
     setTestLoading(true); setTestError(''); setTestResult(null)
     try {
       const game = userGames.find(g => g.game_id.toString() === selectedGame)
-      const r = await axios.post(`${API_BASE}/admin/test-notification`, {
+      const r = await api.post(`${API_BASE}/admin/test-notification`, {
         service: selectedService, gameId: selectedGame,
         gameName: game.game_name, releaseDate: game.release_date,
         coverUrl: game.cover_url,

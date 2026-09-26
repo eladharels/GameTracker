@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import { api, API_BASE } from './api'
 import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
-import { useToast } from './src/contexts/ToastContext';
-import { readSession } from './src/session';
+import { useToast } from './contexts/ToastContext';
+import { readSession } from './session';
 
 // Always call our own origin's /api (nginx proxies it to the backend). The previous
 // hardcoded host/port fell back to the PRODUCTION backend (:3000) from staging, and
 // being cross-origin it also bypassed the shared axios auth interceptor.
-const API_BASE = `${window.location.origin}/api`;
 
 // Token and user from localStorage, decoded by session.js — the ONE client-side JWT
 // decode. The inline atob() this replaced threw on base64URL payloads, and this page
@@ -72,12 +71,12 @@ function SharedLibrary() {
     setLoading(true);
     setError('');
     Promise.all([
-      axios.get(`${API_BASE}/all-users`),
-      axios.get(`${API_BASE}/user/${user.username}/shared-with-me`),
+      api.get(`${API_BASE}/all-users`),
+      api.get(`${API_BASE}/user/${user.username}/shared-with-me`),
       // No `.catch(() => ({ data: [] }))` here any more: it turned a failed request
       // into "you share with nobody", which is data the user might act on by
       // re-sharing. Let it reject and be reported with the others below.
-      axios.get(`${API_BASE}/user/${user.username}/share`)
+      api.get(`${API_BASE}/user/${user.username}/share`)
     ]).then(([allUsersRes, sharedWithMeRes, sharedWithRes]) => {
       setAllUsers(allUsersRes.data.filter(u => u.username !== user.username));
       setSharedWithMe(sharedWithMeRes.data.map(s => s.from_user));
@@ -102,8 +101,8 @@ function SharedLibrary() {
     const newSharedWith = [...sharedWith, username];
     setToggleLoading(true);
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
-      const res = await axios.get(`${API_BASE}/user/${user.username}/share`);
+      await api.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
+      const res = await api.get(`${API_BASE}/user/${user.username}/share`);
       setSharedWith(res.data.toUsers || []);
       showToast('success', `Now sharing with @${username}`);
     } catch (err) {
@@ -115,8 +114,8 @@ function SharedLibrary() {
     const newSharedWith = sharedWith.filter(u => u !== username);
     setToggleLoading(true);
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
-      const res = await axios.get(`${API_BASE}/user/${user.username}/share`);
+      await api.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
+      const res = await api.get(`${API_BASE}/user/${user.username}/share`);
       setSharedWith(res.data.toUsers || []);
       showToast('error', `Revoked sharing from @${username}`);
     } catch (err) {
@@ -136,7 +135,7 @@ function SharedLibrary() {
     setStatusFilter('all');
     setPage(1);
     try {
-      const res = await axios.get(`${API_BASE}/user/${user.username}/shared/${u.username}`);
+      const res = await api.get(`${API_BASE}/user/${user.username}/shared/${u.username}`);
       setModalGames(res.data);
     } catch (err) {
       setModalError('Failed to load shared games.');

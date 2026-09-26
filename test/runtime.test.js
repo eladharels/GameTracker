@@ -209,10 +209,11 @@ check("the SPA's CSP has no 'unsafe-inline' and nothing in the SPA needs it (FE-
     return /\.jsx?$/.test(e.name) && !/\.test\./.test(e.name) ? [rel] : [];
   });
   for (const f of walk('frontend')) {
-    const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    // Comments stripped: a note saying "never use innerHTML" is not a use of it.
+    const text = fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
     // Every way markup — and so a style attribute or a <style> — gets in: React's escape
     // hatch, the two DOM sinks, setAttribute('style'), a created or JSX <style>.
-    assert.ok(!/dangerouslySetInnerHTML|\.innerHTML\s*=|insertAdjacentHTML|setAttribute\(\s*['"]style['"]|createElement\(\s*['"]style['"]|<style[\s>{]/.test(text),
+    assert.ok(!/dangerouslySetInnerHTML|\.(?:inner|outer)HTML\s*=(?!=)|insertAdjacentHTML|document\.write|setAttribute\(\s*['"]style['"]|createElement\(\s*['"]style['"]|<style[\s>{]/.test(text),
       `${f} sets style through markup; the CSP would block it (and it would need 'unsafe-inline')`);
   }
 });
@@ -579,7 +580,23 @@ console.log('the SPA has one auth header and one way to end a session:');
   });
 
   check('found the frontend sources (guards the guard)', () => {
-    assert.ok(src['frontend/src/App.jsx'] && src['frontend/SharedLibrary.jsx'], 'the frontend walk found nothing');
+    assert.ok(src['frontend/src/App.jsx'] && src['frontend/src/SharedLibrary.jsx'] && src['frontend/src/api.js'],
+      'the frontend walk found nothing');
+  });
+  // FE-9: every SPA module lives under src/ — SharedLibrary.jsx sat beside it and reached
+  // back in with './src/...' imports.
+  check('no SPA module outside frontend/src/ (FE-9)', () => {
+    const outside = files.filter((f) => /\.jsx$/.test(f) && !f.startsWith('frontend/src/'));
+    assert.deepStrictEqual(outside, [], `SPA modules outside src/: ${outside.join(', ')}`);
+  });
+  // FE-16: ONE client. Pages import `api` from ./api; nothing imports axios itself, so no
+  // page can quietly send a request without the token, and the interceptors cannot be
+  // re-installed on the global instance.
+  check('only src/api.js imports axios, and API_BASE is defined once (FE-16)', () => {
+    const importers = files.filter((f) => /from\s+['"]axios['"]|require\(\s*['"]axios['"]/.test(src[f]));
+    assert.deepStrictEqual(importers, ['frontend/src/api.js'], `axios imported directly by: ${importers.join(', ')}`);
+    const defs = files.filter((f) => /\bconst API_BASE\s*=/.test(src[f]));
+    assert.deepStrictEqual(defs, ['frontend/src/api.js'], `API_BASE defined in: ${defs.join(', ')}`);
   });
   check('only the axios interceptor (and Swagger UI\'s own client) set a Bearer header', () => {
     // Matches the VALUE being built, whatever the key is spelled like: a template
@@ -587,9 +604,9 @@ console.log('the SPA has one auth header and one way to end a session:');
     // as 'Bearer Token' is neither. Pinned to ONE per allowed file.
     const built = (f) => (src[f].match(/`Bearer \$\{|['"`]Bearer ['"`]\s*\+/g) || []).length;
     const where = files.filter((f) => built(f) > 0);
-    assert.deepStrictEqual(where.sort(), ['frontend/src/ApiDocsPage.jsx', 'frontend/src/App.jsx'],
-      `hand-built Bearer headers in: ${where.join(', ')} — the interceptor in App.jsx adds it to every /api call`);
-    assert.strictEqual(built('frontend/src/App.jsx'), 1, 'App.jsx builds a Bearer header outside its interceptor');
+    assert.deepStrictEqual(where.sort(), ['frontend/src/ApiDocsPage.jsx', 'frontend/src/api.js'],
+      `hand-built Bearer headers in: ${where.join(', ')} — the interceptor in api.js adds it to every /api call`);
+    assert.strictEqual(built('frontend/src/api.js'), 1, 'api.js builds a Bearer header outside its interceptor');
     assert.strictEqual(built('frontend/src/ApiDocsPage.jsx'), 1, 'ApiDocsPage builds a second Bearer header');
   });
   check('only session.js#endSession deletes the token (FE-17)', () => {
@@ -598,9 +615,11 @@ console.log('the SPA has one auth header and one way to end a session:');
     assert.deepStrictEqual(where, ['frontend/src/session.js'], `token deleted from: ${where.join(', ')}`);
     assert.strictEqual((src['frontend/src/session.js'].match(/removeItem\(['"]token['"]\)/g) || []).length, 1,
       'session.js removes the token somewhere other than endSession');
-    // The three ways a session ends — the 401 interceptor, expiry at boot, and sign-out /
-    // the expiry timer — all go through it. A page deciding on its own is P0-6 again.
-    assert.ok((src['frontend/src/App.jsx'].match(/endSession\(\{/g) || []).length >= 4,
+    // The ways a session ends — the 401 interceptor (api.js), expiry at boot, sign-out and
+    // the expiry timer (App.jsx) — all go through it. A page deciding on its own is P0-6.
+    assert.strictEqual((src['frontend/src/api.js'].match(/endSession\(\{/g) || []).length, 1,
+      "api.js's 401 interceptor no longer ends the session through endSession");
+    assert.ok((src['frontend/src/App.jsx'].match(/endSession\(\{/g) || []).length >= 3,
       'App.jsx no longer ends sessions through endSession');
     // A manual sign-out must stay SILENT; every other ending explains itself.
     const logoutFn = src['frontend/src/App.jsx'].slice(src['frontend/src/App.jsx'].indexOf('const logout = useCallback'),

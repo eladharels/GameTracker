@@ -11,12 +11,11 @@
 // handlers.
 
 import { useEffect, useRef, useState } from 'react'
-import axios from 'axios'
+import { api, API_BASE } from './api'
 import { FaGamepad, FaTimes, FaHourglassHalf } from 'react-icons/fa'
 import { formatDurationLong, formatDateTimeReadable, statusProse } from './dateUtils'
 import { handleModalFocusTrap } from './focusTrap'
 
-const API_BASE = `${window.location.origin}/api`
 
 // How a single transition reads in prose. `from` is null for the row that records the
 // game being added, which is why that case is spelled out rather than left to render as
@@ -64,7 +63,7 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
     if (!gameId || !username) { setHistory(null); return }
     let cancelled = false
     setHistory(null)
-    axios.get(`${API_BASE}/user/${encodeURIComponent(username)}/games/${encodeURIComponent(gameId)}/history`)
+    api.get(`${API_BASE}/user/${encodeURIComponent(username)}/games/${encodeURIComponent(gameId)}/history`)
       .then((res) => {
         if (cancelled) return
         const d = res.data

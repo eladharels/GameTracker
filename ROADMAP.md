@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
-| FE — Frontend | 22 | 15 |
+| FE — Frontend | 22 | 17 |
 | UP — Tidying & upkeep | 24 | 19 |
-| **Total** | **84** | **70** |
+| **Total** | **84** | **72** |
 
 ---
 
@@ -894,9 +894,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   and Swagger UI's own client on the API page is the one deliberate exception. Pinned in
   `test/runtime.test.js`. Four lint warnings went with them.
 
-### [ ] FE-9 `SharedLibrary.jsx` lives outside `src/`
+### [x] FE-9 `SharedLibrary.jsx` lives outside `src/`
 - **Fix:** move it to `frontend/src/` and fix its imports (it currently imports
   `./src/contexts/...`).
+- **Done** (`git mv`, so history follows it). `test/runtime.test.js` now refuses any `.jsx`
+  outside `frontend/src/`.
 
 ### [ ] FE-10 `App.jsx` is ~3000 lines with at least eight page components
 - **Fix:** split it into `src/pages/*` one page per PR, starting with the pages touched by
@@ -985,12 +987,34 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   gone; a 401 reaching that page's error text now only happens without a stored token and
   says "Your session has ended. Please sign in again.", like the other pages.
 
-### [ ] FE-16 One `API_BASE` and one axios instance (pair with FE-9)
+### [x] FE-16 One `API_BASE` and one axios instance (pair with FE-9)
 - **Where:** `API_BASE` is defined five times (`${origin}/api` in four files, `'/api'` in
   `ApiTokensSection.jsx`), and every page depends on App.jsx having modified the GLOBAL
   axios instance on import.
 - **Fix:** a `frontend/src/api.js` owning `API_BASE` and the interceptors on an
   `axios.create()` instance, and update the "only App.jsx" pins in `test/runtime.test.js`.
+- **Done:**
+  - **`frontend/src/api.js`** owns `API_BASE` and an `axios.create()` instance with both
+    interceptors:
+    - the token goes to `/api/` only, absolute or relative, and never to `/api-docs` or
+      another host;
+    - a 401 ends the session through `endSession` and goes to `/login`.
+  - **Every call site** in App.jsx, GameDetailModal, StatsPage, SharedLibrary and
+    ApiTokensSection now uses `api`. They were all our own API; the four other
+    `API_BASE` definitions are gone. The GLOBAL axios now carries no interceptors, and a
+    test asserts that.
+  - **Pins updated:** only `api.js` imports axios, `API_BASE` is defined once, the one
+    Bearer header is in `api.js`, and the 401 interceptor's `endSession` is in `api.js`.
+  - **Tests:** `LoginPage.test.jsx` spies on `api.post`. Spying on the global would have
+    been a silent false pass. New `api.test.js` covers the token placement, the global
+    being untouched, a 401 ending the session, and a 403 NOT ending it. Mutation-checked:
+    removing the `endSession` call fails one test, and sending the token everywhere fails
+    another.
+  - **Review follow-ups folded in (FE-14 review):**
+    - Reduced motion also stops the infinite login-background drift and the status-pill
+      and accent-dot hover scales (measured).
+    - The markup scan strips comments before matching, uses `innerHTML =` but not `==`,
+      and also catches `outerHTML =` and `document.write`.
 
 ### [x] FE-17 One `endSession()` in `session.js`
 - **Why:** three call sites remove the token, and a count of 3 is pinned. One function
@@ -1675,3 +1699,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-22 (+UP-18 review) | this batch | 2026-09-26 | rate-limits.js: one store, one sweep, a named perUserLimit() factory rendering both surfaces; the final error handler no longer passes an upstream 401 through |
 | FE-11, FE-21 (+UP-22 review) | this batch | 2026-09-26 | CSP style-src drops 'unsafe-inline' (measured: zero violations; React styles are CSSOM); card animation no longer pins transform; router's URIError 400 kept |
 | FE-14 | this batch | 2026-09-26 | The post-login return path is honoured only for the user whose session ended |
+| FE-9, FE-16 | this batch | 2026-09-26 | SharedLibrary.jsx into src/; one API client (api.js, axios.create) owning both interceptors, pages no longer depend on App.jsx patching the global axios |

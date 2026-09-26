@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import axios from 'axios'
+import { api } from './api'
 import { LoginPage } from './App'
 import { markSessionEnded } from './session'
 
@@ -28,7 +28,7 @@ function submit(username = 'jane', password = 'pw') {
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: password } })
   fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
 }
-const rejectWith = (status, error) => vi.spyOn(axios, 'post').mockRejectedValue(
+const rejectWith = (status, error) => vi.spyOn(api, 'post').mockRejectedValue(
   status ? { response: { status, data: error ? { error } : {} } } : new Error('Network Error'))
 
 describe('LoginPage errors (FE-4)', () => {
@@ -50,7 +50,7 @@ describe('LoginPage errors (FE-4)', () => {
   })
   it('disables the button while signing in', async () => {
     let resolve
-    vi.spyOn(axios, 'post').mockReturnValue(new Promise((r) => { resolve = r }))
+    vi.spyOn(api, 'post').mockReturnValue(new Promise((r) => { resolve = r }))
     renderLogin(); submit()
     const button = screen.getByRole('button', { name: /signing in/i })
     expect(button.disabled).toBe(true)
@@ -70,14 +70,14 @@ describe('LoginPage session handling (SEC-7)', () => {
   })
   it('stores a valid token and signs the user in', async () => {
     const token = fakeJwt({ id: 1, username: 'jane', exp: Date.now() / 1000 + 3600 })
-    vi.spyOn(axios, 'post').mockResolvedValue({ data: { token } })
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { token } })
     const setUser = renderLogin(); submit()
     await waitFor(() => expect(setUser).toHaveBeenCalledWith(expect.objectContaining({ username: 'jane' })))
     expect(localStorage.getItem('token')).toBe(token)
   })
   it('refuses a token the device clock says is expired, and says why', async () => {
     const token = fakeJwt({ id: 1, username: 'jane', exp: Date.now() / 1000 - 60 })
-    vi.spyOn(axios, 'post').mockResolvedValue({ data: { token } })
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { token } })
     const setUser = renderLogin(); submit()
     expect((await screen.findByRole('alert')).textContent).toMatch(/date and time/)
     expect(setUser).not.toHaveBeenCalled()
@@ -104,13 +104,13 @@ describe('the return path after an ended session (FE-14)', () => {
   const soon = () => Date.now() / 1000 + 3600
   it('takes the SAME user back to where their session ended', async () => {
     markSessionEnded('/user/alice/library', 'alice')
-    vi.spyOn(axios, 'post').mockResolvedValue({ data: { token: fakeJwt({ id: 1, username: 'alice', exp: soon() }) } })
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { token: fakeJwt({ id: 1, username: 'alice', exp: soon() }) } })
     renderRouted(); submit('alice')
     expect((await screen.findByTestId('where')).textContent).toBe('/user/alice/library')
   })
   it("never sends a DIFFERENT user to the previous user's page", async () => {
     markSessionEnded('/user/alice/library', 'alice')
-    vi.spyOn(axios, 'post').mockResolvedValue({ data: { token: fakeJwt({ id: 2, username: 'bob', exp: soon() }) } })
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { token: fakeJwt({ id: 2, username: 'bob', exp: soon() }) } })
     renderRouted(); submit('bob')
     expect((await screen.findByTestId('where')).textContent).toBe('/search')
   })

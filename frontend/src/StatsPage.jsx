@@ -21,7 +21,7 @@
 // confident zero is indistinguishable from a real one.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import axios from 'axios';
+import { api, API_BASE } from './api'
 import {
   FaChartBar, FaExclamationCircle, FaSync, FaCheckCircle, FaPlay,
   FaList, FaRegCalendarAlt, FaHourglassHalf,
@@ -29,7 +29,6 @@ import {
 import { useToast } from './contexts/ToastContext';
 import { bucketKey, bucketRange, bucketLabel, bucketFullLabel, formatDurationShort, formatDurationLong, formatDateReadable } from './dateUtils';
 
-const API_BASE = `${window.location.origin}/api`;
 
 const PERIODS = [
   { value: 'week', label: 'Weekly' },
@@ -181,8 +180,8 @@ export default function StatsPage({ user }) {
     try {
       const t = Date.now();
       const [g, s] = await Promise.all([
-        axios.get(`${API_BASE}/user/${user.username}/games?t=${t}`),
-        axios.get(`${API_BASE}/user/${user.username}/stats?t=${t}`),
+        api.get(`${API_BASE}/user/${user.username}/games?t=${t}`),
+        api.get(`${API_BASE}/user/${user.username}/stats?t=${t}`),
       ]);
       // Shape guards: a proxy answering with an HTML error page yields a string, and
       // rendering that as data is how a failure becomes a confident zero.

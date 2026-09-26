@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import axios from 'axios'
+import { api, API_BASE } from './api'
 import { FaKey, FaSync, FaTrash, FaCheckCircle, FaExclamationCircle, FaCopy, FaPlus } from 'react-icons/fa'
 
 // Personal access tokens, managed from My Account.
@@ -13,7 +13,6 @@ import { FaKey, FaSync, FaTrash, FaCheckCircle, FaExclamationCircle, FaCopy, FaP
 // the design below — the reveal is a deliberate, dismissible step rather than a toast,
 // because a user who misses it has lost the token and has to mint another.
 
-const API_BASE = '/api'
 
 const SCOPE_COPY = {
   library: {
@@ -54,7 +53,7 @@ export default function ApiTokensSection({ canManageUsers }) {
   const load = useCallback(async () => {
     setListError('')
     try {
-      const res = await axios.get(`${API_BASE}/user/me/tokens`)
+      const res = await api.get(`${API_BASE}/user/me/tokens`)
       setTokens(Array.isArray(res.data?.tokens) ? res.data.tokens : [])
     } catch (err) {
       setListError(err.response?.data?.error || 'Could not load your tokens.')
@@ -86,7 +85,7 @@ export default function ApiTokensSection({ canManageUsers }) {
     setCreating(true)
     setFormError('')
     try {
-      const res = await axios.post(`${API_BASE}/user/me/tokens`, {
+      const res = await api.post(`${API_BASE}/user/me/tokens`, {
         name: name.trim(),
         scopes,
         password,
@@ -112,7 +111,7 @@ export default function ApiTokensSection({ canManageUsers }) {
     if (!window.confirm(`Revoke "${tokenName}"?\n\nAnything using it stops working immediately. This cannot be undone.`)) return
     setRevoking(tokenId)
     try {
-      await axios.delete(`${API_BASE}/user/me/tokens/${tokenId}`)
+      await api.delete(`${API_BASE}/user/me/tokens/${tokenId}`)
       load()
     } catch (err) {
       setListError(err.response?.data?.error || 'Could not revoke that token.')

@@ -757,7 +757,13 @@ body, html {
   .games-list.list-view .game-card.card-drag-over {
     transform: none !important;
     transition-property: border-color, box-shadow, background-color, opacity !important;
-  }
+  }  /* The rest of the app's motion (UI/UX review of FE-14): an INFINITE background drift on
+     the login page is the worst offender for vestibular triggers, and the hover scales on
+     status pills and accent dots are movement too. The active dot keeps its size — that
+     is a state, not an animation — so only the transition goes. */
+  .login-page::before { animation: none !important; }
+  .status-pill:hover, .theme-dot:hover { transform: none !important; }
+  .status-pill, .theme-dot { transition: none !important; }
 }
 
 .game-card:hover {
