@@ -1372,6 +1372,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
       focus lands on the moved card.
     - The announcement is cleared when the filter changes.
     - New tests for all three, plus Space as a pick-up/drop key.
+  - **Second review:**
+    - The focus move no longer takes focus from elsewhere. It acts only when focus is on
+      `<body>` or inside the list, and it always clears its id, so a stale id cannot pull
+      focus later. A test covers a user who typed in the search box during a slow PUT.
+    - The live region's "Selected…" text names Space and Enter-on-the-same-game.
+    - The three backlog comparators, one with a different sentinel, became one
+      `byBacklogOrder`.
 
 ### [x] FE-24 Reordering the backlog with a search typed corrupted `backlog_order` (Architect, FE-23 review)
 - **Where:** `frontend/src/pages/LibraryPage.jsx`: `handleBacklogDrop` and
@@ -1388,7 +1395,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   typed each send the full four- or three-game order. Reverting either to
   `filteredUserGames` fails its test.
 - **Not fixed here:** the server accepts a partial list. Making `reorderBacklog` refuse or
-  complete one is a v1 behaviour change, and every client now sends the whole list.
+  complete one is a v1 behaviour change. The SPA now sends the whole list; the Android
+  client is not in this repo, so what it sends is unknown.
 
 ### [x] UP-1 Stale `.trivyignore` entry
 - **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,
@@ -1972,6 +1980,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   then look at the rest of the disk. The four Docker stores total about 35 GB of the 83 GB
   used, and CI cannot see the other ~48 GB. Unreferenced volumes are left for the operator
   on purpose: CI must never prune volumes on the host that holds the production database.
+- **Review (CISO):**
+  - A prune failure is no longer hidden behind `|| true`; it prints as a warning.
+  - The step fails by name when under 5 GiB remains after the prune, so a full disk reads
+    as a full disk, not as an apt signature error three steps later.
+  - Host disk alerting belongs to the operator.
 - **Open:** confirm the disk numbers from the next run. If the build cache is not what
   fills the disk, the operator needs to look at the host (volumes, logs, other projects),
   which CI cannot and should not do.

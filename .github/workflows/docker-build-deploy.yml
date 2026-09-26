@@ -462,16 +462,29 @@ jobs:
       #
       # This removes BUILD CACHE ONLY -- every unused entry: never an image, container,
       # network or volume, so production's running stack and its database are
-      # untouched. The cost is speed only: backend and frontend build --no-cache anyway.
-      # It prints the numbers first and after, so the next failure is diagnosable.
+      # untouched. The cost is speed only: backend and frontend build --no-cache anyway,
+      # and the MCP build (which does use the cache) now starts cold.
+      # It prints the numbers first and after, so the next failure is diagnosable, and it
+      # FAILS HERE, by name, when the disk is still nearly full: an apt "invalid
+      # signature" three steps later took two runs to trace back to this.
       - name: Report disk and reclaim build cache
         run: |
           echo "[disk] Before:"
           df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
           docker system df 2>&1 || true
-          docker builder prune -af 2>&1 | tail -n 1 || true
+          if ! docker builder prune -af > "${RUNNER_TEMP}/prune.log" 2>&1; then
+            echo "::warning::docker builder prune failed:"; cat "${RUNNER_TEMP}/prune.log"
+          else
+            tail -n 1 "${RUNNER_TEMP}/prune.log"
+          fi
           echo "[disk] After reclaiming unused build cache:"
           df -h /var/lib/docker 2>&1 || df -h / 2>&1 || true
+          # 5 GiB: roughly three images plus the smoke stack. Measured in KiB (df -Pk).
+          AVAIL_KB=$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')
+          if [ -n "${AVAIL_KB}" ] && [ "${AVAIL_KB}" -lt 5242880 ]; then
+            echo "::error::Runner disk still has only $((AVAIL_KB / 1024)) MiB free after clearing build cache. This host also runs PRODUCTION: an operator must free space (ROADMAP UP-25). Not building."
+            exit 1
+          fi
 
       - name: Build backend Docker image
         run: |

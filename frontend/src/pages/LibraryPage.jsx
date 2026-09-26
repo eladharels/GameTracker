@@ -8,6 +8,10 @@ import GameDetailModal from '../GameDetailModal'
 import { formatDurationShort, formatDurationLong, formatDateReadable } from '../dateUtils'
 import { STATUSES, isGameUnreleased, normalizeStatus } from '../gameStatus'
 
+// ONE backlog order (Architect review): the view, the whole-backlog reorder and the undo
+// restore each had their own copy, one with a different sentinel. Unnumbered games last.
+const byBacklogOrder = (a, b) => (a.backlog_order ?? Infinity) - (b.backlog_order ?? Infinity) || 0
+
 export default function LibraryPage({ user }) {
   const [userGames, setUserGames] = useState([])
   // Starts true when there is a user, because the fetch below begins immediately and
@@ -196,7 +200,7 @@ export default function LibraryPage({ user }) {
   filteredUserGames = [...filteredUserGames].sort((a, b) => {
     // Backlog is always sorted by queue position
     if (filter === 'backlog') {
-      return (a.backlog_order ?? 999999) - (b.backlog_order ?? 999999)
+      return byBacklogOrder(a, b)
     }
     if (sortBy === 'name') {
       return sortDir === 'asc'
@@ -236,11 +240,18 @@ export default function LibraryPage({ user }) {
 
   // After a confirmed keyboard move: focus the card that moved, once it has re-rendered.
   // The card may now be on another page of the list; then focus the list, never <body>.
+  // It never TAKES focus from somewhere else: the move resolves after a PUT and a GET, and a
+  // user who tabbed or typed elsewhere meanwhile keeps their place (UI/UX review). The id
+  // is cleared either way, so a stale one cannot pull focus the next time the list renders.
   useEffect(() => {
-    if (focusGameId == null || !gamesListRef.current) return
-    const card = [...gamesListRef.current.querySelectorAll('[data-game-id]')]
-      .find(el => el.getAttribute('data-game-id') === String(focusGameId))
-    ;(card || gamesListRef.current).focus()
+    if (focusGameId == null) return
+    const list = gamesListRef.current
+    const active = document.activeElement
+    if (list && (!active || active === document.body || list.contains(active))) {
+      const card = [...list.querySelectorAll('[data-game-id]')]
+        .find(el => el.getAttribute('data-game-id') === String(focusGameId))
+      ;(card || list).focus()
+    }
     setFocusGameId(null)
   }, [focusGameId, userGames])
 
@@ -356,7 +367,7 @@ export default function LibraryPage({ user }) {
         setUserGames(prev => {
           const exists = prev.some(g => String(g.game_id) === String(gameId))
           if (exists) return prev
-          return [...prev, snapshot].sort((a, b) => (a.backlog_order ?? 9999) - (b.backlog_order ?? 9999))
+          return [...prev, snapshot].sort(byBacklogOrder)
         })
         showToast('success', `"${snapshot.game_name}" restored.`)
       },
@@ -391,7 +402,7 @@ export default function LibraryPage({ user }) {
   // subset 1..k, colliding with every hidden game's backlog_order.
   const fullBacklog = () => userGames
     .filter(g => normalizeStatus(g.status) === 'backlog')
-    .sort((a, b) => (a.backlog_order ?? 999999) - (b.backlog_order ?? 999999))
+    .sort(byBacklogOrder)
   const handleBacklogDrop = async (sourceGameId, targetGameId) => {
     if (!sourceGameId || String(sourceGameId) === String(targetGameId)) {
       setDraggedGameId(null)
@@ -692,7 +703,7 @@ export default function LibraryPage({ user }) {
           {filter === 'backlog' && (
             <div aria-live="polite" aria-atomic="true" className="visually-hidden">
               {keyboardDragId
-                ? `Selected game for reordering. Press Enter on another game to move it there, or Escape to cancel.`
+                ? `Selected game for reordering. Press Enter or Space on another game to move it there, or Escape, or Enter on this game, to cancel.`
                 : reorderAnnouncement}
             </div>
           )}

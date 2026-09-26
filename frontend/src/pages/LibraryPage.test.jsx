@@ -223,6 +223,22 @@ describe('keyboard reordering of the backlog (FE-23)', () => {
     expect(screen.queryByText(/Moved Charlie/)).toBeNull()
   })
 
+  it('a slow move does not pull focus back from where the user went meanwhile', async () => {
+    library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 })]
+    const slow = deferred()
+    api.put.mockImplementation((url, body) => { puts.push({ url, body }); return slow.p })
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 2/ })) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Bravo' }), { key: 'Enter' }) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Alpha' }), { key: 'Enter' }) })
+    const box = screen.getByPlaceholderText('Search your library...')
+    box.focus()   // the user moved on while the PUT is in flight
+    await act(async () => { slow.resolve({ data: {} }) })
+    await flush()
+    await flush()
+    expect(document.activeElement).toBe(box)
+  })
+
   it('with a search typed, a move reorders the WHOLE backlog, not the visible subset (FE-24)', async () => {
     library = [row('igdb_1', 'Apple', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Berry', 'backlog', { backlog_order: 2 }),
       row('igdb_3', 'Cherry', 'backlog', { backlog_order: 3 }), row('igdb_4', 'Apricot', 'backlog', { backlog_order: 4 })]
