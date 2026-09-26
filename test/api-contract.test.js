@@ -245,8 +245,9 @@ function handlerFor(method, path) {
 // A res that records rather than writes. `json` and `status` are all these handlers
 // use; anything else appearing here should fail loudly rather than be absorbed.
 function recordingRes() {
-  const res = { statusCode: 200, body: undefined, headersSent: false };
+  const res = { statusCode: 200, body: undefined, headersSent: false, headers: {} };
   res.status = (code) => { res.statusCode = code; return res; };
+  res.set = (name, value) => { res.headers[String(name).toLowerCase()] = value; return res; };
   res.json = (body) => { res.body = body; res.headersSent = true; return res; };
   return res;
 }
@@ -780,7 +781,7 @@ async function ldapLoginAs(username, row, ip, opts = {}) {
   settingsStore.loadSettings = () => ({
     ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' },
   });
-  ldapHelpers.verifyLdapCredentials = async () => ({
+  ldapHelpers.verifyLdapCredentials = async () => (opts.verify || {
     ok: true, entry: { dn: `uid=${username},dc=x`, cn: username, memberOf: [] },
   });
   db.promises.get = async () => row;
@@ -821,6 +822,71 @@ checkAsync('a directory login named after a LOCAL admin does not sign in as it (
     assert.strictEqual(res.statusCode, 401, `'${name}': expected the local password to be checked`);
     assert.ok(!writes.some((w) => /origin/i.test(w)), `'${name}' was relabelled as a directory account`);
   }
+});
+
+// UP-21. The directory could not be REACHED. Before this, the route fell back to local
+// auth, a directory account has no local hash, and the answer was 401 "Invalid
+// credentials" -- every directory user was told their password was wrong during an
+// outage, and each retry burned their lockout budget.
+const UNREACHABLE = { ok: false, reason: 'unreachable' };
+
+checkAsync('directory unreachable + a directory account: 503 {error}, never "wrong password" (UP-21)', async () => {
+  const row = { id: 7, username: 'dora', can_manage_users: 0, origin: 'ldap', password: null };
+  const { res } = await ldapLoginAs('dora', row, '203.0.113.41', { verify: UNREACHABLE });
+  assert.strictEqual(res.statusCode, 503, 'an outage answered as a credential failure');
+  assertKeys(res.body, ['error'], 'login 503');
+  assert.ok(res.headers && res.headers['retry-after'], 'a 503 without Retry-After');
+  assert.ok(!res.body.token);
+});
+
+checkAsync('directory unreachable + no local row: 503 too, so it names no account (UP-21)', async () => {
+  // Same answer as a directory account: an outage must not become an oracle for which
+  // usernames the directory holds.
+  const { res } = await ldapLoginAs('ghost', undefined, '203.0.113.42', { verify: UNREACHABLE });
+  assert.strictEqual(res.statusCode, 503);
+});
+
+checkAsync('directory unreachable + a LOCAL account: bcrypt still decides (UP-21 control)', async () => {
+  // A local hash is a definitive answer, outage or not: the right password signs in and a
+  // wrong one is 401 and counted -- an outage is not a window for guessing local passwords.
+  const hash = require('bcryptjs').hashSync('local-pass', 4);
+  const row = { id: 8, username: 'loki', can_manage_users: 0, origin: 'local', password: hash };
+  const wrong = await ldapLoginAs('loki', row, '203.0.113.43', { verify: UNREACHABLE });
+  assert.strictEqual(wrong.res.statusCode, 401, 'a wrong LOCAL password was not refused as one');
+  const ldapHelpers = require('../ldap-helpers');
+  const settingsStore = require('../settings-store');
+  const realVerify = ldapHelpers.verifyLdapCredentials;
+  const realLoad = settingsStore.loadSettings;
+  const realGet = db.get;
+  settingsStore.loadSettings = () => ({ ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' } });
+  ldapHelpers.verifyLdapCredentials = async () => UNREACHABLE;
+  db.get = (sql, params, cb) => cb(null, row);
+  const res = recordingRes();
+  try {
+    await handlerFor('post', '/api/auth/login')({ body: { username: 'loki', password: 'local-pass' }, ip: '203.0.113.44' }, res);
+    for (let i = 0; i < 200 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    ldapHelpers.verifyLdapCredentials = realVerify;
+    settingsStore.loadSettings = realLoad;
+    db.get = realGet;
+  }
+  assert.strictEqual(res.statusCode, 200, 'a directory outage locked out a LOCAL account');
+});
+
+checkAsync('outage retries never lock the ACCOUNT out, but still count against the IP (UP-21)', async () => {
+  const row = { id: 9, username: 'dana', can_manage_users: 0, origin: 'ldap', password: null };
+  // Eight tries for one account from eight addresses: the owner is never locked out.
+  for (let i = 0; i < 8; i++) {
+    const { res } = await ldapLoginAs('dana', row, `198.51.100.${10 + i}`, { verify: UNREACHABLE });
+    assert.strictEqual(res.statusCode, 503, `outage attempt ${i + 1} for one account answered ${res.statusCode}`);
+  }
+  // Many accounts from ONE address: the IP budget still applies, so an outage is no spray window.
+  let throttled = false;
+  for (let i = 0; i < 8 && !throttled; i++) {
+    const { res } = await ldapLoginAs(`spray${i}`, undefined, '198.51.100.99', { verify: UNREACHABLE });
+    throttled = res.statusCode === 429;
+  }
+  assert.ok(throttled, 'outage attempts from one IP were never throttled');
 });
 
 checkAsync('a directory login for a directory account still signs in (P0-1 control)', async () => {

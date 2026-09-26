@@ -1882,7 +1882,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Known, and not a defect: running with `--isolate=false` breaks the suite. The config uses
     the isolated default.
 
-### [ ] UP-21 An unreachable directory answers "wrong password" at login (code review, FE-4)
+### [x] UP-21 An unreachable directory answers "wrong password" at login (code review, FE-4)
 - **Where:** the login route in `index.js`. When `verifyLdapCredentials` returns
   `unreachable`, it falls back to local auth; a directory account has no local hash, so the
   answer is 401 `Invalid credentials`, and the attempt counts toward the lockout.
@@ -1891,6 +1891,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** answer 503 when the directory is unreachable AND the row has no local hash, and
   do not count it. This is a new status on a frozen v1 route: it needs an Architect and
   CISO decision, recorded in `test/api-contract.test.js`, before code.
+- **Decided (owner, 2026-09-26):** go ahead.
+- **Done:**
+  - When `verifyLdapCredentials` says `unreachable` and the local fallback finds no row, or
+    a row with no local hash, the login answers 503 `{error}` with `Retry-After: 60`.
+  - **Counted against the IP only, never the account.** Retries during an outage cannot
+    lock the owner out, and the IP budget still stops spraying. One test shows eight
+    outage attempts on one account are never throttled; another shows eight accounts from
+    one IP are.
+  - **Not-found answers the same 503 as a directory account,** so an outage is not an
+    oracle for which usernames the directory holds.
+  - **A local hash still decides:** a wrong local password is 401 and counted, the right
+    one signs in. Both are tested.
+  - The SPA needed no change: FE-4 already maps any 5xx to "Sign-in is temporarily
+    unavailable".
+  - **Tests** (`test/api-contract.test.js`):
+    - `recordingRes` now records headers;
+    - the old route fails the first new test ("an outage answered as a credential
+      failure").
 
 ### [x] UP-22 One `perUserLimit()` factory and a `rate-limits.js` module (Architect, SEC-15)
 - **Why:** `libraryWriteLimit`, `testNotificationLimit` and `crackCheckLimit` are the same

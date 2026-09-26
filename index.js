@@ -1688,6 +1688,21 @@ app.post('/api/auth/login', (req, res) => {
   // Set once the directory has authenticated the caller. See the .catch at the end of
   // the LDAP path: past this point a bug must be a 500, never a fallback to local auth.
   let directoryVerified = false;
+  // Set when the directory could not be REACHED (UP-21). Then a login only the directory
+  // could decide -- no local row, or a row with no local hash -- is an outage, not a wrong
+  // password: 503, and it does not count against the ACCOUNT, whose owner cannot fix an
+  // outage by retyping and must not be locked out by one. It still counts against the
+  // IP, so an outage is no window for spraying. A row WITH a local hash is still decided
+  // by bcrypt, outage or not: that answer is definitive and fully rate limited.
+  let directoryUnreachable = false;
+  function directoryOutage() {
+    trackFailures([`ip:${clientIP}`]);
+    console.log(`[Auth] Directory unreachable; '${safeForLog(normalizedUsername, 64)}' cannot be verified locally. Answering 503.`);
+    res.set('Retry-After', '60');
+    return res.status(503).json({
+      error: 'Sign-in is temporarily unavailable: the directory could not be reached. Please try again in a few minutes.'
+    });
+  }
   function fallbackLocalAuth() {
     if (authCompleted) return;
     authCompleted = true;
@@ -1698,6 +1713,7 @@ app.post('/api/auth/login', (req, res) => {
         return res.status(500).json({ error: 'Database error' });
       }
       if (!user) {
+        if (directoryUnreachable) return directoryOutage();
         console.log('[Auth] Local user not found:', safeForLog(normalizedUsername, 64));
         // Track failed attempt
         trackFailedAttempt(clientIP, normalizedUsername);
@@ -1710,6 +1726,7 @@ app.post('/api/auth/login', (req, res) => {
         // an LDAP account confirmed both that the username exists and that it is a
         // domain account, which is a ready-made target list for spraying against AD.
         if (!user.password || typeof user.password !== 'string') {
+          if (directoryUnreachable) return directoryOutage();
           console.log(`[Auth] User '${safeForLog(normalizedUsername, 64)}' has no local password (origin=${user.origin}). Local auth not possible.`);
           trackFailedAttempt(clientIP, normalizedUsername);
           return res.status(401).json({ error: 'Invalid credentials' });
@@ -1771,6 +1788,7 @@ app.post('/api/auth/login', (req, res) => {
     // outage must not lock out local accounts, and a username the directory does not
     // know may still be a local one.
     if (result.reason === 'unreachable' || result.reason === 'not_found') {
+      directoryUnreachable = result.reason === 'unreachable';
       return fallbackLocalAuth();
     }
 

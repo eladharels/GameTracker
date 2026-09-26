@@ -6,10 +6,10 @@
 // they just fail). An LDAP or server outage (5xx) and an unreachable server read the
 // same way, so the user blamed their password for somebody else's outage.
 //
-// LIMIT: an unreachable DIRECTORY still reads as a wrong password. The server falls back
-// to local auth when LDAP is unreachable, and a directory account has no local hash, so
-// it answers 401 — nothing here can tell that from a typo. Fixing it is server-side
-// (ROADMAP UP-21), and a new status on a frozen v1 route is a decision, not a tweak.
+// An unreachable DIRECTORY is a 503 since UP-21: the server answers it when only the
+// directory could have decided (no local password to check), so it reads as the outage
+// it is below, not as a wrong password. Before, it was a 401 nothing here could tell
+// from a typo.
 //
 // "Sign in", everywhere: the button, these messages and the session notice.
 //

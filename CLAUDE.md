@@ -823,6 +823,13 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   admin variant does not). The SPA's in-flight dedupe is a courtesy, not a control. Same 429
   `{error}` + `Retry-After` shape as the other limiters; the SPA honours `Retry-After` and
   does not record a throttled check as `unknown`
+- **Directory outage at login** (ROADMAP UP-21): when the directory is UNREACHABLE and
+  only it could decide (no local row, or a row with no local hash), `POST /api/auth/login`
+  answers **503** `{error}` + `Retry-After`, not 401. It counts against the IP only, never
+  the account: an outage must not lock owners out, nor open a spray window. A row WITH a
+  local hash is still decided by bcrypt. This is a new status on a frozen v1 route,
+  decided by the owner, reviewed, and pinned in `test/api-contract.test.js`. Existing
+  clients already treat 5xx as "try again".
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.
