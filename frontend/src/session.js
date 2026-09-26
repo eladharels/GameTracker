@@ -34,6 +34,22 @@ export function readSession(token, nowMs = Date.now()) {
   return payload
 }
 
+// WHO a token names, ignoring `exp` — or null. ONLY for deciding whose return path a
+// finished session left behind (ROADMAP FE-14): an EXPIRED token still says whose it was,
+// and readSession() deliberately returns nothing for one. Never use this to decide what
+// to render or whether someone is signed in; that is readSession()'s job.
+export function sessionOwner(token) {
+  if (typeof token !== 'string') return null
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  try {
+    const name = decodeSegment(parts[1])?.username
+    return typeof name === 'string' && name ? name.toLowerCase() : null
+  } catch {
+    return null
+  }
+}
+
 // Milliseconds until the session expires (0 when it already has), for scheduling the
 // logout while the app is open. null when there is no valid session.
 export function msUntilExpiry(token, nowMs = Date.now()) {
@@ -65,14 +81,18 @@ export function safeReturnPath(path) {
   return path
 }
 
-export function markSessionEnded(fromPath) {
+// `owner`: whose session ended. The return path is theirs; see returnPathFor.
+export function markSessionEnded(fromPath, owner = null) {
   try {
-    sessionStorage.setItem(END_KEY, JSON.stringify({ from: safeReturnPath(fromPath) }))
+    sessionStorage.setItem(END_KEY, JSON.stringify({
+      from: safeReturnPath(fromPath),
+      owner: typeof owner === 'string' && owner ? owner.toLowerCase() : null,
+    }))
   } catch { /* storage unavailable: the redirect still happens, just unexplained */ }
 }
 
-// Read WITHOUT clearing — safe inside a render/state initializer. Returns {from} or
-// null. The stored value is re-validated: sessionStorage is writable by anything
+// Read WITHOUT clearing — safe inside a render/state initializer. Returns {from, owner}
+// or null. The stored value is re-validated: sessionStorage is writable by anything
 // running in the origin.
 //
 // Reading and clearing are separate on purpose: StrictMode renders twice on mount in
@@ -84,10 +104,23 @@ export function peekSessionEnd() {
     const raw = sessionStorage.getItem(END_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    return { from: safeReturnPath(parsed && parsed.from) }
+    const owner = parsed && typeof parsed.owner === 'string' && parsed.owner ? parsed.owner : null
+    return { from: safeReturnPath(parsed && parsed.from), owner }
   } catch {
     return null
   }
+}
+
+// Where to go after signing in with `newToken`, or null for the default page.
+//
+// The stored path belongs to whoever's session ENDED. On a shared machine the next
+// person to sign in is often someone else, and was sent to the previous user's page —
+// /user/alice/… for bob is at best an error screen (ROADMAP FE-14). So the path is
+// honoured only when the new session is the SAME user; a record with no owner (written
+// before this change, or from a token that named nobody) is never honoured.
+export function returnPathFor(sessionEnd, newToken) {
+  if (!sessionEnd || !sessionEnd.from || !sessionEnd.owner) return null
+  return sessionOwner(newToken) === sessionEnd.owner ? sessionEnd.from : null
 }
 
 // Clear, so the notice shows once.
@@ -104,6 +137,9 @@ export function clearSessionEnd() {
 // sign-out passes false: nothing went wrong, so the login page must say nothing.
 // Storage is touched only inside the function — helpers.test.js imports this module.
 export function endSession({ explain, fromPath } = {}) {
+  // WHO, read before the token goes: the return path is recorded as theirs (FE-14).
+  let owner = null
+  try { owner = sessionOwner(localStorage.getItem('token')) } catch { /* no storage */ }
   try { localStorage.removeItem('token') } catch { /* storage unavailable: nothing to clear */ }
-  if (explain) markSessionEnded(fromPath)
+  if (explain) markSessionEnded(fromPath, owner)
 }

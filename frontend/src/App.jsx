@@ -9,7 +9,7 @@ import GameDetailModal from './GameDetailModal'
 import { formatDurationShort, formatDurationLong, formatDateReadable, formatDateLocal } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
-import { readSession, msUntilExpiry, peekSessionEnd, clearSessionEnd, endSession } from './session'
+import { readSession, msUntilExpiry, peekSessionEnd, clearSessionEnd, endSession, returnPathFor } from './session'
 import { safeExternalUrl } from './safeUrl'
 import { libraryMatch } from './libraryMatch'
 import { loginErrorMessage } from './loginErrors'
@@ -369,7 +369,8 @@ function LoginPage({ setUser }) {
         return
       }
       setUser(session)
-      navigate(sessionEnd?.from || '/search')
+      // Back to where the session ended only for the SAME user (FE-14).
+      navigate(returnPathFor(sessionEnd, res.data.token) || '/search')
     } catch (err) {
       // Distinct answers for a lockout, an outage and a wrong password (FE-4).
       setError(loginErrorMessage(err))

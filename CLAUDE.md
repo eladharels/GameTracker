@@ -333,7 +333,10 @@ GameTracker/
 │   │   │                           #   verifies: it decides what the UI shows, the server
 │   │   │                           #   decides everything else. Also records WHY a session
 │   │   │                           #   ended so the login page can say so (sessionStorage)
-│   │   │                           #   endSession() is the ONE way a session ends (FE-17)
+│   │   │                           #   endSession() is the ONE way a session ends (FE-17),
+│   │   │                           #   and records WHOSE session it was: returnPathFor()
+│   │   │                           #   sends only that same user back to the old page,
+│   │   │                           #   never the next person on a shared machine (FE-14)
 │   │   ├── safeUrl.js              # safeExternalUrl — the ONLY way a server-supplied URL
 │   │   │                           #   may reach an `href` (http/https only)
 │   │   ├── libraryMatch.js         # libraryMatch — 'same' (id, or name AND known year)

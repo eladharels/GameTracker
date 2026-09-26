@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
-| FE — Frontend | 22 | 14 |
+| FE — Frontend | 22 | 15 |
 | UP — Tidying & upkeep | 24 | 19 |
-| **Total** | **84** | **69** |
+| **Total** | **84** | **70** |
 
 ---
 
@@ -933,7 +933,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Done:** a dashed, muted "No library access" badge on tokens whose scopes are exactly
   `['admin']`, with a tooltip saying why and what to mint instead.
 
-### [ ] FE-14 Return path after an ended session ignores who signs in next (UI/UX review)
+### [x] FE-14 Return path after an ended session ignores who signs in next (UI/UX review)
 - **Where:** `frontend/src/session.js#markSessionEnded`, `LoginPage` (`App.jsx`).
 - **Why:** on a shared machine, a different user signing in after someone else's session
   expired is sent to the previous user's page, for example another user's library path,
@@ -941,6 +941,20 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** record the username with `from`, and honour `from` only when it matches the new
   login. The boot path needs the expired token's `username`, which `readSession`
   deliberately refuses to return, so this needs a small decode-ignoring-`exp` helper.
+- **Done:**
+  - `session.js#sessionOwner(token)` names a token's user while ignoring `exp`. It is used
+    ONLY for this decision, never for rendering; `readSession` still refuses expired tokens.
+  - `endSession` reads the owner BEFORE removing the token and records `{from, owner}`.
+  - `returnPathFor(sessionEnd, newToken)` returns the stored path only when the NEW
+    token's user is the same. A record without an owner (written before this change) is
+    never honoured.
+  - `LoginPage` navigates through it.
+  - **Tests:**
+    - unit tests: the owner survives expiry, case-insensitive matching, bob-after-alice,
+      and a legacy record;
+    - two routed `LoginPage` component tests: the same user returns to their page, a
+      different user lands on `/search`. Reverting the navigate fails exactly the
+      second one.
 
 ### [ ] FE-18 One banner style for page messages (UI/UX review of P0-6)
 - **Where:** User Management shows a translucent `gt-alert` for errors next to a solid,
@@ -1633,3 +1647,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-17, UP-18 | this batch | 2026-09-26 | Deploy warns on either TRUST_PROXY/BACKEND_BIND mismatch; a 401 may only come from authentication (the SPA logs out on every 401) |
 | UP-22 (+UP-18 review) | this batch | 2026-09-26 | rate-limits.js: one store, one sweep, a named perUserLimit() factory rendering both surfaces; the final error handler no longer passes an upstream 401 through |
 | FE-11, FE-21 (+UP-22 review) | this batch | 2026-09-26 | CSP style-src drops 'unsafe-inline' (measured: zero violations; React styles are CSSOM); card animation no longer pins transform; router's URIError 400 kept |
+| FE-14 | this batch | 2026-09-26 | The post-login return path is honoured only for the user whose session ended |

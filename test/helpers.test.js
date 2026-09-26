@@ -3683,13 +3683,13 @@ checkAsync('the login page is told why a session ended, once, and returns only t
     assert.strictEqual(takeSessionEnd(), null, 'a notice appeared with no session having ended');
     markSessionEnded('/settings');
     // A peek does not consume: StrictMode's double render must see the same value twice.
-    assert.deepStrictEqual(peekSessionEnd(), { from: '/settings' });
-    assert.deepStrictEqual(peekSessionEnd(), { from: '/settings' }, 'a read consumed the notice');
-    assert.deepStrictEqual(takeSessionEnd(), { from: '/settings' });
+    assert.deepStrictEqual(peekSessionEnd(), { from: '/settings', owner: null });
+    assert.deepStrictEqual(peekSessionEnd(), { from: '/settings', owner: null }, 'a read consumed the notice');
+    assert.deepStrictEqual(takeSessionEnd(), { from: '/settings', owner: null });
     assert.strictEqual(takeSessionEnd(), null, 'the notice is shown more than once');
     // Re-validated on READ: storage is writable by anything in the origin.
     store.set('session_end', JSON.stringify({ from: '//evil.example' }));
-    assert.deepStrictEqual(takeSessionEnd(), { from: null });
+    assert.deepStrictEqual(takeSessionEnd(), { from: null, owner: null });
     store.set('session_end', '{not json');
     assert.strictEqual(takeSessionEnd(), null);
   } finally {
@@ -3761,9 +3761,41 @@ checkAsync('endSession: clears the token, and explains only when asked (FE-17)',
     globalThis.localStorage.setItem('token', 't');
     endSession({ explain: true, fromPath: '/library' });
     assert.strictEqual(globalThis.localStorage.getItem('token'), null);
-    assert.deepStrictEqual(peekSessionEnd(), { from: '/library' }, 'an ended session was not explained');
+    assert.deepStrictEqual(peekSessionEnd(), { from: '/library', owner: null }, 'an ended session was not explained');
     delete globalThis.localStorage; delete globalThis.sessionStorage;
     endSession({ explain: true, fromPath: '/x' });   // no storage at all: must not throw
+  } finally {
+    if (had.l) globalThis.localStorage = prev.l; else delete globalThis.localStorage;
+    if (had.s) globalThis.sessionStorage = prev.s; else delete globalThis.sessionStorage;
+  }
+});
+
+checkAsync('the return path after an ended session is honoured only for the SAME user (FE-14)', async () => {
+  const { endSession, peekSessionEnd, returnPathFor, sessionOwner } = await import('../frontend/src/session.js');
+  const tok = (payload) => ['x', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'sig'].join('.');
+  const past = Math.floor(Date.now() / 1000) - 60, future = past + 7200;
+  // The EXPIRED token still names its owner; readSession refuses it, sessionOwner must not.
+  assert.strictEqual(sessionOwner(tok({ username: 'Alice', exp: past })), 'alice');
+  for (const bad of [null, 'x', 'a.b', tok({ exp: past }), tok({ username: 7 })]) assert.strictEqual(sessionOwner(bad), null);
+
+  const mk = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
+  const had = { l: 'localStorage' in globalThis, s: 'sessionStorage' in globalThis };
+  const prev = { l: globalThis.localStorage, s: globalThis.sessionStorage };
+  try {
+    globalThis.localStorage = mk(); globalThis.sessionStorage = mk();
+    globalThis.localStorage.setItem('token', tok({ username: 'alice', exp: past }));
+    endSession({ explain: true, fromPath: '/user/alice/library' });
+    const ended = peekSessionEnd();
+    assert.deepStrictEqual(ended, { from: '/user/alice/library', owner: 'alice' });
+    assert.strictEqual(returnPathFor(ended, tok({ username: 'alice', exp: future })), '/user/alice/library');
+    assert.strictEqual(returnPathFor(ended, tok({ username: 'ALICE', exp: future })), '/user/alice/library');
+    // The shared-machine case: bob signs in after alice's session expired.
+    assert.strictEqual(returnPathFor(ended, tok({ username: 'bob', exp: future })), null,
+      "the next user was sent to the previous user's page");
+    // A record with no owner (written before FE-14) is never honoured.
+    assert.strictEqual(returnPathFor({ from: '/library', owner: null }, tok({ username: 'alice', exp: future })), null);
+    assert.strictEqual(returnPathFor(null, tok({ username: 'alice', exp: future })), null);
   } finally {
     if (had.l) globalThis.localStorage = prev.l; else delete globalThis.localStorage;
     if (had.s) globalThis.sessionStorage = prev.s; else delete globalThis.sessionStorage;
