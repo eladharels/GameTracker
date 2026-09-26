@@ -805,8 +805,15 @@ jobs:
             -p "${SMOKE_PROJECT}" \
             -f docker-compose.test.yml \
             up -d || {
-            echo "[smoke] ERROR: Stack failed to start — printing backend container logs:"
-            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend 2>&1 || true
+            # EVERY service, not the backend alone: when the db exited before the backend
+            # was created, backend-only logs printed nothing and the cause was lost.
+            echo "[smoke] ERROR: Stack failed to start — container states:"
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml ps -a 2>&1 || true
+            echo "[smoke] Logs of every service:"
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color 2>&1 || true
+            # This runner has run out of disk before; an initdb that cannot write exits 1.
+            echo "[smoke] Disk space for Docker and the data directory:"
+            df -h /var/lib/docker "${SMOKE_DATA_DIR}" 2>&1 || true
             exit 1
           }
           echo "[smoke] Stack started — backend :${{ env.BACKEND_TEST_PORT }}, frontend :${{ env.FRONTEND_TEST_PORT }}"
