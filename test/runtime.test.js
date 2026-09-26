@@ -469,6 +469,24 @@ console.log('the SPA has one auth header and one way to end a session:');
     assert.ok(/useState\(\(\) => peekSessionEnd\(\)\)/.test(login), 'LoginPage no longer reads the flag with peekSessionEnd');
     assert.ok(/useEffect\(\(\) => \{ clearSessionEnd\(\) \}, \[\]\)/.test(login), 'LoginPage no longer clears the flag on mount');
   });
+  // FE-1, FE-2, FE-5 live inside components and the SPA has no DOM harness, so only the
+  // SHAPE of each regression is pinned here — the one that shipped before.
+  check('no effect is keyed on the per-render `currentGames` array (FE-1)', () => {
+    const app = src['frontend/src/App.jsx'];
+    assert.ok(!/\}, \[[^\]]*\bcurrentGames\b[^\]]*\]\)/.test(app),
+      'an effect depends on currentGames, a new array every render — use currentPageKey');
+    assert.ok(/crackInFlight\.current\.has\(/.test(app), 'crack-status requests are no longer tracked in flight');
+  });
+  check('a search response is dropped unless it answers the latest query (FE-2)', () => {
+    const app = src['frontend/src/App.jsx'];
+    const search = app.slice(app.indexOf('const handleSearch'), app.indexOf('const addToLibrary'));
+    assert.ok(/if \(seq !== searchSeq\.current\) return/.test(search), 'handleSearch no longer ignores stale responses');
+  });
+  check('a failed status change rolls back that game only (FE-5)', () => {
+    const app = src['frontend/src/App.jsx'];
+    const fn = app.slice(app.indexOf('const setGameStatus'), app.indexOf('const removeGame'));
+    assert.ok(!/setUserGames\(previous/.test(fn), 'setGameStatus restores a whole-library snapshot again');
+  });
   check('no `window.setUser` fallback', () => {
     for (const f of files) assert.ok(!/window\.setUser/.test(src[f]), `${f} still reaches for window.setUser`);
   });

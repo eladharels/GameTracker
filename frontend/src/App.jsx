@@ -11,6 +11,8 @@ import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
 import { readSession, msUntilExpiry, markSessionEnded, peekSessionEnd, clearSessionEnd } from './session'
 import { safeExternalUrl } from './safeUrl'
+import { isAlreadyInLibrary } from './libraryMatch'
+import { loginErrorMessage } from './loginErrors'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
 // Statically imported it would land in the main chunk and slow every login.
@@ -356,7 +358,8 @@ function LoginPage({ setUser }) {
       setUser(session)
       navigate(sessionEnd?.from || '/search')
     } catch (err) {
-      setError('Invalid username or password')
+      // Distinct answers for a lockout, an outage and a wrong password (FE-4).
+      setError(loginErrorMessage(err))
     }
   }
 
@@ -798,14 +801,19 @@ function SearchPage({ user }) {
   const [gamePrices, setGamePrices] = useState({}) // { [gameId]: { price, loading, error } }
   const [openGame, setOpenGame] = useState(null)
   const { showToast } = useToast();
+  // Which search is current (FE-2). A slow answer to an EARLIER query used to replace the
+  // results of the one on screen; every response now checks it is still the latest.
+  const searchSeq = useRef(0)
 
-  // Fetch price for a game by Steam App ID
-  const fetchGamePrice = async (gameId, steamAppId) => {
+  // Fetch price for a game by Steam App ID. `seq` ties it to the search that asked.
+  const fetchGamePrice = async (gameId, steamAppId, seq) => {
     setGamePrices(prev => ({ ...prev, [gameId]: { loading: true } }))
     try {
       const res = await axios.get(`${API_BASE}/game-price/${steamAppId}`)
+      if (seq !== searchSeq.current) return
       setGamePrices(prev => ({ ...prev, [gameId]: { price: res.data.price, loading: false } }))
     } catch (err) {
+      if (seq !== searchSeq.current) return
       setGamePrices(prev => ({ ...prev, [gameId]: { price: null, loading: false, error: true } }))
     }
   }
@@ -814,23 +822,26 @@ function SearchPage({ user }) {
   const handleSearch = async (e) => {
     e.preventDefault()
     if (!search) return
+    const seq = ++searchSeq.current
     setLoading(true)
     setSearchError('')
     try {
       const res = await axios.get(`${API_BASE}/games/search?q=${encodeURIComponent(search)}`)
+      if (seq !== searchSeq.current) return   // a newer search owns the screen now
       // Ensure res.data is an array
       const results = Array.isArray(res.data) ? res.data : []
       setSearchResults(results)
       // Fetch price for games with a Steam App ID
       results.forEach(game => {
         if (game.steamAppId) {
-          fetchGamePrice(game.id, game.steamAppId)
+          fetchGamePrice(game.id, game.steamAppId, seq)
         }
       })
       if (results.length === 0) {
         setSearchError('No games found. Try a different search term.')
       }
     } catch (err) {
+      if (seq !== searchSeq.current) return
       console.error('Search error:', err)
       setSearchResults([])
       const errorMsg = err.response?.data?.error || err.message || 'Failed to search games. Please try again.'
@@ -847,16 +858,11 @@ function SearchPage({ user }) {
       return;
     }
     try {
-      // Check for duplicate
-      const res = await axios.get(`${API_BASE}/user/${user.username}/games`);
-      const alreadyInLibrary = res.data.some(g => {
-        const gId = g.gameId || g.game_id;
-        const gName = (g.gameName || g.game_name || '').trim().toLowerCase();
-        const gameId = game.id || game.game_id;
-        const gameName = (game.name || game.game_name || '').trim().toLowerCase();
-        return gId === gameId || gName === gameName;
-      });
-      if (alreadyInLibrary) {
+      // Check for duplicate: by id, or by name AND year (FE-3) — by name alone a remake
+      // was refused because the original was in the library. The five-column own-games
+      // read, not the whole library with every alias.
+      const res = await axios.get(`${API_BASE}/user/me/games`);
+      if (isAlreadyInLibrary(res.data, game)) {
         showToast('error', 'You already have this game in your library!');
         return;
       }
@@ -1186,6 +1192,11 @@ function LibraryPage({ user }) {
   const indexOfLastGame = currentPage * gamesPerPage
   const indexOfFirstGame = indexOfLastGame - gamesPerPage
   const currentGames = filteredUserGames.slice(indexOfFirstGame, indexOfLastGame)
+  // A STABLE identity for the visible page (FE-1). `currentGames` is a new array on every
+  // render, so effects keyed on it ran on every render; with crack-status requests not
+  // tracked in flight, each response re-rendered and re-POSTed every pending game.
+  const currentPageKey = currentGames.map(g => g.game_id).join('\u0001')
+  const crackInFlight = useRef(new Set())
 
   // Fetch price for a game by Steam App ID
   const fetchGamePrice = async (gameId, steamAppId) => {
@@ -1208,14 +1219,19 @@ function LibraryPage({ user }) {
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showPrices, currentGames])
+  }, [showPrices, currentPageKey])
 
   const fetchCrackStatus = async (game) => {
+    const id = String(game.game_id)
+    if (crackInFlight.current.has(id)) return   // one request per game at a time
+    crackInFlight.current.add(id)
     try {
       const res = await axios.post(`${API_BASE}/user/${user.username}/games/${game.game_id}/crackrelease-status`);
       setCrackStatusMap(prev => ({ ...prev, [game.game_id]: res.data.status || 'unknown' }));
     } catch (err) {
       setCrackStatusMap(prev => ({ ...prev, [game.game_id]: 'unknown' }));
+    } finally {
+      crackInFlight.current.delete(id)
     }
   };
 
@@ -1229,17 +1245,16 @@ function LibraryPage({ user }) {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCrackStatus, currentGames, user])
+  }, [showCrackStatus, currentPageKey, user?.username])
 
   // Change status — optimistic update
   const setGameStatus = async (game, status) => {
     if (!user) return alert('Enter a username first!')
     setStatusError('')
     // Optimistically update local state immediately
-    const previousGames = userGames
-    setUserGames(prev => prev.map(g =>
-      String(g.game_id) === String(game.game_id) ? { ...g, status } : g
-    ))
+    const sameGame = (g) => String(g.game_id) === String(game.game_id)
+    const previousStatus = game.status
+    setUserGames(prev => prev.map(g => sameGame(g) ? { ...g, status } : g))
     try {
       await axios.post(`${API_BASE}/user/${user.username}/games`, {
         gameId: game.game_id,
@@ -1252,8 +1267,12 @@ function LibraryPage({ user }) {
       // stats before it returned would read the state the user just changed away from.
       refreshTimings()
     } catch (err) {
-      // Rollback on failure
-      setUserGames(previousGames)
+      // Roll back THIS game only, and only if nothing newer has changed it (FE-5).
+      // Restoring a snapshot of the whole library undid every other game's change made
+      // while this request was in flight.
+      setUserGames(prev => prev.map(g =>
+        sameGame(g) && g.status === status ? { ...g, status: previousStatus } : g
+      ))
       showToast('error', 'Failed to update status. Please try again.')
     }
   }

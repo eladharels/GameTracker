@@ -187,7 +187,8 @@ GameTracker/
 │   │                               #   CHECK constraints, what a query RETURNS — is why
 │   │                               #   test/integration/ exists
 │   │                               #   It also pins the DOM-free frontend helpers
-│   │                               #   (session.js, safeUrl.js) through import(); a module
+│   │                               #   (session.js, safeUrl.js, libraryMatch.js,
+│   │                               #   loginErrors.js) through import(); a module
 │   │                               #   loaded that way must not touch window, document or
 │   │                               #   storage at MODULE scope, or this suite breaks.
 │   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks the BACKEND
@@ -318,6 +319,10 @@ GameTracker/
 │   │   │                           #   ended so the login page can say so (sessionStorage)
 │   │   ├── safeUrl.js              # safeExternalUrl — the ONLY way a server-supplied URL
 │   │   │                           #   may reach an `href` (http/https only)
+│   │   ├── libraryMatch.js         # isAlreadyInLibrary — by id, or name AND year; never by
+│   │   │                           #   name alone (a remake is not its original, FE-3)
+│   │   ├── loginErrors.js          # loginErrorMessage — a 429 lockout or an outage must
+│   │   │                           #   never read as "wrong password" (FE-4)
 │   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2
 │   │   │                           #   contract from GET /api/openapi/v2, so the page and CI
 │   │   │                           #   validate the SAME document. VENDORED, never CDN-loaded:

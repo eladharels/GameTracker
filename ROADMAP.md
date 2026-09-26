@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 14 | 12 |
-| FE — Frontend | 18 | 2 |
+| FE — Frontend | 18 | 7 |
 | UP — Tidying & upkeep | 18 | 0 |
-| **Total** | **72** | **36** |
+| **Total** | **72** | **41** |
 
 ---
 
@@ -754,36 +754,49 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ## FE — Frontend
 
-### [ ] FE-1 Crack-status requests fire again on every render
+### [x] FE-1 Crack-status requests fire again on every render
 - **Where:** `frontend/src/App.jsx:1096` (`currentGames` is a new `.slice()` on every render),
   used as an effect dependency at `:1110` and `:1131`.
 - **Problem:** in-flight requests aren't tracked, so each response re-renders and re-POSTs
   every pending game.
 - **Fix:** memoise `currentGames`, track in-flight ids in a ref, and send one batched request.
+- **Done:** effects are keyed on `currentPageKey` (the visible ids), not the per-render array, and
+  crack-status requests are tracked in flight, one per game. **Not batched:** that needs a new
+  endpoint; the per-game loop now sends each at most once. Pinned in `test/runtime.test.js`.
 
-### [ ] FE-2 Search results can come from an older query
+### [x] FE-2 Search results can come from an older query
 - **Where:** `App.jsx:722-750` (`handleSearch`).
 - **Failure:** a slow response to an earlier search replaces the results for the current
   query, and its price lookups land in the shared `gamePrices` map.
 - **Fix:** use an `AbortController` or a request-sequence id, and ignore stale responses.
+- **Done:** a request-sequence ref; a result, error or price from any search but the latest is
+  dropped. Pinned in `test/runtime.test.js`.
 
-### [ ] FE-3 The "already in your library" check compares names, not ids
+### [x] FE-3 The "already in your library" check compares names, not ids
 - **Where:** `App.jsx:766-772`.
 - **Failure:** RE4 (2023) is blocked because RE4 (2005) is in the library. The check also
   downloads the whole library on every add.
 - **Fix:** compare `game_id`, using the library already held in state or the server's
   answer to the add.
+- **Done:** `frontend/src/libraryMatch.js#isAlreadyInLibrary`: same id, or same name AND same
+  known year (catches one game from two providers, not a remake). Reads the five-column
+  `/api/user/me/games`, not the whole library. Tested in `helpers.test.js`.
 
-### [ ] FE-4 Login shows "Invalid username or password" for every error
+### [x] FE-4 Login shows "Invalid username or password" for every error
 - **Where:** `App.jsx:285-300`.
 - **Failure:** a 429 lockout or a 503 LDAP outage tells the user their password is wrong, so
   they retry and extend the lockout.
 - **Fix:** give distinct messages for 401, 429 (with the retry time) and 503/network errors.
+- **Done:** `frontend/src/loginErrors.js#loginErrorMessage`: 401 wrong password, 429 the
+  server's message with its minutes, 5xx temporarily unavailable, no response can't reach the
+  server. Tested in `helpers.test.js`.
 
-### [ ] FE-5 A failed status change can undo other changes
+### [x] FE-5 A failed status change can undo other changes
 - **Where:** `App.jsx:1147`, `:1164`.
 - **Failure:** if game A's change fails after game B's succeeded, B is reverted in the UI too.
 - **Fix:** roll back only the game that failed, from its own previous value.
+- **Done:** the failure restores that game's previous status, and only if its status is still
+  the one this request set. Pinned in `test/runtime.test.js`.
 
 ### [ ] FE-6 Keyboard access: library cards and stats chips
 - **Where:**
@@ -1057,3 +1070,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | SEC-10 | this batch | 2026-09-26 | Debug route kept (v1 freeze), logging removed, now a service adapter |
 | SEC-11 | this batch | 2026-09-26 | `.env*` ignored in git and every image build context |
 | P0-6, FE-8 | this batch | 2026-09-26 | A 403 no longer logs out; admin routes gated; one auth header, one session-ending path |
+| FE-1..FE-5 | this batch | 2026-09-26 | Crack requests once per game; stale searches dropped; library match by id or name+year; login errors by cause; per-game rollback |

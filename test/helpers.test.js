@@ -3569,6 +3569,38 @@ checkAsync('the login page is told why a session ended, once, and returns only t
   }
 });
 
+checkAsync('isAlreadyInLibrary: by id, or by name AND year — never by name alone (FE-3)', async () => {
+  const { isAlreadyInLibrary } = await import('../frontend/src/libraryMatch.js');
+  const lib = [{ game_id: 'igdb_1', game_name: 'Resident Evil 4', release_date: '2005-01-11' }];
+  assert.strictEqual(isAlreadyInLibrary(lib, { id: 'igdb_1', name: 'Anything', releaseDate: null }), true, 'same id');
+  assert.strictEqual(isAlreadyInLibrary(lib, { id: 'igdb_2', name: 'Resident Evil 4', releaseDate: '2023-03-24' }), false,
+    'the 2023 remake was refused because the 2005 original is in the library');
+  assert.strictEqual(isAlreadyInLibrary(lib, { id: 'rawg_9', name: ' resident evil 4 ', releaseDate: '2005-01-11' }), true,
+    'the same game from another provider (same name and year) was not caught');
+  assert.strictEqual(isAlreadyInLibrary(lib, { id: 'rawg_9', name: 'Resident Evil 4', releaseDate: null }), false,
+    'an unknown year is not evidence two same-named games are one');
+  assert.strictEqual(isAlreadyInLibrary([{ game_id: 7, game_name: 'X', release_date: null }], { id: '7', name: 'Y' }), true,
+    'ids must compare as text — game_id is TEXT');
+  assert.strictEqual(isAlreadyInLibrary(null, { id: 'igdb_1' }), false);
+  assert.strictEqual(isAlreadyInLibrary(lib, null), false);
+});
+
+checkAsync('loginErrorMessage: a lockout or an outage never reads as a wrong password (FE-4)', async () => {
+  const { loginErrorMessage } = await import('../frontend/src/loginErrors.js');
+  const wrong = 'Invalid username or password';
+  const e = (status, error) => ({ response: { status, data: error ? { error } : {} } });
+  assert.strictEqual(loginErrorMessage(e(401, 'Invalid credentials')), wrong);
+  assert.strictEqual(loginErrorMessage(e(429, 'Too many login attempts. Please try again in 12 minutes.')),
+    'Too many login attempts. Please try again in 12 minutes.', 'the lockout lost its minutes remaining');
+  assert.notStrictEqual(loginErrorMessage(e(429)), wrong);
+  for (const status of [500, 502, 503]) {
+    assert.notStrictEqual(loginErrorMessage(e(status, 'Authentication error')), wrong, `${status} read as a wrong password`);
+  }
+  assert.match(loginErrorMessage({ message: 'Network Error' }), /reach the server/);
+  assert.strictEqual(loginErrorMessage(e(400, 'Username and password are required')), 'Username and password are required');
+  assert.notStrictEqual(loginErrorMessage(undefined), wrong);
+});
+
 checkAsync('safeExternalUrl: only absolute http(s) reaches an href (SEC-8)', async () => {
   const { safeExternalUrl } = await import('../frontend/src/safeUrl.js');
   assert.strictEqual(safeExternalUrl('https://crackrelease.com/halo/'), 'https://crackrelease.com/halo/');
