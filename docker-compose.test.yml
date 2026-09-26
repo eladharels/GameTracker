@@ -1,21 +1,25 @@
 # docker-compose.test.yml — Smoke test stack for CI pipeline
 #
 # ONLY used by the smoke-test job in .github/workflows/docker-build-deploy.yml.
-# Always launched with: docker compose -p gametracker-smoke -f docker-compose.test.yml ...
+# Always launched with: docker compose -p "$SMOKE_PROJECT" -f docker-compose.test.yml ...
+# (one project per CI run). NO container_name here, deliberately (ROADMAP UP-6): a fixed
+# name made two stacks unable to coexist, which is why a PR run could cancel a main run's
+# smoke test and so its deploy. Address containers through the project, e.g.
+# `docker compose -p "$SMOKE_PROJECT" -f docker-compose.test.yml logs backend`.
 #
 # ISOLATION:
-#   - Ports 3099 (backend) and 8099 (frontend) — no conflict with production (3000/8080).
+#   - Host ports from BACKEND_/FRONTEND_/MCP_TEST_PORT: 3099/8099/3199 for pull requests,
+#     3098/8098/3198 for main — no conflict with production (3000/8080/3001) or each other.
 #   - The database is a THROWAWAY container with an anonymous volume, torn down by
 #     `down --volumes`. It never touches the production volume gametracker-pgdata.
-#   - Data mounted from /tmp/gametracker-smoke-data/ — never touches the real
-#     production volume at /home/docker/gametracker/data/.
+#   - Data mounted from SMOKE_DATA_DIR, a per-run `mktemp -d` — never the real
+#     production data at /home/docker/gametracker/data/.
 #   - restart: "no" prevents orphan containers after CI teardown.
 #   - All API keys and the database password are dummy placeholder values.
 
 services:
   db:
     image: postgres:16-alpine
-    container_name: postgres-gametracker-smoke
     # No published port — the backend reaches it over the compose network.
     environment:
       - POSTGRES_DB=gametracker
@@ -38,7 +42,6 @@ services:
 
   backend:
     image: ${TEST_BACKEND_IMAGE:-local/gametracker-backend:latest}
-    container_name: gametracker-backend-smoke
     pull_policy: never
     ports:
       # Host port varies to avoid clashing with prod; the CONTAINER port is fixed
@@ -63,6 +66,15 @@ services:
       - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:-smoke-test-dummy}
       - IGDB_BEARER_TOKEN=${IGDB_BEARER_TOKEN:-smoke-test-dummy}
       - RAWG_API_KEY=${RAWG_API_KEY:-smoke-test-dummy}
+      # Same keys as docker-compose.yaml — the two files must stay the same SHAPE.
+      - THEGAMESDB_API_KEY=${THEGAMESDB_API_KEY:-}
+      - IGDB_CLIENT_SECRET=${IGDB_CLIENT_SECRET:-}
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - STEAM_REGION=${STEAM_REGION:-il}
+      # Fixed EMPTY, not interpolated: CI must exercise the secure default (SEC-14), and a
+      # stray value in the runner's environment must not flip it.
+      - SESSION_COOKIE_INSECURE=
       - JWT_SECRET=${JWT_SECRET:-smoke-test-jwt-secret-not-real}
       # Deterministic so the smoke test can LOG IN and exercise a route through
       # Express. Without it the root seed generates a random password printed once,
@@ -99,7 +111,6 @@ services:
   # a real handshake against this service.
   mcp:
     image: ${TEST_MCP_IMAGE:-local/gametracker-mcp:latest}
-    container_name: gametracker-mcp-smoke
     pull_policy: never
     ports:
       - "127.0.0.1:${MCP_TEST_PORT:-3199}:3001"
@@ -140,7 +151,6 @@ services:
 
   frontend:
     image: ${TEST_FRONTEND_IMAGE:-local/gametracker-frontend:latest}
-    container_name: gametracker-frontend-smoke
     pull_policy: never
     ports:
       - "127.0.0.1:${FRONTEND_TEST_PORT:-8099}:8080"

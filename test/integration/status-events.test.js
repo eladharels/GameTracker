@@ -22,7 +22,7 @@ const lib = require('../../services/library');
 
 let n = 0, failed = 0;
 const ok = (label) => { n++; console.log('  ok  ' + label); };
-const fail = (label, e) => { failed++; console.log('  FAIL ' + label + ' -> ' + e.message); };
+const fail = (label, e) => { n++; failed++; console.log('  FAIL ' + label + ' -> ' + e.message); };
 async function check(label, fn) { try { await fn(); ok(label); } catch (e) { fail(label, e); } }
 
 const events = (userId) => db.promises.all(
@@ -145,6 +145,123 @@ const iso = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10
     await db.promises.run('DELETE FROM users WHERE id = ?', [uid]);
     assert.strictEqual((await events(uid)).length, 0, 'deleting the account left history behind');
   });
+
+  // ---- Concurrency: the read that decides a status, and the write, must be one ----
+  // (ROADMAP CC-1, CC-2.) A separate account so the counts above are untouched.
+  console.log('\nconcurrent writers (CC-1, CC-2):');
+  await db.promises.run("DELETE FROM users WHERE username = 'evrace'");
+  await db.promises.run(
+    "INSERT INTO users (username, password, can_manage_users, created_at, origin) VALUES ('evrace','x',0,'now','local')");
+  const rid = (await db.promises.get("SELECT id FROM users WHERE username='evrace'")).id;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const statusOf = async (gid) => (await db.promises.get(
+    'SELECT status FROM user_games WHERE user_id = ? AND game_id = ?', [rid, gid])).status;
+
+  await check('setStatus records the status the row HAD when it changed, not an earlier read', async () => {
+    // Another transaction holds the row and moves it wishlist -> playing. setStatus
+    // starts while that is uncommitted. It used to read the row BEFORE its own
+    // transaction, see `wishlist`, and log `wishlist -> done` -- a transition that
+    // never happened, written permanently into history.
+    await lib.upsertGame(rid, { gameId: 'igdb_r1', gameName: 'R1', releaseDate: iso(-10), status: 'wishlist' });
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const other = db.withTransaction(async (tx) => {
+      await tx.query("SELECT 1 FROM user_games WHERE user_id = ? AND game_id = 'igdb_r1' FOR UPDATE", [rid]);
+      await tx.query("UPDATE user_games SET status = 'playing' WHERE user_id = ? AND game_id = 'igdb_r1'", [rid]);
+      await gate;
+    });
+    await sleep(100);
+    const pending = lib.setStatus(rid, 'igdb_r1', 'done');
+    await sleep(200);
+    release();
+    await other;
+    await pending;
+    const last = (await events(rid)).filter((e) => e.game_id === 'igdb_r1').pop();
+    assert.deepStrictEqual({ f: last.from_status, t: last.to_status }, { f: 'playing', t: 'done' },
+      `logged ${last.from_status} -> ${last.to_status}`);
+  });
+
+  await check('setStatus on a game removed meanwhile is NOT_FOUND and writes no event', async () => {
+    // A REAL interleaving: another transaction holds the row and deletes it while
+    // setStatus is already running. The old code had read the row first, so it went on
+    // to an UPDATE matching nothing and STILL inserted an event for a game that no
+    // longer existed, returning game: undefined.
+    await lib.upsertGame(rid, { gameId: 'igdb_r2', gameName: 'R2', releaseDate: iso(-10), status: 'wishlist' });
+    const before = (await events(rid)).length;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const other = db.withTransaction(async (tx) => {
+      await tx.query("SELECT 1 FROM user_games WHERE user_id = ? AND game_id = 'igdb_r2' FOR UPDATE", [rid]);
+      await tx.query("DELETE FROM user_games WHERE user_id = ? AND game_id = 'igdb_r2'", [rid]);
+      await gate;
+    });
+    await sleep(100);
+    let code = null;
+    const pending = lib.setStatus(rid, 'igdb_r2', 'done').catch((e) => { code = e.code; });
+    await sleep(200);
+    release();
+    await other;
+    await pending;
+    assert.strictEqual(code, 'not_found');
+    assert.strictEqual((await events(rid)).length, before, 'an event was written for a game that no longer exists');
+  });
+
+  await check('a metadata refresh never overwrites a status set after its snapshot', async () => {
+    // The bulk refresh snapshots the library at the start of a minutes-long sweep.
+    // Here: snapshot says wishlist, the user then moves the game to playing, and the
+    // provider reports a later (future) date. The date may update; the status may not.
+    await lib.upsertGame(rid, { gameId: 'igdb_r3', gameName: 'R3', releaseDate: iso(-10), status: 'wishlist' });
+    const snapshot = await db.promises.get(
+      "SELECT * FROM user_games WHERE user_id = ? AND game_id = 'igdb_r3'", [rid]);
+    await lib.setStatus(rid, 'igdb_r3', 'playing');
+    const before = (await events(rid)).length;
+    const r = await lib.applyRefreshedMetadata(rid, snapshot, { releaseDate: iso(60) });
+    assert.strictEqual(await statusOf('igdb_r3'), 'playing', 'the refresh overwrote a status the user had just set');
+    assert.ok(r.changes.includes('release_date') && !r.changes.includes('status'), JSON.stringify(r.changes));
+    const after = await events(rid);
+    assert.strictEqual(after.length, before, `the refresh logged ${JSON.stringify(after[after.length - 1])}`);
+  });
+
+  await check('...and still re-syncs the date-derived pair when the row really is wishlist', async () => {
+    // The control: without it the test above passes for a refresh that never moves status.
+    await lib.upsertGame(rid, { gameId: 'igdb_r4', gameName: 'R4', releaseDate: iso(-10), status: 'wishlist' });
+    const snapshot = await db.promises.get(
+      "SELECT * FROM user_games WHERE user_id = ? AND game_id = 'igdb_r4'", [rid]);
+    await lib.applyRefreshedMetadata(rid, snapshot, { releaseDate: iso(60) });
+    assert.strictEqual(await statusOf('igdb_r4'), 'unreleased');
+    const last = (await events(rid)).pop();
+    assert.deepStrictEqual({ f: last.from_status, t: last.to_status, s: last.source },
+      { f: 'wishlist', t: 'unreleased', s: 'metadata_refresh' });
+  });
+  await check('a backlog move waiting on a reorder uses the positions AFTER it (CC-10)', async () => {
+    // A reorder holds the backlog lock and rewrites A,B,C = 1,2,3 to 3,2,1. A move of
+    // A "down" starts meanwhile. It used to read positions BEFORE the lock (A=1, B=2),
+    // then swap those stale values in: A=2, B=1 -- and C also 1. Two games on one slot.
+    for (const [g, n] of [['igdb_b1', 'A'], ['igdb_b2', 'B'], ['igdb_b3', 'C']]) {
+      await lib.upsertGame(rid, { gameId: g, gameName: n, releaseDate: iso(-10), status: 'backlog' });
+    }
+    await lib.reorderBacklog(rid, ['igdb_b1', 'igdb_b2', 'igdb_b3']);
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const other = db.withTransaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(?, ?)', [db.LOCKS.BACKLOG_ORDER, rid]);
+      for (const [g, pos] of [['igdb_b1', 3], ['igdb_b2', 2], ['igdb_b3', 1]]) {
+        await tx.query('UPDATE user_games SET backlog_order = ? WHERE user_id = ? AND game_id = ?', [pos, rid, g]);
+      }
+      await gate;
+    });
+    await sleep(100);
+    const pending = lib.moveBacklogItem(rid, 'igdb_b1', 'down');
+    await sleep(200);
+    release();
+    await other;
+    await pending;
+    const rows = await db.promises.all(
+      "SELECT game_id, backlog_order FROM user_games WHERE user_id = ? AND status = 'backlog'", [rid]);
+    const orders = rows.map((r) => r.backlog_order);
+    assert.strictEqual(new Set(orders).size, orders.length, `duplicate backlog positions: ${JSON.stringify(rows)}`);
+  });
+  await db.promises.run('DELETE FROM users WHERE id = ?', [rid]);
 
   console.log(`\n${n - failed}/${n} passed`);
   await db.close?.();

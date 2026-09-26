@@ -10,12 +10,12 @@
 // status). Wire the status buttons to your existing setGameStatus / removeGame
 // handlers.
 
-import { useEffect, useState } from 'react'
-import axios from 'axios'
+import { useEffect, useRef, useState } from 'react'
+import { api, API_BASE } from './api'
 import { FaGamepad, FaTimes, FaHourglassHalf } from 'react-icons/fa'
 import { formatDurationLong, formatDateTimeReadable, statusProse } from './dateUtils'
+import { useDialogFocus } from './useDialogFocus'
 
-const API_BASE = `${window.location.origin}/api`
 
 // How a single transition reads in prose. `from` is null for the row that records the
 // game being added, which is why that case is spelled out rather than left to render as
@@ -43,7 +43,7 @@ const KICKER = {
   unreleased: 'Unreleased',
 }
 
-export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, username }) {
+export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, username, fallbackFocusRef }) {
   // This game's status history. Fetched per-open rather than carried in the library
   // response: the timeline is unbounded per game and only ever one game is on screen.
   //
@@ -63,7 +63,7 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
     if (!gameId || !username) { setHistory(null); return }
     let cancelled = false
     setHistory(null)
-    axios.get(`${API_BASE}/user/${encodeURIComponent(username)}/games/${encodeURIComponent(gameId)}/history`)
+    api.get(`${API_BASE}/user/${encodeURIComponent(username)}/games/${encodeURIComponent(gameId)}/history`)
       .then((res) => {
         if (cancelled) return
         const d = res.data
@@ -79,6 +79,12 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
     // new object for the same game on every poll, which would re-issue this request
     // while the modal sits open.
   }, [gameId, game?.status, username])
+
+  // Focus (FE-7): INTO the dialog on open, BACK to whatever opened it on close — or, when
+  // Remove or a filter took the opener away, to the list (fallbackFocusRef), then the page
+  // heading, never <body>. The shared hook since FE-19; this dialog had the first copy.
+  const closeRef = useRef(null)
+  const { onKeyDown: dialogKeyDown } = useDialogFocus(!!game, { initialRef: closeRef, fallbackRef: fallbackFocusRef })
 
   // Close on Escape + lock background scroll while open.
   useEffect(() => {
@@ -100,10 +106,10 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
 
   return (
     <div className="gdm-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="gdm-modal" role="dialog" aria-modal="true" aria-label={game.game_name || game.name}>
+      <div className="gdm-modal" role="dialog" aria-modal="true" aria-labelledby="gdm-title" tabIndex={-1} onKeyDown={dialogKeyDown}>
         {cover && <img className="gdm-bg" src={cover} alt="" aria-hidden />}
         <div className="gdm-scrim" />
-        <button className="gdm-close" onClick={onClose} aria-label="Close"><FaTimes /></button>
+        <button ref={closeRef} className="gdm-close" onClick={onClose} aria-label="Close"><FaTimes /></button>
 
         <div className="gdm-body">
           <div className="gdm-cover">
@@ -114,7 +120,7 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
 
           <div className="gdm-info">
             <div className="gdm-kicker">{KICKER[status] || 'In your library'}</div>
-            <h1 className="gdm-title">{game.game_name || game.name}</h1>
+            <h1 id="gdm-title" className="gdm-title">{game.game_name || game.name}</h1>
 
             <div className="gdm-meta">
               <div><span className="meta-label">Released</span><span>{date}</span></div>

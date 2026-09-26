@@ -109,10 +109,11 @@ gets wrong unaided. Everything else is one call away.
 | `MCP_PUBLIC_HOST` | follows `MCP_BIND` | The address clients use. Compose sets it automatically; you should not need to. |
 | `MCP_ALLOWED_HOSTS` | — | Extra Host header values, comma-separated. Only needed for a DNS name or a reverse proxy. Adds to the defaults. |
 
-## Runtime requirement: Node 20+
+## Runtime requirement: Node 22+
 
-The image is `node:22-slim` and `package.json` sets `engines: >=20`. This is a hard
-requirement, not a preference: the MCP SDK's HTTP transport calls the **global**
+The image is `node:22-slim` and `package.json` sets `engines: >=22`: the lowest Node
+still receiving security updates (20 went EOL on 2026-04-30). The part that is a hard
+requirement rather than policy is Node 19+: the MCP SDK's HTTP transport calls the **global**
 `crypto.randomUUID()` on every request carrying a JSON-RPC request, and
 `globalThis.crypto` is only exposed by default from Node 19.
 
@@ -154,10 +155,17 @@ into a fresh workspace, so compose reads the checkout and never sees it — and
 `127.0.0.1:3001->3001/tcp` after you set it, this is why. The deploy log prints the
 value it used.
 
-That is the only variable needed. The server refuses Host headers it does not
-recognise — DNS-rebinding protection — and compose derives the published address from
-`MCP_BIND` so the address you just set is accepted. Use `0.0.0.0` for every interface,
-or `MCP_ALLOWED_HOSTS` if clients reach it by a DNS name or through a proxy.
+For a single LAN address that is the only variable needed. The server refuses Host
+headers it does not recognise — DNS-rebinding protection — and compose derives the
+published address from `MCP_BIND` so the address you just set is accepted.
+
+**`MCP_BIND=0.0.0.0` alone does not work.** It publishes the port on every interface,
+but `0.0.0.0` is a bind address, never a Host a client sends, so nothing is added to
+the allowlist and every LAN request is refused. With `0.0.0.0`, also set
+`MCP_ALLOWED_HOSTS` to the addresses or names clients use, e.g.
+`MCP_ALLOWED_HOSTS=192.168.1.30:3001,192.168.1.30`; the server warns at startup when it
+is missing. Use `MCP_ALLOWED_HOSTS` too when clients reach it by a DNS name or through
+a proxy.
 
 Check the startup log if a client is refused; it prints every Host it accepts.
 

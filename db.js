@@ -203,9 +203,39 @@ async function query(sql, params = []) {
 // ---------------------------------------------------------------------------
 // Normalises the (sql, params, cb) / (sql, cb) overloads that node-sqlite3
 // accepted, since existing call sites use both.
-function normalizeArgs(params, cb) {
-  if (typeof params === 'function') return { params: [], cb: params };
-  return { params: params || [], cb: cb || (() => {}) };
+function normalizeArgs(params, cb, sql) {
+  if (typeof params === 'function') return { params: [], cb: guardCallback(params, sql) };
+  return { params: params || [], cb: guardCallback(cb || (() => {}), sql) };
+}
+
+// A callback that THROWS -- or, being async, REJECTS -- used to surface only as a bare
+// unhandledRejection line, with nothing tying it to a query, while the request it was
+// serving waited forever for a response (ROADMAP CC-13). The shim cannot answer that
+// request: it has no `res`. What it can do is say, loudly and unmistakably, that a
+// call site has a bug, which query it was, and that a client may be left hanging.
+//
+// Still invoked EXACTLY ONCE -- see the note on .then(onOk, onErr) below. This only
+// catches what the callback itself throws; it never re-enters it.
+//
+// The durable fix is the one ROADMAP UP-16 carries: the remaining call sites move to
+// db.promises inside async handlers, where Express 5 turns a throw into a 500.
+function guardCallback(cb, sql) {
+  return function guarded(...args) {
+    let out;
+    try {
+      out = cb.apply(this, args);
+    } catch (err) {
+      reportCallbackError(err, sql);
+      return;
+    }
+    if (out && typeof out.then === 'function') out.then(undefined, (err) => reportCallbackError(err, sql));
+  };
+}
+
+function reportCallbackError(err, sql) {
+  console.error('[db] A query CALLBACK threw -- a bug at the call site, not a database error. '
+    + 'The request it was serving may never get a response. Query:',
+  String(sql || '').replace(/\s+/g, ' ').slice(0, 120), '\n', err && err.stack ? err.stack : err);
 }
 
 // db.run -- INSERT / UPDATE / DELETE / DDL.
@@ -224,7 +254,7 @@ function normalizeArgs(params, cb) {
 // that guarantee -- an exception from the callback propagates as an unhandled
 // rejection, which is what it did before, instead of looping back in here.
 function run(sql, params, cb) {
-  const a = normalizeArgs(params, cb);
+  const a = normalizeArgs(params, cb, sql);
   query(sql, a.params).then(
     (res) => {
       const ctx = {
@@ -244,14 +274,14 @@ function run(sql, params, cb) {
 // Returning `undefined` (not null) matches node-sqlite3 exactly; call sites
 // test with `if (!row)`, so either would work, but matching avoids surprises.
 function get(sql, params, cb) {
-  const a = normalizeArgs(params, cb);
+  const a = normalizeArgs(params, cb, sql);
   // Two-argument .then -- see the note above run().
   query(sql, a.params).then((res) => a.cb(null, res.rows[0]), (err) => a.cb(err));
 }
 
 // db.all -- every row, always an array.
 function all(sql, params, cb) {
-  const a = normalizeArgs(params, cb);
+  const a = normalizeArgs(params, cb, sql);
   // Two-argument .then -- see the note above run().
   query(sql, a.params).then((res) => a.cb(null, res.rows), (err) => a.cb(err));
 }
@@ -270,9 +300,11 @@ function all(sql, params, cb) {
 // BEFORE the lock, so a convoy holds pool slots while it waits.
 const LOCKS = Object.freeze({
   // Serialises everything that reads-then-writes user_games.backlog_order for one
-  // user: the upsert's position allocation, the up/down swap, and the wholesale
-  // reorder. All three must take it, or the ones that do not deadlock against each
-  // other — measured at 55 deadlocks in 60 rounds of four concurrent writers.
+  // user: the upsert's position allocation, the up/down swap, the wholesale reorder,
+  // and setStatus (on EVERY path, since CC-2 -- it locks its row FOR UPDATE, and must
+  // take this first, as the others do, or it deadlocks against them). All four must
+  // take it -- the ones that do not deadlock against each other, measured at 55
+  // deadlocks in 60 rounds of four concurrent writers. Take it BEFORE any row lock.
   BACKLOG_ORDER: 4242,
 });
 

@@ -48,7 +48,10 @@ JWT_SECRET=at_least_16_characters_of_random_junk
 
 # Optional
 PORT=3000
-ROOT_PASSWORD=            # password for the seeded `root` user on a FRESH database
+ROOT_PASSWORD=            # password for the seeded `root` user on a FRESH database (not passed
+                          #   into the Docker container — there, the printed-once password is used)
+STEAM_REGION=il           # Steam storefront (two-letter country code) every price is quoted in
+IGDB_CLIENT_SECRET=       # only for "Refresh IGDB Token"; can also be set in Settings → API Keys
 CORS_ORIGINS=             # comma-separated cross-origin allowlist; empty for a same-origin deploy
 TRUST_PROXY=1             # reverse-proxy hop count used by the login rate limiter
 BACKEND_BIND=0.0.0.0      # host interface the backend port is published on (Docker only)
@@ -118,6 +121,13 @@ Two compose variables control how the backend is exposed:
 |---|---|---|
 | `BACKEND_BIND` | `0.0.0.0` | Host interface the backend port is published on |
 | `TRUST_PROXY` | `1` | Number of reverse-proxy hops in front of the backend |
+
+> **Deploying through CI? Set these as repository variables, not only in `.env`.** The deploy job runs
+> compose from a fresh checkout and never reads the host's `.env`, so a value that lives only there is
+> silently replaced by the default on the next push to `main`. Put `BACKEND_BIND`, `TRUST_PROXY`,
+> `CORS_ORIGINS` and `STEAM_REGION` under **Settings → Secrets and variables → Actions → Variables**
+> (a secret of the same name also works), and `THEGAMESDB_API_KEY` / `IGDB_CLIENT_SECRET` under
+> **Secrets**.
 
 **If your reverse proxy runs on another machine** and points at the backend port directly, leave
 `BACKEND_BIND=0.0.0.0` — a loopback bind would make the API unreachable.
@@ -207,6 +217,27 @@ do.** A `library`-scoped token held by an administrator is *not* an administrato
 403 on every admin route. An `admin`-scoped token held by a non-admin does not become one; a
 scope filters privilege, it never grants it. Grant `admin` only to something that genuinely
 needs to manage users or read API keys — an MCP server tending your library does not.
+
+**The two scopes are independent: `admin` does NOT include `library`.** Mint `library,admin`
+for a token that must do both. An `admin`-only token:
+
+- on **v2**, reaches exactly the operations the spec marks `admin` — users, their tokens,
+  settings, system status, instance-wide jobs — and gets 403 from everything else, including
+  `GET /me` and its own `/tokens`;
+- on **v1**, reaches only the routes gated by `requirePermission`: `/api/users*`,
+  `/api/settings/apikeys*`, `/api/system-status`, `/api/admin/*` sweeps and LDAP sync.
+  **`GET/POST /api/settings` is NOT one of them** (it decides admin inline, and fails closed);
+  use v2 `PATCH /settings`. Also refused: `/api/capabilities`, `/api/openapi/v2`,
+  `/api/admin/test-notification`, and the admin bypass on other users' libraries.
+
+A job (`GET /api/v2/jobs/{id}`) is readable with the scope of the call that started it.
+
+> **Upgrade note.** Before this was enforced an `admin`-only token used every library route, so
+> **existing admin-only tokens lose library access** on upgrade. Find them with
+> `SELECT t.id, u.username, t.name, t.scopes FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.scopes NOT LIKE '%"library"%';`
+> and, for each one that needs library access, mint a `library,admin` replacement and revoke the
+> old token. The token UI in My Account used to describe Admin as "everything above", which is
+> how such tokens were likely minted.
 
 > `library` is a slight misnomer worth knowing about: it means *everything that is not
 > admin*, not "read-only" and not "only the library". A `library` token can still change its
@@ -343,8 +374,9 @@ What differs from v1, and why:
 | Long sweeps | run inline until the proxy gives up | `202` and a job to poll |
 | Adding a game | search, pick client-side, post the id | post a **name**; ambiguity is a `409` listing the candidates |
 
-Scopes: a PAT is minted `library` or `admin`. A scope only ever **narrows** the privilege on the
-account — a library-scoped token held by an administrator is not an administrator.
+Scopes: a PAT is minted `library`, `admin`, or both. A scope only ever **narrows** the privilege on
+the account — a library-scoped token held by an administrator is not an administrator — and the
+two are independent: an `admin`-only token cannot use library routes.
 
 | Group | Routes |
 |---|---|
@@ -392,13 +424,24 @@ One job of a kind runs at a time. A user can refresh their own library with
 |---|---|
 | `create-local-admin.js` | Create a local admin from the CLI |
 | `create-api-token.js` | Mint / list / revoke personal access tokens |
-| `reset-root-password.js` | Reset the `root` password |
+| `reset-root-password.js` | Reset the `root` password, read from `NEW_ROOT_PASSWORD` rather than argv (see below) |
 | `run_notifications.js` | Run the release-notification check manually (mirrors the 08:00 job) |
 | `update_library_prices.js` | Trigger a Steam price update |
 | `refresh_igdb_token.js` | Refresh the IGDB OAuth bearer token |
 | `backfill_steam_app_ids.js` | Populate missing Steam App IDs |
 | `backfill_ldap_display_names.js` | Sync display names from LDAP |
 | `test_ldap_sync.js` | Debug the LDAP connection |
+
+**Resetting the root password** keeps the password out of argv, `/proc` and shell history:
+
+```bash
+read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD
+docker compose -f docker-compose.yaml exec -e NEW_ROOT_PASSWORD backend node reset-root-password.js
+unset NEW_ROOT_PASSWORD
+```
+
+`-e NAME` with no value passes the variable through from your shell. The `unset` matters:
+until it runs, every process you start from that shell inherits the password.
 
 **All of them run against PostgreSQL** through `./db`, which takes its connection from the same
 `PG*` variables as the backend. Run them inside the backend container so those variables — and

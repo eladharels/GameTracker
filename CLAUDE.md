@@ -10,9 +10,11 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 
 ### Backend
 - **Runtime**: the images ship Node.js 22 (active LTS); `package.json` engines declares the
-  FLOOR, `>=20`. The two are deliberately different — the floor is the oldest runtime the code
-  is allowed to run on, not the one it ships. Node 18 went EOL 2025-04-30 and is below the
-  floor. `test/runtime.test.js` enforces the pairing
+  FLOOR, `>=22`. The two are deliberately different — the floor is the oldest runtime the code
+  is allowed to run on, not the one it ships. Node 20 went EOL 2026-04-30 and is below the
+  floor (ROADMAP UP-2); 22 reaches EOL 2027-04-30, and `MIN_SUPPORTED_MAJOR` in
+  `test/runtime.test.js` must be raised then — no test notices a date by itself. The same
+  file enforces the pairing for the backend, MCP and frontend-build images
 - **Framework**: Express.js 5.x
 - **Database**: PostgreSQL 16 (`pg` driver, promise-based; `db.js` exposes a node-sqlite3-shaped
   callback shim so the legacy call sites in `index.js` did not have to be rewritten).
@@ -23,22 +25,24 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~3500 lines — Express server; the service layer under `services/`
+- **Entry point**: `index.js` (~2900 lines — Express server; the service layer under `services/`
   is progressively taking the logic out of it)
 
 ### Frontend
-- **Framework**: React 18 with React Router 6
-- **Build tool**: Vite 5
+- **Framework**: React 18 with React Router 7
+- **Build tool**: Vite 6 (component tests: Vitest 4 + jsdom)
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~2900 lines — single large component)
+- **Entry point**: `frontend/src/App.jsx` (~260 lines — the shell and the routes. Every page extracted from it is in `src/pages/`; `StatsPage`, `SharedLibrary` and `ApiDocsPage` were always separate files in `src/`, FE-10)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
 - **Backend port**: 3000
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
 - **Persistent volumes**: `gametracker-pgdata` (named volume, Postgres data), settings.json, sent_notifications.json
+  (**obsolete** since migration 006 moved the reminder log into Postgres; still mounted for one release so a
+  rollback to the previous image finds it — remove the mount in the release after)
 
 > **The backend image has NO build toolchain, and must not regain one.** It used to install
 > `python3 make g++ sqlite3` because the `sqlite3` npm package has no prebuilt NAPI binary for
@@ -90,16 +94,35 @@ GameTracker/
 ├── igdb-helpers.js                 # escapeIgdbSearch() — the ONLY way to interpolate a
 │                                   #   value into an APIcalypse `search "..."` literal
 ├── user-rules.js                   # RESERVED_USERNAMES + validateUsername(), shared by the
-│                                   #   API and create-local-admin.js
+│                                   #   API and create-local-admin.js; directoryClaimRefusal()
+│                                   #   — the ONE rule for which accounts an LDAP login may
+│                                   #   sign in as (never root/me, never a row holding a
+│                                   #   password hash, whatever its origin)
 ├── directory.js                    # getLdapEmail() — the directory read that is NOT part of
 │                                   #   authentication. Lives here, not in a service, so
 │                                   #   services/notifications.js can require it without a cycle;
 │                                   #   passing it in as a parameter made the address validation
 │                                   #   conditional on the caller remembering to
+├── rate-limits.js                  # EVERY in-process rate limit: one store, one hourly
+│                                   #   sweep, the login/sudo primitives, and perUserLimit()
+│                                   #   — the factory for the per-user budgets (library
+│                                   #   writes, test notifications, crack checks). A limiter
+│                                   #   is a NAMED middleware (the route gates find it by
+│                                   #   name) that renders {error} on v1 and problem+json on
+│                                   #   v2. A new budget is one perUserLimit() call, never a
+│                                   #   hand-written copy (UP-22)
 ├── settings-store.js               # The SOLE reader/writer of settings.json, with the one
 │                                   #   mtime-validated cache and the settings-over-env
 │                                   #   API-key precedence (resolveApiKey). readSettings()
-│                                   #   reports a DEGRADED load — writers must refuse then
+│                                   #   reports a DEGRADED load — writers must refuse then.
+│                                   #   Saves are atomic (temp + fsync + rename) where the
+│                                   #   mount allows; production's single-file bind mount does
+│                                   #   not, so there it rewrites in place, write-then-truncate
+│                                   #   + fsync (UP-8). SETTINGS_DIR (UP-24) selects a directory
+│                                   #   mount instead; checkSettingsLocation() refuses to start on
+│                                   #   a half-done migration, and a missing file there is
+│                                   #   DEGRADED, so writers refuse. Operator scripts read it
+│                                   #   through here too, never by their own path
 ├── services/                       # The service layer. Route handlers are thin adapters:
 │   │                               #   they do auth and HTTP, services do the work, so /api
 │   │                               #   and /api/v2 stay two skins over ONE
@@ -120,15 +143,44 @@ GameTracker/
 │   │                               #   scope rule. Scopes only ever NARROW the privilege
 │   │                               #   read from `users` — never grant. Deliberately does
 │   │                               #   NOT contain the interactive LDAP login
+│   ├── session.js                  # The BROWSER session (SEC-14): issue/verify the 12h JWT,
+│   │                               #   the __Host-gt_session cookie strings, the cookie parser,
+│   │                               #   the CSRF rule and the session view. The one owner: the
+│   │                               #   login route, authRequired and /api/auth/{session,logout}
+│   │                               #   are adapters over it. Never read by /api/v2
+│   ├── crackwatch.js               # The DRM-status sources (UP-16): the CrackWatch title cache
+│   │                               #   (load/save/refresh, exact-then-substring lookup) and the
+│   │                               #   CrackRelease page scraper. One cache per process;
+│   │                               #   index.js only wires CACHE_DIR, the cron and the routes.
+│   │                               #   Also the library-facing reads/writes of crack_status
+│   │                               #   (UP-26), every statement owner-scoped and pinned
+│   ├── login.js                    # The interactive LOGIN decision (UP-16): authenticate()
+│   │                               #   returns one outcome the route maps to 200/401/403/503/500.
+│   │                               #   Owns the fallback policy (ambiguous REFUSES; a defect after
+│   │                               #   the directory verified is a 500, never a fallback), the
+│   │                               #   claim checks, the group check, provisioning and the guarded
+│   │                               #   profile write. The route keeps CSRF, the lockout and the
+│   │                               #   session. Every rule is pinned in helpers.test.js
+│   ├── ldap-sync.js                # The admin LDAP sync (UP-16): re-reads display name and
+│   │                               #   email for every ldap-origin account. One client per user,
+│   │                               #   closed on every path; >1 entry is AMBIGUOUS and writes
+│   │                               #   nothing; the login path's sanitising and email check.
+│   │                               #   The UPDATE names only fixed columns -- directory values
+│   │                               #   are always bound, never interpolated
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
-│   ├── library.js                  # Game library + backlog ordering + the upsert
+│   ├── library.js                  # Game library + backlog ordering + the upsert, and the
+│   │                               #   ONE "already in the library?" rule (UP-19). The SPA's
+│   │                               #   libraryMatch.js is a second copy held EQUAL by the shared
+│   │                               #   vectors in test/library-match-vectors.js
 │   ├── catalog.js                  # IGDB/RAWG/TheGamesDB search, normalise, merge.
 │                                   #   Degrades: a provider that is down contributes
 │                                   #   zero results, never an error — but reports its
 │                                   #   STATUS, because "0 results" and "down" must not
 │                                   #   read the same to a caller. NOTHING from a
 │                                   #   provider's error body reaches the caller
-│   ├── users.js                    # Admin user management; the lockout safety rules
+│   ├── users.js                    # Admin user management; the lockout safety rules; My
+│   │                               #   Account's profile read (PROFILE_COLUMNS: never the hash)
+│   │                               #   and sharing toggle
 │   ├── jobs.js                     # The scheduled work as CALLABLE functions: the release
 │   │                               #   sweep, the weekly Steam price sync, and the metadata
 │   │                               #   refresh (the fifth copy of that one, and the last that
@@ -157,7 +209,12 @@ GameTracker/
 │                                   #   page computes those same counts client-side already.
 │                                   #   Every query filters source = 'user'; returns `coverage`,
 │                                   #   including `truncated`, so the page can state what the
-│                                   #   log does NOT know
+│                                   #   log does NOT know. `recordedCompletions` counts GAMES
+│                                   #   currently done that the log saw finished, never events
+│                                   #   (CC-16). ONE deliberate exception to "nothing the library
+│                                   #   carries": agentSummary() returns statusCounts, because
+│                                   #   an agent's only alternative is downloading the whole
+│                                   #   library to count five numbers
 │   ├── notifications.js            # Email/ntfy/Gotify/Telegram transports AND the fan-out.
 │                                   #   dispatch() is the ONE service that never throws — four
 │                                   #   independent outcomes, advisory result. See services/errors.js
@@ -176,6 +233,12 @@ GameTracker/
 │   │                               #   what a stub CANNOT see — ON CONFLICT semantics,
 │   │                               #   CHECK constraints, what a query RETURNS — is why
 │   │                               #   test/integration/ exists
+│   │                               #   It also pins the frontend helpers with NO DOM AT MODULE
+│   │                               #   SCOPE — any DOM or storage they read at call time is
+│   │                               #   stubbed per test (session.js, safeUrl.js, libraryMatch.js,
+│   │                               #   loginErrors.js, focusTrap.js) through import(); a module
+│   │                               #   loaded that way must not touch window, document or
+│   │                               #   storage at MODULE scope, or this suite breaks.
 │   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks the BACKEND
 │   │                               #   and MCP Dockerfiles' `FROM node:<major>` against that
 │   │                               #   package's engines floor, that the floor is a
@@ -188,12 +251,24 @@ GameTracker/
 │   │                               #   the interpreter. engines must be a plain `>=N`:
 │   │                               #   `18.x || >=20` reads like a floor of 20 and still
 │   │                               #   permits 18.
-│   │                               #   NOT the frontend's `node:20` BUILD stage: nothing
-│   │                               #   of it reaches production (nginx serves the emitted
-│   │                               #   assets) and frontend/package.json declares no
-│   │                               #   engines floor to check it against. Add one there and
-│   │                               #   this list should grow to match — the gate is keyed
-│   │                               #   on the pairing, not on the Dockerfile alone
+│   │                               #   INCLUDING the frontend's BUILD stage (UP-2): nothing
+│   │                               #   of it ships, but it runs npm ci on the production
+│   │                               #   host, and it sat on EOL node:20 while this gate
+│   │                               #   omitted it. It installs with --ignore-scripts.
+│   │                               #   ALSO: every env var the backend reads must be in the
+│   │                               #   backend `environment:` of BOTH compose files, or in
+│   │                               #   its NOT_PASSED table with a reason
+│   │                               #   ALSO the SPA's auth invariants (P0-6, FE-8, SEC-14):
+│   │                               #   the SPA builds NO Authorization header; only api.js and
+│   │                               #   ApiDocsPage's spec fetch set the CSRF header; the old
+│   │                               #   `token` key is only ever DELETED, in session.js;
+│   │                               #   every ending goes through endSession (two silent); a 401
+│   │                               #   is the interceptor's alone. A failure there means a page
+│   │                               #   is handling auth by itself again
+│   │                               #   AND two WIRING pins no rendered output shows (no effect
+│   │                               #   keyed on `currentGames`, FE-1; every page passes the
+│   │                               #   detail dialog a focus fallback, FE-7). The component
+│   │                               #   fixes themselves are tested in *.test.jsx (UP-20, FE-10)
 │   ├── api-surface.test.js         # Enforced route + authorization inventory. Walks the LIVE
 │   │                               #   Express router and asserts every route's auth tier.
 │   │                               #   Adding a route without recording its tier FAILS CI
@@ -222,7 +297,17 @@ GameTracker/
 │   │                               #   parameters bound to the INSERT, so only a database
 │   │                               #   says which row came out. Verified by deleting the
 │   │                               #   clause — that test fails, the unit suite stays GREEN.
-│   │                               #   All three call services directly, so the adapters
+│   │                               #   status-events.test.js also interleaves a concurrent
+│   │                               #   writer with setStatus and the metadata refresh
+│   │                               #   (CC-1, CC-2). reminders.test.js runs THREE sweeps at
+│   │                               #   once and asserts one send — the old file log sent
+│   │                               #   three (CC-3, CC-4). email-resolution.test.js
+│   │                               #   proves only origin='ldap' accounts reach the
+│   │                               #   directory for a missing email (CC-5).
+│   │                               #   migration-lock.test.js asks pg_locks that the
+│   │                               #   migration lock does not outlive its run, and runs
+│   │                               #   a second migrating PROCESS (CC-7).
+│   │                               #   All six call services directly, so the adapters
 │   │                               #   between the socket and the service are covered by
 │   │                               #   curl steps in the same job instead
 │   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
@@ -232,7 +317,8 @@ GameTracker/
 │                                   #   green. Two of the three clients (Android, the planned
 │                                   #   MCP) are not in this repo and cannot be grepped
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
-├── migrations/                     # Numbered .sql schema migrations. 005 adds
+├── migrations/                     # Numbered .sql schema migrations. 006 adds
+│                                   #   sent_reminders (the reminder dedupe log). 005 adds
 │                                   #   user_game_status_events. 004 adds user_games.added_at.
 │                                   #   003 adds api_tokens. 002 adds the
 │                                   #   user_games.status CHECK — its `IS NULL` disjunct
@@ -242,7 +328,8 @@ GameTracker/
 │   └── migrate-sqlite-to-postgres.js   # One-shot data migration (manual, idempotent).
 │                                   #   Requires the `sqlite3` devDependency, so it does NOT
 │                                   #   run inside the production image — use a dev checkout
-├── sent_notifications.json         # Notification deduplication log (gitignored)
+├── sent_notifications.json         # OBSOLETE reminder log (gitignored) — the sent_reminders
+│                                   #   table replaced it; see migrations/006
 ├── crackwatch-cache.json           # Cached DRM status (gitignored)
 ├── system-status-cache.json        # Last-OK timestamps per service (gitignored)
 ├── .dockerignore                   # Keeps secrets/state out of the image build context
@@ -255,7 +342,9 @@ GameTracker/
 │   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx                 # Main React app (all pages/views in one file)
+│   │   ├── App.jsx                 # The app shell and routes only. Pages extracted from
+│   │   │                           #   it are in pages/ (FE-10); Stats, SharedLibrary and
+│   │   │                           #   ApiDocs were always separate files here in src/
 │   │   ├── App.css                 # Global styles (glassmorphism theme, ~6700 lines)
 │   │   ├── GameDetailModal.jsx     # Game detail overlay
 │   │   ├── StatsPage.jsx           # Statistics. Charts are hand-rolled — CSS bars + an
@@ -275,6 +364,60 @@ GameTracker/
 │   │   │                           #   an instant belongs to, or when a week starts.
 │   │   │                           #   Bucketing is CLIENT-side on purpose: date_trunc
 │   │   │                           #   would bucket in the server's timezone
+│   │   ├── session.js              # The session as the SERVER describes it (SEC-14): the
+│   │   │                           #   credential is an HttpOnly cookie this page cannot read,
+│   │   │                           #   so nothing here decodes a JWT. One in-memory store
+│   │   │                           #   (get/setSession), expiry from the server's `expiresIn`,
+│   │   │                           #   a non-secret `session_hint` {username, exp}, the one
+│   │   │                           #   deletion of the legacy `token` key, and the cross-tab
+│   │   │                           #   broadcast. Also records WHY a session ended so the
+│   │   │                           #   login page can say so (sessionStorage)
+│   │   │                           #   endSession() is the ONE way a session ends (FE-17),
+│   │   │                           #   and records WHOSE session it was: returnPathFor()
+│   │   │                           #   sends only that same user back to the old page,
+│   │   │                           #   never the next person on a shared machine (FE-14)
+│   │   ├── safeUrl.js              # safeExternalUrl — the ONLY way a server-supplied URL
+│   │   │                           #   may reach an `href` (http/https only)
+│   │   ├── libraryMatch.js         # libraryMatch — 'same' (id, or name AND known year)
+│   │   │                           #   refuses an add; 'possible' (name, a year unknown)
+│   │   │                           #   adds with a note; never refuse by name alone (a
+│   │   │                           #   remake is not its original, FE-3). Deliberately
+│   │   │                           #   stricter than catalog.js's merge rules — see header
+│   │   ├── loginErrors.js          # loginErrorMessage — a 429 lockout or an outage must
+│   │   │                           #   never read as "wrong password" (FE-4)
+│   │   ├── focusTrap.js            # handleModalFocusTrap — the ONE Tab trap (FE-7), React-free
+│   │   │                           #   for its import() test; wraps from the container too
+│   │   ├── useDialogFocus.js       # The ONE dialog focus hook (FE-19): focus in on open (the
+│   │   │                           #   SAFE action for an alertdialog), back to the opener on
+│   │   │                           #   close (else the list, else the page heading — never
+│   │   │                           #   <body>), and the trap. Every role=dialog/alertdialog
+│   │   │                           #   uses it; runtime.test.js pins that, and bans focusing
+│   │   │                           #   on a setTimeout
+│   │   ├── api.js                  # The ONE client for our API (FE-16): API_BASE and an
+│   │   │                           #   axios.create() instance owning BOTH interceptors (the
+│   │   │                           #   CSRF header on /api/ only -- never an Authorization
+│   │   │                           #   header, SEC-14; a 401 ends the session while one exists),
+│   │   │                           #   plus probeSession() and serverLogout(). Pages
+│   │   │                           #   import { api, API_BASE }; only this file imports
+│   │   │                           #   axios (pinned). Touches `window` at module scope, so
+│   │   │                           #   helpers.test.js must never import it
+│   │   ├── SharedLibrary.jsx       # Shared-library page (moved into src/, FE-9)
+│   │   ├── gameStatus.js           # STATUSES + the unreleased/normalise helpers the search
+│   │   │                           #   and library pages share (pages never import App.jsx)
+│   │   ├── pages/                  # Pages extracted from App.jsx, one per change (FE-10):
+│   │   │   ├── LoginPage.jsx           #   sign-in; LoginPage.test.jsx pins FE-4/SEC-7/FE-14
+│   │   │   ├── UserManagementPage.jsx  #   admin user table, dialogs, LDAP sync
+│   │   │   ├── SystemStatusPage.jsx    #   the six dependency probes (admin)
+│   │   │   ├── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
+│   │   │   ├── SearchPage.jsx          #   catalog search; SearchPage.test.jsx pins FE-2
+│   │   │   ├── LibraryPage.jsx         #   the library; LibraryPage.test.jsx pins FE-1/5/6/23/24
+│   │   │   ├── CalendarPage.jsx        #   release calendar
+│   │   │   └── AccountPage.jsx         #   My Account: channels, reminders, API tokens
+│   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
+│   │   │                           #   (`cd frontend && npm test`, run by frontend-quality).
+│   │   │                           #   They replace test/runtime.test.js's source-text shape
+│   │   │                           #   pins one by one (UP-20). devDependencies only: nothing
+│   │   │                           #   here reaches the nginx image
 │   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2
 │   │   │                           #   contract from GET /api/openapi/v2, so the page and CI
 │   │   │                           #   validate the SAME document. VENDORED, never CDN-loaded:
@@ -290,7 +433,6 @@ GameTracker/
 │   │   └── styles/
 │   │       ├── Toast.css
 │   │       └── ApiDocs.css         # Swagger UI restyled into the glassmorphism theme
-│   ├── SharedLibrary.jsx           # Shared-library page (NOTE: lives outside src/)
 │   ├── nginx.conf                  # Serves the SPA + proxies /api to the backend
 │   ├── vite.config.js              # Dev server + /api proxy for local development
 │   ├── eslint.config.js
@@ -314,7 +456,7 @@ GameTracker/
 │                                   #   fast-uri resolved 4.1.2 — a major past ajv's ^3.0.1,
 │                                   #   under the SDK's input validator, to fix a URI CVE.
 │                                   #   Pin inside the major the advisory names.
-│                                   #   Runs node:22-slim and REQUIRES >=20 — the SDK's HTTP
+│                                   #   Runs node:22-slim, floor >=22; HARD minimum 19 — the SDK's HTTP
 │                                   #   transport calls the GLOBAL crypto.randomUUID(), and
 │                                   #   globalThis.crypto is only exposed from Node 19. On
 │                                   #   node:18-slim /health answered 200 while EVERY MCP
@@ -334,6 +476,8 @@ GameTracker/
 │                                   #   the v1 defect it corrects. Read BEFORE editing the spec
 ├── [Docs]:
 │   ├── README.md                   # Setup, API reference, operations
+│   ├── OPERATOR_RUNBOOK.md         # Host-only steps code cannot take: SEC-13 audit,
+│   │                               #   UP-24 settings-directory migration, UP-25 disk
 │   ├── SECURITY_HARDENING_2026-07.md  # Threat history + operational runbook (authoritative)
 │   ├── PRODUCTION_CHANGELOG.txt    # Record of changes promoted from staging
 │   ├── SECURITY_FIXES.md           # Historical — early credential-validation fix
@@ -348,12 +492,15 @@ GameTracker/
     ├── backfill_steam_app_ids.js
     ├── backfill_ldap_display_names.js
     ├── test_ldap_sync.js
+    ├── audit_ldap_hashed_accounts.js   # SEC-13: read-only list of possible pre-P0-1 takeovers
     └── run_notifications.js
 ```
 
 ### Architectural Pattern
 - **Full-stack monolith**: All backend logic lives in a single `index.js`
-- **Single-page application**: All frontend views/pages live in `App.jsx` + React Router
+- **Single-page application**: React Router over `App.jsx` (the shell and routes),
+  `src/pages/*` (the pages extracted from it verbatim, one per change, FE-10), and the
+  three page files that were always separate (`StatsPage`, `SharedLibrary`, `ApiDocsPage`)
 - **File-based config**: Runtime settings (SMTP, LDAP, Telegram, API keys) in `settings.json`,
   read through a cached `loadSettings()` that revalidates on the file's mtime
 - **Stateless API**: JWT-based authentication — no server-side session state. The token carries
@@ -370,6 +517,11 @@ GameTracker/
 > fresh database and their empty error callbacks swallowed the failures — silently shipping installs
 > missing `backlog_order`, `telegram_chat_id`, `ntfy_url` and `gotify_url`. Postgres removes the race,
 > but the swallowing was the real defect. Do not reintroduce a "log and continue" migration path.
+>
+> **Every migration must leave the PREVIOUS release able to run.** A failed deploy rolls back
+> to the previous images automatically, but it cannot roll back a schema. The previous backend
+> boots on the newer schema, because it only applies files it knows. So a migration must ADD:
+> drop or rename a column only in a later release than the one that stopped reading it.
 
 > **`/api/v2` routes go on `v2Router`, BELOW the `v2Router.use(patRequired)` line, and are
 > PAT-only.** "Below" is load-bearing: Express matches layers in stack order, so a route
@@ -401,14 +553,20 @@ GameTracker/
 > it would silently demote a game already in the library on every re-add.
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
-> router and asserts the authorization tier of all 84 routes — public / auth / owner-or-admin /
-> admin / self-only / pat / pat-admin — derived from the middleware chain, not from the path. CI
+> router and asserts the authorization tier of all 86 routes — public / auth / browser-session /
+> owner-or-admin / admin / self-only / pat / pat-library / pat-admin — derived from the middleware chain, not from the path. CI
 > fails on a route that is not in the inventory, on a tier that changed, and on any
 > unauthenticated route outside the two-item allowlist (`GET /api/health`,
 > `POST /api/auth/login`).
 >
-> The seven tiers are not decoration. `pat` is distinct from `auth` because folding them together
+> The nine tiers are not decoration. `browser-session` (authRequired + `cookieSessionOnly`,
+> SEC-14) is distinct from `auth` so its guard is asserted: recorded as `auth`, deleting the
+> guard would let a Bearer script read `/api/auth/session` with the table green.
+> `pat` is distinct from `auth` because folding them together
 > would hide the fact that `/api/v2` refuses session JWTs, which is the whole admin boundary;
+> `pat-library` is distinct from `pat` because a v2 route with NO scope guard looks exactly like
+> a library route otherwise — a new v2 route needs `requireLibraryScope` or `requireAdminScope`,
+> and plain `pat` is accepted only for the one `as-started` operation the spec pins;
 > `self-only` is distinct from `owner-or-admin` because a shared library is a consent
 > relationship between two accounts and is the one place an administrator gets no bypass.
 >
@@ -539,6 +697,20 @@ GameTracker/
 > paths, which drops no-op re-saves (`from === to`). Callers already inside a transaction
 > pass their `tx` so the event and the write it describes commit together.
 
+### `sent_reminders`
+| Column | Type | Notes |
+|---|---|---|
+| user_id | FK → users.id | `ON DELETE CASCADE` |
+| game_id | **TEXT** | Same rule as `user_games.game_id`; no FK, so a reminder stays sent if the game is re-added |
+| type | TEXT | The threshold: `30days`, `7days`, `0days` |
+| sent_at | TIMESTAMPTZ | |
+
+> **The primary key `(user_id, game_id, type)` IS the dedupe.** `services/jobs.js#REMINDER_LOG`
+> claims a reminder with `INSERT … ON CONFLICT DO NOTHING RETURNING` BEFORE sending and releases
+> the claim when no channel delivered, so exactly one sweep in any process wins. It replaced
+> `sent_notifications.json`: one in-memory copy per process, checked then marked, so the cron,
+> the admin route and `run_notifications.js` overlapping each sent the reminder (ROADMAP CC-3/4).
+
 ### `user_shares`
 | Column | Type | Notes |
 |---|---|---|
@@ -577,7 +749,16 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 ## Authentication & Security
 
 - **Local auth**: bcrypt-hashed passwords stored in Postgres
-- **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure
+- **LDAP auth**: Supports Active Directory (`sAMAccountName`) and FreeIPA (`uid`); falls back to local auth on failure.
+  **A directory login never claims `root`, `me`, or any row holding a local password hash — whatever
+  its `origin`**
+  (`user-rules.js#directoryClaimRefusal`) — for those names the directory's answer is ignored and the
+  LOCAL password decides. It used to relabel the row `origin='ldap'` and sign a session carrying its
+  admin flag. `ldap.requiredGroup` is an EXACT match: the group's full DN, or its bare cn compared
+  with the first RDN of each `memberOf` (write a comma escaped exactly as the directory stores it,
+  e.g. `game\, club`). It was a substring test, so `gamers` admitted `cn=gamers-denied`.
+  **Prefer the full group DN** where users can create groups: a bare cn matches a same-named
+  group in ANY OU (in FreeIPA that includes roles, privileges and permissions)
 - **Sudo mode**: minting a PAT from the browser re-checks the password, because a token
   outlives the 12-hour session that created it. Local accounts verify with bcrypt; directory
   accounts verify with a real LDAP bind through `ldap-helpers.js#verifyLdapCredentials` — the
@@ -600,7 +781,15 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   plaintext — a database dump yields no working credentials), revoked by DELETEing one row. Two
   scopes only, `library` and `admin`. **A scope may only NARROW the privilege read from `users`,
   never grant it**: a library-scoped token held by an admin is not an admin, and an admin-scoped
-  token held by a non-admin does not become one. Minted by `create-api-token.js`; accepted by v1's
+  token held by a non-admin does not become one. **The two are independent — `admin` does not
+  imply `library`** (ROADMAP SEC-12): on v2 an admin-only token reaches exactly the `admin`
+  operations; on v1 exactly the `requirePermission`-gated routes — NOT `GET/POST /api/settings`,
+  which decide admin inline and so refuse it (fail closed; use v2 `PATCH /settings`). The set is
+  pinned in `test/api-surface.test.js`. v2 enforces it per route with `requireLibraryScope` (tier
+  `pat-library`); v1's `authRequired` lets such a token reach only routes carrying a
+  `requirePermission` guard, read from `req.route`, failing closed without one. The ONE rule is
+  `services/auth.js#holdsScope`. `GET /api/v2/jobs/:jobId` alone is `x-required-scope: as-started`
+  (`scopeForJob`: the scope of the call that started the job). Minted by `create-api-token.js`; accepted by v1's
   `authRequired` alongside JWTs (additive — no route or response shape changed). The login rate
   limiter lives inside the login route, so token auth never reaches it; that is deliberate, since
   5 retries from an MCP client would otherwise lock the owner out for 15 minutes.
@@ -610,6 +799,41 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   to mean deleting the account and its library. The bulk delete answers 200 with a COUNT
   rather than 204: zero revoked is a success, and a 204 could not tell "revoked seven"
   from "revoked none", which is v1's `{success:true}` defect wearing a new status code.
+- **Browser session cookie (SEC-14, phase 1: server).** The SPA opts in at login with
+  `{"session": "cookie"}`. The answer is then `{session: {...}}` plus
+  `Set-Cookie: __Host-gt_session=<the same 12h JWT>; Path=/; HttpOnly; Secure; SameSite=Strict`,
+  with no token in the body. Without the field, login is byte-for-byte the frozen `{token}` and
+  sends no Set-Cookie: Android and scripts see nothing new. `services/session.js` owns it all.
+  - **CSRF:** every cookie-authenticated request, of EVERY method, must carry
+    `X-Requested-With: GameTracker`, and `Sec-Fetch-Site` if sent must be `same-origin`.
+    Otherwise it gets a **403, never a 401** (a 401 signs the SPA out). The cookie login itself
+    requires the header too. This works only while credentialed CORS stays OFF, which is pinned.
+  - **Precedence:** any `Authorization` header alone decides. An invalid or non-Bearer one is a
+    401 and never falls through to the cookie. The cookie takes a JWT only, never a PAT.
+  - **A 401 on the cookie path clears the cookie,** so a rotated secret or a deleted user cannot
+    loop the browser. A duplicated cookie name is refused.
+  - **`/api/v2` never reads the cookie.** This is tested in `api-contract.test.js` and in the
+    smoke stage.
+  - **Two browser-only routes (the narrow door):** `GET /api/auth/session` (the privilege
+    RE-READ from `users`, plus a server-clock `expiresIn`) and `POST /api/auth/logout` (clears
+    the cookie, 204). Both sit behind `cookieSessionOnly`, tier `browser-session`.
+  - **`SESSION_COOKIE_INSECURE=1`:** no `Secure`, plain `gt_session`, ONLY for a plain-HTTP LAN
+    install. It WARNs on every boot. Any value other than unset, 0 or 1 is fatal.
+  - **Known limitations:**
+    - Logout clears the cookie but cannot revoke a COPIED JWT before its exp. HttpOnly makes
+      copying one a device-compromise-level act.
+    - An XSS can still USE the session while the tab is open. It cannot take it away, or mint
+      a PAT without the password.
+    - In insecure mode, a sibling subdomain can toss a cookie.
+  - **Phase 2 (the SPA) is done.**
+    - The page never holds the credential: `session.js` keeps the server's description of the
+      session in memory, and the boot probe (`GET /api/auth/session`) restores it on reload.
+    - A 5xx or network failure at boot shows "Can't reach the server", NEVER the login page.
+    - Expiry runs on the server's `expiresIn`.
+    - Sign-in and sign-out are broadcast to other tabs.
+    - A pre-SEC-14 `token` in localStorage is deleted at boot, with a one-time "sign-in has
+      been updated" line.
+    - System Status warns when `cookieSecure` is false.
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns
@@ -657,6 +881,40 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 >
 > Each still has to be recorded in `test/api-surface.test.js` with its tier like any other
 > route.
+>
+> **A per-user abuse limit is not a "status move".** Three v1 routes answer 429 when a caller
+> exceeds a budget no person reaches: `libraryWriteLimit` on `POST /api/user/:u/games`,
+> `testNotificationLimit` on `POST /api/admin/test-notification`, and `crackCheckLimit` on both
+> crack-status routes. That is within the freeze on three conditions: the body is the frozen
+> `{error}` envelope, it carries `Retry-After`, and no existing status changes meaning for a
+> request within budget. The limiter must sit AFTER authentication in the chain — before it,
+> `req.user` is unset and the limiter fails open (`test/api-surface.test.js` pins the order).
+>
+> **The second exception is a 503, not a 429:** `POST /api/auth/login` answers 503 when an
+> unreachable directory is the only thing that could decide (UP-21, owner-approved; see
+> "Directory outage at login" below). Same `{error}` envelope, `Retry-After`, and no status
+> changes for a request the directory CAN answer. Pinned, together with its 401 controls,
+> in `test/api-contract.test.js`.
+- **User-chosen notification servers (SSRF)**: private/LAN ntfy and Gotify URLs are allowed on
+  purpose (self-hosting is the feature); cloud-metadata and link-local addresses are not. The
+  refusal is enforced on the **resolved address at connect time**
+  (`services/notifications.js#guardedLookup`, via the axios agents), not only on the URL text —
+  a text-only check let `169.254.169.254.nip.io` and DNS rebinding through (ROADMAP SEC-1). The
+  Diagnostics test button is limited to 10 per user per 5 minutes (`testNotificationLimit`,
+  pinned in `test/api-surface.test.js`)
+- **CrackRelease checks** (`POST /api/user/:u/games/:id/crackrelease-status` and the admin
+  variant) share ONE budget of 60 per caller per 5 minutes (`crackCheckLimit`, ROADMAP SEC-15):
+  each fetches a third-party site, and the per-game route also writes to `user_games` (the
+  admin variant does not). The SPA's in-flight dedupe is a courtesy, not a control. Same 429
+  `{error}` + `Retry-After` shape as the other limiters; the SPA honours `Retry-After` and
+  does not record a throttled check as `unknown`
+- **Directory outage at login** (ROADMAP UP-21): when the directory is UNREACHABLE and
+  only it could decide (no local row, or a row with no local hash), `POST /api/auth/login`
+  answers **503** `{error}` + `Retry-After`, not 401. It counts against the IP only, never
+  the account: an outage must not lock owners out, nor open a spray window. A row WITH a
+  local hash is still decided by bcrypt. This is a new status on a frozen v1 route,
+  decided by the owner, reviewed, and pinned in `test/api-contract.test.js`. Existing
+  clients already treat 5xx as "try again".
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.
@@ -700,6 +958,13 @@ NODE_ENV=production
 # ROOT_PASSWORD=<fresh-DB root password; random-printed-once if unset>
 # CORS_ORIGINS=<comma-separated cross-origin allowlist; usually empty (same-origin app)>
 # TRUST_PROXY=<reverse-proxy hop count for the login rate limiter; default 1>
+# STEAM_REGION=<Steam storefront country code for ALL prices; default il. Read ONLY via
+#   services/jobs.js#steamRegion — the cron, the v2 job and the script once disagreed>
+# SESSION_COOKIE_INSECURE=<unset/0 = Secure __Host- session cookie (default); 1 = plain-HTTP LAN
+#   only: no Secure flag. Anything else refuses to start. SEC-14>
+# SETTINGS_DIR=<directory holding settings.json; unset = the legacy single-file mount>
+#   Set ONLY together with the directory mount, per OPERATOR_RUNBOOK.md (UP-24). The backend
+#   refuses to start if the directory holds no settings.json.
 # BACKEND_BIND=<host interface the backend port publishes on; default 0.0.0.0>
 #   0.0.0.0 is required when the reverse proxy is on ANOTHER machine. It also leaves the
 #   backend directly reachable, which lets a client spoof X-Forwarded-For past the login
@@ -707,6 +972,12 @@ NODE_ENV=production
 #   proxies /api) and then set BACKEND_BIND=127.0.0.1 AND TRUST_PROXY=2 — the extra hop
 #   makes the TRUST_PROXY bump mandatory. See README "Reverse proxy topology".
 ```
+> **Every variable the backend reads must be listed in the backend's `environment:` in BOTH
+> compose files** — `test/runtime.test.js` fails otherwise, and a deliberate omission goes in its
+> `NOT_PASSED` table with the reason. Compose passes nothing implicitly: `TRUST_PROXY`,
+> `CORS_ORIGINS`, `THEGAMESDB_API_KEY`, `IGDB_CLIENT_SECRET` and `STEAM_REGION` were all
+> documented here and silently ignored in Docker until that check existed.
+>
 > In deployment `JWT_SECRET` (and the API keys) come from **GitHub Actions secrets** injected into the
 > compose env; the compose uses `${JWT_SECRET:?...}` (fail-fast). `.env` is gitignored and excluded from
 > images via `.dockerignore`.
@@ -766,13 +1037,14 @@ docker compose -f docker-compose.yaml exec backend node <script> [args]
 |---|---|---|
 | `create-local-admin.js` | Create a new admin user from the CLI | — |
 | `create-api-token.js` | Mint a personal access token (printed ONCE, on stdout alone) | — |
-| `reset-root-password.js` | Reset the root user's password | — |
+| `reset-root-password.js` | Reset the root user's password, read from `NEW_ROOT_PASSWORD` (argv still accepted, with a warning — it lands in `/proc` and shell history) | — |
 | `update_library_prices.js` | Manually trigger a Steam price update | — |
-| `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token | — |
+| `refresh_igdb_token.js` | Refresh the IGDB OAuth Bearer token — stored in settings.json through the same service call as the UI button, so no restart (UP-9) | — |
 | `backfill_steam_app_ids.js` | Populate missing Steam App IDs for existing library entries | yes |
 | `backfill_ldap_display_names.js` | Sync display names from LDAP for all LDAP-origin users | yes |
 | `test_ldap_sync.js` | Diagnose the LDAP connection and resolve every ldap-origin user (read-only) | n/a |
 | `run_notifications.js` | Manually trigger the release notification check | — |
+| `audit_ldap_hashed_accounts.js` | SEC-13: list `origin='ldap'` rows that still hold a local hash, with admin flag and tokens. Read-only; see `OPERATOR_RUNBOOK.md` | n/a |
 
 > **`DB_PATH` is gone.** It pointed at the SQLite file. Because node-sqlite3 opens with
 > `OPEN_CREATE`, a script aimed at a missing path silently *created* an empty database,
@@ -798,27 +1070,35 @@ push: main   |   pull_request -> main
 │
 ├── secret-scan      Gitleaks — full git history scan
 ├── semgrep          Semgrep auto ruleset + custom rules (.semgrep.yml)
-├── frontend-quality npm test (backend + MCP unit tests) + ESLint + Vite build (= typecheck)
+├── frontend-quality npm test (backend + MCP unit + frontend component tests) + ESLint + Vite build
 └── build-images     Build backend + frontend + MCP Docker images
-    │                  tag = `latest` on push, `pr-<number>` on a pull request
+    │                  tag = `sha-<commit>` on push, `pr-<number>` on a pull request —
+    │                  NEVER `latest` (only deploy promotes, after every gate)
     ├── trivy-api    Trivy — backend image  (CRITICAL/HIGH → fail)
     ├── trivy-web    Trivy — frontend image (CRITICAL/HIGH → fail)
     └── trivy-mcp    Trivy — MCP image      (CRITICAL/HIGH → fail)
 
 smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
-  └─► docker compose -p gametracker-smoke -f docker-compose.test.yml
+  └─► docker compose -p gametracker-smoke-<main|pr>-<run_id>-<attempt> -f docker-compose.test.yml
        Backend:  GET http://localhost:3099/api/health → {"status":"ok"}
        Frontend: GET http://localhost:8099/ → HTTP 200
        API via the frontend proxy + JSON 404 on an unknown /api route
        MCP:      POST http://127.0.0.1:3199/mcp → a real `initialize` handshake
-       The three test/integration/ suites against the real Postgres
+       E2E:      a REAL PAT minted in the stack → v2 401/read/write, and MCP `whoami`
+                 through to the backend (UP-7)
+       The six test/integration/ suites against the real Postgres
        Teardown: if: always() — guaranteed cleanup
 
 deploy  (needs: ALL 8 upstream jobs)   [push to main ONLY — see the guard below]
-  └─► docker compose up + post-deploy health check on :3000/api/health
+  └─► promote sha-<commit> -> :latest (old :latest kept as :previous)
+      └─► docker compose up -d (no `down` first) + health check on :3000/api/health
+          └─► on failure: :previous -> :latest, up again — the job stays FAILED
 
-cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
-  └─► docker rmi local/gametracker-*:pr-<number>     [pull_request only, if: always()]
+cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy)
+  └─► docker rmi local/gametracker-*:<pr-N|sha-X>   [every run, if: always();
+                                                     never latest/previous]
+      a push run that did NOT deploy KEEPS its sha-X tags ("Re-run failed jobs" does
+      not rebuild); a successful deploy sweeps every leftover sha-* tag
 ```
 
 > **A pull request runs everything except `deploy`, and THREE things keep it out of
@@ -859,8 +1139,19 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 > resolve `local/gametracker-*:latest` and the runner is **self-hosted** — the same Docker
 > daemon production runs on. A PR build tagged `latest` leaves the RUNNING containers alone
 > (they hold an image ID) but repoints the tag, so the next `docker compose up` on that host —
-> an operator restart, a reboot, the next deploy's own stop/start — silently starts production
+> an operator restart, a reboot, the next deploy's own `up` — silently starts production
 > on unreviewed PR code. The tag is the boundary; the guard alone does not close this.
+>
+> **The same applies to a push to main, which is why no build writes `latest` at all.** Main
+> builds were tagged `latest` BEFORE Trivy and the smoke test ran, so a build that failed a
+> HIGH CVE skipped deploy with `latest` already repointed at it. Builds are now `sha-<commit>`,
+> and the deploy job's promote step is the only writer of `latest`. It keeps the old one as
+> `previous`, and a failure step restores it (ROADMAP P0-5, SEC-6). `test/runtime.test.js`
+> fails if another job writes `latest`, if deploy loses its rollback, or if a
+> `docker compose down` comes back before `up`. That `down` stopped the whole stack, database
+> included, before the new one existed. Every deploy was an outage, and a failed deploy stayed
+> one. **A rollback cannot undo a migration:** write each migration so the PREVIOUS release
+> still runs on it.
 >
 > Both compose files take the image from an environment variable, so a by-hand
 > `docker compose up` is unchanged (the defaults are today's `:latest`) while CI can point the
@@ -877,7 +1168,8 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 > `:latest` explicitly, so it cannot inherit a stray value from a `.env` in the project
 > directory, and it logs `compose config --images` so the deploy record says what went live.
 >
-> **`cleanup-pr-images` is a separate job because the Trivy jobs and `smoke-test` run
+> **`cleanup-pr-images` (which now also removes a push run's `sha-<commit>` tags, after
+> deploy has promoted them) is a separate job because the Trivy jobs and `smoke-test` run
 > concurrently** (all four depend only on `build-images`), so deleting the images from inside
 > smoke-test's teardown would pull them out from under a scan still using them. Nothing else
 > removes them: the deploy job's prune is `docker image prune -f`, which is dangling-only, and
@@ -896,8 +1188,10 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 > Node the runner has), and this stage exercises the built container itself.
 >
 > **`docker-compose.test.yml` must stay identical in SHAPE to `docker-compose.yaml`** —
-> same `depends_on` conditions, same healthchecks, same env keys. Only ports, credentials
-> and probe timings may differ. Production once lacked a `depends_on` the test stack had,
+> same `depends_on` conditions, same healthchecks, same env keys. Only ports, credentials,
+> probe timings and `container_name` may differ. The test stack has NO `container_name`, on
+> purpose: fixed names stopped two stacks coexisting, which let a PR cancel a merge's
+> deploy (ROADMAP UP-6). Production once lacked a `depends_on` the test stack had,
 > so the smoke test could not have caught it: for six seconds of every deploy nginx served
 > the SPA while the API was still starting, and the library page rendered that failed
 > fetch as an empty library. A user reported their games had been deleted.
@@ -906,7 +1200,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 
 | Tool | Job | Failure Condition |
 |---|---|---|
-| Gitleaks | `secret-scan` | Any detected secret in git history |
+| Gitleaks | `secret-scan` | Any detected secret in git history — **or** a scan that errored or covered fewer commits than the history holds. Until ROADMAP SEC-5 it scanned NOTHING on the runner: git refused the checkout ("dubious ownership"), gitleaks logged "failed to scan" and exited 0 with "no leaks found". The step now sets `safe.directory` for itself and fails closed. No documentation file is path-allowlisted; a placeholder goes in `regexes`, exactly |
 | Semgrep | `semgrep` | Any ERROR-severity finding |
 | Trivy | `trivy-api` | CRITICAL or HIGH unfixed CVE in backend image |
 | Trivy | `trivy-web` | CRITICAL or HIGH unfixed CVE in frontend image |
@@ -915,8 +1209,9 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
-| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, or any of the three `test/integration/` suites failing against the real Postgres |
+| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, any of the six `test/integration/` suites failing against the real Postgres, or the end-to-end check with a REAL library-scoped PAT minted in the stack (v2 401/read/write, MCP `whoami` through to the backend) failing (UP-7). Scratch files live in a per-run `mktemp -d` (`SMOKE_TMP`), never a fixed `/tmp` path on this production host |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
+| `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice, stale search responses (FE-2), the library's crack checks, status rollback and card accessibility (FE-1/5/6), keyboard backlog reordering and whole-backlog positions (FE-23/24) |
 
 ### Container Hardening
 
@@ -932,11 +1227,11 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test)
 
 | Property | Value |
 |---|---|
-| Compose project | `gametracker-smoke` (separate Docker network) |
-| Backend port | `3099` (no conflict with production `3000`) |
-| Frontend port | `8099` (no conflict with production `8080`) |
-| MCP port | `3199` (no conflict with production `3001`). Published on `127.0.0.1` — unlike production it is never LAN-bound. The host↔container port skew (3199→3001) is deliberate: it forces the EXPLICIT `MCP_ALLOWED_HOSTS` path, while `MCP_PUBLIC_HOST` is also set so the DERIVED path runs on every build too |
-| Data directory | `/tmp/gametracker-smoke-data/` — ephemeral, wiped after test |
+| Compose project | `gametracker-smoke-<main\|pr>-<run_id>-<attempt>`: one per run, separate network, no fixed container names. The job's concurrency group is split by event (main / pull request), so a PR can never cancel a queued main run's smoke test and with it that merge's deploy (ROADMAP UP-6). A leftover stack from the same partition is removed before start |
+| Backend port | `3099` for pull requests, `3098` for main (no conflict with production `3000`, nor with each other) |
+| Frontend port | `8099` for pull requests, `8098` for main (no conflict with production `8080`) |
+| MCP port | `3199` for pull requests, `3198` for main (no conflict with production `3001`). Published on `127.0.0.1` — unlike production it is never LAN-bound. The host↔container port skew (3199→3001) is deliberate: it forces the EXPLICIT `MCP_ALLOWED_HOSTS` path, while `MCP_PUBLIC_HOST` is also set so the DERIVED path runs on every build too |
+| Data directory | a `mktemp -d` under `RUNNER_TEMP` — ephemeral, wiped after test |
 | Production DB | **Never touched** — `/home/docker/gametracker/data/` not mounted |
 
 ### Docker Prune Change

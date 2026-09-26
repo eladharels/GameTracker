@@ -78,14 +78,23 @@ info:
     | Scope | Grants |
     |---|---|
     | `library` | Everything that is not administration: the caller's own library, backlog, catalog search, sharing, notification settings, and their own tokens. |
-    | `admin` | Additionally: user management and server settings, including API keys. |
+    | `admin` | User management and server settings, including API keys. |
+
+    The two are **independent**: `admin` does not imply `library`. A token minted with
+    `admin` alone reaches exactly the `admin` operations below and gets `403` from every
+    other one — including `GET /me` and its own `/tokens`. (v1 applies the same rule: such
+    a token reaches only its admin-gated routes.) Mint `library,admin` for a token that
+    does both. (Until SEC-12 `library` was enforced nowhere, and an admin-only token used
+    every library operation this table said it could not.)
 
     `library` is a slightly narrow name for "everything that is not admin" — it is not
     read-only, and it is not restricted to the library. A `library` token can change the
     account's own notification targets and share its library with another user. What it
     cannot do is manage users or read server configuration.
 
-    **Every** operation declares its scope with `x-required-scope`, `library` or `admin`.
+    **Every** operation declares its scope with `x-required-scope`: `library`, `admin`,
+    or — for `GET /jobs/{jobId}` alone — `as-started`, the scope of the operation that
+    started the job.
     That extension exists because an OpenAPI `security` scope array carries defined
     semantics only for `oauth2`/`openIdConnect`; on an HTTP bearer scheme 3.1 permits
     role names there but leaves them "not otherwise defined or exchanged in-band", so
@@ -153,6 +162,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Me' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /me/notifications:
     get:
@@ -176,6 +186,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/NotificationSettings' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     patch:
       tags: [identity]
       operationId: updateMyNotificationSettings
@@ -199,6 +210,7 @@ paths:
               schema: { $ref: '#/components/schemas/NotificationSettings' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ------------------------------------------------------------------ tokens --
   /tokens:
@@ -226,6 +238,7 @@ paths:
                     items: { $ref: '#/components/schemas/Token' }
                 additionalProperties: false
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [tokens]
       operationId: createToken
@@ -296,6 +309,7 @@ paths:
         '204':
           description: Revoked.
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /users/{userId}/tokens:
@@ -481,6 +495,7 @@ paths:
                 additionalProperties: false
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [library]
       operationId: addLibraryGame
@@ -501,6 +516,16 @@ paths:
 
         Idempotent by `gameId`: re-adding a game already in the library updates it rather
         than failing, which is what makes a retried tool call safe.
+
+        **Possible duplicates.** A game NEW to the library is checked against the ones
+        already there under OTHER ids: the same name with the same known release year
+        (`match: same`), or the same name with a year unknown on either side
+        (`match: possible`). A remake -- same name, a different known year -- is never
+        one. The default, `onPossibleDuplicate: warn`, adds the game and lists them in
+        `possibleDuplicates`; `reject` refuses with 409 BEFORE writing anything, so a
+        caller that wants to ask first never has to undo an add. It is a check, not a
+        lock: two concurrent adds of the same game under different ids can both
+        succeed.
       requestBody:
         required: true
         content:
@@ -519,13 +544,19 @@ paths:
               schema: { $ref: '#/components/schemas/LibraryGame' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: |
-            The name did not resolve to exactly one game. `candidates` holds what was
-            found; resolve it client-side and retry with a `gameId`.
+            Either the name did not resolve to exactly one game (`candidates`: resolve it
+            client-side and retry with a `gameId`), or `onPossibleDuplicate: reject` was
+            sent and the game may already be in the library (`possibleDuplicates`; retry
+            with `warn` to add it anyway). Nothing was written.
           content:
             application/problem+json:
-              schema: { $ref: '#/components/schemas/AmbiguousGameProblem' }
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/AmbiguousGameProblem' }
+                  - { $ref: '#/components/schemas/PossibleDuplicateProblem' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '502':
           description: No catalog provider answered, so "not found" could not be distinguished from "unreachable".
@@ -555,6 +586,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LibraryGame' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [library]
@@ -589,6 +621,7 @@ paths:
               schema: { $ref: '#/components/schemas/LibraryGame' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [library]
@@ -603,6 +636,7 @@ paths:
         '204':
           description: Removed.
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /stats/summary:
@@ -653,6 +687,7 @@ paths:
                 additionalProperties: false
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /library/backlog:
     get:
@@ -675,6 +710,7 @@ paths:
                     items: { $ref: '#/components/schemas/BacklogEntry' }
                 additionalProperties: false
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     put:
       tags: [library]
       operationId: replaceBacklogOrder
@@ -719,6 +755,7 @@ paths:
                 additionalProperties: false
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /library/refresh:
     post:
@@ -746,6 +783,7 @@ paths:
               description: The job resource to poll.
               schema: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: A refresh is already running for this account.
           content:
@@ -796,6 +834,7 @@ paths:
                 additionalProperties: false
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '502':
           description: |
@@ -838,10 +877,11 @@ paths:
         - name: region
           in: query
           required: false
-          schema: { type: string, pattern: '^[a-z]{2}$', default: il }
+          schema: { type: string, pattern: '^[a-z]{2}$' }
           description: |
             ISO 3166-1 alpha-2 country code selecting the Steam store. Defaults to the
-            same region the weekly price sweep uses, so this endpoint and the stored
+            instance's configured region (`STEAM_REGION`, `il` when unset) — the same
+            region the weekly price sweep uses, so this endpoint and the stored
             `lastPrice` are comparable by default.
       responses:
         '200':
@@ -851,6 +891,7 @@ paths:
               schema: { $ref: '#/components/schemas/GamePrice' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '502':
           description: |
             Steam could not be reached or answered unusably. Distinct from a `200` with
@@ -917,7 +958,7 @@ paths:
         not usable, which is why this is library-scoped rather than admin.
 
         **Username and display name only.** Deliberately NOT the `User` schema: this is
-        readable by every credential on the instance, so it carries what a share picker
+        readable by every `library` credential on the instance, so it carries what a share picker
         needs and nothing else — no email, no administrator flag, no origin, no
         timestamps. `listUsers` remains the administrative view.
 
@@ -937,6 +978,7 @@ paths:
                     items: { $ref: '#/components/schemas/DirectoryEntry' }
                 additionalProperties: false
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /shares:
     get:
@@ -964,6 +1006,7 @@ paths:
                     items: { $ref: '#/components/schemas/Share' }
                 additionalProperties: false
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /shares/outgoing:
     put:
@@ -1010,6 +1053,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/UnknownUsersProblem' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
     post:
       tags: [sharing]
@@ -1040,6 +1084,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/UnknownUsersProblem' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /shares/outgoing/{username}:
@@ -1062,6 +1107,7 @@ paths:
         '204':
           description: Revoked.
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /shares/incoming/{username}/games:
@@ -1349,9 +1395,12 @@ paths:
       operationId: getJob
       x-implemented: true
       summary: Job status and result
-      x-required-scope: library
+      x-required-scope: as-started
       description: |
-        Readable by the account that STARTED the job. An instance-wide job (`POST /jobs`)
+        Readable by the account that STARTED the job, presenting a token with the scope
+        of the operation that started it: `admin` for `POST /jobs`, `library` for
+        `POST /library/refresh`. Hence `x-required-scope: as-started` — the only
+        operation whose scope is decided by the resource rather than the route. An instance-wide job (`POST /jobs`)
         belongs to the administrator who started it; a per-library refresh
         (`POST /library/refresh`) belongs to its caller.
 
@@ -1360,10 +1409,11 @@ paths:
         sequential. A 404-vs-403 distinction is only worth having if the id cannot be
         enumerated.
 
-        `library`-scoped rather than admin because `POST /library/refresh` is, and an
-        operation that hands back a job its own caller cannot poll is not an operation.
-        OWNERSHIP, not scope, is what protects the instance-wide results — which matters
-        because `JobResult.failures[]` names game ids from every user's library.
+        A single fixed scope could not be right: `library` locked an admin-only token out
+        of the jobs it may start, and `admin` locked a library token out of its own
+        refresh. OWNERSHIP is checked first, and is what keeps one account from reading
+        another's instance-wide results — `JobResult.failures[]` names game ids from
+        every user's library. The owner presenting the wrong scope gets a `403`.
       responses:
         '200':
           description: The job.
@@ -1371,6 +1421,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
 components:
@@ -1407,8 +1458,9 @@ components:
           schema: { $ref: '#/components/schemas/Problem' }
     Forbidden:
       description: |
-        Authenticated, but this credential may not do that — usually a `library`-scoped
-        token on an admin operation.
+        Authenticated, but this credential may not do that: a `library`-scoped token on
+        an admin operation, or an `admin`-only token on a library one. Every operation
+        can answer it, because every operation requires a scope.
 
         **Authorization is decided BEFORE existence.** A credential lacking the required
         scope receives `403` for every id, whether or not it exists. `404` is only ever
@@ -1538,6 +1590,31 @@ components:
               description: What the name matched. Pick one and retry with its `gameId`.
               items: { $ref: '#/components/schemas/CatalogGame' }
 
+    PossibleDuplicateProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [possibleDuplicates]
+          properties:
+            possibleDuplicates:
+              type: array
+              description: Games already in the library that may be this one.
+              items: { $ref: '#/components/schemas/PossibleDuplicate' }
+
+    PossibleDuplicate:
+      type: object
+      description: A game in the caller's library, under another id, that may be the one being added.
+      required: [gameId, name, releaseDate, match]
+      properties:
+        gameId: { $ref: '#/components/schemas/GameRef' }
+        name: { type: string }
+        releaseDate: { type: [string, 'null'], format: date }
+        match:
+          type: string
+          enum: [same, possible]
+          description: "`same`: same name and the same known year. `possible`: same name, a year unknown."
+      additionalProperties: false
+
     UnknownUsersProblem:
       allOf:
         - $ref: '#/components/schemas/Problem'
@@ -1616,6 +1693,12 @@ components:
             - { type: 'null' }
         backlogOrder: { type: [integer, 'null'], description: Position in the backlog. Null unless status is `backlog`. }
         addedAt: { type: [string, 'null'], format: date-time }
+        possibleDuplicates:
+          type: array
+          description: |
+            Only on `addLibraryGame`'s response, and only when the added game may already
+            be in the library under another id. Absent everywhere else.
+          items: { $ref: '#/components/schemas/PossibleDuplicate' }
       additionalProperties: false
 
     LibraryGameCreate:
@@ -1644,6 +1727,14 @@ components:
             already out stores `wishlist`. Both corrections are silent on this operation —
             it returns the resulting resource, so read the `status` you got back rather
             than assuming the one you sent.
+        onPossibleDuplicate:
+          type: string
+          enum: [warn, reject]
+          default: warn
+          description: |
+            What to do when the game may already be in the library under another id.
+            `warn` adds it and lists them in `possibleDuplicates`; `reject` answers 409
+            with them and writes nothing.
       oneOf:
         - required: [gameId]
         - required: [name]
@@ -2241,7 +2332,10 @@ components:
         reaching a caller; a free-text `error` field here would hand an implementer the
         obvious `err.message` and undo it. This deployment has already shipped a stack
         trace in a response body once.
-      enum: [provider_unavailable, rate_limited, not_found, invalid_data, internal]
+
+        A provider that rate-limits the sweep is reported as `provider_unavailable`: the
+        catalog does not distinguish an upstream 429 from an outage.
+      enum: [provider_unavailable, not_found, invalid_data, internal]
 
     JobResult:
       type: object

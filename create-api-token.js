@@ -15,6 +15,10 @@
  * Grant `admin` only to something that genuinely needs to manage users or read API
  * keys — an MCP server tending your game library does not.
  *
+ * The two are INDEPENDENT (ROADMAP SEC-12): `admin` alone reaches only the admin
+ * operations -- on v1 only the requirePermission-gated routes, which excludes
+ * GET/POST /api/settings. Pass `library,admin` for a token that must do both.
+ *
  * Run it inside the backend container so the PG* variables are the ones the
  * application actually uses:
  *

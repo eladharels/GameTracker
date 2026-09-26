@@ -1,9 +1,11 @@
 node_modules
+# The image builds its own; a host-built dist would only bloat the context (UP-5 review).
+dist
 npm-debug.log
 .git
 .gitignore
 README.md
-.env
+**/.env*
 .nyc_output
 coverage
 .DS_Store

@@ -1,15 +1,23 @@
 /**
  * Reset the root user's password in the database.
- * Run from project root: node reset-root-password.js "YourNewPassword"
- * Password must be at least 8 characters.
+ * Password must be at least 8 characters, and is read from NEW_ROOT_PASSWORD
+ * (ROADMAP SEC-9) -- NOT from the command line: argv is world-readable in
+ * /proc/<pid>/cmdline, shows in the host's `docker exec` argv and `ps`, and lands in the
+ * operator's shell history. The environment removes those. It does NOT hide the value
+ * from the app itself: the script runs as the same `node` UID, and a same-UID process
+ * can read /proc/<pid>/environ for the few seconds it runs. The positional
+ * argument still works, with a warning, so a runbook that uses it is not stranded in
+ * the middle of a lockout -- this is the break-glass path.
  *
  * This is the break-glass recovery path for an admin lockout, so it must always
  * talk to the database the application actually reads. It now uses ./db, which
  * takes its connection from the same PG* environment variables as the backend.
  * Run it inside the backend container so those are already set:
  *
- *   docker compose -f docker-compose.yaml exec backend \
- *     node reset-root-password.js "YourNewPassword"
+ *   read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD
+ *   docker compose -f docker-compose.yaml exec -e NEW_ROOT_PASSWORD backend \
+ *     node reset-root-password.js
+ *   unset NEW_ROOT_PASSWORD      # or every later child of that shell inherits it
  *
  * DB_PATH is gone. It pointed at the SQLite file, which is no longer the source
  * of truth; leaving it in place meant this script would silently CREATE an empty
@@ -18,11 +26,20 @@
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 
-const newPassword = process.argv[2];
+const envPassword = process.env.NEW_ROOT_PASSWORD || '';
+const newPassword = envPassword || process.argv[2] || '';
 if (!newPassword || newPassword.length < 8) {
-  console.error('Usage: node reset-root-password.js "YourNewPassword"');
+  console.error('Usage:');
+  console.error('  read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD');
+  console.error('  docker compose -f docker-compose.yaml exec -e NEW_ROOT_PASSWORD backend node reset-root-password.js');
+  console.error('  unset NEW_ROOT_PASSWORD');
   console.error('Password must be at least 8 characters.');
   process.exit(1);
+}
+if (!envPassword) {
+  console.error('WARNING: the password was passed on the command line, where it is visible in');
+  console.error('/proc, in `docker exec` argv and in shell history. Prefer NEW_ROOT_PASSWORD, and');
+  console.error('consider clearing this command from your shell history.');
 }
 
 console.log('Using database: %s @ %s', process.env.PGDATABASE || 'gametracker', process.env.PGHOST || 'db');

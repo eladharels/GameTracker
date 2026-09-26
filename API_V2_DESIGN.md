@@ -349,9 +349,18 @@ with the router-derived tier. That last one is not the existing test done twice:
 existing test proves the router's tier matches the recorded table, this proves the
 *published claim* matches the router. Different lie, same ground truth.
 
-Note the narrowing from D1 addendum #2: the gate proves the **admin boundary only**,
+~~Note the narrowing from D1 addendum #2: the gate proves the **admin boundary only**,
 because that is the only distinction the router encodes. It cannot prove anything about
-`library`, which is defined as the absence of admin rather than as a set of permissions.
+`library`, which is defined as the absence of admin rather than as a set of permissions.~~
+
+**Superseded (ROADMAP SEC-12).** "The absence of admin" turned out to mean "enforced
+nowhere": an `["admin"]` token used every library route the spec said required `library`.
+The router now encodes all three values and the gate checks all three:
+`library` ⇔ `requireLibraryScope` (tier `pat-library`), `admin` ⇔ `requireAdminScope`,
+and `as-started` ⇔ neither — the one operation (`getJob`) whose scope comes from the
+resource, pinned so a second one is a reviewed decision. The scopes are independent;
+`admin` does not imply `library`. v1 applies the same rule in `authRequired`: a PAT
+without `library` reaches only routes carrying a `requirePermission` guard.
 
 **What it cannot catch, and nobody should claim otherwise:** response body conformance.
 The spec can say `200` returns `{data: [...]}` while the handler returns

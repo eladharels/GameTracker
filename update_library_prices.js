@@ -21,12 +21,13 @@
 const db = require('./db');
 const jobs = require('./services/jobs');
 
-// Steam's storefront region. Prices are formatted in that region's currency.
-const REGION = process.env.STEAM_REGION || 'il';
+// Steam's storefront region. Prices are formatted in that region's currency. Read
+// through jobs.js so this, the cron and the v2 job always agree on it.
+const REGION = jobs.steamRegion();
 
-console.log('[SCRIPT] Starting manual Steam price update for all user libraries...');
+console.log(`[SCRIPT] Starting manual Steam price update for all user libraries (region '${REGION}')...`);
 
-jobs.updatePrices({ region: REGION })
+jobs.updatePrices()
   .then((report) => {
     console.log(`[SCRIPT] Manual Steam price update complete. ${report.updated} updated, `
       + `${report.withoutPrice} without a price, ${report.errors} failed `

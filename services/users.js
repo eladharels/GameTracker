@@ -16,7 +16,7 @@ const db = require('../db');
 // so a test can observe the SQL it issues. See listAll.
 const { get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
-const { isValidEmailAddress, validatePassword, sanitizeText, RESERVED_USERNAMES } = require('../user-rules');
+const { isValidEmailAddress, validatePassword, sanitizeText, validateUsername, directoryClaimRefusal } = require('../user-rules');
 // Required as MODULES, not destructured. The mapping below — which LDAP outcome
 // becomes "wrong password" and which must not — is itself the safety property, so a
 // test has to be able to stub these and observe it. A destructured binding is
@@ -269,13 +269,13 @@ async function create(fields) {
     throw serviceError(CODES.VALIDATION, 'email must be a single valid address, or empty', { field: 'email' });
   }
 
-  const normalized = username.toLowerCase();
-  // `me` collides with the /api/user/me/* routes, which are registered first and would
-  // shadow the account entirely; the rest are reserved to avoid confusion with the
-  // seeded administrator.
-  if (RESERVED_USERNAMES.includes(normalized)) {
-    throw serviceError(CODES.VALIDATION, `'${normalized}' is a reserved username.`, { field: 'username' });
-  }
+  // TRIMMED, then lowercased, then checked by the SHARED rule (ROADMAP CC-14). This
+  // checked `username.trim()` for emptiness but stored the untrimmed value, so " bob"
+  // became an account distinct from "bob"; and it re-implemented the reserved list
+  // rather than calling validateUsername, which create-local-admin.js already used.
+  const normalized = username.trim().toLowerCase();
+  const usernameProblem = validateUsername(normalized);
+  if (usernameProblem) throw serviceError(CODES.VALIDATION, usernameProblem, { field: 'username' });
 
   const hash = await bcrypt.hash(password, 10);
   let ctx;
@@ -347,11 +347,24 @@ async function verifyPassword(userId, password) {
   // bcrypt.compare, which rejects with "Illegal arguments" on a null hash — an
   // unhandled rejection there takes the process down under Node's default
   // --unhandled-rejections=throw.
-  // `origin` OR a missing hash — the two signals should agree, and where they do not
-  // this takes the safer reading. A row with origin='ldap' that somehow acquired a
-  // local hash must not be verifiable by that hash, and a row with no hash at all
-  // cannot be verified locally whatever its origin says.
-  if (row.origin === 'ldap' || !row.password || typeof row.password !== 'string') {
+  // THE HASH decides, not `origin` (SEC-13 follow-up). A row holding a local hash is
+  // checked locally; a row without one goes to the directory. That is the rule LOGIN
+  // applies (user-rules.js#directoryClaimRefusal), and it used to differ here. The rows
+  // where the two disagree are exactly the pre-P0-1 takeovers: a local account relabelled
+  // origin='ldap' with its hash kept. Login already refused the directory's claim on them;
+  // minting still sent them to the directory, so the directory password that took the
+  // account over could still mint a token for it. One rule now, and the takeover gains
+  // nothing from either door.
+  //
+  // Literally login's rule, not a restatement of it: directoryClaimRefusal decides when the
+  // directory may speak for a row, and a refused row is verified locally or not at all.
+  // `root`/`me` are refused even WITHOUT a hash -- a hashless root (the runbook's clear-hash
+  // SQL misapplied) must not become mintable with a directory password (SEC-13 review).
+  const refusal = directoryClaimRefusal(String(row.username || '').toLowerCase(), row);
+  if (refusal && (!row.password || typeof row.password !== 'string')) {
+    return { ok: false, reason: 'wrong_password' };
+  }
+  if (!refusal) {
     // `.settings`, NOT the return value. readSettings() answers
     // { settings, degraded } — reading `.ldap` off the wrapper gives undefined, which
     // silently became "no directory configured" and refused every directory user with
@@ -365,11 +378,9 @@ async function verifyPassword(userId, password) {
     // unverifiable from here, and both are the administrator's to fix.
     const { settings } = settingsStore.readSettings();
     const ldapSettings = settings.ldap || {};
-    // Same completeness test the login route applies. Without a service account there
-    // is no way to resolve the username to a DN, so there is nothing to bind as.
-    const configured = ['url', 'base', 'bindDn', 'bindPass']
-      .every((k) => typeof ldapSettings[k] === 'string' && ldapSettings[k].trim() !== '');
-    if (!configured) {
+    // The SAME completeness rule the login and the sync apply (ldap-helpers.js). Without a
+    // service account there is no way to resolve the username to a DN, so nothing to bind as.
+    if (!ldapHelpers.isLdapConfigured(ldapSettings)) {
       // An account with no local password on an instance with no directory cannot
       // authenticate at all. Fails closed and says which it is.
       return { ok: false, reason: 'no_directory', origin: row.origin || 'ldap' };
@@ -486,7 +497,17 @@ async function updateNotificationSettings(userId, fields) {
     ['telegramChatId', 'telegram_chat_id']]) {
     if (!has(key)) continue;
     updates.push(`${column} = ?`);
-    params.push(fields[key] === null ? '' : sanitizeText(fields[key], 200));
+    // A NUMBER is converted, not dropped: a Telegram chat id IS a number, and the v1
+    // route stored whatever it was sent, so a client posting `telegram_chat_id: 12345`
+    // would otherwise get a 200 with its chat id silently wiped -- and its Telegram
+    // reminders turned off. Any OTHER non-text value is refused rather than blanked:
+    // success that destroys the stored value is the one answer a client cannot act on.
+    const value = fields[key];
+    const isNumber = typeof value === 'number' && Number.isFinite(value);
+    if (value !== null && typeof value !== 'string' && !isNumber) {
+      throw serviceError(CODES.VALIDATION, `${key} must be text`, { field: key });
+    }
+    params.push(value === null ? '' : sanitizeText(isNumber ? String(value) : value, 200));
   }
   if (has('notificationDays')) {
     const days = fields.notificationDays;
@@ -510,7 +531,28 @@ async function updateNotificationSettings(userId, fields) {
   return readNotificationSettings(userId);
 }
 
+// My Account's profile read (GET /api/user/me, UP-16). The column list IS the safety
+// property -- never the password hash, never the admin flag -- so it is issued through the
+// db MODULE, where a test can assert the statement. `notification_days` is returned RAW:
+// v1 renders it with its own parse, which a NULL column answers as null, and that shape is
+// frozen.
+const PROFILE_COLUMNS = 'id, username, email, ntfy_topic, ntfy_url, gotify_token, gotify_url, '
+  + 'telegram_chat_id, notification_days, display_name, shares_library';
+async function readProfile(userId) {
+  const row = await db.promises.get(`SELECT ${PROFILE_COLUMNS} FROM users WHERE id = ?`, [userId]);
+  if (!row) throw serviceError(CODES.NOT_FOUND, 'User not found');
+  return row;
+}
+
+// The "share my library" toggle (PUT /api/user/me/sharing, UP-16). Any value is coerced by
+// truthiness, as v1 always has; only a MISSING value is refused.
+async function setLibrarySharing(userId, sharesLibrary) {
+  if (typeof sharesLibrary === 'undefined') throw serviceError(CODES.VALIDATION, 'Missing shares_library value');
+  await db.promises.run('UPDATE users SET shares_library = ? WHERE id = ?', [sharesLibrary ? 1 : 0, userId]);
+}
+
 module.exports = {
+  readProfile, setLibrarySharing, PROFILE_COLUMNS,
   listAll, findById, create, update, remove, verifyPassword,
   assertNotUserOwned, ADMIN_LIST_COLUMNS, USER_OWNED_NOTIFICATION_COLUMNS,
   ADMIN_WRITABLE_COLUMNS,

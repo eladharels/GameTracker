@@ -196,13 +196,26 @@ async function summary(userId) {
     throw serviceError(CODES.VALIDATION, 'a valid user id is required', { field: 'userId' });
   }
 
-  const [countsRaw, doneRaw, pairedRaw, playingRaw, libraryDone] = await Promise.all([
+  const [countsRaw, doneRaw, pairedRaw, playingRaw, libraryDone, recordedDone] = await Promise.all([
     eventCounts(userId),
     completions(userId),
     durations(userId),
     inProgress(userId),
     db.promises.get(
       "SELECT COUNT(*)::int AS n FROM user_games WHERE user_id = ? AND status = 'done'",
+      [userId]
+    ),
+    // GAMES, not events (ROADMAP CC-16): of the games done NOW, how many has the log
+    // seen a person finish. This was `done.length` -- the number of completion EVENTS,
+    // capped at MAX_ROWS -- so a game finished twice counted twice and hid one that was
+    // never recorded, and the page's "N of your finished games have no date" (and the
+    // agent's unrecordedCompletions, both libraryDone minus this) came out too LOW.
+    db.promises.get(
+      `SELECT COUNT(*)::int AS n FROM user_games g
+        WHERE g.user_id = ? AND g.status = 'done'
+          AND EXISTS (SELECT 1 FROM user_game_status_events e
+                       WHERE e.user_id = g.user_id AND e.game_id = g.game_id
+                         AND e.to_status = 'done' AND e.source = 'user')`,
       [userId]
     ),
   ]);
@@ -218,7 +231,7 @@ async function summary(userId) {
     trackingSince: counts.firstAt ? new Date(counts.firstAt).toISOString() : null,
     coverage: {
       libraryDone: libraryDone?.n ?? 0,
-      recordedCompletions: done.length,
+      recordedCompletions: recordedDone?.n ?? 0,
       totalEvents: counts.total,
       userEvents: counts.userEvents,
       // The page must not present a capped list as a complete one.

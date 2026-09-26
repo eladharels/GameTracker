@@ -1,24 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import { api, API_BASE } from './api'
 import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
-import { useToast } from './src/contexts/ToastContext';
-import { useNavigate } from 'react-router-dom';
+import { useToast } from './contexts/ToastContext';
+import { getSession } from './session';
+import { useDialogFocus } from './useDialogFocus';
 
-// Always call our own origin's /api (nginx proxies it to the backend). The previous
-// hardcoded host/port fell back to the PRODUCTION backend (:3000) from staging, and
-// being cross-origin it also bypassed the shared axios auth interceptor.
-const API_BASE = `${window.location.origin}/api`;
+// Requests go through ./api's client, always to our own origin's /api. A hardcoded
+// host/port once sent staging to the PRODUCTION backend (:3000), and being cross-origin
+// it bypassed the auth interceptor.
 
-// Helper to get token and user info from localStorage
+// Who is signed in, from session.js's one in-memory store (SEC-14). The page never sees
+// the credential: it is an HttpOnly cookie.
 function getAuth() {
-  const token = localStorage.getItem('token');
-  let user = null;
-  if (token) {
-    try {
-      user = JSON.parse(atob(token.split('.')[1]));
-    } catch { /* ignore malformed JWT */ }
-  }
-  return { token, user };
+  return { user: getSession() };
 }
 
 // Helper to generate a color from a string (username)
@@ -45,7 +39,7 @@ function normalizeStatus(status) {
 
 // This page will display user cards for every user who shares their library
 function SharedLibrary() {
-  const { token, user } = getAuth();
+  const { user } = getAuth();
   const [allUsers, setAllUsers] = useState([]); // All users for sharing UI
   const [sharedWith, setSharedWith] = useState([]); // Who I share with
   const [sharedWithMe, setSharedWithMe] = useState([]); // Who shared with me
@@ -67,48 +61,54 @@ function SharedLibrary() {
 
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const shareModalRef = React.useRef();
+  // Both dialogs: focus in on open (their Close button), back to the opener on close, Tab
+  // kept inside (FE-19). They had none of the three, under aria-modal. Escape stays with
+  // the window listeners below.
+  const shareCloseRef = React.useRef(null);
+  const libraryCloseRef = React.useRef(null);
+  const shareDialog = useDialogFocus(shareModalOpen, { initialRef: shareCloseRef });
+  const libraryDialog = useDialogFocus(modalOpen, { initialRef: libraryCloseRef });
 
   const { showToast } = useToast();
-  const navigate = useNavigate();
 
   // Fetch all users and my sharing list on mount
   useEffect(() => {
-    if (!token || !user) return;
+    if (!user) return;
     setLoading(true);
     setError('');
     Promise.all([
-      axios.get(`${API_BASE}/all-users`, { headers: { Authorization: `Bearer ${token}` } }),
-      axios.get(`${API_BASE}/user/${user.username}/shared-with-me`, { headers: { Authorization: `Bearer ${token}` } }),
+      api.get(`${API_BASE}/all-users`),
+      api.get(`${API_BASE}/user/${user.username}/shared-with-me`),
       // No `.catch(() => ({ data: [] }))` here any more: it turned a failed request
       // into "you share with nobody", which is data the user might act on by
       // re-sharing. Let it reject and be reported with the others below.
-      axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } })
+      api.get(`${API_BASE}/user/${user.username}/share`)
     ]).then(([allUsersRes, sharedWithMeRes, sharedWithRes]) => {
       setAllUsers(allUsersRes.data.filter(u => u.username !== user.username));
       setSharedWithMe(sharedWithMeRes.data.map(s => s.from_user));
       setSharedWith(sharedWithRes.data.toUsers || []);
       setLoading(false);
     }).catch((err) => {
-      if (err.response && (err.response.status === 401 || err.response.status === 403)) {
-        localStorage.removeItem('token');
-        if (window.setUser) window.setUser(null); // fallback if setUser is not in context/props
-        navigate('/login');
-      } else {
-        setError('Failed to load sharing data.');
-      }
+      // A 401 is the api.js interceptor's (it ends the session and reloads to /login).
+      // A 403 is "not allowed", never "logged out" (ROADMAP P0-6) — this used to delete
+      // the token and rely on a global setter nothing ever assigned.
+      // A 401 is normally overtaken by the interceptor's reload; it only reaches here
+      // when no token was stored (logged out in another tab), and then says so.
+      const status = err.response?.status;
+      setError(status === 403 ? 'You do not have access to this sharing data.'
+        : status === 401 ? 'Your session has ended. Please sign in again.'
+        : 'Failed to load sharing data.');
       setLoading(false);
     });
-  }, [token, user?.username]);
+  }, [user?.username]);
 
   // Add or revoke sharing
   async function handleShareAdd(username) {
     const newSharedWith = [...sharedWith, username];
     setToggleLoading(true);
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const res = await axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } });
+      await api.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
+      const res = await api.get(`${API_BASE}/user/${user.username}/share`);
       setSharedWith(res.data.toUsers || []);
       showToast('success', `Now sharing with @${username}`);
     } catch (err) {
@@ -120,10 +120,8 @@ function SharedLibrary() {
     const newSharedWith = sharedWith.filter(u => u !== username);
     setToggleLoading(true);
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const res = await axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } });
+      await api.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
+      const res = await api.get(`${API_BASE}/user/${user.username}/share`);
       setSharedWith(res.data.toUsers || []);
       showToast('error', `Revoked sharing from @${username}`);
     } catch (err) {
@@ -143,9 +141,7 @@ function SharedLibrary() {
     setStatusFilter('all');
     setPage(1);
     try {
-      const res = await axios.get(`${API_BASE}/user/${user.username}/shared/${u.username}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await api.get(`${API_BASE}/user/${user.username}/shared/${u.username}`);
       setModalGames(res.data);
     } catch (err) {
       setModalError('Failed to load shared games.');
@@ -214,14 +210,17 @@ function SharedLibrary() {
       <h2>Shared Library</h2>
       {user && (
         <div style={{ marginBottom: '2rem' }}>
-          <button className="action-btn playing-btn" style={{marginBottom: 18, fontSize: '1.1em'}} onClick={() => setShareModalOpen(true)}>
+          <button className="action-btn playing-btn" style={{marginBottom: 18, fontSize: '1.1em'}} onClick={() => setShareModalOpen(true)}
+            // Nothing to manage when the sharing data failed to load: the dialog would
+            // otherwise read the failure as "No users selected".
+            disabled={!!error}>
             <FaShareAlt style={{marginRight: 8}} /> Manage Sharing
           </button>
           {shareModalOpen && (
-            <div className="user-modal-bg" ref={shareModalRef} onClick={handleShareModalBgClick} tabIndex={-1} aria-modal="true" role="dialog">
+            <div className="user-modal-bg" ref={shareModalRef} onClick={handleShareModalBgClick} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="share-dialog-title" onKeyDown={shareDialog.onKeyDown}>
               <div className="user-modal-window" style={{ maxWidth: 520, minWidth: 320, borderRadius: 18, background: 'var(--surface-2)', boxShadow: '0 8px 40px var(--accent-soft-strong)', padding: '2.2rem 2.2rem 1.5rem 2.2rem' }}>
-                <button className="user-modal-close" aria-label="Close" onClick={() => setShareModalOpen(false)}>&times;</button>
-                <h3 style={{ marginTop: 0, marginBottom: 18, color: 'var(--color-accent)', fontWeight: 800, fontSize: '1.4em', letterSpacing: 0.5 }}>Manage Library Sharing</h3>
+                <button ref={shareCloseRef} className="user-modal-close" aria-label="Close" onClick={() => setShareModalOpen(false)}>&times;</button>
+                <h3 id="share-dialog-title" style={{ marginTop: 0, marginBottom: 18, color: 'var(--color-accent)', fontWeight: 800, fontSize: '1.4em', letterSpacing: 0.5 }}>Manage Library Sharing</h3>
                 {loading ? <p>Loading users...</p> : (
                   <>
                     {/* Currently sharing with */}
@@ -282,7 +281,7 @@ function SharedLibrary() {
       {loading ? (
         <p>Loading shared libraries...</p>
       ) : error ? (
-        <div className="error-msg">{error}</div>
+        <div className="error-msg" role="alert">{error}</div>
       ) : (
         <div className="user-cards-section">
           <div className="user-cards-grid">
@@ -361,10 +360,10 @@ function SharedLibrary() {
       )}
       {/* Modal for viewing shared library */}
       {modalOpen && (
-        <div className="user-modal-bg" onClick={e => { if (e.target.className === 'user-modal-bg') closeModal(); }} tabIndex={-1} aria-modal="true" role="dialog">
+        <div className="user-modal-bg" onClick={e => { if (e.target.className === 'user-modal-bg') closeModal(); }} tabIndex={-1} aria-modal="true" role="dialog" aria-labelledby="shared-library-dialog-title" onKeyDown={libraryDialog.onKeyDown}>
           <div className="user-modal-window" style={{ maxWidth: 700, minWidth: 320 }}>
-            <button className="user-modal-close" aria-label="Close" onClick={closeModal}>&times;</button>
-            <h3 style={{ marginTop: 0, marginBottom: 16 }}>
+            <button ref={libraryCloseRef} className="user-modal-close" aria-label="Close" onClick={closeModal}>&times;</button>
+            <h3 id="shared-library-dialog-title" style={{ marginTop: 0, marginBottom: 16 }}>
               {modalUser && (modalUser.display_name || modalUser.username)}'s Library
             </h3>
             {modalLoading ? (

@@ -82,6 +82,11 @@ function toProblem(err, { fallbackStatus = 500 } = {}) {
     // membership oracle; see the shares adapter, which is careful to keep it that way.
     body.unknownUsers = err.details.unknownUsers.map((u) => String(u));
   }
+  // The third (UP-19): rows from the CALLER's own library that may be the game they
+  // asked to add. Re-shaped field by field, like the other two.
+  if (Array.isArray(err.details?.possibleDuplicates)) {
+    body.possibleDuplicates = err.details.possibleDuplicates.map(possibleDuplicate);
+  }
   return { status: spec.status, body };
 }
 
@@ -222,6 +227,28 @@ function catalogGame(row) {
   };
 }
 
+// A library row that may be the game being added (UP-19). Pinned field by field: the
+// service's object is internal, and PossibleDuplicate is `additionalProperties: false`.
+function possibleDuplicate(d) {
+  return {
+    gameId: String(d.gameId),
+    name: String(d.name ?? ''),
+    releaseDate: d.releaseDate ?? null,
+    match: d.match === 'same' ? 'same' : 'possible',
+  };
+}
+
+// The add's response (UP-19): the stored game, plus `possibleDuplicates` ONLY when there
+// are some. Absent rather than [] on the common path, so every other LibraryGame
+// response is unchanged.
+function libraryGameAdded(row, possibleDuplicates) {
+  const body = libraryGame(row);
+  if (Array.isArray(possibleDuplicates) && possibleDuplicates.length) {
+    body.possibleDuplicates = possibleDuplicates.map(possibleDuplicate);
+  }
+  return body;
+}
+
 // Provider status as an ARRAY of objects, not the service's keyed map. A map keyed by
 // provider name makes every new provider a breaking change to the response's shape;
 // a list of {name, status, count} does not. `skipped` and `failed` stay distinct —
@@ -290,6 +317,8 @@ const USER_WRITE_FIELDS = Object.freeze({
   sharesLibrary: 'shares_library',
 });
 
+const BOOLEAN_USER_FIELDS = Object.freeze(['can_manage_users', 'shares_library']);
+
 function userWrite(body, { create = false } = {}) {
   const input = Object(body);
   const out = {};
@@ -298,6 +327,14 @@ function userWrite(body, { create = false } = {}) {
     const column = USER_WRITE_FIELDS[key];
     if (!column) {
       throw serviceError(CODES.VALIDATION, `unknown field: ${key}`, { field: key });
+    }
+    // BOOLEANS, checked (ROADMAP SEC-2). The service reads these as `x ? 1 : 0`, so
+    // the STRING "false" is truthy: `PATCH /users/5 {"canManageUsers":"false"}` promoted
+    // the user to admin, and the same value slipped past "you cannot remove your own
+    // admin". The spec declares them boolean; this is where that becomes true. v1 is
+    // frozen and keeps its truthy reading -- its only client sends real booleans.
+    if (BOOLEAN_USER_FIELDS.includes(column) && typeof input[key] !== 'boolean') {
+      throw serviceError(CODES.VALIDATION, `${key} must be true or false`, { field: key });
     }
     out[column] = input[key];
   }
@@ -437,7 +474,7 @@ function settingsUpdate(body) {
 
 module.exports = {
   toProblem, send, libraryGame, me, token, tokenCreated, notificationSettings, backlogEntry,
-  catalogGame, searchMeta, share, user, userWrite, job, maskedSettings, settingsUpdate,
+  catalogGame, possibleDuplicate, libraryGameAdded, searchMeta, share, user, userWrite, job, maskedSettings, settingsUpdate,
   SETTINGS_FIELDS, API_KEY_FIELDS, USER_WRITE_FIELDS,
   PLANNED_CODES, WWW_AUTHENTICATE,
 };

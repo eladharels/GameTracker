@@ -26,13 +26,18 @@
 //     Express handler with an unsent response on a pool error.
 
 const axios = require('axios');
+const dns = require('dns');
+const http = require('http');
+const https = require('https');
 const nodemailer = require('nodemailer');
 const db = require('../db');
 // Shared promise surface — see db.js. Four services had each written their own.
 const { get, run } = db.promises;
 const { loadSettings } = require('../settings-store');
 const { isValidEmailAddress, sanitizeText } = require('../user-rules');
-const { getLdapEmail } = require('../directory');
+// Through the module object, not destructured, so a test can substitute the directory
+// read and prove WHICH accounts reach it (ROADMAP CC-5).
+const directory = require('../directory');
 
 
 function escapeHtml(value) {
@@ -70,34 +75,94 @@ function isSafeImageUrl(url) {
 const METADATA_HOSTS = ['169.254.169.254', 'metadata.google.internal', 'fd00:ec2::254', '100.100.100.200'];
 function isBlockedNotificationHost(url) {
   try {
-    const u = new URL(url);
-    let host = u.hostname.toLowerCase()
+    return isBlockedHost(new URL(url).hostname);
+  } catch {
+    return true; // unparseable -> refuse
+  }
+}
+
+// The same test applied to a bare hostname or IP address. Shared by the URL check
+// above (the TEXT the user typed) and guardedLookup below (the ADDRESSES that text
+// resolves to), so the two cannot disagree about what is blocked.
+function isBlockedHost(hostname) {
+  try {
+    let host = String(hostname).toLowerCase()
       .replace(/^\[|\]$/g, '')   // strip IPv6 brackets
       .replace(/\.$/, '');       // "metadata.google.internal." resolves the same
     // Unwrap IPv4-mapped IPv6. Note that `new URL()` does NOT keep the readable
     // dotted form: it normalizes ::ffff:169.254.169.254 to ::ffff:a9fe:a9fe, so the
     // two 16-bit hex groups have to be decoded back to octets before the checks
     // below can see it. (Verified against Node's WHATWG URL parser.)
-    const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    //
+    // The same unwrapping for the other two forms that carry an IPv4 address in the
+    // low 32 bits: the deprecated IPv4-COMPATIBLE `::a.b.c.d`, and NAT64's
+    // `64:ff9b::a.b.c.d`, which a NAT64 gateway on the path translates straight to
+    // that IPv4 address, and SIIT's IPv4-translated `::ffff:0:a.b.c.d`. Defence in
+    // depth, from the CISO review of SEC-1.
+    const embedded = /^(?:::ffff:|::ffff:0:|::|64:ff9b::)/i;
+    const mappedHex = host.match(/^(?:::ffff:|::ffff:0:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
     if (mappedHex) {
       const hi = parseInt(mappedHex[1], 16);
       const lo = parseInt(mappedHex[2], 16);
       host = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
-    } else {
-      const mappedDotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+    } else if (embedded.test(host)) {
+      const mappedDotted = host.match(/^(?:::ffff:|::ffff:0:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/i);
       if (mappedDotted) host = mappedDotted[1];
     }
     if (METADATA_HOSTS.includes(host)) return true;
     // IPv4 link-local (169.254.0.0/16) covers the AWS/Azure/GCP metadata range.
     // new URL() already normalizes decimal/octal/hex IPv4 forms to dotted quads.
     if (/^169\.254\./.test(host)) return true;
-    // IPv6 link-local
-    if (/^fe80:/i.test(host)) return true;
+    // IPv6 link-local is fe80::/10 -- fe80 through febf -- not just `fe80:`.
+    if (/^fe[89ab][0-9a-f]:/i.test(host)) return true;
     return false;
   } catch {
     return true; // unparseable -> refuse
   }
 }
+
+// The TEXT check above is not enough on its own (ROADMAP SEC-1): it never consults
+// DNS, so `http://169.254.169.254.nip.io/` -- or any name the user controls, pointed
+// at the metadata address, or re-pointed there between a check and the request (DNS
+// rebinding) -- passed it, and any user could make this server POST to the cloud
+// metadata endpoint with the Diagnostics button.
+//
+// So the ntfy and Gotify requests connect through agents whose `lookup` refuses a
+// blocked ADDRESS. The check runs on the very resolution the socket connects to, so
+// there is no second lookup for a rebinding answer to slip between. Every address a
+// name resolves to is checked, not just the first. (An IP literal skips `lookup`
+// entirely, which is why the text check stays.)
+function guardedLookup(hostname, options, callback) {
+  if (typeof options === 'function') { callback = options; options = {}; }
+  const opts = typeof options === 'number' ? { family: options } : (options || {});
+  dns.lookup(hostname, { ...opts, all: true }, (err, addresses) => {
+    if (err) return callback(err);
+    if (!addresses.length || addresses.some((a) => isBlockedHost(a.address))) {
+      return callback(blockedHostError());
+    }
+    if (opts.all) return callback(null, addresses);
+    return callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+// `proxy: false` is part of the guard, not a preference: axios honours HTTP(S)_PROXY,
+// and through a proxy the agent would resolve and check the PROXY's host while the
+// proxy fetched the user's URL -- the guard silently checking the wrong name.
+//
+// The http agent does not ADD plain http: axios already spoke it for http:// URLs with
+// its default agent. Plain http to a self-hosted ntfy/Gotify on the LAN is a supported
+// configuration (CLAUDE.md, "User-chosen notification servers"); this agent exists only
+// so those requests get the same connect-time SSRF check as https ones. Removing it
+// would leave http:// URLs unguarded, not make them https.
+const GUARDED_AGENTS = Object.freeze({
+  // nosemgrep: problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
+  httpAgent: new http.Agent({ lookup: guardedLookup }),
+  httpsAgent: new https.Agent({ lookup: guardedLookup }),
+  proxy: false,
+});
+
+// The refusal code, wherever it ended up: a refusal raised inside `lookup` reaches the
+// caller wrapped by axios, with ours as the `cause`.
+const notifyCodeOf = (err) => err?.notifyCode || err?.cause?.notifyCode || null;
 
 // Raw axios errors distinguish ECONNREFUSED / 404 / timeout, which turns the
 // Diagnostics "send test notification" button into an open/closed/filtered port
@@ -118,7 +183,7 @@ function blockedHostError() {
 
 function sanitizeDeliveryError(err, channel) {
   console.error(`[Notify] ${channel} delivery failed:`, err?.message || err);
-  if (err?.notifyCode === NOTIFY_CODES.BLOCKED_HOST) return err.message;
+  if (notifyCodeOf(err) === NOTIFY_CODES.BLOCKED_HOST) return BLOCKED_HOST_MESSAGE;
   return 'Delivery failed. Check the server URL and credentials in My Account, then try again.';
 }
 
@@ -224,6 +289,7 @@ async function sendNtfy(title, message, topic, attachUrl, serverUrl) {
     headers,
     timeout: 10000,
     maxRedirects: 0,
+    ...GUARDED_AGENTS,
   });
   return true;
 }
@@ -244,16 +310,27 @@ async function sendGotify(title, message, token, priority = 5, imageUrl, serverU
     headers: { 'Content-Type': 'application/json', 'X-Gotify-Key': token },
     timeout: 10000,
     maxRedirects: 0,
+    ...GUARDED_AGENTS,
   });
   return true;
 }
+
+// The message body, in Telegram's HTML parse mode (ROADMAP UP-12).
+//
+// It was legacy `Markdown` with the game name interpolated raw, so a name containing
+// `_`, `*`, `[` or a backtick — "Tom Clancy's Rainbow Six_Siege", "Half-Life 2: Episode
+// *" — was an unbalanced entity, Telegram answered 400 "can't parse entities", and that
+// channel never delivered for that game. HTML mode needs only &, <, > (and quotes)
+// escaped, which escapeHtml already does; &#39; is a numeric entity, which Telegram
+// accepts. Pure so helpers.test.js can pin it.
+const telegramText = (title, message) => `<b>${escapeHtml(title)}</b>\n${escapeHtml(message)}`;
 
 async function sendTelegram(title, message, chatId, photoUrl) {
   const { telegram } = loadSettings();
   const botToken = telegram?.bot_token;
   if (!botToken) return skip(NOTIFY_CODES.NOT_CONFIGURED, 'No Telegram bot token configured on this server.');
   if (!chatId) return skip(NOTIFY_CODES.NO_DESTINATION, 'No Telegram chat ID.');
-  const text = `*${title}*\n${message}`;
+  const text = telegramText(title, message);
   // Parity with sendNtfy/sendGotify: a hung api.telegram.org must not hold the
   // request open indefinitely.
   const opts = { timeout: 10000, maxRedirects: 0 };
@@ -269,13 +346,13 @@ async function sendTelegram(title, message, chatId, photoUrl) {
       chat_id: chatId,
       photo: safePhoto,
       caption: text,
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
     }, opts);
   } else {
     await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       chat_id: chatId,
       text,
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
     }, opts);
   }
   return true;
@@ -309,18 +386,28 @@ async function channelsForId(id) {
 //   * the backfill UPDATE was fire-and-forget. Per db.js, pool.end() abandons queries
 //     still waiting for a connection WITHOUT invoking their callbacks, so in a script
 //     or a shutting-down process the write vanishes silently. Awaited now.
+//
+// And ONLY FOR DIRECTORY ACCOUNTS (ROADMAP CC-5). Every account with an empty email
+// used to fall through to the directory, and `getLdapEmail` matches on the username
+// alone — so a LOCAL `jsmith` was given directory-`jsmith`'s address, WRITTEN to their
+// row, and from then on their reminders went to a different person. A local user who
+// cleared their address to opt out had it silently filled back in. It also cost one
+// service-account bind per notification for every such account. A local account's
+// empty email means "no email", full stop.
 async function resolveEmail(username, knownEmail) {
   const name = username ? String(username).toLowerCase() : '';
   // `knownEmail` lets a caller that has already SELECTed the row skip a second
   // round-trip; undefined means "look it up".
-  const cached = knownEmail !== undefined
-    ? knownEmail
-    : (await get('SELECT email FROM users WHERE username = ?', [name]))?.email;
+  // One read covers both: the address, and whether the directory may supply one.
+  const row = knownEmail !== undefined && knownEmail ? null
+    : await get('SELECT email, origin FROM users WHERE username = ?', [name]);
+  const cached = knownEmail !== undefined ? knownEmail : row?.email;
   if (cached) return cached;
+  if (!row || row.origin !== 'ldap') return null;
 
   let fromLdap = null;
   try {
-    fromLdap = await getLdapEmail(name);
+    fromLdap = await directory.getLdapEmail(name);
   } catch (err) {
     console.error('[Notify] LDAP email lookup failed for', name, '-', err.message);
     return null;
@@ -444,7 +531,7 @@ async function dispatch(channels, payload, { only } = {}) {
         results[channel.key].error = outcome?.message || 'Not delivered.';
       }
     } catch (err) {
-      results[channel.key].code = err?.notifyCode || NOTIFY_CODES.DELIVERY_FAILED;
+      results[channel.key].code = notifyCodeOf(err) || NOTIFY_CODES.DELIVERY_FAILED;
       results[channel.key].error = sanitizeDeliveryError(err, channel.key);
     }
   }));
@@ -551,7 +638,7 @@ function logOutcomes(tag, username, results) {
 
 module.exports = {
   // transports
-  sendEmail, sendNtfy, sendGotify, sendTelegram,
+  sendEmail, sendNtfy, sendGotify, sendTelegram, telegramText,
   // THE TEST SEAM. The CHANNELS rows are frozen and call through this object, so
   // substituting a transport here is the only way to exercise dispatch() without a
   // network — and dispatch()'s contract (one channel's failure never stops another)
@@ -559,7 +646,7 @@ module.exports = {
   // these; a test must restore what it replaced.
   transports,
   // helpers other code still needs
-  escapeHtml, isSafeImageUrl, isBlockedNotificationHost, sanitizeDeliveryError,
+  escapeHtml, isSafeImageUrl, isBlockedNotificationHost, isBlockedHost, guardedLookup, sanitizeDeliveryError,
   ALLOWED_IMAGE_HOSTS, METADATA_HOSTS,
   // recipients + fan-out
   NOTIFY_CODES, CHANNEL_COLUMNS, CHANNELS, CHANNEL_KEYS,

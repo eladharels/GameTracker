@@ -30,6 +30,29 @@ const safe = (v, n = 80) => sanitizeText(v, n);
 // entire run indefinitely. Same defect the catalog providers had.
 const STEAM_TIMEOUT_MS = 10000;
 
+// The Steam storefront region every price in this instance is quoted in, from
+// STEAM_REGION (default 'il'). Resolved HERE, once, and used as the default by every
+// price lookup — because every caller choosing its own was the bug: the cron passed
+// STEAM_REGION, `POST /api/v2/jobs {kind:"updatePrices"}` passed nothing and got
+// 'il', so an instance set to `us` stored USD on Monday and ILS after an admin
+// pressed "run now". Mixed currencies in one library cannot be told apart later.
+//
+// A value that is not a two-letter code falls back to 'il' LOUDLY, rather than being
+// sent to Steam as-is, where it silently answers "not in this region" for everything.
+// Warned once per bad value, not per call: this is the default parameter of every
+// price lookup, so a sweep would otherwise log the same line once per game.
+let warnedRegion = null;
+function steamRegion(env = process.env) {
+  const raw = String(env.STEAM_REGION ?? '').trim().toLowerCase();
+  if (raw === '') return 'il';
+  if (/^[a-z]{2}$/.test(raw)) return raw;
+  if (warnedRegion !== raw) {
+    warnedRegion = raw;
+    console.warn(`[Jobs] Ignoring STEAM_REGION=${safe(raw, 20)}: not a two-letter country code. Using 'il'.`);
+  }
+  return 'il';
+}
+
 // --- Release checks --------------------------------------------------------
 
 // Users who have at least one unreleased game with a date, and their reminder
@@ -38,7 +61,7 @@ const STEAM_TIMEOUT_MS = 10000;
 // and enumerated accounts with nothing to check.
 async function usersWithPendingReleases() {
   return all(
-    `SELECT u.username, u.notification_days
+    `SELECT u.id, u.username, u.notification_days
        FROM users u
       WHERE EXISTS (
         SELECT 1 FROM user_games g
@@ -70,14 +93,44 @@ function reminderDays(raw) {
 // route authorization, applied to push notifications.
 const NO_DEDUPE = Symbol('send reminders without consulting the sent log');
 
+// The reminder dedupe log, in Postgres (migrations/006_sent_reminders.sql).
+//
+// CLAIM, then send, then RELEASE if nothing delivered. It used to be a check
+// (`wasSent`), then the send, then a mark (`markSent`) against a JSON file each process
+// held its own copy of -- so two overlapping sweeps (the 08:00 cron, the admin route,
+// run_notifications.js) both saw "not sent" and both delivered to all four channels,
+// and the second file write erased the first's records (ROADMAP CC-3, CC-4). The
+// primary key makes the claim atomic across processes: exactly one sweep wins each
+// (user, game, threshold).
+//
+// The trade: a process that dies between claim and send leaves the reminder claimed
+// and unsent. At most once is the right side to fail on for a push notification.
+//
+// `db.promises` through the module, so a test can stub the statements.
+const REMINDER_LOG = Object.freeze({
+  async claim(userId, gameId, type) {
+    const row = await db.promises.get(
+      `INSERT INTO sent_reminders (user_id, game_id, type) VALUES (?, ?, ?)
+       ON CONFLICT (user_id, game_id, type) DO NOTHING
+       RETURNING user_id`,
+      [userId, String(gameId), type]);
+    return Boolean(row);
+  },
+  async release(userId, gameId, type) {
+    await db.promises.run(
+      'DELETE FROM sent_reminders WHERE user_id = ? AND game_id = ? AND type = ?',
+      [userId, String(gameId), type]);
+  },
+});
+
 // Promote everything that has come out, and send each user's due reminders.
 //
-// `dedupe` is the sent-notifications log — `{ wasSent, markSent }` — injected because
-// it is file-backed state owned by the server process. Pass NO_DEDUPE to run without
-// it deliberately.
+// `dedupe` is the reminder log -- REMINDER_LOG, or anything with its `{claim, release}`
+// shape. Pass NO_DEDUPE to run without it deliberately.
 async function checkReleases({ dedupe } = {}) {
-  if (!dedupe) {
-    throw new Error('checkReleases requires a dedupe log ({wasSent, markSent}), '
+  if (!dedupe || (dedupe !== NO_DEDUPE
+      && (typeof dedupe.claim !== 'function' || typeof dedupe.release !== 'function'))) {
+    throw new Error('checkReleases requires a dedupe log ({claim, release} -- jobs.REMINDER_LOG), '
       + 'or jobs.NO_DEDUPE to run without one deliberately — omitting it re-sends '
       + 'every due reminder on every run.');
   }
@@ -99,6 +152,7 @@ async function checkReleases({ dedupe } = {}) {
 
     for (const game of games) {
       if (game.status !== 'unreleased') continue;
+      let claimed = null;   // the reminder this iteration holds, until it is delivered
       // null for a date we cannot reason about. The two copies of this used a bare
       // `new Date(...)`, so an unparseable date produced NaN, every comparison below
       // was false, and the row was skipped forever while logging `diffDays: NaN`.
@@ -121,14 +175,18 @@ async function checkReleases({ dedupe } = {}) {
 
         if (!days.includes(diff)) continue;
         const type = `${diff}days`;
-        if (log?.wasSent(user.username, game.game_id, type)) continue;
+        // Claimed BEFORE sending: another sweep holding it (or having sent it) wins.
+        if (log) {
+          if (!(await log.claim(user.id, game.game_id, type))) continue;
+          claimed = type;
+        }
 
         const results = await notifications.notifyReleaseReminder(user.username, game, diff);
-        // Mark sent only if a channel ACTUALLY delivered — dispatch no longer rejects
-        // on a channel failure, so the retry decision has to be made from the result
-        // or a total outage is recorded as delivered and never retried.
+        // Kept only if a channel ACTUALLY delivered — dispatch does not reject on a
+        // channel failure, so the decision has to be made from the result, or a total
+        // outage is recorded as delivered and never retried.
         if (notifications.anyDelivered(results)) {
-          log?.markSent(user.username, game.game_id, type);
+          claimed = null;
           report.remindersSent.push({ username: user.username, gameName: game.game_name, days: diff });
         } else {
           // Not "will retry": diff decrements daily and is matched against the user's
@@ -141,6 +199,14 @@ async function checkReleases({ dedupe } = {}) {
         // Per game: one bad row must not abandon the sweep.
         report.errors.push({ username: user.username, gameName: game.game_name, error: 'Release check failed' });
         console.error(`[Jobs] Release check failed for ${safe(game.game_name)}:`, err.message);
+      } finally {
+        // Nothing delivered (or the send threw): give the claim back, so the reminder
+        // is not recorded as sent. A failed release is logged, not thrown -- it only
+        // means this one threshold will not be retried by a same-day re-run.
+        if (claimed && log) {
+          await log.release(user.id, game.game_id, claimed).catch((e) =>
+            console.error(`[Jobs] Could not release the ${claimed} reminder claim:`, e.message));
+        }
       }
     }
   }
@@ -178,6 +244,10 @@ function priceString(value) {
   return trimmed || null;
 }
 
+// A Steam application id: 1-10 digits. The ONE rule, for both v1 and v2 — the value is
+// interpolated into an outbound request, so it is checked before it leaves.
+const isSteamAppId = (v) => /^[0-9]{1,10}$/.test(String(v ?? ''));
+
 // One Steam lookup. Extracted because there are now two callers — the weekly sweep
 // below and `GET /api/v2/catalog/prices/{steamAppId}` — and the alternative was the
 // route re-implementing the request, the timeout, the redirect refusal and the
@@ -192,7 +262,7 @@ function priceString(value) {
 //   { ok: true,  price }              a formatted price for that region
 //   { ok: true,  price: null, reason } Steam answered; the game has no price there
 //   { ok: false, error }              Steam could not be reached or was unusable
-async function fetchSteamPrice(steamAppId, { region = 'il' } = {}) {
+async function fetchSteamPrice(steamAppId, { region = steamRegion() } = {}) {
   const id = String(steamAppId);
   try {
     const response = await axios.get('https://store.steampowered.com/api/appdetails', {
@@ -207,27 +277,56 @@ async function fetchSteamPrice(steamAppId, { region = 'il' } = {}) {
     // store at all — distinct from an app that is there and simply has no price_overview
     // (free, unreleased, or bundled).
     if (!data?.success) return { ok: true, price: null, reason: 'not_in_region' };
-    const price = priceString(data?.data?.price_overview?.final_formatted);
+    const overview = data?.data?.price_overview;
+    const price = priceString(overview?.final_formatted);
     if (!price) return { ok: true, price: null, reason: 'free_or_unpriced' };
-    return { ok: true, price, reason: null };
+    // The rest of price_overview, for v1's GET /api/game-price shape (UP-10). Same
+    // treatment as the price: third-party values, bounded and typed, or null. The v2
+    // adapter picks its own fields and never sees these.
+    const discount = Number.isInteger(overview.discount_percent)
+      && overview.discount_percent >= 0 && overview.discount_percent <= 100 ? overview.discount_percent : null;
+    const currency = typeof overview.currency === 'string' && /^[A-Z]{3}$/.test(overview.currency)
+      ? overview.currency : null;
+    return {
+      ok: true, price, reason: null,
+      currency, discount, originalPrice: priceString(overview.initial_formatted),
+    };
   } catch (err) {
     // Steam's message only, never the response body.
     return { ok: false, error: err.message };
   }
 }
 
-async function updatePrices({ region = 'il' } = {}) {
+async function updatePrices({ region = steamRegion() } = {}) {
   const report = { checked: 0, updated: 0, withoutPrice: 0, errors: 0 };
   const games = await priceableGames();
+  // ONE Steam request per app id per sweep (ROADMAP UP-11). Rows are per user, so a game
+  // five people own was fetched five times — same id, same region, same answer, five
+  // times the traffic against an unauthenticated API that rate-limits by IP. The report
+  // still counts ROWS, so its meaning is unchanged; a failure is logged once per id.
+  const byAppId = new Map();
+  const lookup = (id) => {
+    if (!byAppId.has(id)) {
+      // A stored value that is not a Steam id is never sent (the same rule the routes
+      // apply): it was interpolated into the outbound request as-is.
+      byAppId.set(id, isSteamAppId(id)
+        ? fetchSteamPrice(id, { region }).then((r) => {
+          if (!r.ok) console.error(`[Jobs] Price lookup failed for app ${safe(id, 20)}:`, r.error);
+          return r;
+        })
+        : Promise.resolve((() => {
+          // Logged once per value, or the error count rises with no explanation.
+          console.error(`[Jobs] Skipping stored steam_app_id ${JSON.stringify(safe(id, 40))}: not a Steam app id`);
+          return { ok: false, error: 'not a Steam app id' };
+        })()));
+    }
+    return byAppId.get(id);
+  };
   for (const game of games) {
     report.checked++;
     {
-      const result = await fetchSteamPrice(game.steam_app_id, { region });
-      if (!result.ok) {
-        report.errors++;
-        console.error(`[Jobs] Price lookup failed for app ${safe(game.steam_app_id, 20)}:`, result.error);
-        continue;
-      }
+      const result = await lookup(String(game.steam_app_id).trim());
+      if (!result.ok) { report.errors++; continue; }
       const price = result.price;
       if (!price) { report.withoutPrice++; continue; }
       // AWAITED. v1 fired this through the callback shim without waiting, which
@@ -254,31 +353,53 @@ async function updatePrices({ region = 'il' } = {}) {
 // SEQUENTIAL, as v1 is. Each game costs up to three provider searches plus RAWG's
 // per-result detail lookups, so a whole library run concurrently bursts hundreds of
 // outbound requests and earns a rate-limit.
+// Refresh ONE library row from the catalog. The single decision all three refresh
+// paths make -- the v2 job below and both v1 routes in index.js -- which was open-coded
+// in each and had already drifted (ROADMAP CC-8): the single-game v1 route still chose
+// "not found" vs "lookup unavailable" from `lookup.degraded`, a bug the bulk route had
+// fixed, so an instance with no API keys told the user their game did not exist.
+//
+// Returns { outcome, changes }, outcome one of:
+//   'updated' | 'unchanged'         -- matched; `changes` names the columns written
+//   'not_found'                     -- asked, and no result is unambiguously this game
+//   'provider_unavailable'          -- nobody could be asked (outage, or no keys at all)
+// Throws only for a database error, which each caller reports per game.
+async function refreshOne(userId, game) {
+  const lookup = await catalog.searchAll(game.game_name, { limit: catalog.LIMIT_REFRESH });
+  // matchForRow, not findExactMatch: id first, then year — see catalog.js (CC-6).
+  const match = catalog.matchForRow(lookup.results, game);
+  if (!match) {
+    // "Not found" only when every provider that could have had it ANSWERED. Two ways
+    // that fails, and both mean "we could not ask", not "it does not exist":
+    //   - `degraded`: a provider FAILED, so the game may be exactly where we could not
+    //     look (IGDB down, RAWG answered without an exact match);
+    //   - nobodyAnswered: no provider was even asked -- an instance with no API keys
+    //     reports every one `skipped`, which is not degraded.
+    // The bulk route had swapped the first test for the second rather than adding it,
+    // and refreshOne inherited that; the single-game route had only the first.
+    const couldNotAsk = lookup.degraded || catalog.nobodyAnswered(lookup.providers);
+    return { outcome: couldNotAsk ? 'provider_unavailable' : 'not_found', changes: [] };
+  }
+  const applied = await library.applyRefreshedMetadata(userId, game, match);
+  return { outcome: applied.updated ? 'updated' : 'unchanged', changes: applied.changes };
+}
+
 async function refreshMetadata({ userId }) {
   const games = await library.listGamesWithAliases(userId);
   const result = { processed: 0, succeeded: 0, failed: 0, failures: [] };
   for (const game of games) {
     result.processed++;
     try {
-      const lookup = await catalog.searchAll(game.game_name, { limit: catalog.LIMIT_REFRESH });
-      const match = catalog.findExactMatch(lookup.results, game.game_name);
-      if (!match) {
+      const { outcome } = await refreshOne(userId, game);
+      if (outcome === 'not_found' || outcome === 'provider_unavailable') {
         result.failed++;
         // "Nobody has this game" and "we could not ask" are different facts and a user
         // acts on them differently — during a provider outage the whole library would
         // otherwise be reported as not existing in any database. The closed reason set
         // is what carries the difference; a message would have carried the provider's.
-        result.failures.push({
-          gameId: game.game_id,
-          // nobodyAnswered, not `degraded`: an instance with no API keys configured
-          // reports every provider `skipped`, which is not degraded and still asked
-          // nobody — and reporting that as `not_found` tells a client every game in
-          // the library has ceased to exist. Measured live before this line changed.
-          reason: catalog.nobodyAnswered(lookup.providers) ? 'provider_unavailable' : 'not_found',
-        });
+        result.failures.push({ gameId: game.game_id, reason: outcome });
         continue;
       }
-      await library.applyRefreshedMetadata(userId, game, match);
       result.succeeded++;
     } catch (err) {
       // Per game: one bad row must not abandon the sweep.
@@ -313,11 +434,12 @@ async function refreshMetadataAll() {
 // which the v1 price sweep genuinely could, reporting success while writing nothing.
 const JOB_KINDS = Object.freeze(['refreshMetadata', 'checkReleases', 'refreshCrackStatus', 'updatePrices']);
 
-// `deps` carries the two pieces of state this module does not own: the file-backed
-// sent-notifications log, and the CrackWatch cache, which lives at module scope in
-// index.js behind its own file. Both are required rather than defaulted — omitting the
-// dedupe log silently re-sends every due reminder to real users, which is precisely
-// the failure NO_DEDUPE was introduced to make impossible to reach by accident.
+// `deps` carries the reminder log and the CrackWatch cache (which lives at module
+// scope in index.js behind its own file). Both are required rather than defaulted —
+// omitting the dedupe log silently re-sends every due reminder to real users, which is
+// precisely the failure NO_DEDUPE was introduced to make impossible to reach by
+// accident. The log itself is REMINDER_LOG now; requiring it to be passed keeps the
+// decision written at every call site.
 async function runJob(kind, { scope = 'instance', userId = null, deps = {} } = {}) {
   if (!JOB_KINDS.includes(kind)) {
     throw serviceError(CODES.VALIDATION, `kind must be one of: ${JOB_KINDS.join(', ')}`, { field: 'kind' });
@@ -357,6 +479,7 @@ async function runJob(kind, { scope = 'instance', userId = null, deps = {} } = {
 }
 
 module.exports = {
-  NO_DEDUPE, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames,
-  refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice,
+  NO_DEDUPE, REMINDER_LOG, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames,
+  refreshOne, refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice, steamRegion,
+  isSteamAppId,
 };

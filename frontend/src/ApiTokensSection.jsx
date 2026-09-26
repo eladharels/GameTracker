@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import axios from 'axios'
+import { api, API_BASE } from './api'
 import { FaKey, FaSync, FaTrash, FaCheckCircle, FaExclamationCircle, FaCopy, FaPlus } from 'react-icons/fa'
 
 // Personal access tokens, managed from My Account.
@@ -13,7 +13,6 @@ import { FaKey, FaSync, FaTrash, FaCheckCircle, FaExclamationCircle, FaCopy, FaP
 // the design below — the reveal is a deliberate, dismissible step rather than a toast,
 // because a user who misses it has lost the token and has to mint another.
 
-const API_BASE = '/api'
 
 const SCOPE_COPY = {
   library: {
@@ -22,7 +21,9 @@ const SCOPE_COPY = {
   },
   admin: {
     label: 'Admin',
-    desc: 'Everything above, plus user management, server settings and instance-wide jobs.',
+    // NOT "everything above": the scopes are independent (ROADMAP SEC-12), and this
+    // copy is how admin-only tokens that could not reach any library got minted.
+    desc: 'User management, server settings and instance-wide jobs. Does not include Library — select both if the token also needs your library.',
   },
 }
 
@@ -48,22 +49,18 @@ export default function ApiTokensSection({ canManageUsers }) {
 
   const [revoking, setRevoking] = useState(null)
 
-  const authH = useCallback(
-    () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }),
-    [],
-  )
 
   const load = useCallback(async () => {
     setListError('')
     try {
-      const res = await axios.get(`${API_BASE}/user/me/tokens`, authH())
+      const res = await api.get(`${API_BASE}/user/me/tokens`)
       setTokens(Array.isArray(res.data?.tokens) ? res.data.tokens : [])
     } catch (err) {
       setListError(err.response?.data?.error || 'Could not load your tokens.')
     } finally {
       setLoading(false)
     }
-  }, [authH])
+  }, [])
 
   useEffect(() => { load() }, [load])
 
@@ -88,7 +85,7 @@ export default function ApiTokensSection({ canManageUsers }) {
     setCreating(true)
     setFormError('')
     try {
-      const res = await axios.post(`${API_BASE}/user/me/tokens`, {
+      const res = await api.post(`${API_BASE}/user/me/tokens`, {
         name: name.trim(),
         scopes,
         password,
@@ -96,7 +93,7 @@ export default function ApiTokensSection({ canManageUsers }) {
         // End of the chosen day, so a token dated "today" is valid for the rest of it
         // rather than already expired.
         expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59Z`).toISOString() : null,
-      }, authH())
+      })
       setMinted(res.data)
       setCopied(false)
       resetForm()
@@ -114,7 +111,7 @@ export default function ApiTokensSection({ canManageUsers }) {
     if (!window.confirm(`Revoke "${tokenName}"?\n\nAnything using it stops working immediately. This cannot be undone.`)) return
     setRevoking(tokenId)
     try {
-      await axios.delete(`${API_BASE}/user/me/tokens/${tokenId}`, authH())
+      await api.delete(`${API_BASE}/user/me/tokens/${tokenId}`)
       load()
     } catch (err) {
       setListError(err.response?.data?.error || 'Could not revoke that token.')
@@ -202,6 +199,15 @@ export default function ApiTokensSection({ canManageUsers }) {
                   {t.scopes.map((s) => (
                     <span key={s} className={`token-badge token-badge--${s}`}>{SCOPE_COPY[s]?.label || s}</span>
                   ))}
+                  {/* FE-13: an admin-only token cannot reach any library (SEC-12). Tokens
+                      minted when the Admin copy said "everything above" look fine and
+                      then answer 403 everywhere; say so where the owner will see it. */}
+                  {t.scopes.length === 1 && t.scopes[0] === 'admin' && (
+                    <span className="token-badge token-badge--note"
+                      title="This token has only the Admin scope, so it cannot read or change any library. Mint one with Library and Admin if it needs both.">
+                      No library access
+                    </span>
+                  )}
                   <span>Created {fmt(t.created_at)}</span>
                   {/* "Never used" is the actionable state: a token nobody has used is one
                       that can be revoked without breaking anything. */}

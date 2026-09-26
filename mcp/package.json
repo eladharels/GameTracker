@@ -6,7 +6,7 @@
   "main": "server.js",
   "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node server.js",
@@ -19,6 +19,6 @@
     "zod": "^3.23.8"
   },
   "overrides": {
-    "fast-uri": "^3.1.5"
+    "fast-uri": "^3.1.6"
   }
 }

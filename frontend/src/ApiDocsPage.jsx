@@ -26,8 +26,10 @@ export default function ApiDocsPage() {
   const requestInterceptor = useMemo(() => (req) => {
     const isSpecRequest = typeof req.url === 'string' && req.url.endsWith(SPEC_URL);
     if (!isSpecRequest) return req;
-    const token = localStorage.getItem('token');
-    if (token) req.headers = { ...req.headers, Authorization: `Bearer ${token}` };
+    // SEC-14: the spec fetch is authenticated by the session COOKIE the browser attaches
+    // itself; it needs only the CSRF header. Try-it-out requests get neither -- they carry
+    // the PAT the user entered, and v2 would refuse the cookie anyway.
+    req.headers = { ...req.headers, 'X-Requested-With': 'GameTracker' };
     return req;
   }, []);
 

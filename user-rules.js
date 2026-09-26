@@ -14,12 +14,61 @@
 const RESERVED_USERNAMES = ['me', 'root', 'admin'];
 
 // Returns an error string, or null when the username is acceptable.
-// Expects the already-lowercased form -- callers normalise first.
+// Expects the already-TRIMMED, already-lowercased form -- callers normalise first.
+//
+// The charset and length were enforced by create-local-admin.js alone, with a comment
+// noting the API had no equivalent (ROADMAP CC-14): POST /api/users accepted " bob" as
+// an account distinct from "bob", with no bound at all. A username is a URL path
+// segment (/api/user/:username/...) and is shown in the admin UI, so anything outside
+// this set is either unreachable or invisible. Applies to accounts CREATED here; a
+// directory login provisions its own rows and is not narrowed by it.
+const MAX_USERNAME_LENGTH = 64;
+// The same string openapi/gametracker-v2.yaml declares as Username.pattern;
+// test/openapi.test.js asserts they are equal, so the spec and the rule cannot drift.
+const USERNAME_PATTERN = '^[a-z0-9._-]+$';
 function validateUsername(normalizedUsername) {
   if (!normalizedUsername) return 'Username is required.';
   if (RESERVED_USERNAMES.includes(normalizedUsername)) {
     return `'${normalizedUsername}' is a reserved username.`;
   }
+  if (normalizedUsername.length > MAX_USERNAME_LENGTH) {
+    return `Username must be at most ${MAX_USERNAME_LENGTH} characters.`;
+  }
+  if (!new RegExp(USERNAME_PATTERN).test(normalizedUsername)) {
+    return 'Username may contain only lowercase letters, digits, dot, underscore and hyphen.';
+  }
+  return null;
+}
+
+// May a successful DIRECTORY authentication sign in as this account?
+//
+// `row` is the existing users row for the name, or null when there is none yet (the
+// login then provisions one). Returns null when it may, else a short reason for the
+// server log — never for the client.
+//
+// The LDAP login used to take whatever row carried the name, relabel it
+// origin='ldap' and sign a session with that row's can_manage_users. Anyone able to
+// create a directory account named `root`, or named after a local administrator,
+// therefore signed in AS that administrator without its local password ever being
+// asked for. The rule:
+//   - `root` and `me` are never the directory's. `root` is the seeded LOCAL
+//     administrator; a `me` row is shadowed by the /api/user/me/* routes and unusable.
+//     NOT the whole RESERVED_USERNAMES list: `admin` is reserved against LOCAL
+//     creation only, and it is FreeIPA's default administrator — refusing it locked
+//     a directory user out and charged every attempt to the lockout counter.
+//   - A row holding a local password hash is a LOCAL account, whatever its `origin`
+//     says. Keyed on the hash, not on origin, because the old login left every account
+//     it took over as origin='ldap' WITH its hash: an origin test would have kept every
+//     takeover that happened before this fix in force. A directory account never holds
+//     a hash — users.update refuses to give one a password.
+//   - Anything else — no row yet, or a row with no hash — is the directory's. That
+//     includes legacy rows an LDAP login provisioned before `origin` was recorded,
+//     which default to 'local' but have no local credential for the directory to bypass.
+const DIRECTORY_REFUSED_USERNAMES = ['root', 'me'];
+
+function directoryClaimRefusal(normalizedUsername, row) {
+  if (DIRECTORY_REFUSED_USERNAMES.includes(normalizedUsername)) return 'reserved username';
+  if (row && row.password) return 'local account';
   return null;
 }
 
@@ -74,8 +123,26 @@ function sanitizeText(value, maxLength = 200) {
   return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trim() : cleaned;
 }
 
+// Make a directory- or user-supplied value safe to put in a log line.
+//
+// Log files are read by humans and by log shippers that parse line by line, so a
+// value containing CR/LF can inject entire fabricated lines. A directory that serves
+// a cn of "bob\n[LDAP] Service account bind succeeded." writes a convincing lie into
+// the audit trail. ldapjs escapes control characters inside a DN, but ATTRIBUTE
+// values arrive raw, and the login path logs several of them.
+//
+// Also bounded: an attribute has no length limit, and a megabyte-long cn in the log
+// is its own denial of service.
+function safeForLog(value, maxLength = 200) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+  const flattened = text.replace(/[\r\n\t]/g, (ch) => ({ '\r': '\\r', '\n': '\\n', '\t': '\\t' }[ch]))
+    // Strip the remaining C0/C1 controls, which can move a terminal cursor around.
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
+  return flattened.length > maxLength ? `${flattened.slice(0, maxLength)}…[truncated]` : flattened;
+}
+
 module.exports = {
-  sanitizeText,
-  RESERVED_USERNAMES, validateUsername, isValidEmailAddress,
+  sanitizeText, safeForLog,
+  RESERVED_USERNAMES, validateUsername, MAX_USERNAME_LENGTH, USERNAME_PATTERN, DIRECTORY_REFUSED_USERNAMES, directoryClaimRefusal, isValidEmailAddress,
   MIN_PASSWORD_LENGTH, validatePassword,
 };

@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node index.js",
@@ -24,7 +24,7 @@
     "jsonwebtoken": "^9.0.2",
     "ldapjs": "^3.0.7",
     "node-cron": "^4.1.1",
-    "nodemailer": "^9.0.1",
+    "nodemailer": "^9.1.0",
     "pg": "^8.22.0"
   },
   "overrides": {

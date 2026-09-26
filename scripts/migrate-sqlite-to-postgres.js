@@ -118,7 +118,6 @@ async function main() {
   // --- Read source -------------------------------------------------------
   const userCols = await columnsOf(sdb, 'users');
   const gameCols = await columnsOf(sdb, 'user_games');
-  const shareCols = await columnsOf(sdb, 'user_shares');
 
   const users = await sqliteAll(sdb, 'SELECT * FROM users');
   const games = await sqliteAll(sdb, 'SELECT * FROM user_games');

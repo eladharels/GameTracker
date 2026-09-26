@@ -42,14 +42,16 @@ const MIGRATION_LOCK_KEY = 4127710501;
 // Resolves when the schema is known-good. Rejects -- loudly -- otherwise.
 async function runMigrations() {
   const client = await pool.connect();
+  let locked = false;
   try {
     // Serialise migration across processes. CREATE TABLE IF NOT EXISTS is NOT
     // race-free in Postgres, so two backends starting together would both see the
     // same migration pending, both run it, and the loser would die on the
     // schema_migrations primary key. Single-replica today, but `restart:
     // unless-stopped` would turn that into a crash-loop rather than a clean start.
-    // The lock is session-scoped and released with the connection in `finally`.
+    // The lock is session-scoped, so it is released EXPLICITLY in `finally` -- see there.
     await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
+    locked = true;
 
     await client.query(TRACKING_TABLE);
 
@@ -83,8 +85,23 @@ async function runMigrations() {
 
     console.log(`[DB] Schema migrations complete (${pending.length} applied)`);
   } finally {
-    // Releases the advisory lock too — it is held for the life of the session.
-    client.release();
+    // UNLOCK, then release. `client.release()` alone does NOT free the lock: it hands
+    // the connection back to the POOL, and a session-level advisory lock lives as long
+    // as the SESSION -- which the pool keeps open. The comment here used to say release
+    // freed it; it did not (ROADMAP CC-7). The lock then sat on an idle pooled
+    // connection, and a second process starting up (an overlapping deploy, a rolled-back
+    // image, a maintenance script) blocked in pg_advisory_lock until that connection
+    // happened to be closed. If the unlock itself fails the connection is suspect, so it
+    // is DESTROYED rather than pooled: ending the session ends the lock.
+    let broken;
+    if (locked) {
+      try {
+        await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]);
+      } catch (err) {
+        broken = err;
+      }
+    }
+    client.release(broken);
   }
 }
 

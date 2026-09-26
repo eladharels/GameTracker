@@ -618,9 +618,10 @@ check('the admin operation set is PINNED, not merely non-empty', () => {
   const admin = operations().filter(({ op }) => op['x-required-scope'] === 'admin')
     .map(({ op }) => op.operationId).sort();
   assert.deepStrictEqual(admin,
-    // getJob is deliberately NOT here: it is library-scoped and protected by OWNERSHIP,
-    // because POST /library/refresh is library-scoped and an operation that returns a
-    // job its own caller cannot poll is not an operation.
+    // getJob is deliberately NOT here: it is `as-started` — readable with the scope of
+    // the operation that started the job, behind OWNERSHIP — because startJob is admin
+    // and POST /library/refresh is library, and an operation that returns a job its
+    // own caller cannot poll is not an operation (SEC-12).
     // The three token-revocation operations are admin-scoped for the same reason
     // deleteUser is: they act on another account's credentials. An admin ACCOUNT
     // presenting a library-scoped token is not an admin here — authorize() has
@@ -631,13 +632,22 @@ check('the admin operation set is PINNED, not merely non-empty', () => {
     'the set of admin-scoped operations changed');
 });
 
+check('every operation documents the 403 its scope guard can return', () => {
+  // Since SEC-12 every operation requires a scope, so every operation can refuse one:
+  // an admin-only token gets 403 from the library operations too. A generated client
+  // with no 403 case treats that as an unexpected error rather than "wrong token".
+  for (const { path: p, method, op } of operations()) {
+    assert.ok(op.responses['403'], `${method.toUpperCase()} ${p} does not document its 403`);
+  }
+});
+
 check('every operation declares a scope, and absence is a failure not a default', () => {
   // `library` being "the absence of admin" made a FORGOTTEN marker indistinguishable
   // from a deliberate non-admin one — the exact "decided by omission" pattern
   // CLAUDE.md describes for route authorization.
   for (const { path: p, method, op } of operations()) {
     const scope = op['x-required-scope'];
-    assert.ok(scope === 'admin' || scope === 'library',
+    assert.ok(scope === 'admin' || scope === 'library' || scope === 'as-started',
       `${method.toUpperCase()} ${p} declares x-required-scope '${scope}'`);
   }
   assert.strictEqual(spec.paths['/shares/incoming/{username}/games'].get['x-admin-bypass'], false,
@@ -842,6 +852,10 @@ check('bounds agree with the constants the services enforce', () => {
   assert.strictEqual(spec.components.schemas.JobResult.properties.failures.maxItems,
     require('../services/job-runner').MAX_FAILURES);
   assert.strictEqual(spec.components.schemas.GameRef.pattern, catalog.GAME_REF_PATTERN);
+  // The username rule the API now enforces for every creation path (CC-14).
+  const userRules = require('../user-rules');
+  assert.strictEqual(spec.components.schemas.Username.maxLength, userRules.MAX_USERNAME_LENGTH);
+  assert.strictEqual(spec.components.schemas.Username.pattern, userRules.USERNAME_PATTERN);
 });
 
 check('the job enums match the runner and the service, in BOTH directions', () => {
@@ -863,6 +877,28 @@ check('the job enums match the runner and the service, in BOTH directions', () =
   // was a separate literal in the spec, so the two could drift apart silently.
   const started = spec.paths['/jobs'].post.requestBody.content['application/json'].schema;
   assert.deepStrictEqual([...started.properties.kind.enum].sort(), [...jobs.JOB_KINDS].sort());
+});
+
+check('the duplicate-detection enums match the service (UP-19)', () => {
+  const lib = require('../services/library');
+  const create = spec.components.schemas.LibraryGameCreate.properties.onPossibleDuplicate;
+  assert.deepStrictEqual([...create.enum].sort(), [...lib.DUPLICATE_POLICIES].sort());
+  assert.strictEqual(create.default, 'warn', 'the documented default is not the service default');
+  assert.deepStrictEqual([...spec.components.schemas.PossibleDuplicate.properties.match.enum].sort(),
+    ['possible', 'same']);
+  // The shape the service emits is the shape the spec publishes, key for key.
+  const emitted = lib.findPossibleDuplicates(
+    [{ game_id: 'igdb_1', game_name: 'Halo', release_date: null }], { id: 'rawg_1', name: 'Halo' });
+  assert.deepStrictEqual(Object.keys(emitted[0]).sort(),
+    [...spec.components.schemas.PossibleDuplicate.required].sort());
+});
+
+check('PUT /shares/outgoing maxItems is the cap the service ENFORCES (UP-13)', () => {
+  // The spec said 200 from the start and nothing enforced it; v1 reaches the same
+  // function with no bound. One number, stated twice, has to be checked twice.
+  const { MAX_SHARE_RECIPIENTS } = require('../services/shares');
+  const body = spec.paths['/shares/outgoing'].put.requestBody.content['application/json'].schema;
+  assert.strictEqual(body.properties.usernames.maxItems, MAX_SHARE_RECIPIENTS);
 });
 
 console.log(`\n${n} spec assertions passed.`);

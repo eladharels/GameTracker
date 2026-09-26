@@ -64,8 +64,9 @@ function liveRoutes(stack = (app.router || app._router).stack, prefix = '', inhe
       const names = handles.map((h) => h.name || 'anon');
       const perms = handles.map((h) => h.requiredPermission).filter(Boolean);
       const selfOnly = handles.some((h) => h.isSelfOnly === true);
+      const permTaggers = handles.filter((h) => h.requiredPermission).map((h) => h.name || 'anon');
       for (const method of Object.keys(layer.route.methods).filter((m) => m !== '_all')) {
-        out.push({ key: `${method.toUpperCase()} ${prefix}${layer.route.path}`, names, perms, selfOnly });
+        out.push({ key: `${method.toUpperCase()} ${prefix}${layer.route.path}`, names, perms, selfOnly, permTaggers });
       }
       continue;
     }
@@ -148,11 +149,19 @@ function tierOf(route) {
       ? `pat-admin:${route.perms.join('+')}`
       : `admin:${route.perms.join('+')}`;
   }
+  // v2's library guard (SEC-12). Its own tier, not folded into 'pat': until it existed
+  // `library` was "the absence of admin" and a route with no scope check at all looked
+  // exactly like a library route — the decided-by-omission shape again.
+  if (route.names.includes('patRequired') && route.names.includes('requireLibraryScope')) return 'pat-library';
   if (route.names.includes('ownershipRequired')) return 'owner-or-admin';
   // Strictly narrower than owner-or-admin: self, with NO admin bypass. Recorded as
   // its own tier so the table states the real rule — it previously logged these as
   // plain 'auth', which understated them.
   if (route.selfOnly) return 'self-only';
+  // SEC-14: routes that answer the BROWSER session alone (cookieSessionOnly). Its own tier
+  // so the guard is asserted, not assumed: recorded as plain 'auth', deleting the guard
+  // would leave this table green while a Bearer script read /api/auth/session.
+  if (route.names.includes('authRequired') && route.names.includes('cookieSessionOnly')) return 'browser-session';
   if (route.names.includes('authRequired')) return 'auth';
   // v2. A DISTINCT tier, not folded into 'auth': patRequired refuses a session JWT,
   // and a table that showed the two as the same tier would hide exactly the property
@@ -171,6 +180,10 @@ const EXPECTED = {
   // --- public: only these two, ever ---
   'GET /api/health': 'public',
   'POST /api/auth/login': 'public',
+
+  // --- the browser session (SEC-14): authRequired + cookieSessionOnly ---
+  'GET /api/auth/session': 'browser-session',
+  'POST /api/auth/logout': 'browser-session',
 
   // --- authenticated ---
   'GET /api/all-users': 'auth',
@@ -252,35 +265,53 @@ const EXPECTED = {
 // what keeps the admin boundary from being bypassable by logging in with a password.
 // Every one of these is also an operation in openapi/gametracker-v2.yaml carrying
 // `x-implemented: true`, and the drift check below fails if the two disagree.
+// The v1 routes a PAT WITHOUT the `library` scope may reach (ROADMAP SEC-12) — exactly
+// the requirePermission-gated ones. Checked below against the live router.
+const ADMIN_ONLY_TOKEN_V1_ROUTES = [
+  'DELETE /api/users/:id',
+  'GET /api/settings/apikeys',
+  'GET /api/system-status',
+  'GET /api/test/igdb',
+  'GET /api/users',
+  'POST /api/admin/check-releases',
+  'POST /api/admin/crackrelease-status',
+  'POST /api/admin/ldap-sync',
+  'POST /api/admin/refresh-crackwatch-cache',
+  'POST /api/settings/apikeys',
+  'POST /api/settings/apikeys/refresh-igdb-token',
+  'POST /api/users',
+  'PUT /api/users/:id',
+];
+
 const EXPECTED_V2 = {
-  'GET /api/v2/me': 'pat',
-  'GET /api/v2/library/games': 'pat',
-  'GET /api/v2/library/games/:gameId': 'pat',
-  'DELETE /api/v2/library/games/:gameId': 'pat',
-  'GET /api/v2/tokens': 'pat',
-  'POST /api/v2/tokens': 'pat',
-  'DELETE /api/v2/tokens/:tokenId': 'pat',
-  'GET /api/v2/me/notifications': 'pat',
-  'PATCH /api/v2/me/notifications': 'pat',
-  'PATCH /api/v2/library/games/:gameId': 'pat',
-  'GET /api/v2/library/backlog': 'pat',
-  'PUT /api/v2/library/backlog': 'pat',
-  'GET /api/v2/catalog/search': 'pat',
+  'GET /api/v2/me': 'pat-library',
+  'GET /api/v2/library/games': 'pat-library',
+  'GET /api/v2/library/games/:gameId': 'pat-library',
+  'DELETE /api/v2/library/games/:gameId': 'pat-library',
+  'GET /api/v2/tokens': 'pat-library',
+  'POST /api/v2/tokens': 'pat-library',
+  'DELETE /api/v2/tokens/:tokenId': 'pat-library',
+  'GET /api/v2/me/notifications': 'pat-library',
+  'PATCH /api/v2/me/notifications': 'pat-library',
+  'PATCH /api/v2/library/games/:gameId': 'pat-library',
+  'GET /api/v2/library/backlog': 'pat-library',
+  'PUT /api/v2/library/backlog': 'pat-library',
+  'GET /api/v2/catalog/search': 'pat-library',
   // A LIVE Steam price, distinct from the library row's stored one. Library scope: an
   // agent asking "what does this cost" is doing library work, not administration.
-  'GET /api/v2/catalog/prices/:steamAppId': 'pat',
-  'POST /api/v2/library/games': 'pat',
-  'GET /api/v2/shares': 'pat',
+  'GET /api/v2/catalog/prices/:steamAppId': 'pat-library',
+  'POST /api/v2/library/games': 'pat-library',
+  'GET /api/v2/shares': 'pat-library',
   // Share TARGETS. Library-scoped and NOT admin, deliberately: listUsers is admin-only,
   // so without this a non-admin credential could reach POST /shares/outgoing and had no
   // way to discover a valid value for it. Username and display name only.
-  'GET /api/v2/users/directory': 'pat',
-  'PUT /api/v2/shares/outgoing': 'pat',
-  'POST /api/v2/shares/outgoing': 'pat',
-  'DELETE /api/v2/shares/outgoing/:username': 'pat',
+  'GET /api/v2/users/directory': 'pat-library',
+  'PUT /api/v2/shares/outgoing': 'pat-library',
+  'POST /api/v2/shares/outgoing': 'pat-library',
+  'DELETE /api/v2/shares/outgoing/:username': 'pat-library',
   // No ownership middleware, deliberately: the grant check IS the authorization, and
   // there is no admin bypass on this path. See openapi's `x-admin-bypass: false`.
-  'GET /api/v2/shares/incoming/:username/games': 'pat',
+  'GET /api/v2/shares/incoming/:username/games': 'pat-library',
   'GET /api/v2/users': 'pat-admin:can_manage_users',
   'POST /api/v2/users': 'pat-admin:can_manage_users',
   'PATCH /api/v2/users/:userId': 'pat-admin:can_manage_users',
@@ -297,13 +328,13 @@ const EXPECTED_V2 = {
   // Live probes of every external dependency. Admin, matching v1: searchCatalog
   // already tells a library-scoped caller which providers answered, so what this adds
   // is infrastructure detail — latency, HTTP status, which keys are set.
-  'GET /api/v2/stats/summary': 'pat',
+  'GET /api/v2/stats/summary': 'pat-library',
   'GET /api/v2/system/status': 'pat-admin:can_manage_users',
   'PATCH /api/v2/settings': 'pat-admin:can_manage_users',
   // Library-scoped on purpose: POST /library/refresh hands back a job, and an
   // operation whose own caller cannot poll the result is not an operation. Ownership,
   // not scope, is what protects an instance-wide job's failures[].
-  'POST /api/v2/library/refresh': 'pat',
+  'POST /api/v2/library/refresh': 'pat-library',
   'GET /api/v2/jobs/:jobId': 'pat',
   'POST /api/v2/jobs': 'pat-admin:can_manage_users',
 };
@@ -433,6 +464,39 @@ check('every status-write route carries the library write limiter', () => {
   }
 });
 
+// A per-user limiter reads req.user.id and does `if (!userId) return next()`. Mounted
+// BEFORE authentication it is a silent no-op, and a presence-only pin stays green (CISO,
+// SEC-15 review). So its POSITION is pinned: after authRequired and every authz guard.
+function assertAfterAuthz(route, limiter) {
+  const at = route.names.indexOf(limiter);
+  for (const guard of ['authRequired', 'ownershipRequired', 'requirePermissionMiddleware']) {
+    const g = route.names.indexOf(guard);
+    if (g !== -1) assert.ok(at > g, `${route.key}: ${limiter} runs before ${guard} — it would fail open`);
+  }
+  assert.ok(route.names.indexOf('authRequired') !== -1 && at > route.names.indexOf('authRequired'),
+    `${route.key}: ${limiter} is not after authRequired`);
+}
+
+// Same reason, SEC-1: the test-notification route makes the SERVER send a request to a
+// URL the user chose. Not an authorization middleware, so no tier assertion sees it.
+check('the test-notification route carries its per-user limiter', () => {
+  const route = liveRoutes().find((r) => r.key === 'POST /api/admin/test-notification');
+  assert.ok(route, 'POST /api/admin/test-notification is not a live route — update this pin with the rename');
+  assert.ok(route.names.includes('testNotificationLimit'),
+    `the test-notification route has no limiter. Its chain is: ${route.names.join(' -> ')}`);
+  assertAfterAuthz(route, 'testNotificationLimit');
+});
+
+// SEC-15: each CrackRelease check writes to the database AND fetches a third-party site.
+check('both crack-status routes carry the per-user limiter', () => {
+  for (const key of ['POST /api/user/:username/games/:gameId/crackrelease-status', 'POST /api/admin/crackrelease-status']) {
+    const route = liveRoutes().find((r) => r.key === key);
+    assert.ok(route, `${key} is not a live route — update this pin with the rename`);
+    assert.ok(route.names.includes('crackCheckLimit'), `${key} has no limiter. Its chain is: ${route.names.join(' -> ')}`);
+    assertAfterAuthz(route, 'crackCheckLimit');
+  }
+});
+
 const live = new Set(liveRoutes().map((r) => r.key));
   for (const key of specKeys.keys()) {
     assert.ok(live.has(key),
@@ -451,17 +515,29 @@ check('every v2 route on the router is in the spec', () => {
 
 check('x-required-scope agrees with the tier the router derives', () => {
   // The one comparison worth making: the spec's published authorization claim against
-  // the middleware chain that actually runs. `library` is defined as the ABSENCE of
-  // admin, so only the admin boundary is derivable — which is exactly what
-  // API_V2_DESIGN.md narrowed the claim to.
+  // the middleware chain that actually runs. All three values are derivable now
+  // (SEC-12): `library` used to be the ABSENCE of admin and so could only be claimed,
+  // never checked — and it was enforced nowhere.
+  //   library    <-> requireLibraryScope  (tier pat-library)
+  //   admin      <-> requireAdminScope    (tier pat-admin:...)
+  //   as-started <-> NEITHER guard (tier pat): the handler decides from the resource.
+  // The third is the dangerous one, since "no guard" is also what a forgotten guard
+  // looks like; it is only accepted where the spec says so explicitly.
   const tiers = new Map(liveRoutes().map((r) => [r.key, tierOf(r)]));
+  const expectedTier = { library: 'pat-library', 'as-started': 'pat' };
   for (const [key, op] of specKeys) {
     const declared = op['x-required-scope'];
-    const tier = tiers.get(key);
-    const routerSaysAdmin = String(tier).startsWith('pat-admin:');
-    assert.strictEqual(declared === 'admin', routerSaysAdmin,
-      `${key}: spec says x-required-scope '${declared}' but the router's tier is '${tier}'`);
+    const tier = String(tiers.get(key));
+    const agrees = declared === 'admin' ? tier.startsWith('pat-admin:') : tier === expectedTier[declared];
+    assert.ok(agrees, `${key}: spec says x-required-scope '${declared}' but the router's tier is '${tier}'`);
   }
+});
+
+check('only the job poll decides its scope from the resource', () => {
+  // Pinned, so a second `as-started` operation is a reviewed decision rather than the
+  // easy way to make the agreement check above stop complaining about a missing guard.
+  const asStarted = [...specKeys].filter(([, op]) => op['x-required-scope'] === 'as-started').map(([k]) => k);
+  assert.deepStrictEqual(asStarted, ['GET /api/v2/jobs/:jobId']);
 });
 
 check('no v2 route is registered below the catch-all that would shadow it', () => {
@@ -488,12 +564,37 @@ check('no v2 route is registered below the catch-all that would shadow it', () =
     `these v2 routes are registered below the catch-all and are UNREACHABLE: ${shadowed.join(', ')}`);
 });
 
+check('.requiredPermission is carried only by guards that enforce it', () => {
+  // Since SEC-12 the tag does more than label a tier: on v1 it is what lets a PAT
+  // WITHOUT the library scope through authRequired (v1RouteIsAdminGated). Attached to a
+  // middleware that enforces nothing, it would silently open that route to admin-only
+  // tokens held by anyone — an admin-scoped token on a NON-admin account included.
+  for (const route of liveRoutes()) {
+    for (const name of route.permTaggers) {
+      assert.ok(name === 'requirePermissionMiddleware' || name === 'requireAdminScope',
+        `${route.key}: '${name}' carries .requiredPermission but is not one of the two guards that enforce it`);
+    }
+  }
+});
+
+check('the v1 routes an admin-only token can reach are PINNED', () => {
+  // Derived the same way authRequired decides it: a v1 route is reachable by a PAT
+  // without `library` iff its chain carries a .requiredPermission guard. Pinned, so a
+  // route silently joining the set (a requirePermission added) or leaving it (an admin
+  // check moved inline, as GET/POST /api/settings already are — which refuse such a
+  // token) is a reviewed change rather than a surprise to an operator's script.
+  const reachable = liveRoutes()
+    .filter((r) => !r.key.includes('/api/v2/') && r.names.includes('authRequired') && r.perms.length)
+    .map((r) => r.key).sort();
+  assert.deepStrictEqual(reachable, ADMIN_ONLY_TOKEN_V1_ROUTES);
+});
+
 check('every v2 route is token-authenticated, never merely authenticated', () => {
   // A v2 route reaching 'auth' would mean it accepted a session JWT — and a JWT
   // carries no scope, so the admin boundary would be bypassable by logging in.
   for (const route of liveRoutes().filter((r) => r.key.includes('/api/v2/'))) {
     const tier = tierOf(route);
-    assert.ok(tier === 'pat' || tier.startsWith('pat-admin:'),
+    assert.ok(tier === 'pat' || tier === 'pat-library' || tier.startsWith('pat-admin:'),
       `${route.key} has tier '${tier}' — every /api/v2 route must go through patRequired`);
   }
 });

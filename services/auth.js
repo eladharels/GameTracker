@@ -304,6 +304,34 @@ function authorize(identity) {
   };
 }
 
+// Does this request's credential carry `scope`? The ONE statement of what each scope
+// means at request time, used by v2's requireLibraryScope, the job poll and v1's
+// authRequired alike (ROADMAP SEC-12).
+//
+//   admin   — the account's privilege AND the token's scope. Read from the flag
+//             authorize() already narrowed, never from `scopes` alone: an admin-scoped
+//             token held by a non-admin must not pass.
+//   library — the token's scope alone. Every account holds library privilege, so there
+//             is nothing to intersect with. It used to be checked NOWHERE: `library`
+//             was "the absence of admin", so an admin-only token read and wrote every
+//             library route while the spec said those routes required `library`.
+//
+// A session JWT arrives with ALL_SCOPES (see authRequired), so this never narrows one.
+function holdsScope(user, scopes, scope) {
+  if (scope === SCOPES.ADMIN) return !!(user && user.can_manage_users);
+  if (scope === SCOPES.LIBRARY) return Array.isArray(scopes) && scopes.includes(SCOPES.LIBRARY);
+  return false;
+}
+
+// The scope needed to READ a job: the scope of the operation that STARTED it. An
+// instance-wide sweep (POST /jobs, admin) reports failures from every user's library;
+// a self refresh (POST /library/refresh, library) reports on one. A single scope on the
+// poll could not be right for both — `library` locked an admin-only token out of the
+// jobs it may start, `admin` locked a library token out of its own refresh.
+function scopeForJob(job) {
+  return job && job.scope === 'self' ? SCOPES.LIBRARY : SCOPES.ADMIN;
+}
+
 async function listTokens(userId) {
   // token_hash is deliberately absent. It is not the secret, but it is the lookup
   // key, and a listing endpoint is not a reason to move it any closer to a response.
@@ -405,7 +433,7 @@ async function revokeTokenForUser(tokenId, userId) {
 
 module.exports = {
   TOKEN_PREFIX, SCOPES, ALL_SCOPES, MAX_NAME_LENGTH,
-  hashToken, looksLikePat, normaliseScopes, parseScopes, authorize,
+  hashToken, looksLikePat, normaliseScopes, parseScopes, authorize, holdsScope, scopeForJob,
   createToken, verifyToken, listTokens, revokeToken,
   listTokensForUser, revokeAllTokensForUser, revokeTokenForUser,
 };

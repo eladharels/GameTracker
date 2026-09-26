@@ -190,6 +190,14 @@ if (require.main === module) {
   app.listen(PORT, BIND, () => {
     console.log(`[MCP] gametracker-mcp listening on ${BIND}:${PORT}`);
     console.log(`[MCP] Accepting Host: ${ALLOWED_HOSTS.join(', ')}`);
+    // 0.0.0.0 is a bind address, never a Host a client sends, so it adds nothing to the
+    // allowlist above: published on every interface, every LAN request is still refused
+    // until MCP_ALLOWED_HOSTS names the address clients use (ROADMAP UP-3).
+    if (PUBLIC_HOST === '0.0.0.0' && !(process.env.MCP_ALLOWED_HOSTS || '').trim()) {
+      console.warn('[MCP] MCP_BIND is 0.0.0.0 but MCP_ALLOWED_HOSTS is empty: only loopback '
+        + 'and the compose network are accepted. Set MCP_ALLOWED_HOSTS to the address or '
+        + 'name LAN clients use (e.g. 192.168.1.30:3001,192.168.1.30).');
+    }
     console.log(`[MCP] Forwarding to ${api.API_BASE}`);
     console.log(`[MCP] ${TOOLS.length} tools registered. This server holds no credentials; `
       + 'each request must carry its own Authorization: Bearer gt_pat_...');

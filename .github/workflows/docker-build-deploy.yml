@@ -69,18 +69,28 @@ on:
 # the production stack itself. That exclusivity moves down to the two jobs that actually
 # contend for them, where it belongs.
 #
-# BE PRECISE ABOUT WHAT THIS DOES NOT FIX. A job-level group holds one pending item too, so
-# with PR-A's smoke-test running, a main run's smoke-test queued behind it, and PR-B's
-# arriving, the main run's smoke-test is still cancelled -- and `deploy`, which needs it, is
-# skipped. The same "a merge that never deployed" outcome, one job later and now requiring
-# TWO concurrent PR runs to trigger. It cannot be closed by partitioning this group:
-# docker-compose.test.yml hard-codes container_name: gametracker-*-smoke, so two smoke
-# stacks genuinely cannot coexist on one runner. The durable fix is parameterising the
-# container names and project name off github.run_id; that is a larger change than this one.
+# The smoke-test job's own group is partitioned the same way (ROADMAP UP-6). A job-level
+# group also holds one pending item, so while it was shared, PR-A's smoke-test running +
+# a main run's queued + PR-B's arriving CANCELLED the main run's smoke-test, and `deploy`
+# (which needs it) was skipped: a merge that never deployed. That could not be fixed by
+# partitioning while docker-compose.test.yml hard-coded container_names; now each run has
+# its own compose project and each partition its own host ports, so a PR can never evict
+# a main run. Within the main partition a newer merge can still replace a QUEUED older
+# one -- harmless, since main is linear and the newer commit contains the older.
 concurrency:
   group: gametracker-pipeline-${{ github.event_name == 'push' && 'main' || github.event.number }}
   cancel-in-progress: false
 
+# EVERY `uses:` IS PINNED TO A COMMIT SHA, with the release it came from in a trailing
+# comment (ROADMAP SEC-4). A tag like `@v4` is mutable: whoever controls the upstream repo
+# can move it, and the next run executes that code on THIS runner -- the production host,
+# beside JWT_SECRET, the Docker socket and the live database. A SHA cannot move.
+# Semgrep's mutable-action-tag rule was excluded to tolerate the tags; it is back on.
+# test/runtime.test.js fails on an unpinned `uses:`. Bump a pin deliberately:
+#   git ls-remote https://github.com/<owner>/<repo> refs/tags/<tag>
+# and read the release notes first. There is NO Dependabot here on purpose -- see
+# ROADMAP SEC-4 for why a bot author weakens the same-repo pull-request gate below.
+#
 # Least privilege. Without this the default token may be read+write, and
 # actions/checkout persists it into .git/config on a PERSISTENT self-hosted runner.
 permissions:
@@ -108,7 +118,7 @@ jobs:
     continue-on-error: false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -117,28 +127,83 @@ jobs:
         run: |
           set -euo pipefail
           GITLEAKS_VERSION="8.21.2"
+          GITLEAKS_SHA256="5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
           # Reinstall unless the pinned version is already on PATH, so a stubbed
           # binary cannot silently disable the secret scan on a persistent runner.
+          # The SHA-256 below protects the DOWNLOAD. A binary already installed at the pinned
+          # version is not re-hashed; /usr/local/bin is root-owned, and the version check
+          # after this block still fails closed on anything else.
           if [ "$(gitleaks version 2>/dev/null)" != "${GITLEAKS_VERSION}" ]; then
             echo "[gitleaks] Downloading pinned v${GITLEAKS_VERSION}..."
+            # A private mktemp -d, never a fixed /tmp path: this runner is the production
+            # host and the file is installed as ROOT, so a pre-planted /tmp/gitleaks
+            # symlink or binary would be what `sudo install` copies (review of UP-7).
+            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gitleaks-dl.XXXXXXXX")"
+            trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-              -o /tmp/gitleaks.tar.gz
-            tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
-            sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
-            rm -f /tmp/gitleaks.tar.gz /tmp/gitleaks
+              -o "$DL/gitleaks.tar.gz"
+            # The tarball's SHA-256, PINNED here, not fetched beside it: a checksums file
+            # from the same release proves nothing if the release is what was tampered
+            # with. Taken from the release's checksums.txt AND recomputed from a download.
+            # Bump it with the version, deliberately.
+            echo "${GITLEAKS_SHA256}  $DL/gitleaks.tar.gz" | sha256sum -c -
+            tar -xzf "$DL/gitleaks.tar.gz" -C "$DL" gitleaks
+            sudo install -m 0755 "$DL/gitleaks" /usr/local/bin/gitleaks
           fi
           gitleaks version
           gitleaks version | grep -q "${GITLEAKS_VERSION}"
 
+      # THIS SCAN HAD BEEN SCANNING NOTHING. On this runner git refuses the checkout
+      # ("detected dubious ownership"), gitleaks logs "failed to scan Git repository",
+      # then "no leaks found", and exits 0 -- so secret-scan was green on every run
+      # without reading a single commit (found by the SEC-5 review).
+      #
+      # Two fixes, both needed:
+      #   - the checkout is marked a safe directory for THIS step only, through a
+      #     throwaway GLOBAL config file (GIT_CONFIG_GLOBAL), rather than by editing the
+      #     runner's real ~/.gitconfig. NOT via GIT_CONFIG_COUNT/-c: git before 2.38
+      #     ignores command-line scope for safe.directory (the CVE-2022-24765 fix reads
+      #     it with ignore_cmdline), and the runner has git 2.34.1 -- the CISO review
+      #     caught that the first version of this fix could never have gone green;
+      #   - the job FAILS unless gitleaks says it scanned commits and logged no error.
+      #     A scanner that cannot scan must never read as a scanner that found nothing.
       - name: Run Gitleaks secret scan
         run: |
+          set -uo pipefail
+          export GIT_CONFIG_GLOBAL="${RUNNER_TEMP}/gitleaks-gitconfig"
+          git config --file "${GIT_CONFIG_GLOBAL}" --add safe.directory "${GITHUB_WORKSPACE}"
+          LOG="${RUNNER_TEMP}/gitleaks.log"
           gitleaks detect \
             --source . \
             --config .gitleaks.toml \
             --redact \
             --verbose \
-            --exit-code 1
+            --exit-code 1 2>&1 | tee "${LOG}"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          if grep -Eq '\bERR\b|failed to scan' "${LOG}"; then
+            echo "::error::gitleaks reported an error -- the scan did not run. Refusing to pass."
+            exit 1
+          fi
+          scanned=$(grep -Eo '[0-9]+ commits scanned' "${LOG}" | grep -Eo '^[0-9]+' || echo 0)
+          # Commits that CHANGE something, excluding merges: gitleaks walks `git log -p`,
+          # which shows no diff for a merge or an --allow-empty commit, so neither is ever
+          # counted as scanned. `-- .` drops the empty ones; without it one empty commit
+          # would fail every run for good.
+          expected=$(git rev-list --count --no-merges HEAD -- .)
+          : "${expected:?could not count the history -- refusing to pass}"
+          echo "[gitleaks] ${scanned} commits scanned; HEAD has ${expected} non-merge commits"
+          # A FLOOR, not equality: gitleaks' own count runs a couple below the number of
+          # commits with a diff (measured: consistently 2 fewer -- commits it has nothing
+          # to scan in, e.g. only allowlisted paths or binaries). What this guards is a
+          # scan that silently covered little or nothing -- an error (caught above), a
+          # shallow checkout, a wrong --source -- and 90% separates those from a real run
+          # by a wide margin.
+          if [ "${scanned}" -lt 1 ] || [ $((scanned * 10)) -lt $((expected * 9)) ]; then
+            echo "::error::gitleaks scanned ${scanned} of ${expected} commits. Refusing to pass."
+            exit 1
+          fi
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 2: SAST — Semgrep
@@ -161,21 +226,56 @@ jobs:
     continue-on-error: false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - name: Install Semgrep (if not cached on runner)
+      # PINNED and ISOLATED, like Gitleaks and Trivy above (ROADMAP SEC-3). This was an
+      # unversioned `pip3 install semgrep` behind `if ! command -v semgrep` -- so on this
+      # PERSISTENT runner whatever `semgrep` came first on PATH was trusted for ever: a
+      # stale version, or a stub dropped there by anything that ever ran on the host,
+      # would turn SAST green permanently while CI reported success.
+      #
+      # Now the pinned version lives in its own directory, keyed by version, and is
+      # run by ABSOLUTE PATH through a generated wrapper, never looked up on PATH. The
+      # version is verified, and a mismatch fails the job. Bump SEMGREP_VERSION
+      # deliberately -- it must be a real release on pypi.org/project/semgrep.
+      #
+      # `pip install --target`, NOT a venv: the runner has no python3-venv (ensurepip),
+      # so `python3 -m venv` failed the first run of this step. The wrapper sets
+      # PYTHONPATH to the pinned tree (ahead of system site-packages), disables the user
+      # site, and puts the tree's own bin/ first on PATH -- semgrep execs `pysemgrep`
+      # by name, and without that it found none, or whichever one PATH offered.
+      - name: Install Semgrep (pinned, isolated)
+        env:
+          SEMGREP_VERSION: "1.178.0"
         run: |
-          if ! command -v semgrep &>/dev/null; then
-            echo "[semgrep] Installing via pip3..."
-            pip3 install semgrep --quiet
+          set -euo pipefail
+          DIR="${HOME}/.cache/gametracker-semgrep/${SEMGREP_VERSION}"
+          if [ "$("${DIR}/semgrep" --version 2>/dev/null || true)" != "${SEMGREP_VERSION}" ]; then
+            echo "[semgrep] Installing pinned v${SEMGREP_VERSION} into ${DIR}..."
+            rm -rf "${DIR}"
+            mkdir -p "${DIR}"
+            pip3 install --quiet --disable-pip-version-check --no-warn-script-location \
+              --target "${DIR}/lib" "semgrep==${SEMGREP_VERSION}"
+            printf '%s\n' '#!/bin/sh' \
+              "export PYTHONPATH=\"${DIR}/lib\" PYTHONNOUSERSITE=1 PATH=\"${DIR}/lib/bin:\$PATH\"" \
+              "exec python3 -s \"${DIR}/lib/bin/semgrep\" \"\$@\"" > "${DIR}/semgrep"
+            chmod 755 "${DIR}/semgrep"
           fi
-          echo "[semgrep] Version: $(semgrep --version)"
+          # Fail closed if the binary we are about to run is not the pinned version.
+          test "$("${DIR}/semgrep" --version)" = "${SEMGREP_VERSION}"
+          echo "SEMGREP_BIN=${DIR}/semgrep" >> "$GITHUB_ENV"
+          echo "[semgrep] Using ${DIR}/semgrep v${SEMGREP_VERSION}"
 
+      # `--config auto` still pulls the registry's CURRENT rules: the binary is pinned,
+      # the auto rule set is not (the registry does not version it). A new registry rule
+      # can therefore fail a build that did not change -- that is the intended direction
+      # for a security gate -- but a rule REMOVED upstream is silent. .semgrep.yml is the
+      # pinned half; put anything this repo depends on there.
       - name: Run Semgrep scan
         run: |
-          semgrep scan \
+          "${SEMGREP_BIN:?SEMGREP_BIN not set by the install step}" scan \
             --config auto \
             --config .semgrep.yml \
             --error \
@@ -184,7 +284,6 @@ jobs:
             --exclude 'frontend/dist' \
             --exclude-rule 'javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring' \
             --exclude-rule 'javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage' \
-            --exclude-rule 'yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag' \
             .
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -211,7 +310,7 @@ jobs:
     continue-on-error: false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -220,14 +319,14 @@ jobs:
       # suites passed on an interpreter production never used and a server that could
       # not answer a single request shipped with every job green.
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
 
-      # --ignore-scripts: the backend depends on sqlite3, which has no prebuilt
-      # binary for this platform and compiles from source via node-gyp (~60s). The
-      # unit tests are pure functions and never load it, so skip the build entirely.
-      # This is a TEST-only shortcut — the Dockerfile still does a full `npm ci`.
+      # --ignore-scripts: sqlite3 is a devDependency (only the one-shot SQLite migration
+      # script uses it) with no prebuilt binary here, so a plain `npm ci` would compile it
+      # via node-gyp (~60s) for tests that never load it. The backend Dockerfile runs
+      # `npm ci --omit=dev`, which never sees sqlite3 at all.
       - name: Install backend dependencies
         run: npm ci --ignore-scripts
 
@@ -266,6 +365,13 @@ jobs:
         working-directory: ./frontend
         run: npm run lint
 
+      # Component behaviour tests (Vitest + jsdom, ROADMAP UP-20). They replace source-text
+      # shape pins in test/runtime.test.js one by one; devDependencies only, so nothing of
+      # this reaches the nginx image.
+      - name: Run frontend component tests
+        working-directory: ./frontend
+        run: npm test
+
       - name: Vite build (compile + typecheck verification)
         working-directory: ./frontend
         run: npm run build
@@ -300,12 +406,12 @@ jobs:
       mcp_image: ${{ steps.image-tags.outputs.mcp_image }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # THE TAG IS THE SAFETY BOUNDARY between a pull request and production.
       #
@@ -315,8 +421,16 @@ jobs:
       # so the next `docker compose up` on this host starts production on PR code. That
       # includes an operator restart and the deploy job's own stop/start.
       #
-      # So: push to main keeps `latest`, exactly as before. A pull request gets
-      # `pr-<number>`, which nothing in either compose file resolves by default.
+      # And NOTHING here writes `latest` -- not even on a push to main. It used to: a
+      # main push was built straight to `:latest`, BEFORE Trivy and the smoke test had
+      # run. A build that then failed a HIGH CVE skipped deploy, but `:latest` already
+      # pointed at the rejected image, so the next restart of this host ran it anyway --
+      # the PR hazard above, reached from main. (ROADMAP P0-5.)
+      #
+      # So every build gets a tag nothing resolves by default: `pr-<number>` for a pull
+      # request, `sha-<commit>` for a push. The scans and the smoke stack test THAT tag,
+      # and only the deploy job, after every gate has passed, promotes it to `latest`.
+      # test/runtime.test.js fails if any job but deploy so much as mentions `:latest`.
       - name: Set image tag outputs
         id: image-tags
         run: |
@@ -324,13 +438,60 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             TAG="pr-${{ github.event.number }}"
           else
-            TAG="latest"
+            TAG="sha-${GITHUB_SHA:0:12}"
           fi
           echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
           echo "backend_image=${BACKEND_IMAGE_BASE}:${TAG}" >> $GITHUB_OUTPUT
           echo "frontend_image=${FRONTEND_IMAGE_BASE}:${TAG}" >> $GITHUB_OUTPUT
           echo "mcp_image=${MCP_IMAGE_BASE}:${TAG}" >> $GITHUB_OUTPUT
           echo "[build] Tagging images :${TAG} (event=${{ github.event_name }})"
+
+      # DISK. This runner is the production host, and it has run out before. On
+      # 2026-09-26 two runs in a row failed in ways that only a full disk explains:
+      # Postgres exited 1 on start, and apt-get inside a build rejected every Debian
+      # index with "invalid signature" (apt cannot verify without writing to /tmp).
+      #
+      # BuildKit's build cache is the one store that only ever grows here: backend and
+      # frontend build with --no-cache, which bypasses the cache but still records new
+      # entries, and nothing pruned it. The only prunes are `docker image prune -f`,
+      # which leaves the build cache alone.
+      #
+      # MEASURED on the first run of this step: / at 100% (87G, 0 available), Build Cache
+      # 19.44GB with 0 active and all of it reclaimable. `builder prune` WITHOUT -a removes
+      # only DANGLING cache and freed 59MB, even with an age filter; -a is what reclaims.
+      #
+      # This removes BUILD CACHE ONLY -- every unused entry: never an image, container,
+      # network or volume, so production's running stack and its database are
+      # untouched. The cost is speed only: backend and frontend build --no-cache anyway,
+      # and the MCP build (which does use the cache) now starts cold.
+      # It prints the numbers first and after, so the next failure is diagnosable, and it
+      # FAILS HERE, by name, when the disk is still nearly full: an apt "invalid
+      # signature" three steps later took two runs to trace back to this.
+      - name: Report disk and reclaim build cache
+        run: |
+          # The daemon's REAL root, not an assumed /var/lib/docker: a custom data-root would
+          # make df fail and the guard below pass silently. Used by the report AND the guard.
+          DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+          echo "[disk] Before (${DOCKER_ROOT}):"
+          df -h "${DOCKER_ROOT}" 2>&1 || df -h / 2>&1 || true
+          docker system df 2>&1 || true
+          if ! docker builder prune -af > "${RUNNER_TEMP}/prune.log" 2>&1; then
+            echo "::warning::docker builder prune failed:"; cat "${RUNNER_TEMP}/prune.log"
+          else
+            tail -n 1 "${RUNNER_TEMP}/prune.log"
+          fi
+          echo "[disk] After reclaiming unused build cache:"
+          df -h "${DOCKER_ROOT}" 2>&1 || df -h / 2>&1 || true
+          # 5 GiB: roughly three images plus the smoke stack. Measured in KiB (df -Pk).
+          # An unreadable value warns, never passes quietly.
+          AVAIL_KB=$(df -Pk "${DOCKER_ROOT}" 2>/dev/null | awk 'NR==2 {print $4}')
+          if [ -z "${AVAIL_KB}" ]; then
+            echo "::warning::Could not measure free space under ${DOCKER_ROOT}; the 5 GiB guard did not run."
+          fi
+          if [ -n "${AVAIL_KB}" ] && [ "${AVAIL_KB}" -lt 5242880 ]; then
+            echo "::error::Runner disk still has only $((AVAIL_KB / 1024)) MiB free after clearing build cache. This host also runs PRODUCTION: an operator must free space (ROADMAP UP-25). Not building."
+            exit 1
+          fi
 
       - name: Build backend Docker image
         run: |
@@ -339,9 +500,14 @@ jobs:
             -t ${{ steps.image-tags.outputs.backend_image }} \
             .
 
+      # --pull --no-cache: the base is a moving `alpine` tag and the Dockerfile runs
+      # `apk upgrade`. Cached, both froze at whatever the runner first fetched, and
+      # Trivy failed on a libexpat HIGH that Alpine had already fixed.
       - name: Build frontend Docker image
         run: |
           docker build \
+            --pull \
+            --no-cache \
             -t ${{ steps.image-tags.outputs.frontend_image }} \
             ./frontend
 
@@ -373,7 +539,7 @@ jobs:
     needs: build-images
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -389,16 +555,22 @@ jobs:
           # before changing. The asset is trivy_<ver>_Linux-64bit.tar.gz (capital L, hyphen).
           # 0.70.0 is what this runner already has, so the pin normally downloads nothing.
           TRIVY_VERSION: "0.70.0"
+          # SHA-256 of trivy_0.70.0_Linux-64bit.tar.gz: the release's checksums.txt AND a
+          # recomputed download agree. Bump WITH the version.
+          TRIVY_SHA256: "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9"
         run: |
           set -euo pipefail
           if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
             echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
+            # Private temp dir + PINNED SHA-256 before a root install — see the Gitleaks step.
+            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/trivy-dl.XXXXXXXX")"
+            trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-              -o /tmp/trivy.tar.gz
-            tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
-            sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
-            rm -f /tmp/trivy.tar.gz /tmp/trivy
+              -o "$DL/trivy.tar.gz"
+            echo "${TRIVY_SHA256}  $DL/trivy.tar.gz" | sha256sum -c -
+            tar -xzf "$DL/trivy.tar.gz" -C "$DL" trivy
+            sudo install -m 0755 "$DL/trivy" /usr/local/bin/trivy
           fi
           # Fail closed if the binary on PATH is not the pinned version.
           trivy --version
@@ -439,7 +611,7 @@ jobs:
     needs: build-images
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -455,16 +627,22 @@ jobs:
           # before changing. The asset is trivy_<ver>_Linux-64bit.tar.gz (capital L, hyphen).
           # 0.70.0 is what this runner already has, so the pin normally downloads nothing.
           TRIVY_VERSION: "0.70.0"
+          # SHA-256 of trivy_0.70.0_Linux-64bit.tar.gz: the release's checksums.txt AND a
+          # recomputed download agree. Bump WITH the version.
+          TRIVY_SHA256: "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9"
         run: |
           set -euo pipefail
           if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
             echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
+            # Private temp dir + PINNED SHA-256 before a root install — see the Gitleaks step.
+            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/trivy-dl.XXXXXXXX")"
+            trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-              -o /tmp/trivy.tar.gz
-            tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
-            sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
-            rm -f /tmp/trivy.tar.gz /tmp/trivy
+              -o "$DL/trivy.tar.gz"
+            echo "${TRIVY_SHA256}  $DL/trivy.tar.gz" | sha256sum -c -
+            tar -xzf "$DL/trivy.tar.gz" -C "$DL" trivy
+            sudo install -m 0755 "$DL/trivy" /usr/local/bin/trivy
           fi
           # Fail closed if the binary on PATH is not the pinned version.
           trivy --version
@@ -513,7 +691,7 @@ jobs:
     needs: build-images
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -529,16 +707,22 @@ jobs:
           # before changing. The asset is trivy_<ver>_Linux-64bit.tar.gz (capital L, hyphen).
           # 0.70.0 is what this runner already has, so the pin normally downloads nothing.
           TRIVY_VERSION: "0.70.0"
+          # SHA-256 of trivy_0.70.0_Linux-64bit.tar.gz: the release's checksums.txt AND a
+          # recomputed download agree. Bump WITH the version.
+          TRIVY_SHA256: "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9"
         run: |
           set -euo pipefail
           if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
             echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
+            # Private temp dir + PINNED SHA-256 before a root install — see the Gitleaks step.
+            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/trivy-dl.XXXXXXXX")"
+            trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-              -o /tmp/trivy.tar.gz
-            tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
-            sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
-            rm -f /tmp/trivy.tar.gz /tmp/trivy
+              -o "$DL/trivy.tar.gz"
+            echo "${TRIVY_SHA256}  $DL/trivy.tar.gz" | sha256sum -c -
+            tar -xzf "$DL/trivy.tar.gz" -C "$DL" trivy
+            sudo install -m 0755 "$DL/trivy" /usr/local/bin/trivy
           fi
           # Fail closed if the binary on PATH is not the pinned version.
           trivy --version
@@ -559,14 +743,15 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 7: Smoke Test (docker compose)
-  # Starts a completely isolated test stack on ports 3099/8099 using
-  # docker-compose.test.yml. Verifies backend /api/health and frontend HTTP 200
+  # Starts a completely isolated test stack using docker-compose.test.yml. Verifies backend /api/health and frontend HTTP 200
   # before any deploy happens. Teardown always runs (if: always()).
   #
   # ISOLATION GUARANTEES:
-  #   - Compose project name: gametracker-smoke (separate network + containers)
-  #   - Ports: 3099 (backend), 8099 (frontend) — no conflict with production 3000/8080
-  #   - Data dir: /tmp/gametracker-smoke-data/ — never touches production DB
+  #   - Compose project: gametracker-smoke-<main|pr>-<run_id>-<attempt>, one per run
+  #     (separate network + containers; no container_name is fixed)
+  #   - Ports: 3099/8099/3199 for pull requests, 3098/8098/3198 for main -- no
+  #     conflict with production 3000/8080/3001, nor with each other
+  #   - Data dir: a mktemp -d under RUNNER_TEMP -- never touches production data
   #   - Dummy API keys — no real credentials used or exposed
   # ─────────────────────────────────────────────────────────────────────────────
   smoke-test:
@@ -588,16 +773,20 @@ jobs:
       - secret-scan
       - semgrep
       - frontend-quality
-    # The smoke stack's ports and compose project name are fixed, so two of these must
-    # never overlap on one runner -- this is the half of the old global group that was
-    # doing real work.
+    # PARTITIONED BY EVENT (ROADMAP UP-6). Within a partition the host ports are fixed, so
+    # two of the same kind must never overlap -- the group serialises them. ACROSS
+    # partitions they may run at once: the project name is per run and the ports differ.
+    # The point is that a pull request can never cancel a queued main run's smoke-test
+    # (and with it that merge's deploy), which a single shared group allowed.
     concurrency:
-      group: gametracker-smoke-stack
+      group: gametracker-smoke-stack-${{ github.event_name == 'push' && 'main' || 'pr' }}
       cancel-in-progress: false
     env:
-      BACKEND_TEST_PORT: 3099
-      FRONTEND_TEST_PORT: 8099
-      MCP_TEST_PORT: 3199
+      SMOKE_PARTITION: ${{ github.event_name == 'push' && 'main' || 'pr' }}
+      SMOKE_PROJECT: gametracker-smoke-${{ github.event_name == 'push' && 'main' || 'pr' }}-${{ github.run_id }}-${{ github.run_attempt }}
+      BACKEND_TEST_PORT: ${{ github.event_name == 'push' && '3098' || '3099' }}
+      FRONTEND_TEST_PORT: ${{ github.event_name == 'push' && '8098' || '8099' }}
+      MCP_TEST_PORT: ${{ github.event_name == 'push' && '3198' || '3199' }}
       # The images THIS run built. Both compose files default these to `:latest`, so a
       # by-hand `docker compose up` is unchanged; CI passes them explicitly because on a
       # pull request the tag is `pr-<number>` and `:latest` is production's, not ours.
@@ -608,7 +797,7 @@ jobs:
       TEST_MCP_IMAGE: ${{ needs.build-images.outputs.mcp_image }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -624,6 +813,12 @@ jobs:
           set -euo pipefail
           SMOKE_DATA_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gametracker-smoke.XXXXXXXX")"
           echo "SMOKE_DATA_DIR=${SMOKE_DATA_DIR}" >> "$GITHUB_ENV"
+          # The steps' own scratch files (response bodies, the mint's stderr) — never fixed
+          # /tmp paths (review of UP-7): `curl -o` and `2>` follow a symlink, and this runner
+          # is the production host, so a pre-planted ${SMOKE_TMP}/smoke-*.json could be pointed at a
+          # production file. Same reasoning as SMOKE_DATA_DIR above. Mode 0700, per run.
+          SMOKE_TMP="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gametracker-smoke-tmp.XXXXXXXX")"
+          echo "SMOKE_TMP=${SMOKE_TMP}" >> "$GITHUB_ENV"
           # No gametracker.db any more — the smoke stack brings up its own
           # throwaway Postgres container and the backend creates the schema.
           echo '{}' > "${SMOKE_DATA_DIR}/settings.json"
@@ -635,6 +830,17 @@ jobs:
           sudo chown -R 1000:1000 "${SMOKE_DATA_DIR}"
           echo "[smoke] Test data dir: ${SMOKE_DATA_DIR}"
 
+      # A stack a cancelled or crashed run left behind would hold THIS partition's ports.
+      # Only this partition's projects are removed: the concurrency group guarantees none
+      # of them belongs to a live run, while the other partition's may well be running.
+      - name: Remove leftover smoke stacks from this partition
+        run: |
+          set -euo pipefail
+          for proj in $(docker compose ls -a -q | grep -E "^gametracker-smoke-${SMOKE_PARTITION}-[0-9]+-[0-9]+$" || true); do
+            echo "[smoke] Removing leftover stack ${proj}"
+            docker compose -p "${proj}" -f docker-compose.test.yml down --volumes --remove-orphans || true
+          done
+
       - name: Start smoke test stack
         env:
           IGDB_CLIENT_ID: smoke-test-dummy
@@ -643,11 +849,18 @@ jobs:
           JWT_SECRET: smoke-test-jwt-secret-not-real
         run: |
           docker compose \
-            -p gametracker-smoke \
+            -p "${SMOKE_PROJECT}" \
             -f docker-compose.test.yml \
             up -d || {
-            echo "[smoke] ERROR: Stack failed to start — printing backend container logs:"
-            docker logs gametracker-backend-smoke 2>&1 || true
+            # EVERY service, not the backend alone: when the db exited before the backend
+            # was created, backend-only logs printed nothing and the cause was lost.
+            echo "[smoke] ERROR: Stack failed to start — container states:"
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml ps -a 2>&1 || true
+            echo "[smoke] Logs of every service:"
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color 2>&1 || true
+            # This runner has run out of disk before; an initdb that cannot write exits 1.
+            echo "[smoke] Disk space for Docker and the data directory:"
+            df -h /var/lib/docker "${SMOKE_DATA_DIR}" 2>&1 || true
             exit 1
           }
           echo "[smoke] Stack started — backend :${{ env.BACKEND_TEST_PORT }}, frontend :${{ env.FRONTEND_TEST_PORT }}"
@@ -659,7 +872,7 @@ jobs:
           until curl -sf http://localhost:${{ env.BACKEND_TEST_PORT }}/api/health > /dev/null 2>&1; do
             if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
               echo "[smoke] ERROR: Backend not healthy after ${MAX_WAIT}s"
-              docker compose -p gametracker-smoke -f docker-compose.test.yml logs backend
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs backend
               exit 1
             fi
             echo "[smoke] Waiting for backend... (${ELAPSED}s)"
@@ -685,7 +898,7 @@ jobs:
           until curl -sf http://localhost:${{ env.FRONTEND_TEST_PORT }}/ > /dev/null 2>&1; do
             if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
               echo "[smoke] ERROR: Frontend not reachable after ${MAX_WAIT}s"
-              docker compose -p gametracker-smoke -f docker-compose.test.yml logs frontend
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs frontend
               exit 1
             fi
             echo "[smoke] Waiting for frontend... (${ELAPSED}s)"
@@ -726,14 +939,14 @@ jobs:
       - name: Verify unknown API routes return JSON 404
         run: |
           set -euo pipefail
-          STATUS=$(curl -o /tmp/smoke-404.json -sw "%{http_code}" \
+          STATUS=$(curl -o ${SMOKE_TMP}/smoke-404.json -sw "%{http_code}" \
             "http://localhost:${{ env.FRONTEND_TEST_PORT }}/api/definitely-not-a-route")
-          echo "[smoke] Unknown API route status: $STATUS, body: $(cat /tmp/smoke-404.json)"
-          [ "$STATUS" -eq 404 ] && grep -q '"error"' /tmp/smoke-404.json || {
+          echo "[smoke] Unknown API route status: $STATUS, body: $(cat ${SMOKE_TMP}/smoke-404.json)"
+          [ "$STATUS" -eq 404 ] && grep -q '"error"' ${SMOKE_TMP}/smoke-404.json || {
             echo "[smoke] ERROR: expected a JSON 404 from an unknown /api route."
             exit 1
           }
-          rm -f /tmp/smoke-404.json
+          rm -f ${SMOKE_TMP}/smoke-404.json
           echo "[smoke] API 404 handling check PASSED"
 
       # Status history, against the real Postgres, inside the real backend container.
@@ -755,14 +968,26 @@ jobs:
       # clause is present, so only a database can say which row came out. Verified by
       # deleting the clause: the integration test fails and the whole unit suite stays
       # green.
+      #
+      # reminders runs three release sweeps at ONCE and asserts one send: the reminder
+      # log is a primary-key claim in Postgres now (migration 006). The JSON file it
+      # replaced sent three.
+      #
+      # email-resolution proves only DIRECTORY accounts are looked up in LDAP for a
+      # missing email: a local account used to be given, and have WRITTEN to its row,
+      # the address of whoever held the same username in the directory (CC-5).
+      #
+      # migration-lock asks pg_locks whether the schema-migration advisory lock outlived
+      # its run, and starts a second process migrating: the lock used to stay on a
+      # pooled connection, blocking every later migrator (CC-7).
       - name: Verify status history, statistics and the upsert's date rule (real Postgres)
         run: |
           set -euo pipefail
-          for t in status-events stats upsert-release-date; do
-            docker compose -p gametracker-smoke -f docker-compose.test.yml \
+          for t in status-events stats upsert-release-date reminders email-resolution migration-lock; do
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml \
               exec -T backend node "test/integration/${t}.test.js" || {
               echo "[smoke] ERROR: ${t} integration test failed"
-              docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend 2>&1 | tail -30 || true
               exit 1
             }
           done
@@ -798,23 +1023,23 @@ jobs:
             | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
           [ -n "$TOKEN" ] || { echo "[smoke] ERROR: could not log in as root"; exit 1; }
 
-          STATUS=$(curl -o /tmp/smoke-stats.json -sw "%{http_code}" \
+          STATUS=$(curl -o ${SMOKE_TMP}/smoke-stats.json -sw "%{http_code}" \
             -H "Authorization: Bearer $TOKEN" "$BASE/api/user/root/stats")
-          echo "[smoke] authenticated GET -> $STATUS: $(head -c 200 /tmp/smoke-stats.json)"
+          echo "[smoke] authenticated GET -> $STATUS: $(head -c 200 ${SMOKE_TMP}/smoke-stats.json)"
           [ "$STATUS" -eq 200 ] || {
             echo "[smoke] ERROR: authenticated stats request returned $STATUS"
-            docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend 2>&1 | tail -30 || true
             exit 1
           }
           # Shape, not just a 200 — an empty body or an HTML error page is also a 200
           # from some proxies, and the page renders a missing field as a confident zero.
           for key in coverage completions durations trackingSince inProgress; do
-            grep -q "\"$key\"" /tmp/smoke-stats.json || {
+            grep -q "\"$key\"" ${SMOKE_TMP}/smoke-stats.json || {
               echo "[smoke] ERROR: stats response is missing \"$key\""
               exit 1
             }
           done
-          rm -f /tmp/smoke-stats.json
+          rm -f ${SMOKE_TMP}/smoke-stats.json
 
           # The per-game history, through Express. UNAUTHENTICATED FIRST: this route
           # returns one user's play history, and a route that loses its middleware still
@@ -826,9 +1051,9 @@ jobs:
             echo "[smoke] ERROR: the history route answered $HUNAUTH without a token, expected 401."
             exit 1
           }
-          HSTATUS=$(curl -o /tmp/smoke-hist.json -sw "%{http_code}" \
+          HSTATUS=$(curl -o ${SMOKE_TMP}/smoke-hist.json -sw "%{http_code}" \
             -H "Authorization: Bearer $TOKEN" "$BASE/api/user/root/games/igdb_smoke/history")
-          echo "[smoke] authenticated GET .../history -> $HSTATUS: $(head -c 160 /tmp/smoke-hist.json)"
+          echo "[smoke] authenticated GET .../history -> $HSTATUS: $(head -c 160 ${SMOKE_TMP}/smoke-hist.json)"
           [ "$HSTATUS" -eq 200 ] || {
             echo "[smoke] ERROR: history request returned $HSTATUS"
             exit 1
@@ -836,12 +1061,12 @@ jobs:
           # A game with no recorded transitions is an EMPTY history, never a 404 -- the
           # normal case for anything added before migration 005.
           for key in events daysToFinish gameId; do
-            grep -q "\"$key\"" /tmp/smoke-hist.json || {
+            grep -q "\"$key\"" ${SMOKE_TMP}/smoke-hist.json || {
               echo "[smoke] ERROR: history response is missing \"$key\""
               exit 1
             }
           done
-          rm -f /tmp/smoke-hist.json
+          rm -f ${SMOKE_TMP}/smoke-hist.json
           echo "[smoke] Statistics + history route checks PASSED"
 
       # A real MCP handshake against the real container, on the image's own Node.
@@ -856,6 +1081,45 @@ jobs:
       # The token is a fake. `initialize` is answered by the transport and never reaches
       # the API, so a valid one would prove nothing extra; what is under test is that the
       # server can complete an exchange at all.
+      # SEC-14: the browser session cookie, against the REAL stack. The contract tests
+      # drive the middleware in-process; this proves the wire: that the Set-Cookie header
+      # really leaves Express and nginx with its attributes, and that v2 refuses it.
+      # The cookie is sent with an explicit Cookie header, never a curl cookie jar, which
+      # may drop a Secure cookie over http. The test stack leaves SESSION_COOKIE_INSECURE
+      # empty, so this is the SECURE default: __Host- prefix, Secure, SameSite=Strict.
+      - name: Verify the browser session cookie (SEC-14)
+        run: |
+          set -euo pipefail
+          for BASE in "http://127.0.0.1:${{ env.BACKEND_TEST_PORT }}" "http://127.0.0.1:${{ env.FRONTEND_TEST_PORT }}"; do
+            echo "[smoke] session cookie via $BASE"
+            curl -s -D ${SMOKE_TMP}/sess-h.txt -o ${SMOKE_TMP}/sess-b.json -X POST "$BASE/api/auth/login" \
+              -H 'content-type: application/json' -H 'X-Requested-With: GameTracker' \
+              -d '{"username":"root","password":"smoke-test-root-not-a-real-password","session":"cookie"}'
+            SETC=$(grep -i '^set-cookie:' ${SMOKE_TMP}/sess-h.txt | head -1 | tr -d '\r' || true)
+            [ -n "$SETC" ] || { echo "[smoke] ERROR: the cookie login sent no Set-Cookie: $(head -c 200 ${SMOKE_TMP}/sess-b.json)"; exit 1; }
+            echo "[smoke] $(echo "$SETC" | sed 's/=[^;]*;/=<redacted>;/')"
+            for attr in '__Host-gt_session=' 'HttpOnly' 'Secure' 'SameSite=Strict' 'Path=/'; do
+              echo "$SETC" | grep -q "$attr" || { echo "[smoke] ERROR: the session cookie lacks $attr"; exit 1; }
+            done
+            if grep -q '"token"' ${SMOKE_TMP}/sess-b.json; then echo "[smoke] ERROR: a cookie login returned a token in its body"; exit 1; fi
+            COOKIE=$(echo "$SETC" | sed -n 's/^[Ss]et-[Cc]ookie: *\(__Host-gt_session=[^;]*\).*/\1/p')
+            [ -n "$COOKIE" ] || { echo "[smoke] ERROR: no session cookie to send back"; exit 1; }
+
+            code() { curl -o /dev/null -sw "%{http_code}" "$@"; }
+            OK=$(code -H "Cookie: $COOKIE" -H 'X-Requested-With: GameTracker' "$BASE/api/auth/session")
+            NOHDR=$(code -H "Cookie: $COOKIE" "$BASE/api/auth/session")
+            V2=$(code -H "Cookie: $COOKIE" -H 'X-Requested-With: GameTracker' "$BASE/api/v2/me")
+            echo "[smoke] session with header -> $OK, without -> $NOHDR, cookie on v2 -> $V2"
+            [ "$OK" -eq 200 ] || { echo "[smoke] ERROR: a valid session cookie was refused"; exit 1; }
+            [ "$NOHDR" -eq 403 ] || { echo "[smoke] ERROR: a cookie request WITHOUT the CSRF header answered $NOHDR, expected 403"; exit 1; }
+            [ "$V2" -eq 401 ] || { echo "[smoke] ERROR: /api/v2 answered $V2 to a session cookie, expected 401 (v2 is PAT-only)"; exit 1; }
+
+            curl -s -D ${SMOKE_TMP}/out-h.txt -o /dev/null -X POST -H "Cookie: $COOKIE" -H 'X-Requested-With: GameTracker' "$BASE/api/auth/logout"
+            grep -i '^set-cookie:' ${SMOKE_TMP}/out-h.txt | grep -q 'Max-Age=0' || { echo "[smoke] ERROR: logout did not clear the cookie"; exit 1; }
+          done
+          rm -f ${SMOKE_TMP}/sess-h.txt ${SMOKE_TMP}/sess-b.json ${SMOKE_TMP}/out-h.txt
+          echo "[smoke] Browser session cookie checks PASSED"
+
       - name: Verify the MCP server completes an initialize handshake
         run: |
           set -euo pipefail
@@ -866,7 +1130,7 @@ jobs:
           until curl -sf "http://127.0.0.1:${{ env.MCP_TEST_PORT }}/health" > /dev/null 2>&1; do
             if [ "$ELAPSED" -ge 30 ]; then
               echo "[smoke] ERROR: MCP container never became reachable"
-              docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
               exit 1
             fi
             sleep 3
@@ -875,32 +1139,82 @@ jobs:
           echo "[smoke] MCP reachable after ${ELAPSED}s"
 
           BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
-          STATUS=$(curl -o /tmp/smoke-mcp.txt -sw "%{http_code}" \
+          STATUS=$(curl -o ${SMOKE_TMP}/smoke-mcp.txt -sw "%{http_code}" \
             -X POST "http://127.0.0.1:${{ env.MCP_TEST_PORT }}/mcp" \
             -H 'content-type: application/json' \
             -H 'accept: application/json, text/event-stream' \
             -H 'authorization: Bearer gt_pat_smoke-test-not-a-real-token' \
             -d "$BODY")
           echo "[smoke] MCP initialize status: $STATUS"
-          echo "[smoke] MCP initialize body: $(head -c 400 /tmp/smoke-mcp.txt)"
+          echo "[smoke] MCP initialize body: $(head -c 400 ${SMOKE_TMP}/smoke-mcp.txt)"
           [ "$STATUS" -eq 200 ] || {
             echo "[smoke] ERROR: MCP initialize returned $STATUS, expected 200."
-            docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
             exit 1
           }
           # A JSON-RPC error is delivered with HTTP 200 in some paths, so the status
           # code alone would not have caught the crypto failure. Assert the RESULT.
-          grep -q '"serverInfo"' /tmp/smoke-mcp.txt && grep -q '"name":"gametracker"' /tmp/smoke-mcp.txt || {
+          grep -q '"serverInfo"' ${SMOKE_TMP}/smoke-mcp.txt && grep -q '"name":"gametracker"' ${SMOKE_TMP}/smoke-mcp.txt || {
             echo "[smoke] ERROR: MCP initialize did not return a serverInfo result."
-            docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
             exit 1
           }
-          grep -q '"error"' /tmp/smoke-mcp.txt && {
+          grep -q '"error"' ${SMOKE_TMP}/smoke-mcp.txt && {
             echo "[smoke] ERROR: MCP initialize returned a JSON-RPC error."
             exit 1
           } || true
-          rm -f /tmp/smoke-mcp.txt
+          rm -f ${SMOKE_TMP}/smoke-mcp.txt
           echo "[smoke] MCP handshake check PASSED"
+
+      # END TO END with a REAL credential (ROADMAP UP-7). Every step above is v1, and the
+      # MCP handshake uses a fake PAT because `initialize` never reaches the backend. So
+      # nothing proved that a token minted by create-api-token.js is accepted by /api/v2,
+      # that a v2 WRITE lands, or that the MCP server forwards a caller's token to the
+      # backend — the whole design of both. This mints one inside the throwaway stack
+      # (scope `library` ONLY — every call below is a library operation, and a library-only
+      # token working is itself worth proving; expires in a day, stack destroyed at
+      # teardown anyway), masks it in the log, and drives both paths.
+      - name: Verify /api/v2 and the MCP-to-backend path with a real token
+        run: |
+          set -euo pipefail
+          B="http://127.0.0.1:${{ env.BACKEND_TEST_PORT }}"
+          M="http://127.0.0.1:${{ env.MCP_TEST_PORT }}"
+          fail() { echo "[smoke] ERROR: $1"; docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend mcp 2>&1 | tail -40 || true; exit 1; }
+
+          # The token is printed ALONE on stdout (the script's contract); prose goes to stderr.
+          # `|| true`: under set -e + pipefail a failed mint would kill the step SILENTLY;
+          # the case below reports it with the script's own stderr instead.
+          PAT=$(docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml exec -T backend \
+                  node create-api-token.js root "smoke-e2e-${GITHUB_RUN_ID:-local}-$$" library --expires-in-days 1 \
+                  2>${SMOKE_TMP}/smoke-mint.err | tail -n 1) || true
+          case "$PAT" in gt_pat_*) ;; *) fail "create-api-token.js did not print a token: $(tail -n 3 ${SMOKE_TMP}/smoke-mint.err 2>/dev/null)" ;; esac
+          echo "::add-mask::${PAT}"
+
+          # 1. v2 refuses a missing credential with problem+json 401 (never the v1 envelope).
+          CODE=$(curl -s -o "${SMOKE_TMP}/smoke-v2.json" -w "%{http_code} %{content_type}" "$B/api/v2/library/games") || CODE="curl failed"
+          case "$CODE" in "401 application/problem+json"*) ;; *) fail "unauthenticated v2 answered: $CODE" ;; esac
+
+          # 2. A v2 READ with the minted token.
+          CODE=$(curl -s -o "${SMOKE_TMP}/smoke-v2.json" -w "%{http_code}" -H "Authorization: Bearer $PAT" "$B/api/v2/library/games?limit=5") || CODE="curl failed"
+          [ "$CODE" = "200" ] && grep -q '"data"' ${SMOKE_TMP}/smoke-v2.json || fail "v2 library read answered $CODE: $(head -c 300 ${SMOKE_TMP}/smoke-v2.json)"
+
+          # 3. A v2 WRITE that needs no external provider (no API keys here): replace the
+          #    outgoing share list, then read it back through the same token.
+          CODE=$(curl -s -o ${SMOKE_TMP}/smoke-v2.json -w "%{http_code}" -X PUT -H "Authorization: Bearer $PAT" \
+                   -H 'content-type: application/json' -d '{"usernames":[]}' "$B/api/v2/shares/outgoing") || CODE="curl failed"
+          [ "$CODE" = "200" ] && grep -q '"data":\[\]' ${SMOKE_TMP}/smoke-v2.json || fail "v2 share write answered $CODE: $(head -c 300 ${SMOKE_TMP}/smoke-v2.json)"
+
+          # 4. An MCP TOOL CALL that reaches the backend: whoami can only answer with the
+          #    caller's identity if the MCP server forwarded this token and v2 accepted it.
+          curl -s -o ${SMOKE_TMP}/smoke-mcp-e2e.txt -X POST "$M/mcp" -H 'content-type: application/json' \
+               -H 'accept: application/json, text/event-stream' -H "authorization: Bearer $PAT" \
+               -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}' \
+            || fail "could not reach the MCP server"
+          grep -q 'username\\":\\"root' ${SMOKE_TMP}/smoke-mcp-e2e.txt || fail "MCP whoami did not return the token's user: $(head -c 400 ${SMOKE_TMP}/smoke-mcp-e2e.txt)"
+          grep -q '"isError":true' ${SMOKE_TMP}/smoke-mcp-e2e.txt && fail "MCP whoami returned a tool error" || true
+
+          rm -f ${SMOKE_TMP}/smoke-v2.json ${SMOKE_TMP}/smoke-mcp-e2e.txt
+          echo "[smoke] v2 read, v2 write and MCP -> backend with a real token PASSED"
 
       - name: Tear down smoke test stack
         if: always()
@@ -911,12 +1225,15 @@ jobs:
           JWT_SECRET: smoke-test-jwt-secret-not-real
         run: |
           docker compose \
-            -p gametracker-smoke \
+            -p "${SMOKE_PROJECT}" \
             -f docker-compose.test.yml \
             down --volumes --remove-orphans || true
           # Refuse to delete anything that isn't the mktemp -d directory we created.
           if [ -n "${SMOKE_DATA_DIR:-}" ] && [ -d "${SMOKE_DATA_DIR}" ] && [ ! -L "${SMOKE_DATA_DIR}" ]; then
             sudo rm -rf --one-file-system "${SMOKE_DATA_DIR}"
+          fi
+          if [ -n "${SMOKE_TMP:-}" ] && [ -d "${SMOKE_TMP}" ] && [ ! -L "${SMOKE_TMP}" ]; then
+            rm -rf --one-file-system "${SMOKE_TMP}"
           fi
           echo "[smoke] Stack torn down and temp data wiped"
 
@@ -969,33 +1286,96 @@ jobs:
       # actions/checkout@v4, and a third-party action has no need for JWT_SECRET.
       MCP_BIND: ${{ vars.MCP_BIND || secrets.MCP_BIND }}
       MCP_ALLOWED_HOSTS: ${{ vars.MCP_ALLOWED_HOSTS || secrets.MCP_ALLOWED_HOSTS }}
+      # The backend's non-secret settings, for the same reason: compose runs from this
+      # job's fresh checkout and never sees the host's `.env`. TRUST_PROXY and
+      # BACKEND_BIND are the README's hardened topology — set in `.env` alone, the next
+      # push to main silently redeployed at trust-proxy 1 on 0.0.0.0, the exact
+      # lockout-everyone failure that topology exists to prevent. test/runtime.test.js
+      # fails when a variable docker-compose.yaml interpolates is missing from this job.
+      BACKEND_BIND: ${{ vars.BACKEND_BIND || secrets.BACKEND_BIND }}
+      TRUST_PROXY: ${{ vars.TRUST_PROXY || secrets.TRUST_PROXY }}
+      CORS_ORIGINS: ${{ vars.CORS_ORIGINS || secrets.CORS_ORIGINS }}
+      STEAM_REGION: ${{ vars.STEAM_REGION || secrets.STEAM_REGION }}
+      # SEC-14: 1 only for a plain-HTTP LAN install. Unset here = the secure default.
+      SESSION_COOKIE_INSECURE: ${{ vars.SESSION_COOKIE_INSECURE || secrets.SESSION_COOKIE_INSECURE }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # The env block is REQUIRED even though `down` starts nothing: compose still
-      # interpolates the file, and JWT_SECRET uses the `${VAR:?}` fail-fast form.
-      # Without it the command errors on interpolation and `|| true` swallows the
-      # failure -- leaving the OLD stack running while the deploy reports success.
-      - name: Stop existing production stack
-        # The env block is REQUIRED even to stop the stack: `docker compose down`
-        # still interpolates the compose file, and both JWT_SECRET and
-        # POSTGRES_PASSWORD use the `:?` fail-fast form. Without them the command
-        # errors on interpolation and `|| true` swallows it, leaving the old stack
-        # running and the deploy silently updating nothing.
-        # Kept symmetric with the `up` step below so the two cannot drift.
+      # PROMOTION -- the only place in this workflow that writes `latest` (P0-5).
+      #
+      # The images were built and scanned as `sha-<commit>`. Every gate this job needs
+      # has passed, so they become `latest` here and nowhere earlier. Whatever `latest`
+      # was is kept as `previous` first: that is what the rollback step below restores
+      # when the new stack fails to come up (SEC-6).
+      #
+      # `has_previous` is written BEFORE the retag loop, so a failure partway through
+      # the loop still leaves the rollback step able to put all three back.
+      #
+      # There is deliberately NO `docker compose down` before `up` any more. It stopped
+      # the whole stack -- database included -- before the new one was even started, so
+      # every deploy was an outage and a failed one stayed an outage. `up -d` replaces
+      # only the containers whose image changed, and the database keeps running.
+      - name: Promote the scanned images to :latest
+        id: promote
         env:
-          IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
-          IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
-          RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          IMAGE_TAG: ${{ needs.build-images.outputs.image_tag }}
         run: |
-          # NEVER add --volumes here. That would delete gametracker-pgdata,
-          # which is now the production database.
-          docker compose -f docker-compose.yaml down || true
+          set -euo pipefail
+          case "${IMAGE_TAG}" in
+            sha-*) ;;
+            *) echo "[deploy] Refusing to promote '${IMAGE_TAG}': expected sha-<commit>."; exit 1 ;;
+          esac
+          BASES="${BACKEND_IMAGE_BASE} ${FRONTEND_IMAGE_BASE} ${MCP_IMAGE_BASE}"
+          # All three must exist BEFORE anything is retagged. The cleanup job keeps a
+          # push run's tags until a deploy succeeds, so "Re-run failed jobs" finds them;
+          # if they are gone anyway, re-run the whole workflow.
+          for base in ${BASES}; do
+            docker image inspect "${base}:${IMAGE_TAG}" >/dev/null 2>&1 || {
+              echo "[deploy] ${base}:${IMAGE_TAG} not found. Re-run the WHOLE workflow, not only this job."
+              exit 1
+            }
+          done
+          HAS_PREVIOUS=true
+          for base in ${BASES}; do
+            if docker image inspect "${base}:latest" >/dev/null 2>&1; then
+              docker tag "${base}:latest" "${base}:previous"
+            else
+              HAS_PREVIOUS=false
+            fi
+          done
+          # NOTE: re-running a whole workflow that already deployed (same commit) makes
+          # `previous` the image that is already live, so a failure there has nothing
+          # older to roll back to. Harmless, but not a real rollback target.
+          echo "has_previous=${HAS_PREVIOUS}" >> "$GITHUB_OUTPUT"
+          for base in ${BASES}; do
+            docker tag "${base}:${IMAGE_TAG}" "${base}:latest"
+            echo "[deploy] ${base}:${IMAGE_TAG} -> :latest"
+          done
+          echo "[deploy] Rollback target recorded: has_previous=${HAS_PREVIOUS}"
+
+      # TRUST_PROXY and BACKEND_BIND are only safe as a PAIR (ROADMAP UP-17), and the
+      # backend cannot check it: the bind is a host-side port mapping it never sees.
+      #   TRUST_PROXY>=2 with the backend still on 0.0.0.0: a client connecting straight
+      #     to :3000 supplies its own X-Forwarded-For and walks past the login limiter.
+      #   BACKEND_BIND=127.0.0.1 with TRUST_PROXY=1: every request arrives from nginx, so
+      #     req.ip is nginx for everyone and one person's failures lock out all users.
+      # A WARNING, not a failure: a proxy on another machine legitimately needs 0.0.0.0,
+      # and refusing to deploy over a config choice would take the site down to make a point.
+      - name: Check the reverse-proxy pairing (TRUST_PROXY / BACKEND_BIND)
+        run: |
+          tp="${TRUST_PROXY:-1}"; bind="${BACKEND_BIND:-0.0.0.0}"
+          case "$tp" in ''|*[!0-9]*) echo "::warning title=TRUST_PROXY::TRUST_PROXY is not a number. index.js reads it with Number(), so a value like loopback, true or a CIDR becomes NaN and Express then trusts NO proxy hop: every request appears to come from nginx and one user's failed logins lock everyone out. Use a hop count (1, or 2 behind the frontend's nginx)."; exit 0 ;; esac
+          loopback=false; case "$bind" in 127.*|localhost|::1|'[::1]') loopback=true ;; esac
+          if [ "$tp" -ge 2 ] && [ "$loopback" = false ]; then
+            echo "::warning title=Reverse proxy pairing::TRUST_PROXY=${tp} but the backend is published on ${bind}. A client reaching port 3000 directly can spoof X-Forwarded-For past the login rate limiter. Set BACKEND_BIND=127.0.0.1 (README: Reverse proxy topology)."
+          elif [ "$tp" -le 1 ] && [ "$loopback" = true ]; then
+            echo "::warning title=Reverse proxy pairing::BACKEND_BIND=${bind} with TRUST_PROXY=${tp}: every request arrives through nginx, so the login limiter sees one client and a single user's failures lock out everyone. Set TRUST_PROXY=2."
+          else
+            echo "[deploy] Reverse-proxy pairing OK: TRUST_PROXY=${tp}, BACKEND_BIND=${bind}"
+          fi
 
       - name: Start production stack
         # MCP_BIND / MCP_ALLOWED_HOSTS are repository VARIABLES by preference — a LAN
@@ -1025,6 +1405,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          THEGAMESDB_API_KEY: ${{ secrets.THEGAMESDB_API_KEY }}
+          IGDB_CLIENT_SECRET: ${{ secrets.IGDB_CLIENT_SECRET }}
         run: |
           # The `|| { ... }` is REQUIRED now that frontend and mcp declare
           # `depends_on: backend: condition: service_healthy`. Before that, `up -d`
@@ -1034,7 +1416,7 @@ jobs:
           # would report one line of compose text where it used to report the actual
           # error. That diagnostic exists because it once masked a
           # `password authentication failed`; do not let the ordering fix delete it.
-          docker compose -f docker-compose.yaml up -d || {
+          docker compose -f docker-compose.yaml up -d --remove-orphans || {
             echo "[deploy] ERROR: stack failed to start (backend never became healthy?)"
             docker logs --tail 50 gametracker-backend-1 2>&1 || true
             docker compose -f docker-compose.yaml ps || true
@@ -1072,6 +1454,8 @@ jobs:
           RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          THEGAMESDB_API_KEY: ${{ secrets.THEGAMESDB_API_KEY }}
+          IGDB_CLIENT_SECRET: ${{ secrets.IGDB_CLIENT_SECRET }}
         run: |
           echo "[deploy] Waiting for production backend to become healthy..."
           MAX_WAIT=90
@@ -1091,13 +1475,62 @@ jobs:
           done
           echo "[deploy] Production healthy after ${ELAPSED}s — deployment SUCCESSFUL"
 
+      # ROLLBACK (SEC-6). Runs when promotion, start-up or the health check failed,
+      # and there was a `latest` to go back to. It restores `previous` -> `latest` and
+      # brings that stack up again. The JOB STAYS FAILED either way: a rolled-back
+      # deploy is a failed deploy, and it must read as one.
+      #
+      # What it cannot undo: a schema migration the new backend already applied.
+      # Migrations are additive and the runner only applies files it knows, so the
+      # previous backend boots on a newer schema -- but a migration that removes or
+      # renames something the previous code reads would break that. Write migrations
+      # so the previous release still runs on them.
+      #
+      # `cancelled()` too: a deploy cancelled by hand between promote and a healthy
+      # start would otherwise leave `latest` on the new images, or the stack half-replaced.
+      - name: Roll back to the previous images
+        if: (failure() || cancelled()) && steps.promote.outputs.has_previous == 'true'
+        env:
+          IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
+          IGDB_BEARER_TOKEN: ${{ secrets.IGDB_BEARER_TOKEN }}
+          RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          THEGAMESDB_API_KEY: ${{ secrets.THEGAMESDB_API_KEY }}
+          IGDB_CLIENT_SECRET: ${{ secrets.IGDB_CLIENT_SECRET }}
+          IMAGE_TAG: ${{ needs.build-images.outputs.image_tag }}
+        run: |
+          set -uo pipefail
+          echo "::error::Deploy of ${IMAGE_TAG} failed. Rolling production back to the previous images."
+          for base in ${BACKEND_IMAGE_BASE} ${FRONTEND_IMAGE_BASE} ${MCP_IMAGE_BASE}; do
+            docker tag "${base}:previous" "${base}:latest"
+          done
+          docker compose -f docker-compose.yaml up -d --remove-orphans || true
+          ELAPSED=0
+          until curl -sf http://localhost:3000/api/health > /dev/null 2>&1; do
+            if [ "$ELAPSED" -ge 90 ]; then
+              echo "::error::ROLLBACK FAILED: the previous images are not healthy either. Production is DOWN."
+              docker logs --tail 50 gametracker-backend-1 2>&1 || true
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          echo "::warning::Rolled back: production is healthy on the PREVIOUS images. ${IMAGE_TAG} did NOT go live."
+          docker compose -f docker-compose.yaml config --images | sed 's/^/[rollback]   /'
+          # KNOWN LIMIT: if this release changed a NETWORK definition in the compose
+          # file, `up` without `down` fails -- here and in the start step. Recovery is
+          # manual: `docker compose -f docker-compose.yaml down` (never --volumes),
+          # then `up -d`.
+
       - name: Prune dangling Docker images
         run: |
           docker image prune -f
           echo "[deploy] Dangling image prune complete"
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 9: Remove the PR-tagged images
+  # JOB 9: Remove this run's image tags (pr-<number>, and since P0-5 sha-<commit>)
+  # The job id is still `cleanup-pr-images`, kept to avoid renaming a check.
   # PR builds are tagged pr-<number> so they can never be mistaken for production's
   # :latest. Nothing else ever deletes them: the deploy job's prune is
   # `docker image prune -f`, which removes DANGLING images only, and these carry a
@@ -1113,32 +1546,65 @@ jobs:
   # `if: always()` because a failed run leaves images behind exactly like a passing
   # one does, and that is the case where nobody comes back to tidy up.
   # ─────────────────────────────────────────────────────────────────────────────
+  #
+  # PUSH RUNS TOO, since P0-5: a main build is tagged `sha-<commit>` now. It waits for
+  # `deploy`, so it never untags an image before promotion has read it. A push run that
+  # did NOT deploy keeps its tags (so "Re-run failed jobs" still has images to scan and
+  # promote); the next successful deploy sweeps every leftover sha-* tag.
   cleanup-pr-images:
-    name: Clean up PR-tagged images
+    name: Clean up this run's image tags
     runs-on: self-hosted
-    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     needs:
       - build-images
       - trivy-api
       - trivy-web
       - trivy-mcp
       - smoke-test
+      - deploy
     steps:
-      - name: Remove images built for this pull request
+      - name: Remove this run's image tags
+        env:
+          TAG: ${{ needs.build-images.outputs.image_tag }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
         run: |
           set -euo pipefail
-          TAG="${{ needs.build-images.outputs.image_tag }}"
-          # Refuse to run without a tag, and NEVER touch latest. If the output is
-          # missing (build-images never ran) an unguarded `docker rmi ...:` would be a
-          # malformed reference at best; `:latest` would be production's image.
-          if [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; then
-            echo "[cleanup] Refusing to remove tag '${TAG}' — expected pr-<number>."
-            exit 0
+          BASES="local/gametracker-backend local/gametracker-frontend local/gametracker-mcp"
+          # Only pr-<number> or sha-<commit>. NEVER latest or previous -- those are
+          # production and its rollback target. If the output is missing (build-images
+          # never ran) an unguarded `docker rmi ...:` would be a malformed reference.
+          case "${TAG}" in
+            pr-*|sha-*) ;;
+            *) echo "[cleanup] Refusing to remove tag '${TAG}' — expected pr-<number> or sha-<commit>."; exit 0 ;;
+          esac
+          if [ "${TAG#sha-}" != "${TAG}" ]; then
+            # A PUSH run keeps its images unless it DEPLOYED. "Re-run failed jobs" re-runs
+            # the scans and deploy but not build-images, so removing sha-<commit> after a
+            # transient scan failure (a rate-limited Trivy DB download, say) made the
+            # re-run fail on a missing image and forced a full rebuild.
+            if [ "${DEPLOY_RESULT}" != "success" ]; then
+              echo "[cleanup] Deploy result '${DEPLOY_RESULT}': keeping :${TAG} so 'Re-run failed jobs' still works."
+              echo "[cleanup] The next successful deploy removes it."
+              exit 0
+            fi
+            # Deployed: remove EVERY sha-* tag, not only ours. Whole main runs are
+            # serialised by the workflow concurrency group, so no other main run is in
+            # flight -- any other sha-* tag was left by an earlier run that never
+            # deployed. After promotion this run's image is also :latest, so removing
+            # its sha tag drops the tag and keeps the image.
+            for base in ${BASES}; do
+              for ref in $(docker images --format '{{.Repository}}:{{.Tag}}' "${base}" | grep ':sha-' || true); do
+                docker rmi "${ref}" >/dev/null 2>&1 \
+                  && echo "[cleanup] Removed ${ref}" \
+                  || echo "[cleanup] Could not remove ${ref} (in use?)"
+              done
+            done
+          else
+            for base in ${BASES}; do
+              docker rmi "${base}:${TAG}" 2>/dev/null \
+                && echo "[cleanup] Removed ${base}:${TAG}" \
+                || echo "[cleanup] ${base}:${TAG} already gone"
+            done
           fi
-          for base in local/gametracker-backend local/gametracker-frontend local/gametracker-mcp; do
-            docker rmi "${base}:${TAG}" 2>/dev/null \
-              && echo "[cleanup] Removed ${base}:${TAG}" \
-              || echo "[cleanup] ${base}:${TAG} already gone"
-          done
           docker image prune -f >/dev/null 2>&1 || true
-          echo "[cleanup] PR image cleanup complete"
+          echo "[cleanup] Image tag cleanup complete"

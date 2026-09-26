@@ -732,8 +732,40 @@ body, html {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+/* `backwards`, NOT `both` (ROADMAP FE-21). A forwards fill keeps the last keyframe's
+   `transform: translateY(0)` applied after the animation ends, and an animation's value
+   beats every normal declaration — so the grid/list hover lifts and the backlog
+   drag-over scale never applied (measured in Chromium: identity matrix). `backwards`
+   only holds the FIRST keyframe until the animation starts; the end state is the card's
+   own style, which is where it lands anyway. */
 .game-card {
-  animation: cardEnter 0.3s ease both;
+  animation: cardEnter 0.3s ease backwards;
+}
+/* Reduced motion covers what FE-21 brought back to life, not only the entrance: the hover
+   lifts, the cover zoom and the drag-over scale all animate a TRANSFORM, and until FE-21
+   none of them applied at all, so nobody had to think about them (UI/UX review). The
+   border, shadow and outline cues stay; only the movement goes. */
+@media (prefers-reduced-motion: reduce) {
+  .game-card { animation: none; }
+  .game-card,
+  .game-card:hover,
+  .game-card .game-cover,
+  .game-card:hover .game-cover,
+  .games-list.list-view .game-card:hover,
+  .games-list:not(.list-view) .game-card:hover .game-cover,
+  .game-card.card-drag-over,
+  .games-list.list-view .game-card.card-drag-over {
+    transform: none !important;
+    transition-property: border-color, box-shadow, background-color, opacity !important;
+  }  /* The rest of the app's motion (UI/UX review of FE-14): an INFINITE background drift on
+     the login page is the worst offender for vestibular triggers, and the hover scales on
+     status pills and accent dots are movement too. The active dot keeps its size — that
+     is a state, not an animation — so only the transition goes. */
+  .login-page::before { animation: none !important; }
+  /* :not(.active): the ACTIVE dot's 1.2 is its state and must not snap to 1.0 on hover
+     (review of FE-16). Only the transform transition goes; colour changes stay. */
+  .status-pill:hover, .theme-dot:not(.active):hover { transform: none !important; }
+  .status-pill, .theme-dot { transition-property: background-color, border-color, box-shadow, color, opacity !important; }
 }
 
 .game-card:hover {
@@ -743,11 +775,22 @@ body, html {
 }
 
 /* === Status-colored card glow on hover === */
-.game-card.status-playing:hover  { box-shadow: 0 16px 40px -8px rgba(34,197,94,0.28),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(34,197,94,0.35); }
-.game-card.status-wishlist:hover  { box-shadow: 0 16px 40px -8px color-mix(in srgb, var(--color-accent) 28%, transparent),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: color-mix(in srgb, var(--color-accent) 35%, transparent); }
-.game-card.status-done:hover      { box-shadow: 0 16px 40px -8px rgba(168,85,247,0.28),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(168,85,247,0.35); }
-.game-card.status-backlog:hover   { box-shadow: 0 16px 40px -8px rgba(249,115,22,0.28),  0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(249,115,22,0.35); }
-.game-card.status-unreleased:hover{ box-shadow: 0 16px 40px -8px rgba(156,163,175,0.22), 0 4px 12px -4px rgba(0,0,0,0.3); border-color: rgba(156,163,175,0.3); }
+/* From the --color-status-* tokens, like the dots, card edges and the stats page (FE-20).
+   Wishlist used --color-accent, so under Violet it glowed like Done and under Emerald like
+   Playing; the others were a second, hard-coded palette that matched nothing else. */
+.game-card.status-wishlist:hover,
+.game-card.status-playing:hover,
+.game-card.status-done:hover,
+.game-card.status-backlog:hover,
+.game-card.status-unreleased:hover {
+  box-shadow: 0 16px 40px -8px color-mix(in srgb, var(--status-c) 28%, transparent), 0 4px 12px -4px rgba(0,0,0,0.3);
+  border-color: color-mix(in srgb, var(--status-c) 35%, transparent);
+}
+.game-card.status-wishlist   { --status-c: var(--color-status-wishlist); }
+.game-card.status-playing    { --status-c: var(--color-status-playing); }
+.game-card.status-done       { --status-c: var(--color-status-done); }
+.game-card.status-backlog    { --status-c: var(--color-status-backlog); }
+.game-card.status-unreleased { --status-c: var(--color-status-unreleased); }
 
 /* === Card actions — always visible in grid view === */
 /* Previously hover-reveal; removed because the hidden state made the delete button
@@ -775,16 +818,28 @@ body, html {
   opacity: 0.4;
   cursor: grabbing;
 }
-.card-drag-over {
+/* .game-card-qualified (0,2,0): with the entry animation no longer pinning `transform`,
+   `.game-card:hover` (0,2,0) competes for it, and a card being dragged over is also
+   hovered. Same specificity and LATER in the file, so the drop cue wins. */
+.game-card.card-drag-over,
+/* List view's hover (0,4,0) would otherwise out-rank the drop cue (review of FE-21). */
+.games-list.list-view .game-card.card-drag-over:hover {
+  transform: scale(1.02);
+}
+.game-card.card-drag-over {
   border-color: var(--color-accent) !important;
   box-shadow: 0 0 0 2px var(--color-accent), 0 10px 30px #0004 !important;
   transform: scale(1.02);
   transition: transform 0.15s ease, box-shadow 0.15s ease !important;
 }
-/* Keyboard-selected card for reordering */
+/* Keyboard-selected card for reordering. DASHED and offset: it used the exact 2px accent
+   ring focus uses, so after picking a card up and tabbing on, the held card and the
+   focused one looked identical. */
 .card-keyboard-selected {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline: 2px dashed var(--color-accent);
+  outline-offset: 3px;
+  /* No transform, deliberately: `.game-card:hover` (0,2,0) outranks this (0,1,0), so a
+     lift here would fight the pointer. The dashed outline is the whole signal. */
 }
 
 /* Subtle glow on non-active cards during a drag to show they're droppable */
@@ -1019,10 +1074,9 @@ body, html {
   margin-bottom: 0.2rem;
   color: var(--text-primary);
   line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  /* The two-line clamp lives on .game-title-btn now (FE-6): a <button> is an atomic
+     inline-block, so a clamp HERE never cut its text — long titles grew over the cover —
+     and this box's overflow:hidden clipped the button's focus ring. */
 }
 .game-release-date {
   font-size: 0.75rem;
@@ -1127,7 +1181,10 @@ body, html {
   transform: scale(0.96);
 }
 .error-msg {
-  background: var(--color-danger);
+  /* ONE rule (a second, later one used to override this: it set #dc2626 text over the
+     --color-danger background, red on red at ~1.3:1 on every .error-msg in the app).
+     White on the raw token is ~3.6:1, below AA at this size; darkened, ~6.6:1. */
+  background: color-mix(in srgb, var(--color-danger) 70%, #000);
   color: #fff;
   padding: 0.7em 1.2em;
   border-radius: 8px;
@@ -1153,16 +1210,6 @@ body, html {
 }
 .add-btn:active {
   transform: scale(0.96);
-}
-.success-msg {
-  background: #43a047;
-  color: #fff;
-  padding: 0.7em 1.2em;
-  border-radius: 8px;
-  margin: 1em 0;
-  font-weight: bold;
-  text-align: center;
-  box-shadow: 0 2px 8px #0002;
 }
 .search-bar.sonarr-style {
   width: 100%;
@@ -1489,6 +1536,30 @@ body, html {
   letter-spacing: 0.02em;
 }
 
+/* SEC-14: the boot probe and the "server unreachable" screens reuse the login card, so
+   the first thing on screen matches what follows it. Centred, no form fields. The title is
+   a real heading here (there is no form), styled exactly like the login wordmark. */
+.app-boot {
+  align-items: center;
+  text-align: center;
+  gap: 1rem;
+}
+.app-boot-text {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.login-notice {
+  /* Informational, not an error: accent-tinted glass, never the danger colour. */
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  padding: 0.7rem 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  text-align: center;
+}
 .login-field-group {
   display: flex;
   flex-direction: column;
@@ -1520,7 +1591,8 @@ body, html {
   background: color-mix(in srgb, var(--color-accent) 4%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
-.login-form button[type="submit"] {
+.login-form button[type="submit"],
+.login-form .app-boot-retry {
   background: var(--color-accent);
   color: var(--color-accent-contrast);
   border: none;
@@ -1536,14 +1608,24 @@ body, html {
   box-shadow: 0 4px 20px color-mix(in srgb, var(--color-accent) 30%, transparent);
   letter-spacing: 0.02em;
 }
-.login-form button[type="submit"]:hover {
+.login-form button[type="submit"]:hover:not(:disabled),
+.login-form .app-boot-retry:hover:not(:disabled) {
   background: var(--color-accent-hover);
   transform: translateY(-1px);
   box-shadow: 0 6px 24px color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
-.login-form button[type="submit"]:active {
+.login-form button[type="submit"]:active:not(:disabled),
+.login-form .app-boot-retry:active:not(:disabled) {
   transform: translateY(0);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+/* While signing in: visibly busy, no lift, no pointer — the label alone looked clickable. */
+.login-form button[type="submit"]:disabled,
+.login-form .app-boot-retry:disabled {
+  opacity: 0.7;
+  cursor: progress;
+  transform: none;
+  box-shadow: none;
 }
 .user-management-page {
   max-width: 900px;
@@ -1744,12 +1826,54 @@ body, html {
   transform: translateY(-2px);
   opacity: 0.9;
 }
+/* Buttons since FE-6: shed the UA button look, keep the chip's own. */
+button.stats-chip { font-family: inherit; line-height: inherit; appearance: none; }
+/* The game title is the button that opens its details (FE-6): it must look exactly like
+   the title it replaced. The global :focus-visible ring shows it on keyboard focus. */
+.game-title-btn {
+  background: none; border: 0; margin: 0;
+  font: inherit; color: inherit; text-align: inherit; letter-spacing: inherit;
+  /* The UA sets text-shadow:none on buttons and `font` does not carry it: the grid title
+     lost the shadow that keeps it readable over the cover art. */
+  text-shadow: inherit;
+  cursor: pointer; width: 100%;
+  padding: 0 2px;   /* room for the inset focus ring */
+  /* The clamp the title had, applied where it can take effect (measured: 2 lines,
+     ellipsis, the same height as the old plain-text title). */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Inset, so the ring is drawn inside the clamped box instead of being clipped by it. */
+.game-title-btn:focus-visible { outline-offset: -2px; }
+/* Hovering ANYWHERE on a card shows it opens details; hover-capable pointers only, so a
+   touch screen keeps no stuck underline. */
+@media (hover: hover) {
+  .game-card:hover .game-title-btn,
+  .game-title-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
+}
+/* The dialog's focus fallback: a subtle ring, so a keyboard user can see where focus went. */
+.page-title:focus { outline: none; }   /* script-focus fallback only; never tabbed to */
+.games-list:focus-visible {
+  outline: 1px dashed color-mix(in srgb, var(--color-accent) 45%, transparent);
+  outline-offset: 4px;
+}
+
+/* The filter currently applied — it had no visible state at all. */
+.stats-chip[aria-pressed="true"] { box-shadow: 0 0 0 1.5px currentColor inset; }
 .stats-chip:active { transform: scale(0.96); }
-.stats-chip--wishlist  { background: color-mix(in srgb, var(--color-accent) 12%, transparent);  color: var(--color-accent); border-color: color-mix(in srgb, var(--color-accent) 25%, transparent); }
-.stats-chip--playing   { background: rgba(34,197,94,0.12);   color: #22c55e; border-color: rgba(34,197,94,0.25); }
-.stats-chip--done      { background: rgba(168,85,247,0.12);  color: #a855f7; border-color: rgba(168,85,247,0.25); }
-.stats-chip--backlog   { background: rgba(249,115,22,0.12);  color: #f97316; border-color: rgba(249,115,22,0.25); }
-.stats-chip--unreleased{ background: rgba(156,163,175,0.1);  color: #9ca3af; border-color: rgba(156,163,175,0.2); }
+/* The status chips use the SAME tokens as everything else that means a status (FE-20). */
+.stats-chip--wishlist, .stats-chip--playing, .stats-chip--done, .stats-chip--backlog, .stats-chip--unreleased {
+  background: color-mix(in srgb, var(--chip-c) 12%, transparent);
+  color: var(--chip-c);
+  border-color: color-mix(in srgb, var(--chip-c) 25%, transparent);
+}
+.stats-chip--wishlist   { --chip-c: var(--color-status-wishlist); }
+.stats-chip--playing    { --chip-c: var(--color-status-playing); }
+.stats-chip--done       { --chip-c: var(--color-status-done); }
+.stats-chip--backlog    { --chip-c: var(--color-status-backlog); }
+.stats-chip--unreleased { --chip-c: var(--color-status-unreleased); }
 .stats-chip--total     { background: rgba(255,255,255,0.05); color: var(--color-fg-muted); border-color: var(--color-border); }
 .toggle-feature-btn {
   background: var(--color-card);
@@ -2254,11 +2378,6 @@ body, html {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-.error-msg {
-  color: #dc2626;
-  font-weight: 600;
-  text-align: center;
 }
 
 /* Responsive Design */
@@ -3139,17 +3258,6 @@ body, html {
   font-size: 1.1rem;
 }
 
-.unreleased-badge {
-  background: #ff6b35;
-  color: white;
-  padding: 0.25rem 0.75rem;
-  border-radius: 20px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  margin-left: 1rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
 
 .genre-tags,
 .platform-tags {
@@ -3355,24 +3463,26 @@ body, html {
   transform: translateY(-2px);
 }
 
-/* Status styling for the detail page */
+/* Status styling for the detail page — the tokens, like everywhere else (FE-20). These
+   selectors are unscoped, so they also reach every .game-card.status-*; a fourth palette
+   here (pink wishlist, ACCENT playing, green done) is how Playing matched the accent. */
 .status-wishlist {
-  color: #e91e63;
+  color: var(--color-status-wishlist);
   font-weight: 700;
 }
 
 .status-playing {
-  color: var(--color-accent);
+  color: var(--color-status-playing);
   font-weight: 700;
 }
 
 .status-done {
-  color: #4caf50;
+  color: var(--color-status-done);
   font-weight: 700;
 }
 
 .status-unreleased {
-  color: #ff6b35;
+  color: var(--color-status-unreleased);
   font-weight: 700;
 }
 
@@ -5393,6 +5503,23 @@ body, html {
   padding: 0 1rem;
 }
 
+/* SEC-14: the insecure-cookie warning. Amber, not red: a configuration choice to review,
+   not an outage. */
+.ss-security-warning {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.ss-security-warning svg { color: #f59e0b; flex-shrink: 0; margin-top: 0.15rem; }
+
 .ss-header {
   display: flex;
   align-items: center;
@@ -5715,9 +5842,16 @@ body, html {
 .gt-alert--page {
   margin-bottom: 1.5rem;
   position: sticky;
-  top: 0;
+  /* 1rem, not 0 (FE-18): flush against the viewport edge it read as part of the browser
+     chrome, and on a page that scrolls the WINDOW (not an .ent-panel) it clipped. */
+  top: 1rem;
   z-index: 2;
   backdrop-filter: blur(8px);
+}
+/* Opaque when page-level (FE-18). The 8% tint is right inside a panel, where the panel is
+   the backdrop; stuck over scrolling content it let card titles show through the text. */
+.gt-alert--page.gt-alert--danger {
+  background: color-mix(in srgb, #ef4444 12%, var(--surface-1));
 }
 
 .gt-alert-action {
@@ -5956,7 +6090,6 @@ body, html {
 .game-detail-page .status-playing  { color: var(--color-status-playing); }
 .game-detail-page .status-done     { color: var(--color-status-done); }
 .game-detail-page .status-unreleased { color: var(--color-status-unreleased); }
-.unreleased-badge { background: var(--accent-soft-strong); color: var(--color-accent-hover); border: 1px solid var(--accent-border); }
 
 /* ── Login wordmark: tasteful, display face ── */
 .login-form h2 { display: none; } /* old plain heading, replaced by wordmark in JSX */
@@ -6459,6 +6592,8 @@ body, html {
    and it must not blend into whichever accent preset the user has chosen. */
 .token-badge--admin { background: rgba(252,161,48,0.14); border-color: rgba(252,161,48,0.45); color: #fcbe6b; }
 .token-badge--expired { background: rgba(249,62,62,0.12); border-color: rgba(249,62,62,0.4); color: #f98b8b; }
+/* Informational, not an error: muted, so it reads as a property of the token. */
+.token-badge--note { background: transparent; border-color: var(--border-default); color: var(--text-secondary); border-style: dashed; }
 
 .token-revoke-btn {
   flex-shrink: 0;
@@ -6880,4 +7015,12 @@ body, html {
   background: color-mix(in srgb, var(--color-status-done) 12%, transparent);
   color: var(--color-status-done);
   font-weight: 600;
+}
+
+/* A button that is busy but must keep focus (FE-18 review): `disabled` would drop focus to
+   <body>, so these use aria-disabled — and need the disabled LOOK the attribute alone does
+   not give them. */
+button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
 }
