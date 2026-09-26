@@ -701,6 +701,51 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   and CISO sign-off before any code.
 - **Constraint (CISO):** `/api/v2` must never accept the cookie. v2 is PAT-only by design, and a
   session cookie there is exactly the scope-less JWT that design excludes.
+- **Decided (owner, 2026-09-26):** go ahead.
+- **Proposed design (for Architect and CISO sign-off BEFORE code):**
+  - **Opt-in at login, so every existing client is unchanged.**
+    - `POST /api/auth/login` with `{"session": "cookie"}` in the body sets the cookie and
+      answers `{session: {username, can_manage_users, origin, display_name, exp}}`, with NO
+      token in the body. Only the SPA sends the option.
+    - Without it, the response is the frozen `{token}` exactly as today (Android, scripts).
+  - **The cookie:** `gt_session=<the same 12h JWT>; HttpOnly; Secure; SameSite=Strict;
+    Path=/api; Max-Age=43200`. `Secure` is explicit, not derived from `req.secure`: nginx
+    forwards `X-Forwarded-Proto $scheme`, which is `http` behind a TLS edge.
+    `SESSION_COOKIE_INSECURE=1` is the documented opt-out for a plain-HTTP LAN install. It is
+    passed in both compose files and carried by CI.
+  - **`authRequired`:** a Bearer header wins, exactly as today (JWT or PAT). Otherwise it reads
+    `gt_session` from the `Cookie` header with a small parser, adding no dependency.
+    - A cookie-authenticated request must carry `X-Requested-With: GameTracker`, or it is
+      refused with 403 `{error}`, NEVER 401, which would sign the SPA out.
+    - This is the CSRF control, on top of SameSite=Strict: a cross-origin page cannot set a
+      custom header without a CORS preflight, and `CORS_ORIGINS` denies by default.
+    - `req.auth = {kind: 'session', via: 'cookie'}`. The privilege re-read from `users` is
+      unchanged.
+  - **`/api/v2` never reads the cookie.** `patRequired` looks only at `Authorization`. A test
+    sends a valid session cookie plus the CSRF header to a v2 route and requires 401.
+  - **Two new v1 routes, browser-only** (the freeze's "narrow door": new route, browser
+    client, logic in a service):
+    - `GET /api/auth/session` (auth tier) returns the session claims, so a reload can learn
+      who is signed in without reading the JWT;
+    - `POST /api/auth/logout` (auth tier) clears the cookie (`Max-Age=0`). Both are recorded
+      in `api-surface.test.js`.
+  - **SPA:**
+    - The token leaves `localStorage` entirely. The session claims live in memory and are
+      restored at boot from `GET /api/auth/session`, behind a loading state.
+    - `api.js` adds the CSRF header to own-API requests and no longer builds `Authorization`.
+      The 401 handler and `endSession()` stay the only session-enders; `endSession()` now also
+      calls logout, best-effort.
+    - A legacy `localStorage` token is deleted at boot, so everyone signs in once more (at
+      most 12h of sessions).
+    - After a cookie login, the SPA checks `GET /api/auth/session`. If the browser refused
+      the cookie (HTTP without the opt-out), the login page says so rather than looping.
+    - `session.js` stops decoding JWTs, and the P0-6/FE-8/FE-17 runtime pins are rewritten:
+      - nothing in the SPA reads or writes a `token` key;
+      - only `api.js` sets the CSRF header;
+      - only ApiDocsPage's try-it-out ever builds `Authorization`, from a PAT the user types.
+  - **Why the JWT stays a JWT:** the server stays stateless (see "Stateless API"), and a
+    revocable server-side session store is a larger change for no gain the 12h expiry and
+    the per-request privilege re-read do not already give.
 
 ### [x] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
 - **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).
