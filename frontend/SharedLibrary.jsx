@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
 import { useToast } from './src/contexts/ToastContext';
-import { useNavigate } from 'react-router-dom';
 import { readSession } from './src/session';
 
 // Always call our own origin's /api (nginx proxies it to the backend). The previous
@@ -66,7 +65,6 @@ function SharedLibrary() {
   const shareModalRef = React.useRef();
 
   const { showToast } = useToast();
-  const navigate = useNavigate();
 
   // Fetch all users and my sharing list on mount
   useEffect(() => {
@@ -74,23 +72,24 @@ function SharedLibrary() {
     setLoading(true);
     setError('');
     Promise.all([
-      axios.get(`${API_BASE}/all-users`, { headers: { Authorization: `Bearer ${token}` } }),
-      axios.get(`${API_BASE}/user/${user.username}/shared-with-me`, { headers: { Authorization: `Bearer ${token}` } }),
+      axios.get(`${API_BASE}/all-users`),
+      axios.get(`${API_BASE}/user/${user.username}/shared-with-me`),
       // No `.catch(() => ({ data: [] }))` here any more: it turned a failed request
       // into "you share with nobody", which is data the user might act on by
       // re-sharing. Let it reject and be reported with the others below.
-      axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } })
+      axios.get(`${API_BASE}/user/${user.username}/share`)
     ]).then(([allUsersRes, sharedWithMeRes, sharedWithRes]) => {
       setAllUsers(allUsersRes.data.filter(u => u.username !== user.username));
       setSharedWithMe(sharedWithMeRes.data.map(s => s.from_user));
       setSharedWith(sharedWithRes.data.toUsers || []);
       setLoading(false);
     }).catch((err) => {
-      if (err.response && (err.response.status === 401 || err.response.status === 403)) {
-        localStorage.removeItem('token');
-        if (window.setUser) window.setUser(null); // fallback if setUser is not in context/props
-        navigate('/login');
-      } else {
+      // A 401 is the global interceptor's (it ends the session and reloads to /login).
+      // A 403 is "not allowed", never "logged out" (ROADMAP P0-6) — this used to delete
+      // the token and rely on a global setter nothing ever assigned.
+      if (err.response?.status === 403) {
+        setError('You do not have access to this sharing data.');
+      } else if (err.response?.status !== 401) {
         setError('Failed to load sharing data.');
       }
       setLoading(false);
@@ -102,10 +101,8 @@ function SharedLibrary() {
     const newSharedWith = [...sharedWith, username];
     setToggleLoading(true);
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const res = await axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } });
+      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
+      const res = await axios.get(`${API_BASE}/user/${user.username}/share`);
       setSharedWith(res.data.toUsers || []);
       showToast('success', `Now sharing with @${username}`);
     } catch (err) {
@@ -117,10 +114,8 @@ function SharedLibrary() {
     const newSharedWith = sharedWith.filter(u => u !== username);
     setToggleLoading(true);
     try {
-      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const res = await axios.get(`${API_BASE}/user/${user.username}/share`, { headers: { Authorization: `Bearer ${token}` } });
+      await axios.post(`${API_BASE}/user/${user.username}/share`, { toUsers: newSharedWith });
+      const res = await axios.get(`${API_BASE}/user/${user.username}/share`);
       setSharedWith(res.data.toUsers || []);
       showToast('error', `Revoked sharing from @${username}`);
     } catch (err) {
@@ -140,9 +135,7 @@ function SharedLibrary() {
     setStatusFilter('all');
     setPage(1);
     try {
-      const res = await axios.get(`${API_BASE}/user/${user.username}/shared/${u.username}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await axios.get(`${API_BASE}/user/${user.username}/shared/${u.username}`);
       setModalGames(res.data);
     } catch (err) {
       setModalError('Failed to load shared games.');

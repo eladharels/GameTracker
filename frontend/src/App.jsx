@@ -296,7 +296,10 @@ function App() {
           <Route path="/calendar" element={<CalendarPage user={user} />} />
           <Route path="/stats" element={<StatsPage user={user} />} />
           <Route path="/account" element={<AccountPage user={user} />} />
-          <Route path="/users" element={<UserManagementPage user={user} />} />
+          {/* Admin-only pages are gated here too, not only in the sidebar: typing the URL
+              used to open them, and the first 403 then logged the user out (P0-6). The
+              server still decides; this only keeps a non-admin off a page of errors. */}
+          <Route path="/users" element={user.can_manage_users ? <UserManagementPage user={user} /> : <Navigate to="/search" replace />} />
           <Route path="/settings" element={<SettingsPage />} />
           {/* Suspense boundary is required by the lazy import above. The fallback is
               deliberately plain text rather than a spinner component: this chunk is
@@ -306,7 +309,7 @@ function App() {
               <ApiDocsPage />
             </Suspense>
           } />
-          <Route path="/system-status" element={<SystemStatusPage />} />
+          <Route path="/system-status" element={user.can_manage_users ? <SystemStatusPage /> : <Navigate to="/search" replace />} />
           <Route path="*" element={<Navigate to="/search" />} />
         </Routes>
       </main>
@@ -424,7 +427,6 @@ function UserManagementPage({ user }) {
   const [newUser, setNewUser] = useState({ username: '', password: '', can_manage_users: false })
   const [success, setSuccess] = useState('')
   const [ldapSyncLoading, setLdapSyncLoading] = useState(false)
-  const token = localStorage.getItem('token')
   const [formError, setFormError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -437,20 +439,21 @@ function UserManagementPage({ user }) {
   const pwModalRef = useRef()
   const addUserFirstInputRef = useRef()
   const pwInputRef = useRef()
-  const navigate = useNavigate()
 
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      const res = await axios.get(`${API_BASE}/users`, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await axios.get(`${API_BASE}/users`)
       setUsers(res.data)
       setLoading(false)
     } catch (err) {
-      if (err.response && (err.response.status === 401 || err.response.status === 403)) {
-        // Token expired or invalid, log out
-        localStorage.removeItem('token');
-        navigate('/login');
-      } else {
+      // 401 is the global interceptor's to handle (it ends the session). A 403 is NOT
+      // "logged out" (ROADMAP P0-6): this handler used to delete the token and navigate
+      // to /login while React still held the user, so the app bounced to /search looking
+      // signed in and every later request failed.
+      if (err.response?.status === 403) {
+        setError('You do not have permission to manage users.')
+      } else if (err.response?.status !== 401) {
         setError('Failed to load users')
       }
       setLoading(false)
@@ -469,7 +472,7 @@ function UserManagementPage({ user }) {
       return
     }
     try {
-      await axios.post(`${API_BASE}/users`, newUser, { headers: { Authorization: `Bearer ${token}` } })
+      await axios.post(`${API_BASE}/users`, newUser)
       setSuccess('User created!')
       setNewUser({ username: '', password: '', can_manage_users: false })
       fetchUsers()
@@ -481,7 +484,7 @@ function UserManagementPage({ user }) {
     setError('')
     setSuccess('')
     try {
-      await axios.delete(`${API_BASE}/users/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+      await axios.delete(`${API_BASE}/users/${id}`)
       setSuccess('User deleted!')
       fetchUsers()
     } catch (err) {
@@ -511,7 +514,7 @@ function UserManagementPage({ user }) {
     setError('')
     setSuccess('')
     try {
-      await axios.put(`${API_BASE}/users/${id}`, updates, { headers: { Authorization: `Bearer ${token}` } })
+      await axios.put(`${API_BASE}/users/${id}`, updates)
       setSuccess('User updated!')
       fetchUsers()
     } catch (err) {
@@ -525,9 +528,7 @@ function UserManagementPage({ user }) {
     setSuccess('')
     
     try {
-      const response = await axios.post(`${API_BASE}/admin/ldap-sync`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
+      const response = await axios.post(`${API_BASE}/admin/ldap-sync`, {})
       
       const result = response.data
       if (result.success) {
@@ -2059,8 +2060,6 @@ const NOTIF_DAY_OPTIONS = [
 ]
 
 function AccountPage({ user }) {
-  const token = localStorage.getItem('token')
-  const authH = { headers: { Authorization: `Bearer ${token}` } }
 
   const [profile, setProfile] = useState({ email: '', ntfy_url: '', ntfy_topic: '', gotify_url: '', gotify_token: '', telegram_chat_id: '', notification_days: [0, 7, 30] })
   const [saved, setSaved] = useState({})   // { channels: true/null, schedule: true/null }
@@ -2074,7 +2073,7 @@ function AccountPage({ user }) {
   const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
-    axios.get(`${API_BASE}/user/me`, authH)
+    axios.get(`${API_BASE}/user/me`)
       .then(res => setProfile({
         email:             res.data.email || '',
         ntfy_url:          res.data.ntfy_url || '',
@@ -2100,7 +2099,7 @@ function AccountPage({ user }) {
     setError(p => ({ ...p, [section]: null }))
     setSaved(p => ({ ...p, [section]: null }))
     try {
-      await axios.put(`${API_BASE}/user/me/settings`, body, authH)
+      await axios.put(`${API_BASE}/user/me/settings`, body)
       setSaved(p => ({ ...p, [section]: true }))
       setTimeout(() => setSaved(p => ({ ...p, [section]: null })), 3000)
     } catch (err) {
@@ -2246,8 +2245,6 @@ function SystemStatusPage() {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const token = localStorage.getItem('token')
-  const authH = { headers: { Authorization: `Bearer ${token}` } }
 
   const SERVICE_META = {
     database:   { label: 'Database',    desc: 'Local SQLite database',                website: null,                     auth: 'None — local file' },
@@ -2280,7 +2277,7 @@ function SystemStatusPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await axios.get(`${API_BASE}/system-status`, authH)
+      const res = await axios.get(`${API_BASE}/system-status`)
       setStatus(res.data)
     } catch (err) {
       const s = err.response?.status
@@ -2492,7 +2489,6 @@ function SettingsPage() {
   // Admins land on Email; non-admins only have the Diagnostics tab in Settings
   // (all notification config moved to My Account).
   const [activeTab, setActiveTab] = useState(() => (isAdmin ? 'email' : 'testing'))
-  const authH   = { headers: { Authorization: `Bearer ${token}` } }
 
   // ── Load from server. A callback, not just an effect, because a save that succeeds
   // while the unreadable banner is up means someone repaired the file on disk — and
@@ -2539,14 +2535,14 @@ function SettingsPage() {
   // ── Load API keys meta (admin only)
   useEffect(() => {
     if (!isAdmin) return
-    axios.get(`${API_BASE}/settings/apikeys`, authH)
+    axios.get(`${API_BASE}/settings/apikeys`)
       .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}); setApiKeysAuthError(false) })
       .catch(err => { if (err.response?.status === 401) setApiKeysAuthError(true) })
   }, [])
 
   // ── Load user games for testing tab (available to all users)
   useEffect(() => {
-    axios.get(`${API_BASE}/user/me/games`, authH)
+    axios.get(`${API_BASE}/user/me/games`)
       .then(r => setUserGames(r.data))
       .catch(() => {})
   }, [])
@@ -2615,8 +2611,8 @@ function SettingsPage() {
     if (!Object.keys(apiKeysEdit).length) return
     setApiKeysSaving(true); setApiKeysSaveStatus(null)
     try {
-      await axios.post(`${API_BASE}/settings/apikeys`, apiKeysEdit, authH)
-      const r = await axios.get(`${API_BASE}/settings/apikeys`, authH)
+      await axios.post(`${API_BASE}/settings/apikeys`, apiKeysEdit)
+      const r = await axios.get(`${API_BASE}/settings/apikeys`)
       setApiKeysMeta(r.data); setApiKeysEdit({}); setApiKeysShow({})
       setApiKeysSaveStatus('saved')
       setTimeout(() => setApiKeysSaveStatus(null), 3000)
@@ -2632,10 +2628,10 @@ function SettingsPage() {
   const refreshIgdbToken = async () => {
     setIgdbRefreshing(true); setIgdbRefreshResult(null)
     try {
-      const r = await axios.post(`${API_BASE}/settings/apikeys/refresh-igdb-token`, {}, authH)
+      const r = await axios.post(`${API_BASE}/settings/apikeys/refresh-igdb-token`, {})
       const expiresInDays = r.data.expires_in ? Math.floor(r.data.expires_in / 86400) : null
       setIgdbRefreshResult({ ok: true, msg: `New token saved (${r.data.masked}). Expires in ~${expiresInDays ?? '?'} days.` })
-      const meta = await axios.get(`${API_BASE}/settings/apikeys`, authH)
+      const meta = await axios.get(`${API_BASE}/settings/apikeys`)
       setApiKeysMeta(meta.data)
     } catch (err) {
       setIgdbRefreshResult({ ok: false, msg: apiErrMsg(err) })
@@ -2651,7 +2647,7 @@ function SettingsPage() {
     try {
       const game = userGames.find(g => g.game_id.toString() === selectedGame)
       if (!game) { setCrackError('Game not found'); return }
-      const r = await axios.post(`${API_BASE}/admin/crackrelease-status`, { gameName: game.game_name }, authH)
+      const r = await axios.post(`${API_BASE}/admin/crackrelease-status`, { gameName: game.game_name })
       setCrackInfo(r.data)
     } catch (err) { setCrackError(err.response?.data?.error || err.message || 'Failed') }
     finally { setCrackLoading(false) }
@@ -2666,7 +2662,7 @@ function SettingsPage() {
         service: selectedService, gameId: selectedGame,
         gameName: game.game_name, releaseDate: game.release_date,
         coverUrl: game.cover_url,
-      }, authH)
+      })
       setTestResult(r.data)
     } catch (err) { setTestError(err.response?.data?.error || 'Test notification failed') }
     finally { setTestLoading(false) }

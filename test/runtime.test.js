@@ -423,4 +423,41 @@ check('the password comes from NEW_ROOT_PASSWORD first', () => {
   assert.match(src, /if \(!envPassword\)[\s\S]{0,80}WARNING/, 'an argv password is accepted without a warning');
 });
 
+// The SPA authenticates in ONE place and ends a session in ONE place (ROADMAP P0-6, FE-8).
+// Hand-built `Authorization` headers and ad-hoc `removeItem('token')` calls are how P0-6
+// happened: two pages treated a 403 as a logout, deleted the token behind React's back,
+// and left the app looking signed in with every later request failing.
+console.log('the SPA has one auth header and one way to end a session:');
+{
+  const walk = (dir) => fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => {
+    const rel = `${dir}/${e.name}`;
+    if (e.isDirectory()) return e.name === 'node_modules' || e.name === 'dist' ? [] : walk(rel);
+    return /\.(jsx?|mjs)$/.test(e.name) ? [rel] : [];
+  });
+  const files = walk('frontend').filter((f) => !/eslint\.config|vite\.config/.test(f));
+  const src = Object.fromEntries(files.map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]));
+
+  check('found the frontend sources (guards the guard)', () => {
+    assert.ok(src['frontend/src/App.jsx'] && src['frontend/SharedLibrary.jsx'], 'the frontend walk found nothing');
+  });
+  check('only the axios interceptor (and Swagger UI\'s own client) set a Bearer header', () => {
+    const where = files.filter((f) => /Authorization:?\s*[:=]?\s*`Bearer/.test(src[f]) || /Authorization = `Bearer/.test(src[f]));
+    assert.deepStrictEqual(where.sort(), ['frontend/src/ApiDocsPage.jsx', 'frontend/src/App.jsx'],
+      `hand-built Bearer headers in: ${where.join(', ')} — the interceptor in App.jsx adds it to every /api call`);
+    assert.strictEqual((src['frontend/src/App.jsx'].match(/`Bearer \$\{/g) || []).length, 1,
+      'App.jsx builds a Bearer header outside its interceptor');
+  });
+  check('nothing but App.jsx\'s session code deletes the token', () => {
+    const where = files.filter((f) => /removeItem\(['"]token['"]\)/.test(src[f]));
+    assert.deepStrictEqual(where, ['frontend/src/App.jsx'], `token deleted from: ${where.join(', ')}`);
+    // The interceptor (401), useAuth (expired at boot) and logout. A fourth is a page
+    // deciding on its own that the session is over.
+    assert.strictEqual((src['frontend/src/App.jsx'].match(/removeItem\(['"]token['"]\)/g) || []).length, 3,
+      'App.jsx removes the token somewhere other than the interceptor, useAuth and logout');
+  });
+  check('no `window.setUser` fallback', () => {
+    for (const f of files) assert.ok(!/window\.setUser/.test(src[f]), `${f} still reaches for window.setUser`);
+  });
+}
+
 console.log(`\n${n} runtime assertions passed.`);

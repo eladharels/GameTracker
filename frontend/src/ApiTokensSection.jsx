@@ -50,22 +50,18 @@ export default function ApiTokensSection({ canManageUsers }) {
 
   const [revoking, setRevoking] = useState(null)
 
-  const authH = useCallback(
-    () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }),
-    [],
-  )
 
   const load = useCallback(async () => {
     setListError('')
     try {
-      const res = await axios.get(`${API_BASE}/user/me/tokens`, authH())
+      const res = await axios.get(`${API_BASE}/user/me/tokens`)
       setTokens(Array.isArray(res.data?.tokens) ? res.data.tokens : [])
     } catch (err) {
       setListError(err.response?.data?.error || 'Could not load your tokens.')
     } finally {
       setLoading(false)
     }
-  }, [authH])
+  }, [])
 
   useEffect(() => { load() }, [load])
 
@@ -98,7 +94,7 @@ export default function ApiTokensSection({ canManageUsers }) {
         // End of the chosen day, so a token dated "today" is valid for the rest of it
         // rather than already expired.
         expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59Z`).toISOString() : null,
-      }, authH())
+      })
       setMinted(res.data)
       setCopied(false)
       resetForm()
@@ -116,7 +112,7 @@ export default function ApiTokensSection({ canManageUsers }) {
     if (!window.confirm(`Revoke "${tokenName}"?\n\nAnything using it stops working immediately. This cannot be undone.`)) return
     setRevoking(tokenId)
     try {
-      await axios.delete(`${API_BASE}/user/me/tokens/${tokenId}`, authH())
+      await axios.delete(`${API_BASE}/user/me/tokens/${tokenId}`)
       load()
     } catch (err) {
       setListError(err.response?.data?.error || 'Could not revoke that token.')

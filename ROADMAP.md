@@ -37,12 +37,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 | Section | Items | Done |
 |---|---|---|
-| P0 — Fix first | 6 | 5 |
+| P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 14 | 12 |
-| FE — Frontend | 14 | 1 |
+| FE — Frontend | 14 | 2 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **67** | **34** |
+| **Total** | **67** | **36** |
 
 ---
 
@@ -153,7 +153,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     `latest` or `previous`.
   - `runtime.test.js` fails on any mention of `:latest` in a job other than deploy.
 
-### [ ] P0-6 ✔ Frontend: a 403 deletes the token but the app stays "logged in"
+### [x] P0-6 ✔ Frontend: a 403 deletes the token but the app stays "logged in"
 - **Where:** `frontend/src/App.jsx:388-392` (UserManagementPage) and
   `frontend/SharedLibrary.jsx:92-95`. `window.setUser` is never assigned anywhere.
 - **Problem:**
@@ -170,6 +170,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - A 403 means "not allowed", not "logged out": show an error instead.
   - Gate `/users` on the client with `can_manage_users`.
   - Delete the `window.setUser` fallback.
+- **Done:** a 403 on the users list or the sharing page now shows an error and ends nothing.
+  A 401 is left to the one global interceptor, which already ends the session (and, since
+  SEC-7, tells the login page why). `/users` and `/system-status` are gated on
+  `can_manage_users` in the router and redirect a non-admin to `/search`; the server still
+  decides. The global-setter fallback is gone. `test/runtime.test.js` now fails if any file
+  but App.jsx deletes the token, if App.jsx does it anywhere beyond its three session paths,
+  or if the fallback returns.
 
 ---
 
@@ -772,11 +779,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** reuse the `handleModalFocusTrap` pattern (`App.jsx:343`). Focus the dialog when it
   opens and restore focus to the opener when it closes.
 
-### [ ] FE-8 Duplicated Bearer headers and 403-logout logic
+### [x] FE-8 Duplicated Bearer headers and 403-logout logic
 - **Where:** `App.jsx:366`, `:2001`, `:2188`, `:2434`, and `SharedLibrary.jsx`.
 - **Problem:** these build their own headers even though the interceptor already adds them.
   This duplication is how P0-6 happened.
 - **Fix:** rely on the interceptor and on one error handler.
+- **Done (with P0-6):** 24 hand-built headers removed across App.jsx, SharedLibrary.jsx and
+  ApiTokensSection.jsx. The interceptor adds the header to every same-origin `/api` call,
+  and Swagger UI's own client on the API page is the one deliberate exception. Pinned in
+  `test/runtime.test.js`. Four lint warnings went with them.
 
 ### [ ] FE-9 `SharedLibrary.jsx` lives outside `src/`
 - **Fix:** move it to `frontend/src/` and fix its imports (it currently imports
@@ -995,3 +1006,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | SEC-9 | this batch | 2026-09-26 | Root reset reads `NEW_ROOT_PASSWORD`; argv warns |
 | SEC-10 | this batch | 2026-09-26 | Debug route kept (v1 freeze), logging removed, now a service adapter |
 | SEC-11 | this batch | 2026-09-26 | `.env*` ignored in git and every image build context |
+| P0-6, FE-8 | this batch | 2026-09-26 | A 403 no longer logs out; admin routes gated; one auth header, one session-ending path |
