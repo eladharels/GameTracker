@@ -746,6 +746,77 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - **Why the JWT stays a JWT:** the server stays stateless (see "Stateless API"), and a
     revocable server-side session store is a larger change for no gain the 12h expiry and
     the per-request privilege re-read do not already give.
+- **Design sign-off (2026-09-26): CISO, Architect and UI/UX APPROVE WITH CONDITIONS.** These
+  amend the design above; where they differ, the conditions win.
+  1. **Cookie:** `__Host-gt_session`, `Path=/` (not `/api`), and `Max-Age` = the seconds
+     until the JWT's exp. Insecure mode uses a plain `gt_session`, and the server reads only
+     the name for its mode. The same name twice in `Cookie` is treated as unauthenticated.
+  2. **CSRF, on EVERY method:** `X-Requested-With: GameTracker` must match exactly, AND a
+     `Sec-Fetch-Site` header, if present, must be `same-origin`. Refusal is 403 `{error}`,
+     from inside `authRequired`.
+  3. **Credentialed CORS stays off,** and that is pinned.
+  4. **Cookie login:**
+     - It requires the CSRF header, which closes login CSRF from a sibling subdomain.
+     - A `session` value other than `"cookie"` → 400.
+     - No opt-in → byte-for-byte `{token}` and NO `Set-Cookie`.
+     - Both body shapes are exact-pinned, and the P0-1 checks are re-run in cookie mode.
+  5. **An `Authorization` header alone decides when present:** an invalid Bearer never falls
+     through to the cookie. The cookie takes a JWT only. `req.auth.kind` stays `'jwt'`, with
+     `via: 'bearer' | 'cookie'`.
+  6. **Every 401 on the cookie path also clears the cookie.**
+  7. **`GET /api/auth/session` and `POST /api/auth/logout`:**
+     - both are auth tier, behind a named `cookieSessionOnly` middleware;
+     - the session route answers the privilege re-read from the database (`req.user`), plus
+       `exp` and a server-clock `expiresIn`;
+     - neither sends its own 401.
+  8. **`services/session.js`** owns issuing and verifying, the Set-Cookie strings, the cookie
+     parser and the claims projection. Both `jwt.sign` sites in login collapse into one
+     `issue(user)`. No dependency is added, and the parser gets unit tests.
+  9. **Headers:** `Cache-Control: no-store` on login (both modes) and on the session route.
+     Nothing logs `Cookie` or `Set-Cookie`.
+  10. **`SESSION_COOKIE_INSECURE`:** unset, empty or `0` = secure; `1` = insecure; anything
+      else fails fast at startup. A WARN on every boot, and shown on System Status. Passed in
+      both compose files, with the test stack leaving it empty.
+  11. **v2 isolation** is tested: cookie + CSRF header on a v2 route → 401 problem+json, in
+      `api-contract.test.js` and in the smoke test.
+  12. **Smoke:**
+      - the `{token}` path stays;
+      - a cookie-mode step checks:
+        - the attributes;
+        - session 200;
+        - no header → 403;
+        - v2 → 401;
+        - logout clears the cookie.
+  13. **SPA `api.js`:**
+      - the CSRF header goes on own-API URLs only, and `Authorization` is never built;
+      - the 401 handler runs only while an in-memory session exists;
+      - logout skips the interceptor and swallows errors.
+  14. **SPA session state:**
+      - one in-memory store;
+      - the legacy token is deleted at boot, inside `session.js` only, with a neutral
+        one-time "sign-in has been updated" line;
+      - a non-secret `session_hint` `{username, exp}` is allowed for FE-14 and the expiry
+        notice.
+  15. **SPA runtime pins rewritten:**
+      - no `token` key anywhere;
+      - only `api.js` sets the CSRF header;
+      - only ApiDocsPage's try-it-out builds `Authorization`, from a typed PAT;
+      - the spec fetch gets the CSRF header only.
+  16. **Boot probe:** the routes wait behind a loading state. 401 → login. A network error or
+      5xx → "Can't reach the server — Retry", NEVER the login page.
+  17. **The expiry timer uses the server's `expiresIn`.** After a cookie login, the session
+      is set only once the probe succeeds; a 401 there means "your browser refused the
+      sign-in cookie", with the admin fix.
+  18. **Multi-tab:** login and logout are broadcast; other tabs re-probe.
+  19. **Docs:**
+      - CLAUDE.md's Authentication section, env list and freeze record;
+      - known limitations:
+        - logout does not revoke a copied JWT before exp;
+        - insecure mode allows cookie tossing.
+- **Plan:** two phases, each reviewed.
+  1. **Server:** conditions 1-12 and the server half of 19. It is additive: the SPA still
+     uses Bearer.
+  2. **SPA:** conditions 13-18 and the rest of 19.
 
 ### [x] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
 - **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).
