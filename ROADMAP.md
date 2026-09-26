@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 16 | 13 |
-| FE — Frontend | 21 | 12 |
+| SEC — Security (medium/low) | 16 | 14 |
+| FE — Frontend | 22 | 12 |
 | UP — Tidying & upkeep | 22 | 1 |
-| **Total** | **81** | **48** |
+| **Total** | **82** | **49** |
 
 ---
 
@@ -722,13 +722,25 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   of them re-requests on every reload and hits the budget first. If that is reported, stop
   re-requesting known misses (a server-side checked-at time). **Do not raise the budget.**
 
-### [ ] SEC-16 React Router HIGH advisory in the shipped SPA (found by `npm audit`, UP-20)
+### [x] SEC-16 React Router HIGH advisory in the shipped SPA (found by `npm audit`, UP-20)
 - **Where:** `frontend/package.json` `react-router-dom@^6.30.1` → `@remix-run/router <=1.23.2`:
   GHSA-2w69-qvjg-hvjx and GHSA-2j2x-hqr9-3h42 (open redirect / XSS via a same-origin redirect
   whose path starts with `//`). A production dependency: it ships in the nginx image.
 - **Exposure here:** the one path-from-storage navigation (`navigate(sessionEnd.from)`) is
   already guarded by `session.js#safeReturnPath`, which refuses `//` and `/\`.
 - **Fix:** bump to the patched 6.x and re-run the component tests and the build.
+- **Done:** `react-router-dom` 6.30.6 (`@remix-run/router` 1.23.4) clears both HIGH advisories.
+  `npm audit fix` (non-breaking only) also cleared two more HIGH ones and a moderate one in the
+  shipped bundle, all via Swagger UI on the API Reference page: `brace-expansion`, `js-yaml`
+  (which parses the spec in the browser) and `dompurify`. Lint, the build and the component
+  tests pass. **Remaining:** one moderate React Router advisory whose fix is v7, a breaking
+  upgrade (FE-22).
+
+### [ ] FE-22 React Router 7 (moderate advisory; breaking upgrade)
+- **Why:** `npm audit --omit=dev` still reports `react-router 6.0.0–7.17.0` (moderate); the fix
+  is v7. The v7 future flags (`v7_startTransition`, `v7_relativeSplatPath`) already warn in
+  the component tests.
+- **Fix:** opt in to the future flags on v6 first, run the component tests, then upgrade.
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
@@ -1218,3 +1230,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-13, FE-15, FE-17 | this batch | 2026-09-26 | Admin-only token badge; dead 401 banner removed; one endSession() |
 | SEC-15 | this batch | 2026-09-26 | Per-user limit on both crack-status routes |
 | UP-20 | this batch | 2026-09-26 | Vitest + jsdom component tests in CI; FE-7 and the login page converted from shape pins |
+| SEC-16 | this batch | 2026-09-26 | React Router 6.30.6; npm audit fix clears 4 HIGH/moderate advisories in the shipped SPA |
