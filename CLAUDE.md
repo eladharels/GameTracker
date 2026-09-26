@@ -10,9 +10,11 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 
 ### Backend
 - **Runtime**: the images ship Node.js 22 (active LTS); `package.json` engines declares the
-  FLOOR, `>=20`. The two are deliberately different — the floor is the oldest runtime the code
-  is allowed to run on, not the one it ships. Node 18 went EOL 2025-04-30 and is below the
-  floor. `test/runtime.test.js` enforces the pairing
+  FLOOR, `>=22`. The two are deliberately different — the floor is the oldest runtime the code
+  is allowed to run on, not the one it ships. Node 20 went EOL 2026-04-30 and is below the
+  floor (ROADMAP UP-2); 22 reaches EOL 2027-04-30, and `MIN_SUPPORTED_MAJOR` in
+  `test/runtime.test.js` must be raised then — no test notices a date by itself. The same
+  file enforces the pairing for the backend, MCP and frontend-build images
 - **Framework**: Express.js 5.x
 - **Database**: PostgreSQL 16 (`pg` driver, promise-based; `db.js` exposes a node-sqlite3-shaped
   callback shim so the legacy call sites in `index.js` did not have to be rewritten).
@@ -204,12 +206,10 @@ GameTracker/
 │   │                               #   the interpreter. engines must be a plain `>=N`:
 │   │                               #   `18.x || >=20` reads like a floor of 20 and still
 │   │                               #   permits 18.
-│   │                               #   NOT the frontend's `node:20` BUILD stage: nothing
-│   │                               #   of it reaches production (nginx serves the emitted
-│   │                               #   assets) and frontend/package.json declares no
-│   │                               #   engines floor to check it against. Add one there and
-│   │                               #   this list should grow to match — the gate is keyed
-│   │                               #   on the pairing, not on the Dockerfile alone.
+│   │                               #   INCLUDING the frontend's BUILD stage (UP-2): nothing
+│   │                               #   of it ships, but it runs npm ci on the production
+│   │                               #   host, and it sat on EOL node:20 while this gate
+│   │                               #   omitted it. It installs with --ignore-scripts.
 │   │                               #   ALSO: every env var the backend reads must be in the
 │   │                               #   backend `environment:` of BOTH compose files, or in
 │   │                               #   its NOT_PASSED table with a reason
@@ -377,7 +377,7 @@ GameTracker/
 │                                   #   fast-uri resolved 4.1.2 — a major past ajv's ^3.0.1,
 │                                   #   under the SDK's input validator, to fix a URI CVE.
 │                                   #   Pin inside the major the advisory names.
-│                                   #   Runs node:22-slim and REQUIRES >=20 — the SDK's HTTP
+│                                   #   Runs node:22-slim, floor >=22; HARD minimum 19 — the SDK's HTTP
 │                                   #   transport calls the GLOBAL crypto.randomUUID(), and
 │                                   #   globalThis.crypto is only exposed from Node 19. On
 │                                   #   node:18-slim /health answered 200 while EVERY MCP

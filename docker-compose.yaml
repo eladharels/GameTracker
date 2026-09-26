@@ -141,8 +141,12 @@ services:
       # the common case is an MCP client on this same host.
       #
       # To reach it from another machine, set MCP_BIND to the LAN address it should
-      # answer on (e.g. MCP_BIND=192.168.1.30) or 0.0.0.0 for every interface.
-      # MCP_PUBLIC_HOST below follows it automatically, so one variable is enough.
+      # answer on (e.g. MCP_BIND=192.168.1.30). MCP_PUBLIC_HOST below follows it, so for a
+      # single LAN address one variable is enough. 0.0.0.0 (every interface) is NOT: it is
+      # a bind address no client ever sends as its Host, so the DNS-rebinding allowlist
+      # derives nothing from it and refuses every LAN request. With 0.0.0.0 also set
+      # MCP_ALLOWED_HOSTS to the address(es) or name clients use; the server warns at
+      # startup when it is missing (ROADMAP UP-3).
       #
       # A personal access token then crosses the network in a cleartext header. On a
       # trusted LAN that may be acceptable; over anything else, put TLS in front.

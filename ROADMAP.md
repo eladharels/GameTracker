@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 23 | 2 |
-| **Total** | **83** | **50** |
+| UP — Tidying & upkeep | 23 | 7 |
+| **Total** | **83** | **55** |
 
 ---
 
@@ -1004,31 +1004,73 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
 ## UP — Tidying & upkeep
 
-### [ ] UP-1 Stale `.trivyignore` entry
+### [x] UP-1 Stale `.trivyignore` entry
 - **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,
   and because the suppression applies to all three images it would hide a future picomatch.
 - **Fix:** remove it.
+- **Done:** removed. Checked that `picomatch` is in none of the image dependency trees:
+  - the backend and MCP lockfiles have none;
+  - the frontend lockfile has 4.0.7, a fixed version, dev-only and in the build stage only.
+  The file now keeps a header stating that an entry applies to all three scans, and what
+  every entry must record.
 
-### [ ] UP-2 Frontend build stage uses `node:20` (EOL 2026-04-30)
+### [x] UP-2 Frontend build stage uses `node:20` (EOL 2026-04-30)
 - **Where:** `frontend/Dockerfile:2`.
 - **Fix:**
   - Bump to `node:22`.
   - Add an `engines` floor to `frontend/package.json` and extend `test/runtime.test.js`.
   - Consider `npm ci --ignore-scripts`.
   - Consider pinning base images by digest.
+- **Done:**
+  - **Frontend build stage:** now `node:22-slim`. Nothing from the build stage ships, but it
+    runs `npm ci` over the whole tree on the production host. `swagger-client`, which does
+    ship, declares `engines >=22`: it was being built on an unsupported Node.
+  - **The floor itself was stale, which is the bigger finding.**
+    `test/runtime.test.js#MIN_SUPPORTED_MAJOR` read 20 ("the lowest Node still receiving
+    security updates") five months after 20's EOL. The backend and MCP `engines` said
+    `>=20`. All three packages, the frontend included, now declare `>=22`, and the constant
+    is 22. Its comment and CLAUDE.md name the next date, 2027-04-30, because no test notices
+    a date by itself.
+  - **The frontend is now in the runtime gate's `IMAGES`:** Dockerfile base ≥ floor, floor
+    supported, CI's major equal. Mutation-checked: `FROM node:20` and `"node": ">=20"`
+    each fail.
+  - **`npm ci --ignore-scripts` in the frontend image.** Six packages had install scripts,
+    and none is needed for a browser bundle:
+    - `@scarf/scarf` is a telemetry beacon that phoned home from every image build.
+    - `tree-sitter` and its grammars compiled a native Node binding through node-gyp. It
+      only worked because the full `node:20` image carried a compiler, and it never reached
+      the page, since the browser gets Swagger's parser as its own bundle.
+    - The rest are a banner, esbuild's binary self-check, and macOS-only `fsevents`.
 
-### [ ] UP-3 `MCP_BIND=0.0.0.0` docs are wrong
+    Verified: a scriptless install, then the build, the component tests, and `/api-docs` in a
+    real browser (35 operations parsed from the YAML spec). The image build itself is left to
+    CI; there is no Docker daemon here.
+  - **Digest pinning: not adopted, deliberately.** There is no Renovate or Dependabot here to
+    move a digest. A pinned `nginx-unprivileged:alpine` would silently stop receiving the
+    Alpine fixes that the `apk upgrade` layer and Trivy currently surface. Revisit it
+    together with automated base-image bumps.
+
+### [x] UP-3 `MCP_BIND=0.0.0.0` docs are wrong
 - **Where:** `docker-compose.yaml:131-133` and `mcp/README.md:159` say it "just works", but
   `mcp/server.js:57` drops `0.0.0.0` from the derived Host allowlist.
 - **Fix:** document that LAN use needs `MCP_ALLOWED_HOSTS`.
+- **Done:** `docker-compose.yaml` and `mcp/README.md` now say that `0.0.0.0` alone refuses
+  every LAN request, and show the `MCP_ALLOWED_HOSTS` form. The server also logs a startup
+  warning when `MCP_BIND` is `0.0.0.0` and `MCP_ALLOWED_HOSTS` is empty. The allowlist itself
+  is unchanged: deriving nothing from `0.0.0.0` is correct.
 
-### [ ] UP-4 Stale workflow comment about sqlite3
+### [x] UP-4 Stale workflow comment about sqlite3
 - **Where:** `docker-build-deploy.yml:227-230` says the backend "depends on sqlite3", but it
   is a devDependency.
 - **Fix:** correct the comment.
+- **Done:** the comment now says `sqlite3` is a devDependency. The backend Dockerfile's
+  `--omit=dev` never sees it, and `--ignore-scripts` only spares CI a node-gyp build for tests
+  that never load it.
 
-### [ ] UP-5 Backend `.dockerignore` misses `mcp/node_modules`
+### [x] UP-5 Backend `.dockerignore` misses `mcp/node_modules`
 - **Fix:** add `mcp/node_modules` (and `**/node_modules`).
+- **Done:** `**/node_modules` and `**/dist` replace the two per-directory lines, so no nested
+  package can ship its host-built `node_modules` into the backend image.
 
 ### [ ] UP-6 Two smoke stacks can't run concurrently
 - **Where:** hard-coded `container_name`s in `docker-compose.test.yml`. The workflow comment
@@ -1308,3 +1350,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-20 | this batch | 2026-09-26 | Vitest + jsdom component tests in CI; FE-7 and the login page converted from shape pins |
 | SEC-16 | this batch | 2026-09-26 | React Router 6.30.6; npm audit fix clears 4 HIGH/moderate advisories in the shipped SPA |
 | UP-23 | this batch | 2026-09-26 | Vite 6.4.3 + Vitest 4.1.11: clears the HIGH dev-server and the mocker advisories; no production entry moved |
+| UP-1–5 | this batch | 2026-09-26 | Node floor 20→22 everywhere (20 is EOL) and the frontend build stage in the runtime gate; scriptless frontend install; stale trivyignore, workflow comment, `.dockerignore`, `MCP_BIND` docs |

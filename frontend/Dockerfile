@@ -1,13 +1,23 @@
-# Node.js 20 LTS build stage (Vite 6 and Vitest 4 both support ^20). Nothing from this
-# stage reaches production: nginx serves the emitted assets
-FROM node:20 AS build
+# Build stage. Nothing from it reaches production (nginx serves the emitted assets), but
+# it must still be a SUPPORTED Node: 20 went EOL 2026-04-30, and swagger-client — which
+# ships in the bundle — declares engines >=22. The major must match CI's setup-node and
+# package.json's engines floor; test/runtime.test.js enforces both (ROADMAP UP-2).
+FROM node:22-slim AS build
 
 WORKDIR /app
 
 COPY package*.json ./
 
-# Install dependencies (including dev dependencies needed for build)
-RUN npm ci
+# All dependencies (dev included: the build needs Vite), with install scripts OFF.
+# Six packages have one, and none is needed for a browser bundle:
+#   - @scarf/scarf is an install-time telemetry beacon that phones home;
+#   - tree-sitter and its grammars compile a NATIVE Node binding via node-gyp. The
+#     browser gets Swagger's parser as its own bundle, so that binding never reached
+#     the page, and it only built because the old full `node:20` image carried a compiler;
+#   - core-js-pure prints a banner; esbuild's postinstall only verifies its binary, which
+#     comes from the platform optionalDependency either way; fsevents is macOS-only.
+# Verified by building with scripts off and loading /api-docs, which parses the YAML spec.
+RUN npm ci --ignore-scripts
 
 COPY . .
 

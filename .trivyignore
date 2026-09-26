@@ -1,7 +1,6 @@
-# CVE-2026-33671: picomatch ReDoS via crafted extglob patterns
-# Fixed in picomatch 4.0.4, 3.0.2, 2.3.2 — fix not yet resolvable via npm override
-# because node-gyp → glob@11 pins picomatch@^4 and 4.0.4 is not yet propagated.
-# picomatch is a transitive dep of node-gyp (sqlite3 build tooling only);
-# production traffic cannot supply crafted patterns to it.
-# Remove this entry once picomatch@4.0.4 is resolvable and the override takes effect.
-CVE-2026-33671
+# Documented CVE suppressions. This file applies to ALL THREE image scans (trivy-api,
+# trivy-web, trivy-mcp), so an entry hides that CVE everywhere — including in an image
+# that later gains the package for an unrelated reason. Every entry needs: the package,
+# why it is unreachable, and the condition for removing it. Remove entries as soon as
+# that condition holds (ROADMAP UP-1 removed CVE-2026-33671, picomatch via sqlite3's
+# node-gyp, once sqlite3 became a devDependency and picomatch left every image).

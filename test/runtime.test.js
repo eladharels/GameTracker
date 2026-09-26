@@ -36,12 +36,18 @@ const ROOT = path.join(__dirname, '..');
 const IMAGES = [
   { name: 'backend', dockerfile: 'Dockerfile', pkg: 'package.json' },
   { name: 'mcp', dockerfile: 'mcp/Dockerfile', pkg: 'mcp/package.json' },
+  // The frontend's BUILD stage (the first FROM). Nothing of it ships, but it runs npm ci
+  // over the whole dependency tree on the production host, and swagger-client — which
+  // does ship — declares engines >=22. It sat on EOL node:20 because this list omitted it.
+  { name: 'frontend', dockerfile: 'frontend/Dockerfile', pkg: 'frontend/package.json' },
 ];
 
-// Below this, a supported runtime is not what you are running. 20 is the lowest Node
-// still receiving security updates; 19 is where globalThis.crypto arrived, so this
-// floor also covers the specific defect above with a margin.
-const MIN_SUPPORTED_MAJOR = 20;
+// Below this, a supported runtime is not what you are running. 22 is the lowest Node
+// still receiving security updates: 20 went EOL on 2026-04-30 (ROADMAP UP-2), and this
+// constant still said 20 five months later — a date is not something a test notices by
+// itself, so RAISE THIS when 22 reaches EOL (2027-04-30). 19 is where globalThis.crypto
+// arrived, so the floor also covers the MCP defect above with a margin.
+const MIN_SUPPORTED_MAJOR = 22;
 
 // engines.node must be a SIMPLE `>=N` floor and nothing else.
 //

@@ -17,10 +17,10 @@ crackwatch-cache.json
 system-status-cache.json
 
 # Dependencies (installed via `npm install` in the image) and build output
-node_modules
-frontend/node_modules
-dist
-frontend/dist
+# `**/` so a nested package (mcp/, frontend/, any future one) can never ship its host-built
+# node_modules — possibly another platform's binaries — into the backend image (UP-5).
+**/node_modules
+**/dist
 
 # VCS / CI / tooling
 .git
