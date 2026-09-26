@@ -982,6 +982,37 @@ checkAsync('the single-game read keeps its six-field shape and reads through the
   assert.strictEqual(res.body.username, 'jane');
 });
 
+checkAsync('a failed read is 500 {error:"DB error"} and the request is never logged', async () => {
+  // The point of SEC-10: the route used to log the username, the raw :gameId and the
+  // row on EVERY request. Nothing request-derived may reach the log now, on either path.
+  const libraryService = require('../services/library');
+  const logged = [];
+  const real = { get: db.get, find: libraryService.findGame, log: console.log, info: console.info, error: console.error };
+  console.log = console.info = console.error = (...a) => logged.push(a.join(' '));
+  db.get = (sql, params, cb) => cb(null, { id: 7, username: 'jane' });
+  const call = async (find) => {
+    libraryService.findGame = find;
+    const res = recordingRes();
+    await handlerFor('get', '/api/debug/user/:username/game/:gameId')(
+      { params: { username: 'jane', gameId: 'igdb_MARKER' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+    return res;
+  };
+  let ok, failed;
+  try {
+    ok = await call(async () => ({ game_id: 'igdb_MARKER', game_name: 'Halo', status: 'done', user_id: 7 }));
+    failed = await call(async () => { throw new Error('boom'); });
+  } finally {
+    Object.assign(console, { log: real.log, info: real.info, error: real.error });
+    db.get = real.get; libraryService.findGame = real.find;
+  }
+  assert.strictEqual(ok.statusCode, 200);
+  assert.strictEqual(failed.statusCode, 500);
+  assert.deepStrictEqual(failed.body, { error: 'DB error' });
+  const leaked = logged.filter((l) => /igdb_MARKER|jane|Halo/.test(l));
+  assert.deepStrictEqual(leaked, [], 'request data reached the log');
+});
+
 checkAsync('an absent game is still 404 {error}', async () => {
   const { res } = await debugRead(undefined);
   assert.strictEqual(res.statusCode, 404);

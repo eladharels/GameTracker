@@ -3528,6 +3528,42 @@ checkAsync('readSession decodes base64URL, not base64 — `-` and `_` payloads a
   assert.strictEqual(readSession(token, now).username, 'jäne>?');
 });
 
+checkAsync('the login page is told why a session ended, once, and returns only to in-app paths', async () => {
+  const { safeReturnPath, markSessionEnded, takeSessionEnd } = await import('../frontend/src/session.js');
+  // Open-redirect guard: navigate() after login takes this value.
+  assert.strictEqual(safeReturnPath('/settings'), '/settings');
+  assert.strictEqual(safeReturnPath('/game/igdb_1?x=1'), '/game/igdb_1?x=1');
+  for (const bad of ['//evil.example', '/\\evil.example', 'https://evil.example', 'settings', '/login', '/login?x',
+    '/a\u0000b', '/a\nb', null, 7]) {
+    assert.strictEqual(safeReturnPath(bad), null, `${JSON.stringify(bad)} was accepted as a return path`);
+  }
+  // A fake sessionStorage: the helpers must work with it, and must not throw without it.
+  const store = new Map();
+  const had = Object.prototype.hasOwnProperty.call(globalThis, 'sessionStorage');
+  const prev = globalThis.sessionStorage;
+  try {
+    delete globalThis.sessionStorage;
+    markSessionEnded('/library');               // no storage: silently nothing
+    assert.strictEqual(takeSessionEnd(), null);
+    globalThis.sessionStorage = {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    };
+    assert.strictEqual(takeSessionEnd(), null, 'a notice appeared with no session having ended');
+    markSessionEnded('/settings');
+    assert.deepStrictEqual(takeSessionEnd(), { from: '/settings' });
+    assert.strictEqual(takeSessionEnd(), null, 'the notice is shown more than once');
+    // Re-validated on READ: storage is writable by anything in the origin.
+    store.set('session_end', JSON.stringify({ from: '//evil.example' }));
+    assert.deepStrictEqual(takeSessionEnd(), { from: null });
+    store.set('session_end', '{not json');
+    assert.strictEqual(takeSessionEnd(), null);
+  } finally {
+    if (had) globalThis.sessionStorage = prev; else delete globalThis.sessionStorage;
+  }
+});
+
 checkAsync('safeExternalUrl: only absolute http(s) reaches an href (SEC-8)', async () => {
   const { safeExternalUrl } = await import('../frontend/src/safeUrl.js');
   assert.strictEqual(safeExternalUrl('https://crackrelease.com/halo/'), 'https://crackrelease.com/halo/');

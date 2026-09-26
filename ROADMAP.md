@@ -635,7 +635,11 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Problem:** argv is visible in `/proc` and in shell history.
 - **Fix:** read it from an environment variable or stdin, as `create-local-admin.js` does.
 - **Done:** it reads `NEW_ROOT_PASSWORD`. argv is still accepted with a warning, because this
-  is the break-glass path and a runbook using it must not be stranded mid-lockout.
+  is the break-glass path and a runbook using it must not be stranded mid-lockout. The README
+  runbook adds `unset NEW_ROOT_PASSWORD` afterwards.
+- **Before production (CISO):** on GameTracker-stg, confirm that the host's compose passes a
+  value-less `exec -e NEW_ROOT_PASSWORD` through. If it does not, the break-glass path fails
+  with "at least 8 characters" in the middle of a lockout.
 
 ### [x] SEC-10 `/api/debug/...` route still shipped
 - **Where:** `index.js:1054`.
@@ -648,14 +652,21 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   at info level, and its own SQL. It is now an adapter over `libraryService.findGame`, the
   read v2 uses, with its six-field shape pinned in `test/api-contract.test.js`. Remove it
   only if a v1 sunset is ever decided.
+- **Follow-up (CISO, non-blocking):** announce it in `/api/capabilities` `deprecations[]`,
+  pointing at `GET /api/v2/library/games/:gameId`, and gather hit counts (route only, no
+  username or game id) so a sunset can be decided on evidence. Not done here:
+  `deprecations[]` has no defined element shape yet, and inventing one in passing would
+  freeze it by accident. It needs an Architect decision first.
 
 ### [x] SEC-11 `.env` variants not ignored
 - **Where:** `.gitignore` and `.dockerignore` only cover `.env`, `.env.local` and
   `.env.*.local`.
 - **Failure:** a `.env.production` is committed and copied into the image.
 - **Fix:** ignore `.env*`, with an exception for `!.env.example` if one is added.
-- **Done:** `.env*` in `.gitignore` and in all three `.dockerignore` files; `test/runtime.test.js`
-  checks each and allows only `!.env.example` as a negation.
+- **Done:** `.env*` in `.gitignore` and `**/.env*` in all three `.dockerignore` files.
+  `.dockerignore` patterns are anchored at the context root, so a bare `.env*` there left
+  `frontend/.env.production` in the backend context (caught in review).
+  `test/runtime.test.js` checks each file and allows only `!.env.example` as a negation.
 
 ### [ ] SEC-14 Move the web session to an HttpOnly cookie (split from SEC-7)
 - **Where:** `frontend/src/App.jsx` (`localStorage` token), `index.js#authRequired`.
@@ -664,6 +675,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** an `HttpOnly; Secure; SameSite=Strict` cookie for the SPA, with CSRF protection,
   and Bearer kept for Android, scripts and PATs. This is a design change: it needs Architect
   and CISO sign-off before any code.
+- **Constraint (CISO):** `/api/v2` must never accept the cookie. v2 is PAT-only by design, and a
+  session cookie there is exactly the scope-less JWT that design excludes.
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).

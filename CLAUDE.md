@@ -186,6 +186,10 @@ GameTracker/
 │   │                               #   what a stub CANNOT see — ON CONFLICT semantics,
 │   │                               #   CHECK constraints, what a query RETURNS — is why
 │   │                               #   test/integration/ exists
+│   │                               #   It also pins the DOM-free frontend helpers
+│   │                               #   (session.js, safeUrl.js) through import(); a module
+│   │                               #   loaded that way must not touch window, document or
+│   │                               #   storage at MODULE scope, or this suite breaks.
 │   ├── runtime.test.js             # The RUNTIME the images ship. Cross-checks the BACKEND
 │   │                               #   and MCP Dockerfiles' `FROM node:<major>` against that
 │   │                               #   package's engines floor, that the floor is a
@@ -300,6 +304,14 @@ GameTracker/
 │   │   │                           #   an instant belongs to, or when a week starts.
 │   │   │                           #   Bucketing is CLIENT-side on purpose: date_trunc
 │   │   │                           #   would bucket in the server's timezone
+│   │   ├── session.js              # The ONE client-side JWT decode (readSession): checks
+│   │   │                           #   `exp` and decodes base64URL — the inline atob() it
+│   │   │                           #   replaced threw on `-`/`_` payloads. DECODES, never
+│   │   │                           #   verifies: it decides what the UI shows, the server
+│   │   │                           #   decides everything else. Also records WHY a session
+│   │   │                           #   ended so the login page can say so (sessionStorage)
+│   │   ├── safeUrl.js              # safeExternalUrl — the ONLY way a server-supplied URL
+│   │   │                           #   may reach an `href` (http/https only)
 │   │   ├── ApiDocsPage.jsx         # The API Reference page: Swagger UI over the live v2
 │   │   │                           #   contract from GET /api/openapi/v2, so the page and CI
 │   │   │                           #   validate the SAME document. VENDORED, never CDN-loaded:

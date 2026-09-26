@@ -40,3 +40,47 @@ export function msUntilExpiry(token, nowMs = Date.now()) {
   const payload = readSession(token, nowMs)
   return payload ? Math.max(0, payload.exp * 1000 - nowMs) : null
 }
+
+// ── Why the login page is showing (UI/UX review of SEC-7) ───────────────────────────
+// A session that ENDS — expired while the app was open, found expired at boot, or
+// refused by the server — must not look like a random logout: an unexplained state
+// change is read as data loss here (see CLAUDE.md on the "my games were deleted"
+// report). The ending path records why, and where the user was; the login page reads
+// it once. sessionStorage, because the 401 path reloads the page and would wipe any
+// React state or toast. A MANUAL logout records nothing.
+
+const END_KEY = 'session_end'
+
+// An in-app path worth returning to after login, or null. Only a same-origin absolute
+// path: not protocol-relative (`//host`, `/\host` — browsers treat `\` as `/`), not the
+// login page itself, nothing with control characters.
+export function safeReturnPath(path) {
+  if (typeof path !== 'string' || !path.startsWith('/')) return null
+  if (path.startsWith('//') || path.includes('\\')) return null
+  for (let i = 0; i < path.length; i++) {
+    const code = path.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) return null   // control characters
+  }
+  if (path === '/login' || path.startsWith('/login/') || path.startsWith('/login?')) return null
+  return path
+}
+
+export function markSessionEnded(fromPath) {
+  try {
+    sessionStorage.setItem(END_KEY, JSON.stringify({ from: safeReturnPath(fromPath) }))
+  } catch { /* storage unavailable: the redirect still happens, just unexplained */ }
+}
+
+// Read AND clear, so the notice shows once. Returns {from} or null. The stored value is
+// re-validated: sessionStorage is writable by anything running in the origin.
+export function takeSessionEnd() {
+  try {
+    const raw = sessionStorage.getItem(END_KEY)
+    sessionStorage.removeItem(END_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return { from: safeReturnPath(parsed && parsed.from) }
+  } catch {
+    return null
+  }
+}

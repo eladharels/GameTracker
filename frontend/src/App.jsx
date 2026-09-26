@@ -9,7 +9,7 @@ import GameDetailModal from './GameDetailModal'
 import { formatDurationShort, formatDurationLong, formatDateReadable, formatDateLocal } from './dateUtils'
 import ApiTokensSection from './ApiTokensSection'
 import StatsPage from './StatsPage'
-import { readSession, msUntilExpiry } from './session'
+import { readSession, msUntilExpiry, markSessionEnded, takeSessionEnd } from './session'
 import { safeExternalUrl } from './safeUrl'
 // LAZY, deliberately. swagger-ui-react is larger than the rest of this application
 // put together, and it is needed on exactly one page that most sessions never open.
@@ -57,6 +57,8 @@ axios.interceptors.response.use(
     if (err?.response?.status === 401 && localStorage.getItem('token')) {
       localStorage.removeItem('token');
       if (!window.location.pathname.startsWith('/login')) {
+        // Tells the login page why it is showing (the reload wipes React state).
+        markSessionEnded(window.location.pathname);
         window.location.assign('/login');
       }
     }
@@ -91,20 +93,26 @@ function normalizeStatus(status) {
 
 // ${window.location.protocol} ${window.location.hostname}
 function useAuth() {
-  const [user, setUser] = useState(null)
-  useEffect(() => {
+  // Read during the FIRST render, not in an effect: with `null` on the first pass the
+  // logged-out `*` route redirected every deep link to /login before the token was read.
+  //
+  // readSession checks `exp` (SEC-7): an expired or malformed token is dropped here
+  // instead of rendering the whole app until the first request comes back 401.
+  const [user, setUser] = useState(() => {
     const token = localStorage.getItem('token')
-    // readSession checks `exp` (SEC-7): an expired or malformed token is dropped here
-    // instead of rendering the whole app until the first request comes back 401.
     const payload = readSession(token)
-    if (token && !payload) localStorage.removeItem('token')
-    setUser(payload)
-  }, [])
+    if (token && !payload) {
+      localStorage.removeItem('token')
+      markSessionEnded(window.location.pathname)
+    }
+    return payload
+  })
   return [user, setUser]
 }
 
 function App() {
   const [user, setUser] = useAuth()
+  const { showToast } = useToast()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -134,17 +142,42 @@ function App() {
     navigate('/login')
   }, [setUser, navigate])
 
+  // The session ENDED rather than being left: the login page says so, and offers the
+  // way back. Separate from `logout`, which is also a click handler (`onClick={logout}`
+  // would hand it the event) and must stay silent — a manual logout is not an expiry.
+  const expireSession = useCallback(() => {
+    markSessionEnded(window.location.pathname)
+    logout()
+  }, [logout])
+
   // End the session when the token expires while the app is open, rather than when the
   // next request happens to be refused. Re-armed whenever the signed-in user changes.
+  // Two minutes ahead, a warning: when the timer fires the route tree unmounts and any
+  // half-filled form goes with it — the server would refuse the save anyway, since there
+  // is no token refresh, so a warning is the only thing that can save the work.
   useEffect(() => {
     if (!user) return undefined
     const ms = msUntilExpiry(localStorage.getItem('token'))
-    if (ms === null) { logout(); return undefined }
+    if (ms === null) { expireSession(); return undefined }
+    const WARN_AHEAD_MS = 2 * 60 * 1000
     // setTimeout overflows past ~24.8 days and fires at once; a 12-hour token never gets
-    // near that, but a clamp costs nothing and a re-check on wake is harmless.
-    const timer = setTimeout(logout, Math.min(ms, 2 ** 31 - 1))
-    return () => clearTimeout(timer)
-  }, [user, logout])
+    // near that, but a clamp costs nothing. A timer delayed by a suspended laptop or a
+    // background tab fires late, not never — and until it does, the 401 interceptor is
+    // the backstop for any request made on the expired token.
+    //
+    // Known trade-off: `exp` is compared with the CLIENT clock. A clock running more than
+    // 12 hours fast reads a fresh token as expired and sends the user back to login.
+    // The server's check is the real one; this only decides what the UI shows.
+    const clamp = (v) => Math.min(v, 2 ** 31 - 1)
+    const timers = [setTimeout(expireSession, clamp(ms))]
+    if (ms > WARN_AHEAD_MS) {
+      timers.push(setTimeout(
+        () => showToast('info', 'Your session ends in 2 minutes. Save any changes now.', { duration: 15000 }),
+        clamp(ms - WARN_AHEAD_MS),
+      ))
+    }
+    return () => timers.forEach(clearTimeout)
+  }, [user, expireSession, showToast])
 
   // Determine page title
   let pageTitle = ''
@@ -286,10 +319,15 @@ function LoginPage({ setUser }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const navigate = useNavigate()
+  // Why this page is showing, read once: set when a session ENDED (expiry, or refused by
+  // the server), never on a manual logout. Carries the path to return to.
+  const [sessionEnd] = useState(() => takeSessionEnd())
+  const [showEndNotice, setShowEndNotice] = useState(!!sessionEnd)
 
   const handleLogin = async (e) => {
     e.preventDefault()
     setError('')
+    setShowEndNotice(false)
     
     // Client-side validation to prevent empty credentials
     if (!username.trim() || !password.trim()) {
@@ -301,9 +339,17 @@ function LoginPage({ setUser }) {
       // Convert username to lowercase to prevent case sensitivity issues
       const normalizedUsername = username.toLowerCase()
       const res = await axios.post(`${API_BASE}/auth/login`, { username: normalizedUsername, password })
+      const session = readSession(res.data.token)
+      if (!session) {
+        // The server just issued this token, so "expired" can only mean this device's
+        // clock is wrong. Say so: returning to a blank login form looked like a failure
+        // with no reason, and the user could never get in.
+        setError('Signed in, but this device\'s clock looks wrong, so the session cannot start. Check the date and time settings and try again.')
+        return
+      }
       localStorage.setItem('token', res.data.token)
-      setUser(readSession(res.data.token))
-      navigate('/search')
+      setUser(session)
+      navigate(sessionEnd?.from || '/search')
     } catch (err) {
       setError('Invalid username or password')
     }
@@ -319,6 +365,12 @@ function LoginPage({ setUser }) {
           <div className="login-wordmark-title">GameTracker</div>
           <div className="login-wordmark-sub">Track every game worth your time</div>
         </div>
+        {showEndNotice && (
+          // role="status", not "alert": nothing the user typed is wrong.
+          <div className="login-notice" role="status">
+            Your session has ended. Please sign in again.
+          </div>
+        )}
         <div className="login-field-group">
           <label htmlFor="login-username">Username</label>
           <input
@@ -2427,20 +2479,18 @@ function SettingsPage() {
   const [testResult, setTestResult]           = useState(null)
   const [crackLoading, setCrackLoading]       = useState(false)
   const [crackInfo, setCrackInfo]             = useState(null)
+  // Computed once; only http(s) may reach the Source link href (SEC-8).
+  const crackSourceUrl = safeExternalUrl(crackInfo?.url)
   const [crackError, setCrackError]           = useState('')
   const [testError, setTestError]             = useState('')
 
-  const [activeTab, setActiveTab] = useState(() => {
-    try {
-      const tok = localStorage.getItem('token')
-      // Admins land on Email; non-admins only have the Diagnostics tab in Settings
-      // (all notification config moved to My Account).
-      return JSON.parse(atob(tok.split('.')[1])).can_manage_users ? 'email' : 'testing'
-    } catch { return 'testing' }
-  })
-
   const token   = localStorage.getItem('token')
-  const isAdmin = (() => { try { return JSON.parse(atob(token.split('.')[1])).can_manage_users } catch { return false } })()
+  // session.js is the one client-side JWT decode. The inline atob() here threw on
+  // base64URL payloads and showed those admins the non-admin Settings page.
+  const isAdmin = !!readSession(token)?.can_manage_users
+  // Admins land on Email; non-admins only have the Diagnostics tab in Settings
+  // (all notification config moved to My Account).
+  const [activeTab, setActiveTab] = useState(() => (isAdmin ? 'email' : 'testing'))
   const authH   = { headers: { Authorization: `Bearer ${token}` } }
 
   // ── Load from server. A callback, not just an effect, because a save that succeeds
@@ -2934,11 +2984,11 @@ function SettingsPage() {
                     {(crackInfo.status || 'unknown').toUpperCase()}
                   </span>
                 </div>
-                {safeExternalUrl(crackInfo.url) && (
+                {crackSourceUrl && (
                   <div className="ent-result-row">
                     <span className="ent-result-label">Source</span>
                     {/* safeExternalUrl: only http(s) reaches an href (SEC-8) */}
-                    <a href={safeExternalUrl(crackInfo.url)} target="_blank" rel="noopener noreferrer" className="ent-result-link">CrackRelease ↗</a>
+                    <a href={crackSourceUrl} target="_blank" rel="noopener noreferrer" className="ent-result-link">CrackRelease ↗</a>
                   </div>
                 )}
               </div>

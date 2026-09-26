@@ -396,9 +396,15 @@ console.log('the secret scan scans, and fails closed when it cannot:');
 console.log('no .env variant is committed or copied into an image:');
 {
   const lines = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8').split('\n').map((l) => l.trim());
-  for (const f of ['.gitignore', '.dockerignore', 'frontend/.dockerignore', 'mcp/.dockerignore']) {
-    check(`${f} ignores every .env variant`, () => {
-      assert.ok(lines(f).includes('.env*'), `${f} has no '.env*' line`);
+  // .gitignore: a pattern with no slash matches at ANY depth. .dockerignore does NOT work
+  // that way — patterns are anchored at the context root and `*` does not cross `/` — so
+  // `.env*` there left frontend/.env.production in the backend context, which ends in
+  // `COPY . .`. Those files need `**/.env*`.
+  const WANT = { '.gitignore': '.env*', '.dockerignore': '**/.env*',
+    'frontend/.dockerignore': '**/.env*', 'mcp/.dockerignore': '**/.env*' };
+  for (const [f, want] of Object.entries(WANT)) {
+    check(`${f} ignores every .env variant, at any depth`, () => {
+      assert.ok(lines(f).includes(want), `${f} has no '${want}' line`);
       // A negation may re-admit ONLY the example file.
       const negated = lines(f).filter((l) => /^!.*\.env/.test(l));
       assert.deepStrictEqual(negated.filter((l) => l !== '!.env.example'), [],

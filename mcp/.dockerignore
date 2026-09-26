@@ -7,4 +7,4 @@ probe-e2e.js
 .eslintcache
 
 # Defense in depth: no .env variant belongs in any image (ROADMAP SEC-11).
-.env*
+**/.env*

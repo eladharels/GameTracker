@@ -424,13 +424,24 @@ One job of a kind runs at a time. A user can refresh their own library with
 |---|---|
 | `create-local-admin.js` | Create a local admin from the CLI |
 | `create-api-token.js` | Mint / list / revoke personal access tokens |
-| `reset-root-password.js` | Reset the `root` password — from `NEW_ROOT_PASSWORD`, not argv: `read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD`, then `exec -e NEW_ROOT_PASSWORD backend node reset-root-password.js` |
+| `reset-root-password.js` | Reset the `root` password, read from `NEW_ROOT_PASSWORD` rather than argv (see below) |
 | `run_notifications.js` | Run the release-notification check manually (mirrors the 08:00 job) |
 | `update_library_prices.js` | Trigger a Steam price update |
 | `refresh_igdb_token.js` | Refresh the IGDB OAuth bearer token |
 | `backfill_steam_app_ids.js` | Populate missing Steam App IDs |
 | `backfill_ldap_display_names.js` | Sync display names from LDAP |
 | `test_ldap_sync.js` | Debug the LDAP connection |
+
+**Resetting the root password** keeps the password out of argv, `/proc` and shell history:
+
+```bash
+read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD
+docker compose -f docker-compose.yaml exec -e NEW_ROOT_PASSWORD backend node reset-root-password.js
+unset NEW_ROOT_PASSWORD
+```
+
+`-e NAME` with no value passes the variable through from your shell. The `unset` matters:
+until it runs, every process you start from that shell inherits the password.
 
 **All of them run against PostgreSQL** through `./db`, which takes its connection from the same
 `PG*` variables as the backend. Run them inside the backend container so those variables — and

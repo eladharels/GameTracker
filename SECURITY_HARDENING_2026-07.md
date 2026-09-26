@@ -140,7 +140,7 @@ Notification *servers* are now a per-user choice instead of a shared server sett
 | `POST /api/user/:username/games/:gameId/refresh-metadata` | **auth + owner** |
 | `POST /api/user/:username/games/:gameId/crackrelease-status` | **auth + owner** |
 | `GET /api/user/:username/crack-status` | **auth + owner** |
-| `GET /api/debug/user/:username/game/:gameId` | **auth + owner** |
+| `GET /api/debug/user/:username/game/:gameId` | **auth + owner** — kept deliberately (ROADMAP SEC-10: v1 freeze); per-request logging removed, now reads through `libraryService.findGame` |
 | `GET /api/settings` | **auth** (secrets stripped; `{}` for non-admins) |
 | `POST /api/settings` | **auth**; server sections admin-only |
 | `GET/POST /api/settings/apikeys`, `.../refresh-igdb-token` | **admin** |

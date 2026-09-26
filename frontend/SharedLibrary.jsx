@@ -3,22 +3,19 @@ import axios from 'axios';
 import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
 import { useToast } from './src/contexts/ToastContext';
 import { useNavigate } from 'react-router-dom';
+import { readSession } from './src/session';
 
 // Always call our own origin's /api (nginx proxies it to the backend). The previous
 // hardcoded host/port fell back to the PRODUCTION backend (:3000) from staging, and
 // being cross-origin it also bypassed the shared axios auth interceptor.
 const API_BASE = `${window.location.origin}/api`;
 
-// Helper to get token and user info from localStorage
+// Token and user from localStorage, decoded by session.js — the ONE client-side JWT
+// decode. The inline atob() this replaced threw on base64URL payloads, and this page
+// then never loaded for those users.
 function getAuth() {
   const token = localStorage.getItem('token');
-  let user = null;
-  if (token) {
-    try {
-      user = JSON.parse(atob(token.split('.')[1]));
-    } catch { /* ignore malformed JWT */ }
-  }
-  return { token, user };
+  return { token, user: readSession(token) };
 }
 
 // Helper to generate a color from a string (username)

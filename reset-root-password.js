@@ -1,9 +1,11 @@
 /**
  * Reset the root user's password in the database.
  * Password must be at least 8 characters, and is read from NEW_ROOT_PASSWORD
- * (ROADMAP SEC-9) -- NOT from the command line: argv is visible in /proc/<pid>/cmdline
- * to every process in the container (which also runs the internet-facing app), in the
- * host's `docker exec` argv, and in the operator's shell history. The positional
+ * (ROADMAP SEC-9) -- NOT from the command line: argv is world-readable in
+ * /proc/<pid>/cmdline, shows in the host's `docker exec` argv and `ps`, and lands in the
+ * operator's shell history. The environment removes those. It does NOT hide the value
+ * from the app itself: the script runs as the same `node` UID, and a same-UID process
+ * can read /proc/<pid>/environ for the few seconds it runs. The positional
  * argument still works, with a warning, so a runbook that uses it is not stranded in
  * the middle of a lockout -- this is the break-glass path.
  *
@@ -15,6 +17,7 @@
  *   read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD
  *   docker compose -f docker-compose.yaml exec -e NEW_ROOT_PASSWORD backend \
  *     node reset-root-password.js
+ *   unset NEW_ROOT_PASSWORD      # or every later child of that shell inherits it
  *
  * DB_PATH is gone. It pointed at the SQLite file, which is no longer the source
  * of truth; leaving it in place meant this script would silently CREATE an empty
@@ -28,7 +31,8 @@ const newPassword = envPassword || process.argv[2] || '';
 if (!newPassword || newPassword.length < 8) {
   console.error('Usage:');
   console.error('  read -rs NEW_ROOT_PASSWORD && export NEW_ROOT_PASSWORD');
-  console.error('  node reset-root-password.js');
+  console.error('  docker compose -f docker-compose.yaml exec -e NEW_ROOT_PASSWORD backend node reset-root-password.js');
+  console.error('  unset NEW_ROOT_PASSWORD');
   console.error('Password must be at least 8 characters.');
   process.exit(1);
 }
