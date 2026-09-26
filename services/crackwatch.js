@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { safeForLog } = require('../user-rules');
 
 // History worth keeping: these two constants were once deleted by accident (a slice of
 // index.js cut at the wrong boundary). Every reference sat inside a try/catch, so nothing
@@ -25,6 +26,8 @@ function init({ cacheDir } = {}) {
 let crackWatchCache = Object.create(null);
 const cacheSize = () => Object.keys(crackWatchCache).length;
 const sampleKeys = (n) => Object.keys(crackWatchCache).slice(0, n);
+// Empty the cache. For the tests, so one cannot leave titles behind for the next.
+const reset = () => { crackWatchCache = Object.create(null); };
 
 /** Normalize game title for matching: lowercase, trim, collapse spaces, remove most punctuation */
 function normalizeTitleForCrackWatch(str) {
@@ -103,7 +106,8 @@ function saveToFile() {
 }
 
 /** Fetch all pages from CrackWatch API (rate-limited), merge into crackWatchCache. */
-async function refresh() {
+// `rateMs` exists for the tests, which would otherwise wait out the real delay per page.
+async function refresh({ rateMs = CRACKWATCH_RATE_MS } = {}) {
   const baseUrl = 'https://api.crackwatch.com/api/games';
   let page = 0;
   let total = 0;
@@ -141,7 +145,7 @@ async function refresh() {
       }
       total += list.length;
       page++;
-      await delay(CRACKWATCH_RATE_MS);
+      await delay(rateMs);
     } catch (err) {
       rethrowIfReferenceError(err);
       console.warn('[CrackWatch] Refresh error at page', page, err.message || err, err.response?.status);
@@ -190,8 +194,9 @@ async function scrapeCrackRelease(gameName) {
     // status -- the same erasure CC-11 exists to stop (from the Architect review).
     return { fetched: raw !== null, result: { status, url, slug, gameName } };
   } catch (err) {
-    // JSON.stringify escapes CR/LF: a game name must not be able to forge a log line.
-    console.warn('[CrackRelease] Error fetching status for', JSON.stringify(String(gameName).slice(0, 80)), '-', err.message);
+    // safeForLog, not JSON.stringify: the name is user-controlled, and JSON.stringify
+    // passes C1 controls and DEL (a CSI can move a terminal cursor) through raw.
+    console.warn('[CrackRelease] Error fetching status for', safeForLog(gameName, 80), '-', safeForLog(err.message));
     // `error` stays in the body (v1 shape) but is OUR sentence, not the upstream's:
     // err.message named hosts and ports, and this reaches non-admin callers.
     return {
@@ -235,7 +240,7 @@ function statusForRow(row) {
 }
 
 module.exports = {
-  init, cacheSize, sampleKeys,
+  init, cacheSize, sampleKeys, reset,
   normalizeTitleForCrackWatch, loadFromFile, saveToFile, refresh, lookupCrackStatus, statusForRow,
   slugifyForCrackRelease, getCrackReleaseStatus, scrapeCrackRelease, STORABLE_CRACK_STATUS,
   rethrowIfReferenceError, isUnsafeKey,

@@ -3059,10 +3059,17 @@ console.log('services/crackwatch.js (UP-16: moved out of index.js unchanged):');
 {
   const cw = require('../services/crackwatch');
   const axiosMod = require('axios');
+  // No filesystem and no real delay: fs is stubbed through the module object (the service
+  // calls fs.* at call time), rateMs is 0, and the module cache is reset on both sides so
+  // nothing leaks into a later test (Architect review).
+  const fsMod = require('fs');
   checkAsync('refresh pages until empty; statusForRow: the stored status wins, then exact, then substring', async () => {
     const realGet = axiosMod.get;
-    // An unwritable cache dir: the save fails and is logged, and nothing touches the disk.
-    cw.init({ cacheDir: '/nonexistent-crackwatch-test-dir' });
+    const realWrite = fsMod.writeFileSync;
+    const saved = [];
+    fsMod.writeFileSync = (file, data) => { saved.push([file, data]); };
+    cw.init({ cacheDir: '/crackwatch-test-dir' });
+    cw.reset();
     const pages = [
       [{ title: 'Hades', isCracked: true }, { title: 'Hollow Knight: Silksong', groups: [] , slug: 'silksong' }],
       [{ name: 'Resident Evil 4', crackDate: '2023-04-01' }],
@@ -3070,15 +3077,31 @@ console.log('services/crackwatch.js (UP-16: moved out of index.js unchanged):');
     ];
     let asked = 0;
     axiosMod.get = async (url, opts) => { asked++; return { data: pages[opts.params.page] || [] }; };
-    try { await cw.refresh(); } finally { axiosMod.get = realGet; }
-    assert.strictEqual(asked, 3, 'the refresh did not stop at the first empty page');
-    assert.ok(cw.cacheSize() >= 4, 'titles and slug keys were not cached');
-    assert.strictEqual(cw.statusForRow({ game_name: 'Hades', crack_status: null }), 'cracked');
-    assert.strictEqual(cw.statusForRow({ game_name: 'Hades', crack_status: 'uncracked' }), 'uncracked',
-      'the per-game stored status must win over the cache');
-    assert.strictEqual(cw.statusForRow({ game_name: 'Hollow Knight Silksong' }), 'uncracked');
-    assert.strictEqual(cw.statusForRow({ game_name: 'Resident Evil 4 Remake' }), 'cracked', 'substring match lost');
-    assert.strictEqual(cw.statusForRow({ game_name: 'A Game Nobody Has Heard Of' }), 'unknown');
+    try {
+      await cw.refresh({ rateMs: 0 });
+      assert.strictEqual(asked, 3, 'the refresh did not stop at the first empty page');
+      assert.ok(cw.cacheSize() >= 4, 'titles and slug keys were not cached');
+      assert.strictEqual(saved.length, 1, 'the refreshed cache was not saved');
+      assert.strictEqual(saved[0][0], require('path').join('/crackwatch-test-dir', 'crackwatch-cache.json'));
+      assert.strictEqual(JSON.parse(saved[0][1]).hades, true);
+      assert.strictEqual(cw.statusForRow({ game_name: 'Hades', crack_status: null }), 'cracked');
+      assert.strictEqual(cw.statusForRow({ game_name: 'Hades', crack_status: 'uncracked' }), 'uncracked',
+        'the per-game stored status must win over the cache');
+      assert.strictEqual(cw.statusForRow({ game_name: 'Hollow Knight Silksong' }), 'uncracked');
+      assert.strictEqual(cw.statusForRow({ game_name: 'Resident Evil 4 Remake' }), 'cracked', 'substring match lost');
+      assert.strictEqual(cw.statusForRow({ game_name: 'A Game Nobody Has Heard Of' }), 'unknown');
+    } finally { axiosMod.get = realGet; fsMod.writeFileSync = realWrite; cw.reset(); }
+  });
+  check('loadFromFile drops __proto__/constructor keys from a tampered cache file', () => {
+    const realExists = fsMod.existsSync; const realRead = fsMod.readFileSync;
+    fsMod.existsSync = () => true;
+    fsMod.readFileSync = () => '{"hades":true,"__proto__":{"polluted":1},"constructor":false,"prototype":true}';
+    cw.reset();
+    try {
+      cw.loadFromFile();
+      assert.deepStrictEqual(cw.sampleKeys(10), ['hades'], 'an unsafe key reached the cache');
+      assert.strictEqual({}.polluted, undefined);
+    } finally { fsMod.existsSync = realExists; fsMod.readFileSync = realRead; cw.reset(); }
   });
   check('CrackRelease slugs and the storable statuses are unchanged', () => {
     assert.strictEqual(cw.slugifyForCrackRelease("Assassin's Creed: Unity"), 'assassins-creed-unity');
@@ -3088,6 +3111,131 @@ console.log('services/crackwatch.js (UP-16: moved out of index.js unchanged):');
   });
 }
 
+
+console.log('services/ldap-sync.js (UP-16: the admin LDAP sync out of index.js):');
+{
+  const sync = require('../services/ldap-sync');
+  const db = require('../db');
+  const ldapHelpers = require('../ldap-helpers');
+  const LDAP = { url: 'ldaps://dc.example', base: 'dc=example', bindDn: 'cn=svc', bindPass: 'pw' };
+
+  checkAsync('an unconfigured directory is a VALIDATION error, and nothing is read', async () => {
+    const realAll = db.promises.all;
+    let read = false;
+    db.promises.all = async () => { read = true; return []; };
+    try {
+      for (const bad of [{}, { ...LDAP, bindPass: '   ' }, { ...LDAP, base: undefined }, null]) {
+        await assert.rejects(sync.syncAll(bad, { lookup: async () => null }),
+          (e) => e.code === 'validation' && e.message === 'LDAP is not properly configured');
+      }
+    } finally { db.promises.all = realAll; }
+    assert.strictEqual(read, false, 'the user table was read before the configuration check');
+  });
+
+  checkAsync('syncAll: every outcome, the v1 result shape, and the UPDATE it issues', async () => {
+    const realAll = db.promises.all; const realRun = db.promises.run;
+    const rows = [
+      { id: 1, username: 'ann', email: 'old@x.io', display_name: 'Old' },
+      { id: 2, username: 'bob', email: 'bob@x.io', display_name: 'Bob B' },
+      { id: 3, username: 'cat', email: null, display_name: 'cat' },
+      { id: 4, username: 'dan', email: null, display_name: 'dan' },
+      { id: 5, username: 'eve', email: null, display_name: 'eve' },
+      { id: 6, username: 'fay', email: 'fay@x.io', display_name: 'fay' },
+      { id: 7, username: 'gus', email: null, display_name: 'Old' },
+    ];
+    const dir = {
+      // lower-case attribute names: the directory's casing must not matter
+      ann: { displayname: 'Ann\r\nA', MAIL: ' ann@x.io ' },
+      bob: { displayName: 'Bob B', mail: 'bob@x.io' },
+      dan: sync.AMBIGUOUS,
+      fay: { mail: 'not an address' },       // no displayName -> username; bad mail -> keep
+      gus: { displayName: 'Gus' },
+    };
+    const writes = [];
+    let reads = '';
+    db.promises.all = async (sql) => { reads = sql; return rows; };
+    db.promises.run = async (sql, params) => {
+      writes.push([sql, params]);
+      if (params[params.length - 1] === 7) throw new Error('deadlock detected');
+      return { changes: 1 };
+    };
+    const lookup = async (ldap, username) => {
+      assert.strictEqual(ldap, LDAP);
+      if (username === 'eve') throw new Error('LDAP bind failed: invalid credentials');
+      return Object.prototype.hasOwnProperty.call(dir, username) ? dir[username] : null;
+    };
+    let r;
+    try { r = await sync.syncAll(LDAP, { lookup }); } finally { db.promises.all = realAll; db.promises.run = realRun; }
+
+    assert.match(reads, /WHERE origin = 'ldap'/, 'the sync read accounts that are not ldap-origin');
+    assert.deepStrictEqual(Object.keys(r), ['total', 'updated', 'errors', 'details']);
+    assert.strictEqual(r.total, 7);
+    assert.strictEqual(r.updated, 1);
+    assert.deepStrictEqual(r.details, [
+      { username: 'ann', action: 'updated', changes: ['display_name', 'email'] },
+      { username: 'bob', action: 'no_changes', changes: [] },
+      { username: 'cat', action: 'not_found_in_ldap', changes: [] },
+      { username: 'dan', action: 'ambiguous_ldap_match', changes: [] },
+      { username: 'eve', action: 'error', error: 'LDAP bind failed: invalid credentials' },
+      { username: 'fay', action: 'no_changes', changes: [] },
+      { username: 'gus', action: 'error', error: 'Database update failed: deadlock detected' },
+    ]);
+    assert.deepStrictEqual(r.errors, [
+      { username: 'eve', error: 'LDAP bind failed: invalid credentials' },
+      { username: 'gus', error: 'Database update failed: deadlock detected' },
+    ]);
+    assert.deepStrictEqual(writes[0], ['UPDATE users SET display_name = ?, email = ? WHERE id = ?', ['Ann A', 'ann@x.io', 1]],
+      'the display name was not sanitised, the email not trimmed, or a value was interpolated');
+    assert.deepStrictEqual(writes[1], ['UPDATE users SET display_name = ? WHERE id = ?', ['Gus', 7]]);
+    assert.strictEqual(writes.length, 2, 'an ambiguous, missing or unchanged account was written');
+  });
+
+  // A fake ldapjs client. `entries` is what the search yields; `bindErr` fails the bind.
+  function fakeClient({ bindErr, searchErr, entries = [], streamErr }) {
+    const c = { unbound: 0, handled: 0, filter: null };
+    c.markHandled = () => { c.handled++; };
+    c.unbind = () => { c.unbound++; };
+    c.bind = (dn, pw, cb) => setImmediate(() => cb(bindErr || null));
+    c.search = (base, opts, cb) => {
+      c.filter = opts.filter;
+      if (searchErr) return setImmediate(() => cb(searchErr));
+      const handlers = {};
+      const res = { on: (ev, fn) => { handlers[ev] = fn; } };
+      cb(null, res);
+      setImmediate(() => {
+        for (const e of entries) handlers.searchEntry(e);
+        if (streamErr) handlers.error(streamErr); else handlers.end();
+      });
+    };
+    return c;
+  }
+  const entry = (attrs) => ({ attributes: Object.entries(attrs).map(([type, v]) => ({ type, values: [v] })) });
+
+  checkAsync('lookupUser: one entry, none, two (AMBIGUOUS) -- and the socket is closed on EVERY path', async () => {
+    const realCreate = ldapHelpers.createLdapClient;
+    const realWarn = ldapHelpers.warnIfCleartextLdap;
+    ldapHelpers.warnIfCleartextLdap = () => {};
+    const cases = [
+      [{ entries: [entry({ displayName: 'Ann' })] }, (v) => assert.strictEqual(sync.AMBIGUOUS === v, false) || assert.strictEqual(ldapHelpers.attrValue(v, 'displayName'), 'Ann')],
+      [{ entries: [] }, (v) => assert.strictEqual(v, null)],
+      [{ entries: [entry({ uid: 'a' }), entry({ uid: 'a' })] }, (v) => assert.strictEqual(v, sync.AMBIGUOUS)],
+      [{ bindErr: new Error('invalid credentials') }, null, /LDAP bind failed: invalid credentials/],
+      [{ searchErr: new Error('no such object') }, null, /LDAP search failed: no such object/],
+      [{ entries: [], streamErr: new Error('reset') }, null, /LDAP search error: reset/],
+    ];
+    try {
+      for (const [spec, ok, rejects] of cases) {
+        const client = fakeClient(spec);
+        ldapHelpers.createLdapClient = () => client;
+        const p = sync.lookupUser(LDAP, 'a*)(uid=admin');
+        if (rejects) await assert.rejects(p, rejects); else ok(await p);
+        assert.strictEqual(client.unbound, 1, `the client was not closed (${JSON.stringify(Object.keys(spec))})`);
+        assert.strictEqual(client.handled, 1);
+        if (client.filter) assert.ok(!client.filter.includes('*)('), 'the username reached the filter unescaped');
+      }
+    } finally { ldapHelpers.createLdapClient = realCreate; ldapHelpers.warnIfCleartextLdap = realWarn; }
+  });
+}
 console.log('services/session.js (SEC-14: the browser session cookie):');
 {
   const sess = require('../services/session');
@@ -3136,12 +3284,15 @@ console.log('services/session.js (SEC-14: the browser session cookie):');
   });
   check('issue/verify round-trip, with one claims shape; a wrong secret is null, never a throw', () => {
     const secret = 'abcdefghijklmnopqrstu';
-    const { token, exp } = sess.issue({ id: 5, username: 'jane', can_manage_users: 1, origin: 'ldap', display_name: 'Jane' }, secret);
+    const nowMs = Date.now();
+    const { token, exp } = sess.issue({ id: 5, username: 'jane', can_manage_users: 1, origin: 'ldap', display_name: 'Jane' }, secret, nowMs);
     const p = sess.verify(token, secret);
     assert.deepStrictEqual({ id: p.id, username: p.username, can_manage_users: p.can_manage_users, origin: p.origin, display_name: p.display_name },
       { id: 5, username: 'jane', can_manage_users: true, origin: 'ldap', display_name: 'Jane' });
     assert.strictEqual(p.exp, exp);
-    assert.ok(exp - Math.floor(Date.now() / 1000) <= sess.SESSION_TTL_SECONDS);
+    // Exactly 12 hours from the given clock: an exp an hour short must fail (Architect review).
+    assert.strictEqual(sess.SESSION_TTL_SECONDS, 12 * 60 * 60);
+    assert.strictEqual(exp, Math.floor(nowMs / 1000) + 12 * 60 * 60);
     assert.strictEqual(sess.verify(token, 'another-secret-entirely'), null);
     assert.strictEqual(sess.verify('not.a.jwt', secret), null);
   });

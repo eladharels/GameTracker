@@ -1544,7 +1544,6 @@ body, html {
   text-align: center;
   gap: 1rem;
 }
-.app-boot h1.login-wordmark-title { margin: 0; font-size: inherit; }
 .app-boot-text {
   margin: 0;
   color: var(--text-secondary);

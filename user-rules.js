@@ -123,8 +123,26 @@ function sanitizeText(value, maxLength = 200) {
   return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trim() : cleaned;
 }
 
+// Make a directory- or user-supplied value safe to put in a log line.
+//
+// Log files are read by humans and by log shippers that parse line by line, so a
+// value containing CR/LF can inject entire fabricated lines. A directory that serves
+// a cn of "bob\n[LDAP] Service account bind succeeded." writes a convincing lie into
+// the audit trail. ldapjs escapes control characters inside a DN, but ATTRIBUTE
+// values arrive raw, and the login path logs several of them.
+//
+// Also bounded: an attribute has no length limit, and a megabyte-long cn in the log
+// is its own denial of service.
+function safeForLog(value, maxLength = 200) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+  const flattened = text.replace(/[\r\n\t]/g, (ch) => ({ '\r': '\\r', '\n': '\\n', '\t': '\\t' }[ch]))
+    // Strip the remaining C0/C1 controls, which can move a terminal cursor around.
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
+  return flattened.length > maxLength ? `${flattened.slice(0, maxLength)}…[truncated]` : flattened;
+}
+
 module.exports = {
-  sanitizeText,
+  sanitizeText, safeForLog,
   RESERVED_USERNAMES, validateUsername, MAX_USERNAME_LENGTH, USERNAME_PATTERN, DIRECTORY_REFUSED_USERNAMES, directoryClaimRefusal, isValidEmailAddress,
   MIN_PASSWORD_LENGTH, validatePassword,
 };

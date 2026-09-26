@@ -9,7 +9,7 @@ import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 import { api } from './api'
-import { getSession, markSessionEnded, peekSessionEnd, setSession, writeHint } from './session'
+import { getSession, markSessionEnded, markSignInUpdated, peekSessionEnd, peekSignInUpdated, setSession, writeHint } from './session'
 import { ToastProvider } from './contexts/ToastContext'
 import { ROUTER_PROPS } from './routerConfig'
 
@@ -191,4 +191,32 @@ it('neither the boot 401 nor another tab\'s sign-out calls the server logout (CI
   })
   otherTab.close()
   expect(logouts()).toBe(0)
+})
+
+it('expiry ends the session with the notice, but neither logs out server-side nor tells other tabs (CISO review)', async () => {
+  // When the timer fires the browser has already dropped the cookie (Max-Age follows exp),
+  // so a server logout could only clear a NEWER session another tab obtained.
+  serverSession = 'jane'
+  api.get.mockImplementation((url) => (url.endsWith('/auth/session')
+    ? Promise.resolve({ data: { session: { ...view('jane'), expiresIn: 1 } } })
+    : Promise.resolve({ data: [] })))
+  const heard = []
+  const listener = new BroadcastChannel('gametracker-session')
+  listener.onmessage = (e) => heard.push(e.data)
+  renderApp('/library')
+  await waitFor(() => expect(heading()).toMatch(/library/i))   // signed in first, then the timer
+  expect(await screen.findByText(/session has ended/, {}, { timeout: 3000 })).toBeTruthy()
+  await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+  listener.close()
+  expect(getSession()).toBeNull()
+  expect(api.post.mock.calls.filter(([url]) => url.endsWith('/auth/logout'))).toHaveLength(0)
+  expect(heard).toEqual([])
+})
+
+it('boot: a live session clears a pending "sign-in has been updated" notice (Architect review)', async () => {
+  markSignInUpdated()
+  serverSession = 'jane'
+  renderApp('/library')
+  await waitFor(() => expect(heading()).toMatch(/library/i))
+  expect(peekSignInUpdated()).toBe(false)
 })

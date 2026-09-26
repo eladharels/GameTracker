@@ -928,6 +928,19 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - gitleaks flagged a realistic-length placeholder PAT in a test (exact-run allowlist, and
     the test now builds it at runtime);
   - the contract suite failed without `JWT_SECRET` set, as CI runs it.
+- **Review of fd2b609 and 498e07c (CISO/Architect/UI-UX), conditions met:**
+  - CISO: the expiry timer no longer calls the server logout or announces to other tabs.
+    The cookie's Max-Age follows the same exp, so when the timer fires the only cookie a
+    logout could carry is a NEWER one another tab obtained; a laptop waking with a late
+    timer would have cleared it. Tested, and the mutation is caught.
+  - CISO (optional): the gitleaks entry is anchored to the exact 43-A literal
+    (`^gt_pat_A{43}$`), and removing it is confirmed to surface the finding.
+  - Architect: tests for the boot clearing the "sign-in updated" notice; an INSECURE-mode
+    instance in a child process, so a route hard-coding `'secure'` fails; and `issue()`'s
+    exp pinned to exactly 12 hours through its `nowMs` seam.
+  - UI/UX: removed `.app-boot h1.login-wordmark-title { font-size: inherit }`, which beat
+    the wordmark's own size and made the boot and unreachable headings smaller than the
+    login page's.
 
 ### [x] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
 - **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).
@@ -2015,9 +2028,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 ### [ ] UP-16 Shrink `index.js` (3,517 lines)
 - **Move into services, one per PR, each an adapter-only change:**
   - login (`:1684-1939`, ~250 lines);
-  - LDAP sync (`:2779-3014`, ~235 lines, which repeats bind and search instead of using
-    `ldap-helpers`);
-  - the CrackWatch cache and scraper (`:523-809`);
+  - ~~LDAP sync~~ (step 2, done);
+  - ~~the CrackWatch cache and scraper~~ (step 1, done);
   - the sent-notification store;
   - the `/api/user/me*` routes;
   - the Steam price route.
@@ -2036,6 +2048,29 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
      - New unit tests drive `refresh` through a stubbed CrackWatch API: pagination to the
        empty page; stored-status precedence, then exact, then substring. Every v1 route
        shape is unchanged; the contract suite passes untouched.
+     - **Review (CISO/Architect/UI-UX), conditions met in step 2's commit:**
+       - The warning now uses `safeForLog`, moved to `user-rules.js` so the service can share
+         it. `JSON.stringify` passed C1 controls and DEL through raw.
+       - The test no longer touches the filesystem (`fs` stubbed through the module), waits
+         no real delay (`refresh({ rateMs })`), and resets the module cache (`reset()`) on both
+         sides. A new test covers `loadFromFile` dropping `__proto__`/`constructor` keys,
+         which a mutation showed was untested.
+  2. **The admin LDAP sync → `services/ldap-sync.js` (2026-09-26).**
+     - The route was a `db.all` callback wrapping a loop of hand-built promises. It is now
+       `syncAll()`, with `lookupUser()` (one client per user, closed on every path) and a
+       pure `planUpdate()`. The `UPDATE` names only the two fixed columns; directory values
+       are always bound parameters.
+     - Rule for rule the same: `AMBIGUOUS` for more than one entry (nothing written),
+       `sanitizeText` and `isValidEmailAddress` as on the login path, no `cn` fallback.
+     - The v1 envelope (`{success, message, results: {total, updated, errors, details}}`) and
+       the 400 for an unconfigured directory are unchanged. One deliberate difference: an
+       unexpected failure answers `{error: 'LDAP sync failed.'}` through `problem.send`,
+       instead of echoing the exception message in a 500.
+     - Tests: unit tests for every outcome and the exact `UPDATE` issued, `lookupUser`
+       against a fake client (one, none, two entries; bind, search and stream failures; the
+       socket closed each time; the filter escaped), and contract tests for the adapter's
+       three answers. All eight mutations tried were caught. Checked against a real
+       Postgres too. 3,404 → 3,180 lines.
 
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with

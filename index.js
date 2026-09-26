@@ -21,12 +21,9 @@ const fs = require('fs');
 const cron = require('node-cron');
 const path = require('path');
 // ldapjs itself is no longer required here -- createLdapClient() is the only way
-// this file should ever construct a client, and it lives in ./ldap-helpers.js.
+// anything should ever construct a client, and it lives in ./ldap-helpers.js. This file
+// no longer builds one at all: the sync moved to services/ldap-sync.js (UP-16).
 const {
-  buildUserSearchFilter,
-  createLdapClient,
-  warnIfCleartextLdap,
-  entryAttributes,
   attrValue,
   attrValues,
   compatTreeAdvice,
@@ -65,6 +62,7 @@ const authService = require('./services/auth');
 const sessionService = require('./services/session');
 // The CrackWatch cache and CrackRelease scraper (UP-16's first slice out of this file).
 const crackwatch = require('./services/crackwatch');
+const ldapSync = require('./services/ldap-sync');
 let SESSION_COOKIE_MODE;
 try {
   SESSION_COOKIE_MODE = sessionService.cookieMode();
@@ -86,7 +84,7 @@ const problem = require('./services/problem');
 // RESERVED_USERNAMES and validatePassword are no longer imported here: the last route
 // that applied them by hand (POST /api/users) now calls services/users.js#create,
 // which holds both rules for BOTH surfaces.
-const { sanitizeText: sanitizeDirectoryText, isValidEmailAddress, directoryClaimRefusal } = require('./user-rules');
+const { sanitizeText: sanitizeDirectoryText, isValidEmailAddress, directoryClaimRefusal, safeForLog } = require('./user-rules');
 
 // Upper bound on PUT /api/user/:username/backlog-reorder.
 const MAX_BACKLOG_REORDER = 1000;
@@ -787,28 +785,9 @@ app.post('/api/settings/apikeys/refresh-igdb-token', authRequired, requirePermis
 // A single valid address, with no comma or semicolon.
 //
 
-// Sentinel distinguishing "the directory returned several entries for this user"
-// from "the directory has no such user". Both used to resolve as null, so the admin
-// UI reported an ambiguous match as not_found_in_ldap.
-const AMBIGUOUS_LDAP_MATCH = Symbol('ambiguous-ldap-match');
+// The "several entries matched" sentinel moved with the sync: services/ldap-sync.js#AMBIGUOUS.
 
-// Make a directory- or user-supplied value safe to put in a log line.
-//
-// Log files are read by humans and by log shippers that parse line by line, so a
-// value containing CR/LF can inject entire fabricated lines. A directory that serves
-// a cn of "bob\n[LDAP] Service account bind succeeded." writes a convincing lie into
-// the audit trail. ldapjs escapes control characters inside a DN, but ATTRIBUTE
-// values arrive raw, and the login path logs several of them.
-//
-// Also bounded: an attribute has no length limit, and a megabyte-long cn in the log
-// is its own denial of service.
-function safeForLog(value, maxLength = 200) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
-  const flattened = text.replace(/[\r\n\t]/g, (ch) => ({ '\r': '\\r', '\n': '\\n', '\t': '\\t' }[ch]))
-    // Strip the remaining C0/C1 controls, which can move a terminal cursor around.
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
-  return flattened.length > maxLength ? `${flattened.slice(0, maxLength)}…[truncated]` : flattened;
-}
+// safeForLog moved to user-rules.js: services/crackwatch.js needs the same rule (UP-16 review).
 
 // Clean a directory-supplied value before STORING it (safeForLog is for logs only,
 // and deliberately renders control characters as visible escapes).
@@ -2726,240 +2705,15 @@ app.post('/api/admin/test-notification', authRequired, testNotificationLimit, as
 });
 
 // --- LDAP Sync endpoint for admins ---
+// The sync itself is services/ldap-sync.js (UP-16). The response shape is v1's, frozen.
 app.post('/api/admin/ldap-sync', authRequired, requirePermission('can_manage_users'), async (req, res) => {
   try {
-    const settings = loadSettings();
-    const ldapSettings = settings.ldap || {};
-    
-    // Check if LDAP is properly configured
-    const isLdapConfigured = ldapSettings.url &&
-      ldapSettings.base &&
-      ldapSettings.bindDn &&
-      ldapSettings.bindPass &&
-      ldapSettings.url.trim() !== '' &&
-      ldapSettings.base.trim() !== '' &&
-      ldapSettings.bindDn.trim() !== '' &&
-      ldapSettings.bindPass.trim() !== '';
-    
-    if (!isLdapConfigured) {
-      return res.status(400).json({ error: 'LDAP is not properly configured' });
-    }
-
-    console.log('[LDAP Sync] Starting sync process...');
-    console.log('[LDAP Sync] LDAP Settings:', {
-      url: ldapSettings.url,
-      base: ldapSettings.base,
-      bindDn: ldapSettings.bindDn
-    });
-
-    // Get all LDAP users from database
-    db.all("SELECT id, username, email, display_name FROM users WHERE origin = 'ldap'", [], async (err, ldapUsers) => {
-      if (err) {
-        console.error('[LDAP Sync] Database error:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
-
-      console.log(`[LDAP Sync] Found ${ldapUsers.length} LDAP users in database`);
-
-      const syncResults = {
-        total: ldapUsers.length,
-        updated: 0,
-        errors: [],
-        details: []
-      };
-
-      // Process each LDAP user
-      for (const user of ldapUsers) {
-        console.log(`[LDAP Sync] Processing user: ${user.username}`);
-        
-        // Declared outside the try so the finally block can always close the socket:
-        // the previous version returned early on the reject paths without ever
-        // calling unbind(), leaking one connection per failing user in this loop.
-        let client = null;
-        try {
-          warnIfCleartextLdap(ldapSettings.url);
-          await new Promise((resolve, reject) => {
-            // Without an 'error' listener an unreachable directory here was a
-            // guaranteed process crash — this loop builds a fresh client per user.
-            client = createLdapClient(ldapSettings.url, (err) => reject(err));
-            client.bind(ldapSettings.bindDn, ldapSettings.bindPass, (err) => {
-              if (err) {
-                console.error(`[LDAP Sync] Bind failed for ${user.username}:`, err.message);
-                reject(new Error(`LDAP bind failed: ${err.message}`));
-                return;
-              }
-              console.log(`[LDAP Sync] Bind successful for ${user.username}`);
-              resolve();
-            });
-          });
-
-          // Search for user in LDAP using multiple username attributes
-          // (Active Directory: sAMAccountName, FreeIPA: uid). Escaped even though
-          // the username comes from our own DB — LDAP-origin rows are created from
-          // directory data, so this is second-order untrusted input.
-          const searchOptions = {
-            filter: buildUserSearchFilter(user.username),
-            scope: 'sub',
-            attributes: ['displayName', 'mail', 'sAMAccountName', 'uid']
-          };
-
-          console.log(`[LDAP Sync] Searching for user with filter: ${searchOptions.filter}`);
-
-          const userData = await new Promise((resolve, reject) => {
-            client.search(ldapSettings.base, searchOptions, (err, searchRes) => {
-              if (err) {
-                console.error(`[LDAP Sync] Search failed for ${user.username}:`, err.message);
-                reject(new Error(`LDAP search failed: ${err.message}`));
-                return;
-              }
-
-              // Buffered so the SAME pairing rule as the login path can be applied;
-              // resolving on the first entry could not tell a redundant mirror from
-              // a compat-only account's single real entry.
-              const rawEntries = [];
-              searchRes.on('searchEntry', (entry) => rawEntries.push(entry));
-
-              searchRes.on('end', () => {
-                // No compat filtering — see ldap-helpers.js.
-                const entries = rawEntries;
-                if (!entries.length) {
-                  console.log(`[LDAP Sync] User not found in LDAP: ${user.username}`);
-                  return resolve(null); // User not found in LDAP
-                }
-                // Ambiguous here means we cannot tell whose attributes these are, and
-                // this writes display_name/email onto an account. Skip rather than
-                // guess; the login path refuses the same shape outright.
-                if (entries.length > 1) {
-                  console.warn(`[LDAP Sync] ${entries.length} entries matched '${user.username}' — ambiguous, skipping.`);
-                  // A distinct sentinel, not null. Folding this into "not found"
-                  // told the admin UI the account had been REMOVED from the
-                  // directory when in fact it was found twice — opposite diagnoses,
-                  // opposite remedies.
-                  return resolve(AMBIGUOUS_LDAP_MATCH);
-                }
-                console.log(`[LDAP Sync] Found user in LDAP: ${user.username}`);
-                resolve(entryAttributes(entries[0]));
-              });
-
-              searchRes.on('error', (err) => {
-                console.error(`[LDAP Sync] Search error for ${user.username}:`, err.message);
-                reject(new Error(`LDAP search error: ${err.message}`));
-              });
-            });
-          });
-
-          // (the socket is closed in the finally block below, on every path)
-
-          if (userData === AMBIGUOUS_LDAP_MATCH) {
-            // Reported distinctly: "found twice" and "not there" are opposite
-            // diagnoses. Nothing is written for this user.
-            syncResults.details.push({
-              username: user.username,
-              action: 'ambiguous_ldap_match',
-              changes: []
-            });
-          } else if (userData) {
-            // User found in LDAP, update their information
-            // attrValue, not property access: `displayname` from the directory used
-            // to miss here and silently reset every synced user's display name to
-            // their username.
-            //
-            // Deliberately NOT falling back to `cn` here, though the login path does
-            // (see the cnValue block above). Adding it would change which value gets
-            // written for users who have no displayName, which is a policy decision
-            // and not part of this casing fix. The inconsistency is pre-existing.
-            // Same sanitising and the same email validation as the login path — this
-            // is the other writer of display_name/email from directory data.
-            const newDisplayName = sanitizeDirectoryText(attrValue(userData, 'displayName')) || user.username;
-            const syncedEmail = attrValue(userData, 'mail', 'email');
-            const newEmail = isValidEmailAddress(syncedEmail) ? syncedEmail.trim() : user.email;
-            
-            console.log(`[LDAP Sync] User data for ${user.username}:`, {
-              current: { display_name: user.display_name, email: user.email },
-              ldap: { displayName: newDisplayName, email: newEmail }
-            });
-            
-            const updates = [];
-            const params = [];
-            
-            if (newDisplayName !== user.display_name) {
-              updates.push('display_name = ?');
-              params.push(newDisplayName);
-              console.log(`[LDAP Sync] Will update display_name for ${user.username}: "${user.display_name}" -> "${newDisplayName}"`);
-            }
-            
-            if (newEmail !== user.email) {
-              updates.push('email = ?');
-              params.push(newEmail);
-              console.log(`[LDAP Sync] Will update email for ${user.username}: "${user.email}" -> "${newEmail}"`);
-            }
-            
-            if (updates.length > 0) {
-              params.push(user.id);
-              await new Promise((resolve, reject) => {
-                db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function (err) {
-                  if (err) {
-                    console.error(`[LDAP Sync] Database update failed for ${user.username}:`, err.message);
-                    reject(new Error(`Database update failed: ${err.message}`));
-                  } else {
-                    console.log(`[LDAP Sync] Successfully updated ${user.username}`);
-                    syncResults.updated++;
-                    syncResults.details.push({
-                      username: user.username,
-                      action: 'updated',
-                      changes: updates.map(update => update.split(' = ')[0])
-                    });
-                    resolve();
-                  }
-                });
-              });
-            } else {
-              console.log(`[LDAP Sync] No changes needed for ${user.username}`);
-              syncResults.details.push({
-                username: user.username,
-                action: 'no_changes',
-                changes: []
-              });
-            }
-          } else {
-            // User not found in LDAP - could be deleted or moved
-            console.log(`[LDAP Sync] User not found in LDAP: ${user.username}`);
-            syncResults.details.push({
-              username: user.username,
-              action: 'not_found_in_ldap',
-              changes: []
-            });
-          }
-        } catch (error) {
-          console.error(`[LDAP Sync] Error processing ${user.username}:`, error.message);
-          syncResults.errors.push({
-            username: user.username,
-            error: error.message
-          });
-          syncResults.details.push({
-            username: user.username,
-            action: 'error',
-            error: error.message
-          });
-        } finally {
-          // Always close the socket, including on the bind/search reject paths.
-          if (client) {
-            try { client.markHandled(); client.unbind(); } catch { /* already closed */ }
-          }
-        }
-      }
-
-      console.log(`[LDAP Sync] Sync completed. ${syncResults.updated} users updated out of ${syncResults.total} total LDAP users.`);
-      
-      res.json({
-        success: true,
-        message: `LDAP sync completed. ${syncResults.updated} users updated out of ${syncResults.total} total LDAP users.`,
-        results: syncResults
-      });
-    });
-  } catch (error) {
-    console.error('[LDAP Sync] General error:', error);
-    res.status(500).json({ error: `LDAP sync failed: ${error.message}` });
+    const results = await ldapSync.syncAll(loadSettings().ldap || {});
+    const summary = `LDAP sync completed. ${results.updated} users updated out of ${results.total} total LDAP users.`;
+    console.log(`[LDAP Sync] ${summary}`);
+    res.json({ success: true, message: summary, results });
+  } catch (err) {
+    problem.send(res, err, { log: '[LDAP Sync] Failed:', fallback: 'LDAP sync failed.' });
   }
 });
 

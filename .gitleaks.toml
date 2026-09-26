@@ -137,9 +137,9 @@ regexes = [
 
   # The same case again (SEC-14): test/api-contract.test.js in commit 1ae53a3 carried a
   # realistic-length placeholder of literal A's, to prove a PAT in the session cookie is
-  # refused. History keeps it. Exact run of A's only -- a CSPRNG token is never that --
+  # refused. History keeps it. Anchored to exactly that 43-A literal -- a CSPRNG token is never that --
   # and the test now builds its placeholder at runtime so no new literal appears.
-  '''gt_pat_A{40,}''',
+  '''^gt_pat_A{43}$''',
 ]
 
 [[rules]]

@@ -25,7 +25,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~3400 lines — Express server; the service layer under `services/`
+- **Entry point**: `index.js` (~3200 lines — Express server; the service layer under `services/`
   is progressively taking the logic out of it)
 
 ### Frontend
@@ -152,6 +152,12 @@ GameTracker/
 │   │                               #   (load/save/refresh, exact-then-substring lookup) and the
 │   │                               #   CrackRelease page scraper. One cache per process;
 │   │                               #   index.js only wires CACHE_DIR, the cron and the routes
+│   ├── ldap-sync.js                # The admin LDAP sync (UP-16): re-reads display name and
+│   │                               #   email for every ldap-origin account. One client per user,
+│   │                               #   closed on every path; >1 entry is AMBIGUOUS and writes
+│   │                               #   nothing; the login path's sanitising and email check.
+│   │                               #   The UPDATE names only fixed columns -- directory values
+│   │                               #   are always bound, never interpolated
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
 │   ├── library.js                  # Game library + backlog ordering + the upsert, and the
 │   │                               #   ONE "already in the library?" rule (UP-19). The SPA's

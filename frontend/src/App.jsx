@@ -117,8 +117,13 @@ function App() {
   // The session ENDED rather than being left: the login page says so, and offers the
   // way back. Separate from `logout`, which is also a click handler (`onClick={logout}`
   // would hand it the event) and must stay silent — a manual logout is not an expiry.
+  //
+  // No server logout and no announcement (CISO review): the cookie's Max-Age follows the
+  // same exp, so when this fires the browser has already dropped it -- the only cookie a
+  // logout could carry is a NEWER one another tab obtained, and a laptop waking up with a
+  // late timer would clear it. Every tab runs its own timer on the server's expiresIn.
   const expireSession = useCallback(() => {
-    endSession({ explain: true, fromPath: window.location.pathname })
+    endSession({ explain: true, fromPath: window.location.pathname, announce: false, logout: false })
     setUser(null)
     navigate('/login')
   }, [setUser, navigate])
