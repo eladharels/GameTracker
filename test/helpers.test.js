@@ -3117,6 +3117,26 @@ console.log('services/crackwatch.js (UP-16: moved out of index.js unchanged):');
     assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(lines[0]), `a control character reached the log line: ${JSON.stringify(lines[0])}`);
     assert.ok(lines[0].includes('Halo?[2J\\n[Auth] login ok?'), lines[0]);
   });
+  // UP-26: every user_games statement these two operations issue is scoped to the OWNER.
+  // The contract tests stub the rows, so an unscoped WHERE passed them.
+  checkAsync('libraryStatuses and checkLibraryGame scope every statement to the owner', async () => {
+    const dbMod = require('../db');
+    const real = { get: dbMod.get, all: dbMod.all, run: dbMod.promises.run, axiosGet: axiosMod.get };
+    const seen = [];
+    dbMod.all = (sql, params, cb) => { seen.push([sql, params]); cb(null, []); };
+    dbMod.get = (sql, params, cb) => { seen.push([sql, params]); cb(null, { game_name: 'Halo' }); };
+    dbMod.promises.run = async (sql, params) => { seen.push([sql, params]); return { changes: 1 }; };
+    axiosMod.get = async () => ({ data: '<b>CRACKED</b>' });
+    try {
+      await cw.libraryStatuses(7);
+      await cw.checkLibraryGame(7, 'igdb_1');
+    } finally { dbMod.get = real.get; dbMod.all = real.all; dbMod.promises.run = real.run; axiosMod.get = real.axiosGet; }
+    assert.deepStrictEqual(seen, [
+      ['SELECT game_id, game_name, crack_status FROM user_games WHERE user_id = ?', [7]],
+      ['SELECT game_name FROM user_games WHERE user_id = ? AND game_id = ?', [7, 'igdb_1']],
+      ['UPDATE user_games SET crack_status = ? WHERE user_id = ? AND game_id = ?', ['cracked', 7, 'igdb_1']],
+    ]);
+  });
   check('CrackRelease slugs and the storable statuses are unchanged', () => {
     assert.strictEqual(cw.slugifyForCrackRelease("Assassin's Creed: Unity"), 'assassins-creed-unity');
     assert.strictEqual(cw.slugifyForCrackRelease(''), '');

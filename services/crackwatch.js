@@ -239,7 +239,56 @@ function statusForRow(row) {
   return combined || 'unknown';
 }
 
+// --- The two library-facing operations (UP-26) ---------------------------------------
+// The rows come from user_games; the answer from the cache or the scraper above. Through the
+// db MODULE, in the callback form the routes used, so the contract suite's stubs still see
+// them. Like every service: no req/res.
+const db = require('../db');
+const { serviceError, CODES } = require('./errors');
+const dbGet = (sql, params) => new Promise((resolve, reject) => {
+  db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
+});
+const dbAll = (sql, params) => new Promise((resolve, reject) => {
+  db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
+});
+
+// {game_id: status} for one library, from the stored status and the cache only (no fetch).
+async function libraryStatuses(userId) {
+  const rows = await dbAll('SELECT game_id, game_name, crack_status FROM user_games WHERE user_id = ?', [userId]);
+  const statusByGameId = {};
+  for (const row of rows) statusByGameId[row.game_id] = statusForRow(row);
+  return statusByGameId;
+}
+
+// Scrape CrackRelease for one library game and store what was READ (ROADMAP CC-11):
+//   - only a page that was actually read may change the stored value -- an outage used to
+//     write `unknown` over every KNOWN status it touched;
+//   - only the documented values are stored; anything else read is `unknown`;
+//   - AWAITED: a failed write is logged, and the caller still gets the answer.
+// NOT_FOUND when the game is not in this library; a database failure of the lookup
+// propagates as itself; a scraper defect is tagged `scrapeFailed`.
+async function checkLibraryGame(userId, gameId) {
+  const row = await dbGet('SELECT game_name FROM user_games WHERE user_id = ? AND game_id = ?', [userId, gameId]);
+  if (!row) throw serviceError(CODES.NOT_FOUND, 'Game not found for this user');
+  let scraped;
+  try {
+    scraped = await scrapeCrackRelease(row.game_name);
+  } catch (err) {
+    throw Object.assign(new Error(`CrackRelease scrape failed: ${err.message}`), { scrapeFailed: true });
+  }
+  if (scraped.fetched) {
+    try {
+      await db.promises.run('UPDATE user_games SET crack_status = ? WHERE user_id = ? AND game_id = ?',
+        [STORABLE_CRACK_STATUS[scraped.result.status] || 'unknown', userId, gameId]);
+    } catch (updateErr) {
+      console.error('[CrackRelease] Failed to update crack_status in DB:', safeForLog(updateErr.message));
+    }
+  }
+  return scraped.result;
+}
+
 module.exports = {
+  libraryStatuses, checkLibraryGame,
   init, cacheSize, sampleKeys, reset,
   normalizeTitleForCrackWatch, loadFromFile, saveToFile, refresh, lookupCrackStatus, statusForRow,
   slugifyForCrackRelease, getCrackReleaseStatus, scrapeCrackRelease, STORABLE_CRACK_STATUS,

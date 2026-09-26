@@ -151,7 +151,9 @@ GameTracker/
 │   ├── crackwatch.js               # The DRM-status sources (UP-16): the CrackWatch title cache
 │   │                               #   (load/save/refresh, exact-then-substring lookup) and the
 │   │                               #   CrackRelease page scraper. One cache per process;
-│   │                               #   index.js only wires CACHE_DIR, the cron and the routes
+│   │                               #   index.js only wires CACHE_DIR, the cron and the routes.
+│   │                               #   Also the library-facing reads/writes of crack_status
+│   │                               #   (UP-26), every statement owner-scoped and pinned
 │   ├── login.js                    # The interactive LOGIN decision (UP-16): authenticate()
 │   │                               #   returns one outcome the route maps to 200/401/403/503/500.
 │   │                               #   Owns the fallback policy (ambiguous REFUSES; a defect after

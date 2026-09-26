@@ -2154,13 +2154,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   opportunistic, one reviewed step each.
 
 
-### [ ] UP-26 The CrackRelease routes still issue their own SQL (from the UP-16 review)
+### [x] UP-26 The CrackRelease routes still issue their own SQL (from the UP-16 review)
 - **Why:** UP-16 moved every item it listed, but two routes in `index.js` still query
   `user_games` directly: `POST /api/user/:u/games/:id/crackrelease-status` (a `SELECT` of the
   game name and an `UPDATE` of `crack_status`) and `GET /api/user/:u/crack-status`.
 - **Fix:** move both into a service (the row access into `services/library.js`, alongside the
   other `user_games` reads), keeping the v1 shapes, statuses and `crackCheckLimit` exactly.
   One reviewed step, with contract tests pinning both responses first.
+- **Done (2026-09-26):** `services/crackwatch.js#libraryStatuses` and `#checkLibraryGame`,
+  beside the scraper and the cache they use, rather than `library.js` as first proposed: both
+  are DRM-status operations and `crack_status` is that service's column. The routes are
+  adapters; `crackCheckLimit` and every shape, status and text are unchanged.
+  - Contract tests pinned `GET /api/user/:u/crack-status` (the map, stored status over the
+    cache, `unknown`, the 500) and the check's 404/500 texts BEFORE the move; they, and the
+    existing CC-11/SEC-8 tests, pass unchanged after it.
+  - Six mutations tried. Five were caught by those; the sixth, dropping `user_id` from the
+    game lookup, was not, since the tests stub the rows. A unit test now asserts all three
+    statements and their parameters, owner-scoped. The UP-16 note above about inline SQL
+    left is resolved by this item.
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with
   `BACKEND_BIND=127.0.0.1`. Set on its own, a client connecting directly can spoof

@@ -582,33 +582,17 @@ app.post('/api/user/:username/games/:gameId/crackrelease-status', authRequired, 
   if (!normalizedUsername || !gameId) {
     return res.status(400).json({ error: 'Missing username or gameId' });
   }
-  withExistingUser(res, normalizedUsername, (user) => {
-    db.get('SELECT game_name FROM user_games WHERE user_id = ? AND game_id = ?', [user.id, gameId], async (err, row) => {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      if (!row) return res.status(404).json({ error: 'Game not found for this user' });
-      try {
-        const { fetched, result } = await crackwatch.scrapeCrackRelease(row.game_name);
-        // ROADMAP CC-11. This wrote fire-and-forget, wrote `unknown` over a KNOWN status
-        // whenever the fetch failed (a CrackRelease outage erased every status it
-        // touched), and stored `unreleased`, which the column does not document.
-        //   - Only a page that was actually read may change the stored value.
-        //   - Only the documented values are stored; anything else read is `unknown`.
-        //   - AWAITED: a failed write is logged, and the caller still gets the answer.
-        if (fetched) {
-          try {
-            await db.promises.run(
-              'UPDATE user_games SET crack_status = ? WHERE user_id = ? AND game_id = ?',
-              [crackwatch.STORABLE_CRACK_STATUS[result.status] || 'unknown', user.id, gameId]);
-          } catch (updateErr) {
-            console.error('[CrackRelease] Failed to update crack_status in DB:', updateErr.message);
-          }
-        }
-        res.json(result);
-      } catch (e) {
-        console.error('[CrackRelease] status update failed:', e.message);
-        res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: 'Internal error' });
+  // The lookup, the scrape and the CC-11 write rules are services/crackwatch.js (UP-26).
+  withExistingUser(res, normalizedUsername, async (user) => {
+    try {
+      res.json(await crackwatch.checkLibraryGame(user.id, gameId));
+    } catch (err) {
+      if (err && err.scrapeFailed) {
+        console.error('[CrackRelease] status update failed:', safeForLog(err.message));
+        return res.status(500).json({ error: 'Failed to fetch CrackRelease status', details: 'Internal error' });
       }
-    });
+      return problem.send(res, err, { messages: { [SVC.NOT_FOUND]: 'Game not found for this user' } });
+    }
   });
 });
 
@@ -624,12 +608,9 @@ app.get('/api/user/:username/crack-status', authRequired, ownershipRequired, (re
   if (!normalizedUsername) return res.status(400).json({ error: 'Missing username' });
 
   withExistingUser(res, normalizedUsername, (user) => {
-    db.all('SELECT game_id, game_name, crack_status FROM user_games WHERE user_id = ?', [user.id], (err, rows) => {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      const statusByGameId = {};
-      for (const row of rows) statusByGameId[row.game_id] = crackwatch.statusForRow(row);
-      res.json(statusByGameId);
-    });
+    crackwatch.libraryStatuses(user.id)
+      .then((statuses) => res.json(statuses))
+      .catch((err) => problem.send(res, err));
   });
 });
 

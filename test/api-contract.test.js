@@ -670,6 +670,50 @@ checkAsync('a page that WAS read is stored -- and only as a documented value', a
   assert.deepStrictEqual(unreleased.writes.map((p) => p[0]), ['unknown'], 'an undocumented value reached the column');
 });
 
+
+console.log('GET /api/user/:username/crack-status (UP-26: pinned before the move):');
+checkAsync('a map of game_id -> status: the stored status wins, then the cache; unknown otherwise; DB error is 500', async () => {
+  const real = { get: db.get, all: db.all };
+  const rows = [
+    { game_id: 'igdb_1', game_name: 'Anything', crack_status: 'uncracked' },
+    { game_id: 'rawg_2', game_name: 'A Game Nobody Has Heard Of', crack_status: null },
+  ];
+  let fail = false;
+  db.get = (sql, params, cb) => cb(null, { id: 7, username: 'jane' });
+  db.all = (sql, params, cb) => (fail ? cb(new Error('ECONNREFUSED 10.0.0.5')) : cb(null, rows));
+  const call = async () => {
+    const res = recordingRes();
+    await handlerFor('get', '/api/user/:username/crack-status')({ params: { username: 'Jane' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+    return res;
+  };
+  try {
+    const ok = await call();
+    assert.deepStrictEqual([ok.statusCode, ok.body], [200, { igdb_1: 'uncracked', rawg_2: 'unknown' }]);
+    fail = true;
+    const down = await call();
+    assert.deepStrictEqual([down.statusCode, down.body], [500, { error: 'DB error' }]);
+  } finally { db.get = real.get; db.all = real.all; }
+});
+checkAsync('crackrelease-status: an unknown game is 404, a DB error 500, both with v1\'s texts', async () => {
+  const real = { get: db.get };
+  let gameLookup;
+  db.get = (sql, params, cb) => (/FROM user_games/.test(sql) ? gameLookup(cb) : cb(null, { id: 7, username: 'jane' }));
+  const call = async () => {
+    const res = recordingRes();
+    await handlerFor('post', '/api/user/:username/games/:gameId/crackrelease-status')({ params: { username: 'jane', gameId: 'igdb_404' } }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+    return res;
+  };
+  try {
+    gameLookup = (cb) => cb(null, undefined);
+    const missing = await call();
+    assert.deepStrictEqual([missing.statusCode, missing.body], [404, { error: 'Game not found for this user' }]);
+    gameLookup = (cb) => cb(new Error('ECONNREFUSED 10.0.0.5'));
+    const down = await call();
+    assert.deepStrictEqual([down.statusCode, down.body], [500, { error: 'DB error' }]);
+  } finally { db.get = real.get; }
+});
 console.log('POST /api/admin/test-notification (SEC-1 per-user limiter):');
 
 checkAsync('the 11th test notification in the window is 429, keyed per user', async () => {
