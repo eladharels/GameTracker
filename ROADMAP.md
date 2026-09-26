@@ -39,10 +39,10 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 |---|---|---|
 | P0 — Fix first | 6 | 5 |
 | CC — Correctness & concurrency | 16 | 16 |
-| SEC — Security (medium/low) | 13 | 6 |
+| SEC — Security (medium/low) | 13 | 7 |
 | FE — Frontend | 12 | 0 |
 | UP — Tidying & upkeep | 17 | 0 |
-| **Total** | **64** | **27** |
+| **Total** | **64** | **28** |
 
 ---
 
@@ -638,12 +638,30 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Failure:** a `.env.production` is committed and copied into the image.
 - **Fix:** ignore `.env*`, with an exception for `!.env.example` if one is added.
 
-### [ ] SEC-12 `library` scope never actually required
+### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
 - **Failure:** an `["admin"]`-only token can use every library route, although the spec says
   `x-required-scope: library`.
 - **Fix:** enforce `library` on library routes, or change the spec and docs to say admin
   implies library. Decide first; either way `test/openapi.test.js` should pin the result.
+- **Decided: enforce the spec** (owner's choice). The scopes are independent; `admin` does not
+  imply `library`, and existing admin-only tokens lose library access.
+- **Done:** `services/auth.js#holdsScope` is the one rule. v2 carries `requireLibraryScope` on its
+  23 library routes (tier `pat-library`). v1's `authRequired` lets a PAT without `library` reach
+  only `requirePermission`-gated routes, a set pinned in `test/api-surface.test.js`. It fails
+  closed, so `GET/POST /api/settings` (inline admin check) refuse such a token; use v2
+  `PATCH /settings`. `GET /api/v2/jobs/:jobId` is `x-required-scope: as-started`: the scope of the
+  call that started the job, checked after ownership. Every spec operation documents its 403.
+  The token UI no longer describes Admin as "everything above".
+- **Operator action (before or at deploy):** list affected tokens with
+  `SELECT t.id, u.username, t.name, t.scopes FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.scopes NOT LIKE '%"library"%';`
+  and re-mint each that needs library access as `library,admin`, then revoke the old one.
+  Record this breaking change in `GameTracker-stg/STAGING_CHANGELOG.txt` and
+  `PRODUCTION_CHANGELOG.txt` (not in this checkout). An admin-only token handed to the MCP now
+  gets 403 from every tool.
+- **Reviews:** CISO and Architect approved with conditions (doc precision, the operator
+  communication above, this tick). Code review: 0 high. All conditions are addressed in the
+  follow-up commit. UI/UX reviewed the token-copy change.
 
 ### [ ] SEC-13 Audit accounts taken over before P0-1 (operator action)
 - **Why:** before P0-1, an LDAP login relabelled a same-named local account `origin='ldap'` and
@@ -915,3 +933,5 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | CC-1, CC-2 | `c42f066` + review fix | 2026-09-25 | Status decided from the locked current row; events can no longer be invented or mis-attributed |
 | CC-3, CC-4 | `7d61751` | 2026-09-25 | Reminder dedupe is a primary-key claim in Postgres (migration 006) |
 | SEC-6 | `8fd5a87`, `cf46533` | 2026-09-25 | No `down` before `up`, and deploy rolls back to `:previous` on failure or cancel |
+| SEC-12 | `5520939` + review fix | 2026-09-26 | `library` enforced on v1 and v2; `admin` no longer implies it; job poll is `as-started` |
+| CI (PR #5) | review fix | 2026-09-26 | Semgrep pin installs with `pip --target` (the runner has no `python3-venv`); nodemailer 9.1 (GHSA-2x7j-588g-ccc2), fast-uri 3.1.8 (four SSRF CVEs), frontend `apk upgrade` + `--pull --no-cache` (libexpat CVE-2026-93990) |

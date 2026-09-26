@@ -223,26 +223,37 @@ jobs:
       # stale version, or a stub dropped there by anything that ever ran on the host,
       # would turn SAST green permanently while CI reported success.
       #
-      # Now the pinned version lives in its own virtualenv, keyed by version, and is
-      # run by ABSOLUTE PATH, never looked up on PATH. The version is verified, and a
-      # mismatch fails the job. Bump SEMGREP_VERSION deliberately -- it must be a real
-      # release on pypi.org/project/semgrep.
+      # Now the pinned version lives in its own directory, keyed by version, and is
+      # run by ABSOLUTE PATH through a generated wrapper, never looked up on PATH. The
+      # version is verified, and a mismatch fails the job. Bump SEMGREP_VERSION
+      # deliberately -- it must be a real release on pypi.org/project/semgrep.
+      #
+      # `pip install --target`, NOT a venv: the runner has no python3-venv (ensurepip),
+      # so `python3 -m venv` failed the first run of this step. The wrapper sets
+      # PYTHONPATH to the pinned tree (ahead of system site-packages), disables the user
+      # site, and puts the tree's own bin/ first on PATH -- semgrep execs `pysemgrep`
+      # by name, and without that it found none, or whichever one PATH offered.
       - name: Install Semgrep (pinned, isolated)
         env:
           SEMGREP_VERSION: "1.178.0"
         run: |
           set -euo pipefail
-          VENV="${HOME}/.cache/gametracker-semgrep/${SEMGREP_VERSION}"
-          if [ "$("${VENV}/bin/semgrep" --version 2>/dev/null || true)" != "${SEMGREP_VERSION}" ]; then
-            echo "[semgrep] Installing pinned v${SEMGREP_VERSION} into ${VENV}..."
-            rm -rf "${VENV}"
-            python3 -m venv "${VENV}"
-            "${VENV}/bin/pip" install --quiet --disable-pip-version-check "semgrep==${SEMGREP_VERSION}"
+          DIR="${HOME}/.cache/gametracker-semgrep/${SEMGREP_VERSION}"
+          if [ "$("${DIR}/semgrep" --version 2>/dev/null || true)" != "${SEMGREP_VERSION}" ]; then
+            echo "[semgrep] Installing pinned v${SEMGREP_VERSION} into ${DIR}..."
+            rm -rf "${DIR}"
+            mkdir -p "${DIR}"
+            pip3 install --quiet --disable-pip-version-check --no-warn-script-location \
+              --target "${DIR}/lib" "semgrep==${SEMGREP_VERSION}"
+            printf '%s\n' '#!/bin/sh' \
+              "export PYTHONPATH=\"${DIR}/lib\" PYTHONNOUSERSITE=1 PATH=\"${DIR}/lib/bin:\$PATH\"" \
+              "exec python3 -s \"${DIR}/lib/bin/semgrep\" \"\$@\"" > "${DIR}/semgrep"
+            chmod 755 "${DIR}/semgrep"
           fi
           # Fail closed if the binary we are about to run is not the pinned version.
-          test "$("${VENV}/bin/semgrep" --version)" = "${SEMGREP_VERSION}"
-          echo "SEMGREP_BIN=${VENV}/bin/semgrep" >> "$GITHUB_ENV"
-          echo "[semgrep] Using ${VENV}/bin/semgrep v${SEMGREP_VERSION}"
+          test "$("${DIR}/semgrep" --version)" = "${SEMGREP_VERSION}"
+          echo "SEMGREP_BIN=${DIR}/semgrep" >> "$GITHUB_ENV"
+          echo "[semgrep] Using ${DIR}/semgrep v${SEMGREP_VERSION}"
 
       # `--config auto` still pulls the registry's CURRENT rules: the binary is pinned,
       # the auto rule set is not (the registry does not version it). A new registry rule
@@ -422,9 +433,14 @@ jobs:
             -t ${{ steps.image-tags.outputs.backend_image }} \
             .
 
+      # --pull --no-cache: the base is a moving `alpine` tag and the Dockerfile runs
+      # `apk upgrade`. Cached, both froze at whatever the runner first fetched, and
+      # Trivy failed on a libexpat HIGH that Alpine had already fixed.
       - name: Build frontend Docker image
         run: |
           docker build \
+            --pull \
+            --no-cache \
             -t ${{ steps.image-tags.outputs.frontend_image }} \
             ./frontend
 

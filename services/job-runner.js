@@ -128,9 +128,10 @@ function start({ kind, scope, ownerId, work }) {
 
 // A job, ONLY for the account that started it.
 //
-// Ownership, not scope, is what protects an instance-wide job's result — its
-// `failures[]` names game ids from every user's library. A job belonging to somebody
-// else is indistinguishable from one that never existed.
+// Ownership is checked HERE, first — an instance-wide job's `failures[]` names game ids
+// from every user's library. A job belonging to somebody else is indistinguishable from
+// one that never existed. The caller then checks the scope of the operation that started
+// it (services/auth.js#scopeForJob), so the owner presenting the wrong token gets a 403.
 function get(id, ownerId) {
   const job = jobs.get(String(id));
   if (!job || String(job.ownerId) !== String(ownerId)) return null;

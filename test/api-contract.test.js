@@ -949,6 +949,8 @@ checkAsync('a game history keeps the shape the modal reads', async () => {
 });
 
 console.log('Token scopes (SEC-12 — admin does not imply library):');
+// Authorization BEHAVIOUR rather than a shape, placed here because this file already
+// loads index.js and drives the live route chains; helpers.test.js must not load it.
 
 // The REAL chains, pulled off the live routers, so what runs here is what serves.
 function routeChain(stack, method, path) {
@@ -1043,22 +1045,28 @@ checkAsync('v2: requireLibraryScope refuses an admin-only token and admits a lib
 });
 
 checkAsync('v2: a job is readable with the scope that STARTED it, and no other', async () => {
+  // REAL records from the job store, not hand-built ones: a fake record once used field
+  // names the runner does not have, and the 200s it asserted proved only "not 403".
   const jobRunner = require('../services/job-runner');
   const handler = routeChain(v2Stack(), 'get', '/jobs/:jobId').stack.slice(-1)[0].handle;
-  const realGet = jobRunner.get;
-  const poll = (jobScope, scopes, admin) => {
-    jobRunner.get = () => ({ id: 'j', kind: 'refreshMetadata', scope: jobScope, ownerId: 7, state: 'running',
-      createdAt: new Date().toISOString(), startedAt: null, finishedAt: null, result: null, error: null });
-    const res = v2Res();
-    try {
-      handler({ params: { jobId: 'j' }, user: { id: 7, can_manage_users: admin }, auth: { scopes } }, res);
-    } finally { jobRunner.get = realGet; }
-    return res.statusCode;
+  const started = {
+    self: jobRunner.start({ kind: 'refreshMetadata', scope: 'self', ownerId: 7, work: async () => 0 }),
+    instance: jobRunner.start({ kind: 'checkReleases', scope: 'instance', ownerId: 7, work: async () => 0 }),
   };
-  assert.strictEqual(poll('instance', ['admin'], true), 200, 'an admin-only token cannot poll the sweep it started');
-  assert.strictEqual(poll('instance', ['library'], false), 403, "a library token read an instance-wide job's results");
-  assert.strictEqual(poll('self', ['library'], false), 200, 'a library token cannot poll its own refresh');
-  assert.strictEqual(poll('self', ['admin'], true), 403, "an admin-only token read a library refresh's results");
+  const poll = (which, scopes, admin, userId = 7) => {
+    const res = v2Res();
+    res.statusCode = 0;   // recordingRes defaults to 200; a handler that never answered must not pass
+    handler({ params: { jobId: started[which].id }, user: { id: userId, can_manage_users: admin }, auth: { scopes } }, res);
+    return res;
+  };
+  const ok = poll('instance', ['admin'], true);
+  assert.strictEqual(ok.statusCode, 0, 'the job poll set a status on success; expected a plain res.json');
+  assert.strictEqual(ok.body && ok.body.id, started.instance.id, 'an admin-only token cannot poll the sweep it started');
+  assert.strictEqual(poll('instance', ['library'], false).statusCode, 403, "a library token read an instance-wide job's results");
+  assert.strictEqual(poll('self', ['library'], false).body.id, started.self.id, 'a library token cannot poll its own refresh');
+  assert.strictEqual(poll('self', ['admin'], true).statusCode, 403, "an admin-only token read a library refresh's results");
+  // Ownership BEFORE scope: someone else's job is a 404 whatever the token holds.
+  assert.strictEqual(poll('instance', ['library'], false, 8).statusCode, 404, "another account's job answered other than 404");
 });
 
 // The async cases run last. A rejection here must fail the process — an async

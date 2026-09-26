@@ -657,8 +657,10 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   scopes only, `library` and `admin`. **A scope may only NARROW the privilege read from `users`,
   never grant it**: a library-scoped token held by an admin is not an admin, and an admin-scoped
   token held by a non-admin does not become one. **The two are independent — `admin` does not
-  imply `library`** (ROADMAP SEC-12): an admin-only token manages users and settings and gets 403
-  from every library route. v2 enforces it per route with `requireLibraryScope` (tier
+  imply `library`** (ROADMAP SEC-12): on v2 an admin-only token reaches exactly the `admin`
+  operations; on v1 exactly the `requirePermission`-gated routes — NOT `GET/POST /api/settings`,
+  which decide admin inline and so refuse it (fail closed; use v2 `PATCH /settings`). The set is
+  pinned in `test/api-surface.test.js`. v2 enforces it per route with `requireLibraryScope` (tier
   `pat-library`); v1's `authRequired` lets such a token reach only routes carrying a
   `requirePermission` guard, read from `req.route`, failing closed without one. The ONE rule is
   `services/auth.js#holdsScope`. `GET /api/v2/jobs/:jobId` alone is `x-required-scope: as-started`

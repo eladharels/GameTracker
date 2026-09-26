@@ -311,12 +311,16 @@ console.log('the semgrep gate runs a pinned binary:');
   const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
   const steps = wf.jobs.semgrep.steps;
   const text = (st) => String(st.run || '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-  check('semgrep is installed at a pinned version, verified, into an isolated venv', () => {
+  check('semgrep is installed at a pinned version, verified, into an isolated directory', () => {
     const install = steps.find((st) => /semgrep==\$\{SEMGREP_VERSION\}/.test(text(st)));
     assert.ok(install, 'no step installs semgrep==${SEMGREP_VERSION}');
     assert.match(String(install.env && install.env.SEMGREP_VERSION), /^\d+\.\d+\.\d+$/, 'SEMGREP_VERSION is not an exact version');
-    assert.ok(/python3 -m venv/.test(text(install)), 'semgrep is not isolated in its own venv');
-    assert.ok(/test "\$\("\$\{VENV\}\/bin\/semgrep" --version\)" = "\$\{SEMGREP_VERSION\}"/.test(text(install)),
+    // --target, not a venv: the runner has no ensurepip, and `python3 -m venv` failed.
+    assert.ok(/--target "\$\{DIR\}\/lib"/.test(text(install)), 'semgrep is not installed into its own directory');
+    assert.ok(!/python3 -m venv/.test(text(install)), 'a venv needs python3-venv, which the runner does not have');
+    assert.ok(/PYTHONNOUSERSITE=1/.test(text(install)) && /\$\{DIR\}\/lib\/bin:/.test(text(install)),
+      'the wrapper does not isolate the pinned tree (PYTHONNOUSERSITE, its own bin/ first on PATH)');
+    assert.ok(/test "\$\("\$\{DIR\}\/semgrep" --version\)" = "\$\{SEMGREP_VERSION\}"/.test(text(install)),
       'the installed version is not verified');
   });
   check('the scan runs that binary by path, and nothing trusts `semgrep` on PATH', () => {

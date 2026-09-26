@@ -64,8 +64,9 @@ function liveRoutes(stack = (app.router || app._router).stack, prefix = '', inhe
       const names = handles.map((h) => h.name || 'anon');
       const perms = handles.map((h) => h.requiredPermission).filter(Boolean);
       const selfOnly = handles.some((h) => h.isSelfOnly === true);
+      const permTaggers = handles.filter((h) => h.requiredPermission).map((h) => h.name || 'anon');
       for (const method of Object.keys(layer.route.methods).filter((m) => m !== '_all')) {
-        out.push({ key: `${method.toUpperCase()} ${prefix}${layer.route.path}`, names, perms, selfOnly });
+        out.push({ key: `${method.toUpperCase()} ${prefix}${layer.route.path}`, names, perms, selfOnly, permTaggers });
       }
       continue;
     }
@@ -256,6 +257,24 @@ const EXPECTED = {
 // what keeps the admin boundary from being bypassable by logging in with a password.
 // Every one of these is also an operation in openapi/gametracker-v2.yaml carrying
 // `x-implemented: true`, and the drift check below fails if the two disagree.
+// The v1 routes a PAT WITHOUT the `library` scope may reach (ROADMAP SEC-12) — exactly
+// the requirePermission-gated ones. Checked below against the live router.
+const ADMIN_ONLY_TOKEN_V1_ROUTES = [
+  'DELETE /api/users/:id',
+  'GET /api/settings/apikeys',
+  'GET /api/system-status',
+  'GET /api/test/igdb',
+  'GET /api/users',
+  'POST /api/admin/check-releases',
+  'POST /api/admin/crackrelease-status',
+  'POST /api/admin/ldap-sync',
+  'POST /api/admin/refresh-crackwatch-cache',
+  'POST /api/settings/apikeys',
+  'POST /api/settings/apikeys/refresh-igdb-token',
+  'POST /api/users',
+  'PUT /api/users/:id',
+];
+
 const EXPECTED_V2 = {
   'GET /api/v2/me': 'pat-library',
   'GET /api/v2/library/games': 'pat-library',
@@ -511,6 +530,31 @@ check('no v2 route is registered below the catch-all that would shadow it', () =
   const shadowed = stack.slice(firstCatchAll + 1).filter((l) => l.route).map((l) => l.route.path);
   assert.deepStrictEqual(shadowed, [],
     `these v2 routes are registered below the catch-all and are UNREACHABLE: ${shadowed.join(', ')}`);
+});
+
+check('.requiredPermission is carried only by guards that enforce it', () => {
+  // Since SEC-12 the tag does more than label a tier: on v1 it is what lets a PAT
+  // WITHOUT the library scope through authRequired (v1RouteIsAdminGated). Attached to a
+  // middleware that enforces nothing, it would silently open that route to admin-only
+  // tokens held by anyone — an admin-scoped token on a NON-admin account included.
+  for (const route of liveRoutes()) {
+    for (const name of route.permTaggers) {
+      assert.ok(name === 'requirePermissionMiddleware' || name === 'requireAdminScope',
+        `${route.key}: '${name}' carries .requiredPermission but is not one of the two guards that enforce it`);
+    }
+  }
+});
+
+check('the v1 routes an admin-only token can reach are PINNED', () => {
+  // Derived the same way authRequired decides it: a v1 route is reachable by a PAT
+  // without `library` iff its chain carries a .requiredPermission guard. Pinned, so a
+  // route silently joining the set (a requirePermission added) or leaving it (an admin
+  // check moved inline, as GET/POST /api/settings already are — which refuse such a
+  // token) is a reviewed change rather than a surprise to an operator's script.
+  const reachable = liveRoutes()
+    .filter((r) => !r.key.includes('/api/v2/') && r.names.includes('authRequired') && r.perms.length)
+    .map((r) => r.key).sort();
+  assert.deepStrictEqual(reachable, ADMIN_ONLY_TOKEN_V1_ROUTES);
 });
 
 check('every v2 route is token-authenticated, never merely authenticated', () => {

@@ -81,9 +81,10 @@ info:
     | `admin` | User management and server settings, including API keys. |
 
     The two are **independent**: `admin` does not imply `library`. A token minted with
-    `admin` alone can manage users and settings and gets `403` from every library
-    operation, on this API and on v1 alike. Mint `library,admin` for a token that does
-    both. (Until SEC-12 `library` was enforced nowhere, and an admin-only token used
+    `admin` alone reaches exactly the `admin` operations below and gets `403` from every
+    other one — including `GET /me` and its own `/tokens`. (v1 applies the same rule: such
+    a token reaches only its admin-gated routes.) Mint `library,admin` for a token that
+    does both. (Until SEC-12 `library` was enforced nowhere, and an admin-only token used
     every library operation this table said it could not.)
 
     `library` is a slightly narrow name for "everything that is not admin" — it is not
@@ -942,7 +943,7 @@ paths:
         not usable, which is why this is library-scoped rather than admin.
 
         **Username and display name only.** Deliberately NOT the `User` schema: this is
-        readable by every credential on the instance, so it carries what a share picker
+        readable by every `library` credential on the instance, so it carries what a share picker
         needs and nothing else — no email, no administrator flag, no origin, no
         timestamps. `listUsers` remains the administrative view.
 

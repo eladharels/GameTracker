@@ -218,11 +218,26 @@ do.** A `library`-scoped token held by an administrator is *not* an administrato
 scope filters privilege, it never grants it. Grant `admin` only to something that genuinely
 needs to manage users or read API keys — an MCP server tending your library does not.
 
-**The two scopes are independent: `admin` does NOT include `library`.** An `admin`-only token
-manages users and settings and gets 403 from every library route, on v1 and v2 alike. Mint
-`library,admin` for a token that must do both. Before this was enforced an `admin`-only token
-used the library routes too, so **existing admin-only tokens lose library access** on upgrade.
+**The two scopes are independent: `admin` does NOT include `library`.** Mint `library,admin`
+for a token that must do both. An `admin`-only token:
+
+- on **v2**, reaches exactly the operations the spec marks `admin` — users, their tokens,
+  settings, system status, instance-wide jobs — and gets 403 from everything else, including
+  `GET /me` and its own `/tokens`;
+- on **v1**, reaches only the routes gated by `requirePermission`: `/api/users*`,
+  `/api/settings/apikeys*`, `/api/system-status`, `/api/admin/*` sweeps and LDAP sync.
+  **`GET/POST /api/settings` is NOT one of them** (it decides admin inline, and fails closed);
+  use v2 `PATCH /settings`. Also refused: `/api/capabilities`, `/api/openapi/v2`,
+  `/api/admin/test-notification`, and the admin bypass on other users' libraries.
+
 A job (`GET /api/v2/jobs/{id}`) is readable with the scope of the call that started it.
+
+> **Upgrade note.** Before this was enforced an `admin`-only token used every library route, so
+> **existing admin-only tokens lose library access** on upgrade. Find them with
+> `SELECT t.id, u.username, t.name, t.scopes FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.scopes NOT LIKE '%"library"%';`
+> and, for each one that needs library access, mint a `library,admin` replacement and revoke the
+> old token. The token UI in My Account used to describe Admin as "everything above", which is
+> how such tokens were likely minted.
 
 > `library` is a slight misnomer worth knowing about: it means *everything that is not
 > admin*, not "read-only" and not "only the library". A `library` token can still change its
