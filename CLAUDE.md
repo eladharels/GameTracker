@@ -938,7 +938,7 @@ push: main   |   pull_request -> main
     └── trivy-mcp    Trivy — MCP image      (CRITICAL/HIGH → fail)
 
 smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
-  └─► docker compose -p gametracker-smoke -f docker-compose.test.yml
+  └─► docker compose -p gametracker-smoke-<main|pr>-<run_id>-<attempt> -f docker-compose.test.yml
        Backend:  GET http://localhost:3099/api/health → {"status":"ok"}
        Frontend: GET http://localhost:8099/ → HTTP 200
        API via the frontend proxy + JSON 404 on an unknown /api route
@@ -1045,8 +1045,10 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 > Node the runner has), and this stage exercises the built container itself.
 >
 > **`docker-compose.test.yml` must stay identical in SHAPE to `docker-compose.yaml`** —
-> same `depends_on` conditions, same healthchecks, same env keys. Only ports, credentials
-> and probe timings may differ. Production once lacked a `depends_on` the test stack had,
+> same `depends_on` conditions, same healthchecks, same env keys. Only ports, credentials,
+> probe timings and `container_name` may differ. The test stack has NO `container_name`, on
+> purpose: fixed names stopped two stacks coexisting, which let a PR cancel a merge's
+> deploy (ROADMAP UP-6). Production once lacked a `depends_on` the test stack had,
 > so the smoke test could not have caught it: for six seconds of every deploy nginx served
 > the SPA while the API was still starting, and the library page rendered that failed
 > fetch as an empty library. A user reported their games had been deleted.
@@ -1082,11 +1084,11 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 
 | Property | Value |
 |---|---|
-| Compose project | `gametracker-smoke` (separate Docker network) |
-| Backend port | `3099` (no conflict with production `3000`) |
-| Frontend port | `8099` (no conflict with production `8080`) |
-| MCP port | `3199` (no conflict with production `3001`). Published on `127.0.0.1` — unlike production it is never LAN-bound. The host↔container port skew (3199→3001) is deliberate: it forces the EXPLICIT `MCP_ALLOWED_HOSTS` path, while `MCP_PUBLIC_HOST` is also set so the DERIVED path runs on every build too |
-| Data directory | `/tmp/gametracker-smoke-data/` — ephemeral, wiped after test |
+| Compose project | `gametracker-smoke-<main\|pr>-<run_id>-<attempt>`: one per run, separate network, no fixed container names. The job's concurrency group is split by event (main / pull request), so a PR can never cancel a queued main run's smoke test and with it that merge's deploy (ROADMAP UP-6). A leftover stack from the same partition is removed before start |
+| Backend port | `3099` for pull requests, `3098` for main (no conflict with production `3000`, nor with each other) |
+| Frontend port | `8099` for pull requests, `8098` for main (no conflict with production `8080`) |
+| MCP port | `3199` for pull requests, `3198` for main (no conflict with production `3001`). Published on `127.0.0.1` — unlike production it is never LAN-bound. The host↔container port skew (3199→3001) is deliberate: it forces the EXPLICIT `MCP_ALLOWED_HOSTS` path, while `MCP_PUBLIC_HOST` is also set so the DERIVED path runs on every build too |
+| Data directory | a `mktemp -d` under `RUNNER_TEMP` — ephemeral, wiped after test |
 | Production DB | **Never touched** — `/home/docker/gametracker/data/` not mounted |
 
 ### Docker Prune Change

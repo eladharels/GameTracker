@@ -1,7 +1,11 @@
 # docker-compose.test.yml — Smoke test stack for CI pipeline
 #
 # ONLY used by the smoke-test job in .github/workflows/docker-build-deploy.yml.
-# Always launched with: docker compose -p gametracker-smoke -f docker-compose.test.yml ...
+# Always launched with: docker compose -p "$SMOKE_PROJECT" -f docker-compose.test.yml ...
+# (one project per CI run). NO container_name here, deliberately (ROADMAP UP-6): a fixed
+# name made two stacks unable to coexist, which is why a PR run could cancel a main run's
+# smoke test and so its deploy. Address containers through the project, e.g.
+# `docker compose -p "$SMOKE_PROJECT" -f docker-compose.test.yml logs backend`.
 #
 # ISOLATION:
 #   - Ports 3099 (backend) and 8099 (frontend) — no conflict with production (3000/8080).
@@ -15,7 +19,6 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: postgres-gametracker-smoke
     # No published port — the backend reaches it over the compose network.
     environment:
       - POSTGRES_DB=gametracker
@@ -38,7 +41,6 @@ services:
 
   backend:
     image: ${TEST_BACKEND_IMAGE:-local/gametracker-backend:latest}
-    container_name: gametracker-backend-smoke
     pull_policy: never
     ports:
       # Host port varies to avoid clashing with prod; the CONTAINER port is fixed
@@ -105,7 +107,6 @@ services:
   # a real handshake against this service.
   mcp:
     image: ${TEST_MCP_IMAGE:-local/gametracker-mcp:latest}
-    container_name: gametracker-mcp-smoke
     pull_policy: never
     ports:
       - "127.0.0.1:${MCP_TEST_PORT:-3199}:3001"
@@ -146,7 +147,6 @@ services:
 
   frontend:
     image: ${TEST_FRONTEND_IMAGE:-local/gametracker-frontend:latest}
-    container_name: gametracker-frontend-smoke
     pull_policy: never
     ports:
       - "127.0.0.1:${FRONTEND_TEST_PORT:-8099}:8080"

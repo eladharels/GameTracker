@@ -69,14 +69,14 @@ on:
 # the production stack itself. That exclusivity moves down to the two jobs that actually
 # contend for them, where it belongs.
 #
-# BE PRECISE ABOUT WHAT THIS DOES NOT FIX. A job-level group holds one pending item too, so
-# with PR-A's smoke-test running, a main run's smoke-test queued behind it, and PR-B's
-# arriving, the main run's smoke-test is still cancelled -- and `deploy`, which needs it, is
-# skipped. The same "a merge that never deployed" outcome, one job later and now requiring
-# TWO concurrent PR runs to trigger. It cannot be closed by partitioning this group:
-# docker-compose.test.yml hard-codes container_name: gametracker-*-smoke, so two smoke
-# stacks genuinely cannot coexist on one runner. The durable fix is parameterising the
-# container names and project name off github.run_id; that is a larger change than this one.
+# The smoke-test job's own group is partitioned the same way (ROADMAP UP-6). A job-level
+# group also holds one pending item, so while it was shared, PR-A's smoke-test running +
+# a main run's queued + PR-B's arriving CANCELLED the main run's smoke-test, and `deploy`
+# (which needs it) was skipped: a merge that never deployed. That could not be fixed by
+# partitioning while docker-compose.test.yml hard-coded container_names; now each run has
+# its own compose project and each partition its own host ports, so a PR can never evict
+# a main run. Within the main partition a newer merge can still replace a QUEUED older
+# one -- harmless, since main is linear and the newer commit contains the older.
 concurrency:
   group: gametracker-pipeline-${{ github.event_name == 'push' && 'main' || github.event.number }}
   cancel-in-progress: false
@@ -665,14 +665,15 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 7: Smoke Test (docker compose)
-  # Starts a completely isolated test stack on ports 3099/8099 using
-  # docker-compose.test.yml. Verifies backend /api/health and frontend HTTP 200
+  # Starts a completely isolated test stack using docker-compose.test.yml. Verifies backend /api/health and frontend HTTP 200
   # before any deploy happens. Teardown always runs (if: always()).
   #
   # ISOLATION GUARANTEES:
-  #   - Compose project name: gametracker-smoke (separate network + containers)
-  #   - Ports: 3099 (backend), 8099 (frontend) — no conflict with production 3000/8080
-  #   - Data dir: /tmp/gametracker-smoke-data/ — never touches production DB
+  #   - Compose project: gametracker-smoke-<main|pr>-<run_id>-<attempt>, one per run
+  #     (separate network + containers; no container_name is fixed)
+  #   - Ports: 3099/8099/3199 for pull requests, 3098/8098/3198 for main -- no
+  #     conflict with production 3000/8080/3001, nor with each other
+  #   - Data dir: a mktemp -d under RUNNER_TEMP -- never touches production data
   #   - Dummy API keys — no real credentials used or exposed
   # ─────────────────────────────────────────────────────────────────────────────
   smoke-test:
@@ -694,16 +695,20 @@ jobs:
       - secret-scan
       - semgrep
       - frontend-quality
-    # The smoke stack's ports and compose project name are fixed, so two of these must
-    # never overlap on one runner -- this is the half of the old global group that was
-    # doing real work.
+    # PARTITIONED BY EVENT (ROADMAP UP-6). Within a partition the host ports are fixed, so
+    # two of the same kind must never overlap -- the group serialises them. ACROSS
+    # partitions they may run at once: the project name is per run and the ports differ.
+    # The point is that a pull request can never cancel a queued main run's smoke-test
+    # (and with it that merge's deploy), which a single shared group allowed.
     concurrency:
-      group: gametracker-smoke-stack
+      group: gametracker-smoke-stack-${{ github.event_name == 'push' && 'main' || 'pr' }}
       cancel-in-progress: false
     env:
-      BACKEND_TEST_PORT: 3099
-      FRONTEND_TEST_PORT: 8099
-      MCP_TEST_PORT: 3199
+      SMOKE_PARTITION: ${{ github.event_name == 'push' && 'main' || 'pr' }}
+      SMOKE_PROJECT: gametracker-smoke-${{ github.event_name == 'push' && 'main' || 'pr' }}-${{ github.run_id }}-${{ github.run_attempt }}
+      BACKEND_TEST_PORT: ${{ github.event_name == 'push' && '3098' || '3099' }}
+      FRONTEND_TEST_PORT: ${{ github.event_name == 'push' && '8098' || '8099' }}
+      MCP_TEST_PORT: ${{ github.event_name == 'push' && '3198' || '3199' }}
       # The images THIS run built. Both compose files default these to `:latest`, so a
       # by-hand `docker compose up` is unchanged; CI passes them explicitly because on a
       # pull request the tag is `pr-<number>` and `:latest` is production's, not ours.
@@ -741,6 +746,17 @@ jobs:
           sudo chown -R 1000:1000 "${SMOKE_DATA_DIR}"
           echo "[smoke] Test data dir: ${SMOKE_DATA_DIR}"
 
+      # A stack a cancelled or crashed run left behind would hold THIS partition's ports.
+      # Only this partition's projects are removed: the concurrency group guarantees none
+      # of them belongs to a live run, while the other partition's may well be running.
+      - name: Remove leftover smoke stacks from this partition
+        run: |
+          set -euo pipefail
+          for proj in $(docker compose ls -a -q | grep -E "^gametracker-smoke-${SMOKE_PARTITION}-[0-9]+-[0-9]+$" || true); do
+            echo "[smoke] Removing leftover stack ${proj}"
+            docker compose -p "${proj}" -f docker-compose.test.yml down --volumes --remove-orphans || true
+          done
+
       - name: Start smoke test stack
         env:
           IGDB_CLIENT_ID: smoke-test-dummy
@@ -749,11 +765,11 @@ jobs:
           JWT_SECRET: smoke-test-jwt-secret-not-real
         run: |
           docker compose \
-            -p gametracker-smoke \
+            -p "${SMOKE_PROJECT}" \
             -f docker-compose.test.yml \
             up -d || {
             echo "[smoke] ERROR: Stack failed to start — printing backend container logs:"
-            docker logs gametracker-backend-smoke 2>&1 || true
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend 2>&1 || true
             exit 1
           }
           echo "[smoke] Stack started — backend :${{ env.BACKEND_TEST_PORT }}, frontend :${{ env.FRONTEND_TEST_PORT }}"
@@ -765,7 +781,7 @@ jobs:
           until curl -sf http://localhost:${{ env.BACKEND_TEST_PORT }}/api/health > /dev/null 2>&1; do
             if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
               echo "[smoke] ERROR: Backend not healthy after ${MAX_WAIT}s"
-              docker compose -p gametracker-smoke -f docker-compose.test.yml logs backend
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs backend
               exit 1
             fi
             echo "[smoke] Waiting for backend... (${ELAPSED}s)"
@@ -791,7 +807,7 @@ jobs:
           until curl -sf http://localhost:${{ env.FRONTEND_TEST_PORT }}/ > /dev/null 2>&1; do
             if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
               echo "[smoke] ERROR: Frontend not reachable after ${MAX_WAIT}s"
-              docker compose -p gametracker-smoke -f docker-compose.test.yml logs frontend
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs frontend
               exit 1
             fi
             echo "[smoke] Waiting for frontend... (${ELAPSED}s)"
@@ -877,10 +893,10 @@ jobs:
         run: |
           set -euo pipefail
           for t in status-events stats upsert-release-date reminders email-resolution migration-lock; do
-            docker compose -p gametracker-smoke -f docker-compose.test.yml \
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml \
               exec -T backend node "test/integration/${t}.test.js" || {
               echo "[smoke] ERROR: ${t} integration test failed"
-              docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend 2>&1 | tail -30 || true
               exit 1
             }
           done
@@ -921,7 +937,7 @@ jobs:
           echo "[smoke] authenticated GET -> $STATUS: $(head -c 200 /tmp/smoke-stats.json)"
           [ "$STATUS" -eq 200 ] || {
             echo "[smoke] ERROR: authenticated stats request returned $STATUS"
-            docker logs gametracker-backend-smoke 2>&1 | tail -30 || true
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend 2>&1 | tail -30 || true
             exit 1
           }
           # Shape, not just a 200 — an empty body or an HTML error page is also a 200
@@ -984,7 +1000,7 @@ jobs:
           until curl -sf "http://127.0.0.1:${{ env.MCP_TEST_PORT }}/health" > /dev/null 2>&1; do
             if [ "$ELAPSED" -ge 30 ]; then
               echo "[smoke] ERROR: MCP container never became reachable"
-              docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+              docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
               exit 1
             fi
             sleep 3
@@ -1003,14 +1019,14 @@ jobs:
           echo "[smoke] MCP initialize body: $(head -c 400 /tmp/smoke-mcp.txt)"
           [ "$STATUS" -eq 200 ] || {
             echo "[smoke] ERROR: MCP initialize returned $STATUS, expected 200."
-            docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
             exit 1
           }
           # A JSON-RPC error is delivered with HTTP 200 in some paths, so the status
           # code alone would not have caught the crypto failure. Assert the RESULT.
           grep -q '"serverInfo"' /tmp/smoke-mcp.txt && grep -q '"name":"gametracker"' /tmp/smoke-mcp.txt || {
             echo "[smoke] ERROR: MCP initialize did not return a serverInfo result."
-            docker logs gametracker-mcp-smoke 2>&1 | tail -30 || true
+            docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color mcp 2>&1 | tail -30 || true
             exit 1
           }
           grep -q '"error"' /tmp/smoke-mcp.txt && {
@@ -1029,7 +1045,7 @@ jobs:
           JWT_SECRET: smoke-test-jwt-secret-not-real
         run: |
           docker compose \
-            -p gametracker-smoke \
+            -p "${SMOKE_PROJECT}" \
             -f docker-compose.test.yml \
             down --volumes --remove-orphans || true
           # Refuse to delete anything that isn't the mktemp -d directory we created.

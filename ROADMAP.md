@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 23 | 7 |
-| **Total** | **83** | **55** |
+| UP — Tidying & upkeep | 23 | 8 |
+| **Total** | **83** | **56** |
 
 ---
 
@@ -1072,11 +1072,28 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Done:** `**/node_modules` and `**/dist` replace the two per-directory lines, so no nested
   package can ship its host-built `node_modules` into the backend image.
 
-### [ ] UP-6 Two smoke stacks can't run concurrently
+### [x] UP-6 Two smoke stacks can't run concurrently
 - **Where:** hard-coded `container_name`s in `docker-compose.test.yml`. The workflow comment
   at `:72-79` already notes that a main run's smoke test can be cancelled.
 - **Fix:** drop the `container_name`s from the test stack, or add a concurrency group that
   never cancels a `push: main` run.
+- **Done: both halves, because neither works alone.** A partitioned group lets two stacks
+  start at once, and fixed names or ports then collide.
+  - **Per-run project:** each run gets `gametracker-smoke-<main|pr>-<run_id>-<attempt>`,
+    and the four `container_name`s are gone. Every log and exec step addresses the stack
+    through the project.
+  - **Split group:** the smoke-test concurrency group is split into main and PR partitions,
+    and each partition has its own host ports (PR 3099/8099/3199, main 3098/8098/3198).
+    A PR can no longer cancel a queued main run's smoke test, and with it that merge's
+    deploy.
+  - **Leftover cleanup:** a stack left behind in the same partition is removed before
+    start. The group guarantees it belongs to no live run.
+  - **Pinned in `test/runtime.test.js`:** mutation-checked, both a re-added `container_name`
+    and the old single group fail.
+  - **Residual:** within the main partition a newer merge can still replace a queued older
+    one. That is harmless, since main is linear and the newer commit contains the older.
+  - **Not verifiable here:** there is no Docker daemon, so the first real run is this
+    push's CI.
 
 ### [ ] UP-7 No end-to-end coverage of `/api/v2` or the MCP→backend path
 - **Problem:** the smoke test never calls v2, and the MCP handshake uses a fake PAT.
@@ -1351,3 +1368,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | SEC-16 | this batch | 2026-09-26 | React Router 6.30.6; npm audit fix clears 4 HIGH/moderate advisories in the shipped SPA |
 | UP-23 | this batch | 2026-09-26 | Vite 6.4.3 + Vitest 4.1.11: clears the HIGH dev-server and the mocker advisories; no production entry moved |
 | UP-1–5 | this batch | 2026-09-26 | Node floor 20→22 everywhere (20 is EOL) and the frontend build stage in the runtime gate; scriptless frontend install; stale trivyignore, workflow comment, `.dockerignore`, `MCP_BIND` docs |
+| UP-6 | this batch | 2026-09-26 | Smoke stack per run (project, no container_name) and smoke concurrency split main/PR with separate ports: a PR can no longer cancel a merge's deploy |

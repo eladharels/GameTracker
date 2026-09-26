@@ -96,6 +96,30 @@ for (const img of IMAGES) {
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
 // every suite passed on an interpreter production never used. Keeping them equal is not
 // cosmetic — it is what makes a green `npm test` mean anything about the deployed thing.
+// ROADMAP UP-6. A shared smoke-test group let a pull request cancel a QUEUED main run's
+// smoke test, and deploy (which needs it) was skipped: a merge that never deployed and
+// never said so. The partition only works because stacks can coexist, so both halves are
+// pinned: per-run project, no fixed container_name, and main/PR on different ports.
+check('smoke stacks are per-run and a PR cannot evict a main run (UP-6)', () => {
+  const yaml = require('js-yaml');
+  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
+  const job = wf.jobs['smoke-test'];
+  assert.ok(/github\.event_name == 'push'/.test(job.concurrency.group),
+    'smoke-test concurrency group is no longer partitioned by event');
+  assert.ok(/github\.run_id/.test(job.env.SMOKE_PROJECT), 'SMOKE_PROJECT is not per run');
+  for (const k of ['BACKEND_TEST_PORT', 'FRONTEND_TEST_PORT', 'MCP_TEST_PORT']) {
+    const m = /'(\d+)' \|\| '(\d+)'/.exec(job.env[k] || '');
+    assert.ok(m && m[1] !== m[2], `${k} must differ between main and pull requests`);
+  }
+  const steps = JSON.stringify(job.steps);
+  assert.ok(!/-p gametracker-smoke[ \\]/.test(steps) && !/docker logs gametracker-/.test(steps),
+    'a smoke step addresses the stack by a fixed name again');
+  const compose = yaml.load(fs.readFileSync(path.join(ROOT, 'docker-compose.test.yml'), 'utf8'));
+  for (const [name, svc] of Object.entries(compose.services)) {
+    assert.ok(!svc.container_name, `docker-compose.test.yml: ${name} has a fixed container_name`);
+  }
+});
+
 check('CI runs the same Node major the images do', () => {
   const wf = fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8');
   const ci = /node-version:\s*'?"?(\d+)/.exec(wf);
