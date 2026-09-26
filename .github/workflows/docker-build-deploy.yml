@@ -1036,6 +1036,54 @@ jobs:
           rm -f /tmp/smoke-mcp.txt
           echo "[smoke] MCP handshake check PASSED"
 
+      # END TO END with a REAL credential (ROADMAP UP-7). Every step above is v1, and the
+      # MCP handshake uses a fake PAT because `initialize` never reaches the backend. So
+      # nothing proved that a token minted by create-api-token.js is accepted by /api/v2,
+      # that a v2 WRITE lands, or that the MCP server forwards a caller's token to the
+      # backend — the whole design of both. This mints one inside the throwaway stack
+      # (scopes library,admin, expires in a day, stack destroyed at teardown anyway),
+      # masks it in the log, and drives both paths.
+      - name: Verify /api/v2 and the MCP-to-backend path with a real token
+        run: |
+          set -euo pipefail
+          B="http://127.0.0.1:${{ env.BACKEND_TEST_PORT }}"
+          M="http://127.0.0.1:${{ env.MCP_TEST_PORT }}"
+          fail() { echo "[smoke] ERROR: $1"; docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml logs --no-color backend mcp 2>&1 | tail -40 || true; exit 1; }
+
+          # The token is printed ALONE on stdout (the script's contract); prose goes to stderr.
+          # `|| true`: under set -e + pipefail a failed mint would kill the step SILENTLY;
+          # the case below reports it with the script's own stderr instead.
+          PAT=$(docker compose -p "${SMOKE_PROJECT}" -f docker-compose.test.yml exec -T backend \
+                  node create-api-token.js root "smoke-e2e-${GITHUB_RUN_ID:-local}-$$" library,admin --expires-in-days 1 \
+                  2>/tmp/smoke-mint.err | tail -n 1) || true
+          case "$PAT" in gt_pat_*) ;; *) fail "create-api-token.js did not print a token: $(tail -n 3 /tmp/smoke-mint.err 2>/dev/null)" ;; esac
+          echo "::add-mask::${PAT}"
+
+          # 1. v2 refuses a missing credential with problem+json 401 (never the v1 envelope).
+          CODE=$(curl -s -o /tmp/smoke-v2.json -w "%{http_code} %{content_type}" "$B/api/v2/library/games")
+          case "$CODE" in "401 application/problem+json"*) ;; *) fail "unauthenticated v2 answered: $CODE" ;; esac
+
+          # 2. A v2 READ with the minted token.
+          CODE=$(curl -s -o /tmp/smoke-v2.json -w "%{http_code}" -H "Authorization: Bearer $PAT" "$B/api/v2/library/games?limit=5")
+          [ "$CODE" = "200" ] && grep -q '"data"' /tmp/smoke-v2.json || fail "v2 library read answered $CODE: $(head -c 300 /tmp/smoke-v2.json)"
+
+          # 3. A v2 WRITE that needs no external provider (no API keys here): replace the
+          #    outgoing share list, then read it back through the same token.
+          CODE=$(curl -s -o /tmp/smoke-v2.json -w "%{http_code}" -X PUT -H "Authorization: Bearer $PAT" \
+                   -H 'content-type: application/json' -d '{"usernames":[]}' "$B/api/v2/shares/outgoing")
+          [ "$CODE" = "200" ] && grep -q '"data":\[\]' /tmp/smoke-v2.json || fail "v2 share write answered $CODE: $(head -c 300 /tmp/smoke-v2.json)"
+
+          # 4. An MCP TOOL CALL that reaches the backend: whoami can only answer with the
+          #    caller's identity if the MCP server forwarded this token and v2 accepted it.
+          curl -s -o /tmp/smoke-mcp-e2e.txt -X POST "$M/mcp" -H 'content-type: application/json' \
+               -H 'accept: application/json, text/event-stream' -H "authorization: Bearer $PAT" \
+               -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}'
+          grep -q 'username\\":\\"root' /tmp/smoke-mcp-e2e.txt || fail "MCP whoami did not return the token's user: $(head -c 400 /tmp/smoke-mcp-e2e.txt)"
+          grep -q '"isError":true' /tmp/smoke-mcp-e2e.txt && fail "MCP whoami returned a tool error" || true
+
+          rm -f /tmp/smoke-v2.json /tmp/smoke-mcp-e2e.txt
+          echo "[smoke] v2 read, v2 write and MCP -> backend with a real token PASSED"
+
       - name: Tear down smoke test stack
         if: always()
         env:

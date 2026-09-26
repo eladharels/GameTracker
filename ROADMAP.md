@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 20 |
-| UP — Tidying & upkeep | 24 | 19 |
-| **Total** | **84** | **75** |
+| UP — Tidying & upkeep | 24 | 20 |
+| **Total** | **84** | **76** |
 
 ---
 
@@ -1280,12 +1280,29 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     - Switchover note: a stack left over under the OLD fixed project `gametracker-smoke` is
       not matched by the cleanup. Teardown runs `if: always()`, so this matters at most once.
 
-### [ ] UP-7 No end-to-end coverage of `/api/v2` or the MCP→backend path
+### [x] UP-7 No end-to-end coverage of `/api/v2` or the MCP→backend path
 - **Problem:** the smoke test never calls v2, and the MCP handshake uses a fake PAT.
 - **Fix:** in the smoke stage:
   1. Mint a PAT with `create-api-token.js`.
   2. Call one v2 read and one v2 write.
   3. Call one MCP tool that reaches the backend.
+- **Done:** a new smoke step, "Verify /api/v2 and the MCP-to-backend path with a real
+  token".
+  - **The token:** it mints a real PAT inside the throwaway stack with
+    `create-api-token.js`, scoped `library,admin`, expiring in a day, and destroyed at
+    teardown. It `::add-mask::`s the token in the log.
+  - **The checks:**
+    1. v2 without a token must be `401 application/problem+json`, never the v1 envelope.
+    2. A v2 READ, the library.
+    3. A v2 WRITE that needs no external provider: `PUT /shares/outgoing`.
+    4. An MCP `tools/call whoami`, which can only return the caller's user if the MCP
+       server forwarded the token and v2 accepted it.
+  - **Rehearsed locally:** the step's own script, extracted from the YAML, ran against a
+    local backend, MCP server and Postgres. It passed, and two negative controls failed
+    with clear messages: whoami returning another user, and a failed mint.
+  - **A silent failure fixed along the way:** under `set -e` plus `pipefail`, a failed mint
+    killed the step with no output. It is now caught and reported with the script's
+    stderr.
 
 ### [x] UP-8 `saveSettings` is not atomic
 - **Where:** `settings-store.js`.
@@ -1789,3 +1806,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-20 | this batch | 2026-09-26 | Every status colour (chips, hover glows, detail block) now from the --color-status-* tokens; no accent preset makes two statuses look alike |
 | FE-19 | this batch | 2026-09-26 | One useDialogFocus() hook for all six dialogs: focus in/back, trap (now also from the container); alertdialog opens on Cancel |
 | FE-18 (+FE-19 review) | this batch | 2026-09-26 | User Management successes → toast, dialog errors = page banner style, sticky banner opaque at 1rem; Add User shows the server's reason; dialog trap on the role element, delete returns focus to the heading |
+| UP-7 | this batch | 2026-09-26 | Smoke stage mints a real PAT and drives v2 (401, read, write) and MCP whoami through to the backend |

@@ -970,6 +970,8 @@ smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
        Frontend: GET http://localhost:8099/ → HTTP 200
        API via the frontend proxy + JSON 404 on an unknown /api route
        MCP:      POST http://127.0.0.1:3199/mcp → a real `initialize` handshake
+       E2E:      a REAL PAT minted in the stack → v2 401/read/write, and MCP `whoami`
+                 through to the backend (UP-7)
        The six test/integration/ suites against the real Postgres
        Teardown: if: always() — guaranteed cleanup
 
