@@ -3055,6 +3055,39 @@ console.log('settings-store.checkSettingsLocation (UP-24: never start on a half-
   });
 }
 
+console.log('services/crackwatch.js (UP-16: moved out of index.js unchanged):');
+{
+  const cw = require('../services/crackwatch');
+  const axiosMod = require('axios');
+  checkAsync('refresh pages until empty; statusForRow: the stored status wins, then exact, then substring', async () => {
+    const realGet = axiosMod.get;
+    // An unwritable cache dir: the save fails and is logged, and nothing touches the disk.
+    cw.init({ cacheDir: '/nonexistent-crackwatch-test-dir' });
+    const pages = [
+      [{ title: 'Hades', isCracked: true }, { title: 'Hollow Knight: Silksong', groups: [] , slug: 'silksong' }],
+      [{ name: 'Resident Evil 4', crackDate: '2023-04-01' }],
+      [],
+    ];
+    let asked = 0;
+    axiosMod.get = async (url, opts) => { asked++; return { data: pages[opts.params.page] || [] }; };
+    try { await cw.refresh(); } finally { axiosMod.get = realGet; }
+    assert.strictEqual(asked, 3, 'the refresh did not stop at the first empty page');
+    assert.ok(cw.cacheSize() >= 4, 'titles and slug keys were not cached');
+    assert.strictEqual(cw.statusForRow({ game_name: 'Hades', crack_status: null }), 'cracked');
+    assert.strictEqual(cw.statusForRow({ game_name: 'Hades', crack_status: 'uncracked' }), 'uncracked',
+      'the per-game stored status must win over the cache');
+    assert.strictEqual(cw.statusForRow({ game_name: 'Hollow Knight Silksong' }), 'uncracked');
+    assert.strictEqual(cw.statusForRow({ game_name: 'Resident Evil 4 Remake' }), 'cracked', 'substring match lost');
+    assert.strictEqual(cw.statusForRow({ game_name: 'A Game Nobody Has Heard Of' }), 'unknown');
+  });
+  check('CrackRelease slugs and the storable statuses are unchanged', () => {
+    assert.strictEqual(cw.slugifyForCrackRelease("Assassin's Creed: Unity"), 'assassins-creed-unity');
+    assert.strictEqual(cw.slugifyForCrackRelease(''), '');
+    assert.deepStrictEqual({ ...cw.STORABLE_CRACK_STATUS }, { cracked: 'cracked', uncracked: 'uncracked' });
+    assert.ok(Object.isFrozen(cw.STORABLE_CRACK_STATUS));
+  });
+}
+
 console.log('services/session.js (SEC-14: the browser session cookie):');
 {
   const sess = require('../services/session');

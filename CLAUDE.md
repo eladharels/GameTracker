@@ -25,7 +25,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Push Notifications**: ntfy.sh, Gotify, Telegram Bot API
 - **Scheduling**: node-cron (release checks daily at 8 AM, price updates Mondays at 3 AM)
 - **HTTP client**: Axios (for external API calls)
-- **Entry point**: `index.js` (~3500 lines — Express server; the service layer under `services/`
+- **Entry point**: `index.js` (~3400 lines — Express server; the service layer under `services/`
   is progressively taking the logic out of it)
 
 ### Frontend
@@ -148,6 +148,10 @@ GameTracker/
 │   │                               #   the CSRF rule and the session view. The one owner: the
 │   │                               #   login route, authRequired and /api/auth/{session,logout}
 │   │                               #   are adapters over it. Never read by /api/v2
+│   ├── crackwatch.js               # The DRM-status sources (UP-16): the CrackWatch title cache
+│   │                               #   (load/save/refresh, exact-then-substring lookup) and the
+│   │                               #   CrackRelease page scraper. One cache per process;
+│   │                               #   index.js only wires CACHE_DIR, the cron and the routes
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
 │   ├── library.js                  # Game library + backlog ordering + the upsert, and the
 │   │                               #   ONE "already in the library?" rule (UP-19). The SPA's

@@ -1992,6 +1992,19 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - the Steam price route.
 - **Also closes, fully or partly:** CC-8, CC-9, CC-11, CC-12, CC-13, UP-10.
 - **Note:** leave the order to the Architect review.
+- **In progress:**
+  1. **The CrackWatch cache and CrackRelease scraper → `services/crackwatch.js` (2026-09-26).**
+     - The functions moved verbatim: the normaliser, the unsafe-key guard,
+       `rethrowIfReferenceError`, load/save/refresh, the substring lookup, the slug, the
+       scraper and `STORABLE_CRACK_STATUS`.
+     - The library read's combined status became `statusForRow`.
+     - `index.js` keeps only the process wiring (CACHE_DIR, the boot load, the 04:00 cron, the
+       first-boot refresh) and the routes, as adapters. 3,612 → 3,408 lines.
+     - The one change: the scraper's warning escapes the game name with `JSON.stringify`
+       instead of `safeForLog`, which stays in index.js; both neutralise CR/LF.
+     - New unit tests drive `refresh` through a stubbed CrackWatch API: pagination to the
+       empty page; stored-status precedence, then exact, then substring. Every v1 route
+       shape is unchanged; the contract suite passes untouched.
 
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with
