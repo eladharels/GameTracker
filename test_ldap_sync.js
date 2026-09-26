@@ -9,24 +9,21 @@
  *
  *   docker compose -f docker-compose.yaml exec backend node test_ldap_sync.js
  */
-const fs = require('fs');
-const path = require('path');
+const settingsStore = require('./settings-store');
 const db = require('./db');
 const {
   buildUserSearchFilter, createLdapClient, warnIfCleartextLdap, entryAttributes, attrValue,
 } = require('./ldap-helpers');
 
 // __dirname, not the process cwd — see backfill_ldap_display_names.js.
+// Through settings-store, the SOLE reader, so it follows SETTINGS_DIR (UP-24).
 function loadLdapSettings() {
-  const file = path.join(__dirname, 'settings.json');
-  let parsed;
-  try {
-    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (e) {
-    console.error(`❌ Cannot read ${file}: ${e.message}`);
+  const { settings, degraded, reason } = settingsStore.readSettings();
+  if (degraded) {
+    console.error(`❌ Cannot read ${settingsStore.SETTINGS_FILE}: ${reason}`);
     process.exit(1);
   }
-  return parsed.ldap || {};
+  return settings.ldap || {};
 }
 
 function bind(ldapSettings) {

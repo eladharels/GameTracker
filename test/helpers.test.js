@@ -3023,7 +3023,7 @@ console.log('settings-store.checkSettingsLocation (UP-24: never start on a half-
     existsSync: (p) => files.includes(p) || dirs.includes(p),
     statSync: (p) => {
       if (!dirs.includes(p) && !files.includes(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
-      return { isDirectory: () => dirs.includes(p) };
+      return { isDirectory: () => dirs.includes(p), isFile: () => files.includes(p) && !dirs.includes(p) };
     },
   });
   const legacy = '/app/settings.json';
@@ -3043,6 +3043,11 @@ console.log('settings-store.checkSettingsLocation (UP-24: never start on a half-
   });
   check('an empty directory with no old file refuses too -- never a quiet empty start', () => {
     assert.ok(store.checkSettingsLocation(fakeFs([], ['/app/config']), { dir: '/app/config', legacy }));
+  });
+  check('a DIRECTORY named settings.json is refused, not read as degraded', () => {
+    const msg = store.checkSettingsLocation(
+      fakeFs([], ['/app/config', '/app/config/settings.json']), { dir: '/app/config', legacy });
+    assert.ok(msg, 'a directory named settings.json passed the check');
   });
   check('SETTINGS_DIR that is not a directory refuses', () => {
     assert.match(store.checkSettingsLocation(fakeFs([], []), { dir: '/nope', legacy }), /not a directory/);
@@ -3098,8 +3103,10 @@ console.log('users.verifyPassword (sudo mode for minting a token from the browse
         await withRow({ username: 'u', password: stored, origin: 'ldap' }, async () => {
           const out = await usersService.verifyPassword(1, 'anything at all');
           assert.strictEqual(out.ok, false, `a stored password of ${JSON.stringify(stored)} was accepted`);
-          // No local hash AND no directory to ask: fails closed, and says which.
-          assert.strictEqual(out.reason, 'no_directory');
+          // No local hash AND no directory to ask: fails closed, and says which. A truthy
+          // non-string ({}) counts as a hash by login's rule (directoryClaimRefusal), so the
+          // directory may not speak for it -- and it is no usable hash either: refused.
+          assert.strictEqual(out.reason, stored ? 'wrong_password' : 'no_directory');
         });
       }
     } finally {
@@ -3124,6 +3131,22 @@ console.log('users.verifyPassword (sudo mode for minting a token from the browse
         assert.strictEqual((await usersService.verifyPassword(1, 'the-local-password')).ok, true);
       });
       assert.strictEqual(asked, 0, 'a row with a local hash was sent to the directory');
+    } finally { ldapHelpers.verifyLdapCredentials = realVerify; }
+  });
+
+  checkAsync('root and me are never verified by the directory, even with NO local hash (SEC-13)', async () => {
+    const ldapHelpers = require('../ldap-helpers');
+    const realVerify = ldapHelpers.verifyLdapCredentials;
+    let asked = 0;
+    ldapHelpers.verifyLdapCredentials = async () => { asked++; return { ok: true, entry: { dn: 'uid=root' } }; };
+    try {
+      for (const username of ['root', 'ROOT', 'me']) {
+        await withRow({ username, password: null, origin: 'ldap' }, async () => {
+          assert.strictEqual((await usersService.verifyPassword(1, 'the-directory-password')).ok, false,
+            `a hashless '${username}' minted with a directory password`);
+        });
+      }
+      assert.strictEqual(asked, 0, 'the directory was asked about root/me');
     } finally { ldapHelpers.verifyLdapCredentials = realVerify; }
   });
 

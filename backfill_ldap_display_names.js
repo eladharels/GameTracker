@@ -8,8 +8,7 @@
  *
  * Add --dry-run to print what would change without writing anything.
  */
-const fs = require('fs');
-const path = require('path');
+const settingsStore = require('./settings-store');
 const db = require('./db');
 const {
   buildUserSearchFilter, createLdapClient, warnIfCleartextLdap, entryAttributes, attrValue,
@@ -22,21 +21,13 @@ const DRY_RUN = process.argv.includes('--dry-run');
 // Throws rather than calling process.exit(): this runs from inside main(), after
 // require('./db') has already opened the pool, so exiting here would skip the
 // .finally(() => db.close()) that every other exit path in this file goes through.
+//
+// Through settings-store, the SOLE reader: this built its own path, so after the UP-24
+// move to SETTINGS_DIR it would have read the stale legacy file, or none (UP-24 review).
 function loadLdapSettings() {
-  const file = path.join(__dirname, 'settings.json');
-  let raw;
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (e) {
-    throw new Error(`Cannot read ${file}: ${e.message}`);
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    throw new Error(`${file} is not valid JSON: ${e.message}`);
-  }
-  const ldapSettings = parsed.ldap || {};
+  const { settings, degraded, reason } = settingsStore.readSettings();
+  if (degraded) throw new Error(`Cannot read ${settingsStore.SETTINGS_FILE}: ${reason}`);
+  const ldapSettings = settings.ldap || {};
   if (!ldapSettings.url || !ldapSettings.base) {
     throw new Error('settings.json has no LDAP url/base configured. Nothing to sync.');
   }

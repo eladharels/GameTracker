@@ -30,7 +30,10 @@ const LEGACY_SETTINGS_FILE = path.join(__dirname, 'settings.json');
 // rewrite (UP-8). Mounting a directory instead makes every save atomic. SETTINGS_DIR
 // selects it; unset, nothing changes. The migration is an operator step
 // (OPERATOR_RUNBOOK.md, UP-24) and checkSettingsLocation() below is its safety net.
-const SETTINGS_DIR = (process.env.SETTINGS_DIR || '').trim();
+// Resolved to an ABSOLUTE path: a relative value would resolve against process.cwd(),
+// which is the bug the __dirname note above records (UP-24 review).
+const SETTINGS_DIR = (process.env.SETTINGS_DIR || '').trim()
+  ? path.resolve(__dirname, process.env.SETTINGS_DIR.trim()) : '';
 const SETTINGS_FILE = SETTINGS_DIR ? path.join(SETTINGS_DIR, 'settings.json') : LEGACY_SETTINGS_FILE;
 
 // Refuse to start on a half-done migration. A missing settings.json reads as "nothing
@@ -44,7 +47,11 @@ function checkSettingsLocation(fsImpl = fs, { dir = SETTINGS_DIR, legacy = LEGAC
   let dirOk = false;
   try { dirOk = fsImpl.statSync(dir).isDirectory(); } catch { dirOk = false; }
   if (!dirOk) return `SETTINGS_DIR=${dir} is not a directory. Mount it, or unset SETTINGS_DIR (OPERATOR_RUNBOOK.md, UP-24).`;
-  if (fsImpl.existsSync(target)) return null;
+  // A FILE, not merely something at that path: a directory named settings.json passed
+  // existsSync and then read as EISDIR -- degraded, not refused (UP-24 review).
+  let isFile = false;
+  try { isFile = fsImpl.statSync(target).isFile(); } catch { isFile = false; }
+  if (isFile) return null;
   if (fsImpl.existsSync(legacy)) {
     return `SETTINGS_DIR=${dir} has no settings.json, but ${legacy} still exists. Copy it into ${dir} `
       + 'before starting (OPERATOR_RUNBOOK.md, UP-24): starting now would run with LDAP and every API key unset.';
@@ -112,7 +119,15 @@ function readSettings() {
   } catch (err) {
     settingsCache = null;
     settingsMtimeMs = -1;
-    if (err.code === 'ENOENT') return { settings: EMPTY_SETTINGS, degraded: false };
+    // A missing file is "nothing configured yet" in the legacy layout (a fresh install).
+    // Under SETTINGS_DIR it can only mean a half-done migration, so it is DEGRADED there:
+    // writers refuse, and an operator script such as refresh_igdb_token.js cannot create a
+    // near-empty settings.json that the startup check would then accept (UP-24 review).
+    if (err.code === 'ENOENT') {
+      return SETTINGS_DIR
+        ? { settings: EMPTY_SETTINGS, degraded: true, reason: `${SETTINGS_FILE} does not exist` }
+        : { settings: EMPTY_SETTINGS, degraded: false };
+    }
     // Used to degrade silently to "no SMTP, no LDAP, no API keys" with no log line
     // at all, which is a miserable thing to debug from the admin's side.
     console.error('[settings] Failed to read/parse settings.json:', err.message);

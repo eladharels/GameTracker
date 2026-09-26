@@ -118,7 +118,11 @@ GameTracker/
 │                                   #   Saves are atomic (temp + fsync + rename) where the
 │                                   #   mount allows; production's single-file bind mount does
 │                                   #   not, so there it rewrites in place, write-then-truncate
-│                                   #   + fsync (UP-8; the directory mount is UP-24)
+│                                   #   + fsync (UP-8). SETTINGS_DIR (UP-24) selects a directory
+│                                   #   mount instead; checkSettingsLocation() refuses to start on
+│                                   #   a half-done migration, and a missing file there is
+│                                   #   DEGRADED, so writers refuse. Operator scripts read it
+│                                   #   through here too, never by their own path
 ├── services/                       # The service layer. Route handlers are thin adapters:
 │   │                               #   they do auth and HTTP, services do the work, so /api
 │   │                               #   and /api/v2 stay two skins over ONE
@@ -887,6 +891,9 @@ NODE_ENV=production
 # TRUST_PROXY=<reverse-proxy hop count for the login rate limiter; default 1>
 # STEAM_REGION=<Steam storefront country code for ALL prices; default il. Read ONLY via
 #   services/jobs.js#steamRegion — the cron, the v2 job and the script once disagreed>
+# SETTINGS_DIR=<directory holding settings.json; unset = the legacy single-file mount>
+#   Set ONLY together with the directory mount, per OPERATOR_RUNBOOK.md (UP-24). The backend
+#   refuses to start if the directory holds no settings.json.
 # BACKEND_BIND=<host interface the backend port publishes on; default 0.0.0.0>
 #   0.0.0.0 is required when the reverse proxy is on ANOTHER machine. It also leaves the
 #   backend directly reachable, which lets a client spoof X-Forwarded-For past the login

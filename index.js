@@ -221,6 +221,18 @@ const ensureRootUser = () => new Promise((resolve) => {
   });
 });
 
+// UP-24: refuse to serve on a half-done settings migration (SETTINGS_DIR set, no
+// settings.json in it). Starting anyway would run with LDAP and every API key unset, and
+// the first admin save would write a near-empty file over the real one. Behind
+// isServerProcess like the migration: an operator script importing this file must not exit.
+if (isServerProcess) {
+  const settingsProblem = settingsStore.checkSettingsLocation();
+  if (settingsProblem) {
+    console.error(`[FATAL] ${settingsProblem}`);
+    process.exit(1);
+  }
+}
+
 // Schema first, THEN the root user — ensureRootUser queries `users`, so running it
 // before the tables exist raced the schema and failed with "no such table".
 // migrateOrExit() terminates the process if the schema cannot be brought up to
@@ -240,18 +252,6 @@ const ensureRootUser = () => new Promise((resolve) => {
 // A script running inside the backend container is, by construction, pointed at an
 // already-migrated database. If it somehow is not, failing on a missing column is a
 // far better outcome than silently migrating production from a maintenance script.
-// UP-24: refuse to serve on a half-done settings migration (SETTINGS_DIR set, no
-// settings.json in it). Starting anyway would run with LDAP and every API key unset, and
-// the first admin save would write a near-empty file over the real one. Behind
-// isServerProcess like the migration: an operator script importing this file must not exit.
-if (isServerProcess) {
-  const settingsProblem = settingsStore.checkSettingsLocation();
-  if (settingsProblem) {
-    console.error(`[FATAL] ${settingsProblem}`);
-    process.exit(1);
-  }
-}
-
 const schemaReady = isServerProcess
   ? migrateOrExit().then(() => ensureRootUser())
   : Promise.resolve();

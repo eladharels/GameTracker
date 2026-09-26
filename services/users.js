@@ -16,7 +16,7 @@ const db = require('../db');
 // so a test can observe the SQL it issues. See listAll.
 const { get, run } = db.promises;
 const { serviceError, CODES } = require('./errors');
-const { isValidEmailAddress, validatePassword, sanitizeText, validateUsername } = require('../user-rules');
+const { isValidEmailAddress, validatePassword, sanitizeText, validateUsername, directoryClaimRefusal } = require('../user-rules');
 // Required as MODULES, not destructured. The mapping below — which LDAP outcome
 // becomes "wrong password" and which must not — is itself the safety property, so a
 // test has to be able to stub these and observe it. A destructured binding is
@@ -355,7 +355,16 @@ async function verifyPassword(userId, password) {
   // minting still sent them to the directory, so the directory password that took the
   // account over could still mint a token for it. One rule now, and the takeover gains
   // nothing from either door.
-  if (!row.password || typeof row.password !== 'string') {
+  //
+  // Literally login's rule, not a restatement of it: directoryClaimRefusal decides when the
+  // directory may speak for a row, and a refused row is verified locally or not at all.
+  // `root`/`me` are refused even WITHOUT a hash -- a hashless root (the runbook's clear-hash
+  // SQL misapplied) must not become mintable with a directory password (SEC-13 review).
+  const refusal = directoryClaimRefusal(String(row.username || '').toLowerCase(), row);
+  if (refusal && (!row.password || typeof row.password !== 'string')) {
+    return { ok: false, reason: 'wrong_password' };
+  }
+  if (!refusal) {
     // `.settings`, NOT the return value. readSettings() answers
     // { settings, degraded } — reading `.ldap` off the wrapper gives undefined, which
     // silently became "no directory configured" and refused every directory user with

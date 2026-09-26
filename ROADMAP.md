@@ -879,6 +879,13 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     revocation and the `JWT_SECRET` rotation.
   - **What stays open is the audit itself,** which only someone with production access can
     run.
+- **Review (all APPROVE):**
+  - `verifyPassword` now calls `directoryClaimRefusal` itself: literally one rule. `root` and
+    `me` are never verified by the directory, even with no hash, and that is tested.
+  - **Runbook fixes:**
+    - the clear-hash SQL excludes `root` and `me`;
+    - a taken-over account's email, notification channels and shares are reviewed after it is
+      reclaimed.
 
 ---
 
@@ -1673,6 +1680,22 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Open, for the operator:** the host copy, the compose change (both files, plus the smoke
   seed path) and the staging run. `OPERATOR_RUNBOOK.md` → UP-24 has each step and the
   rollback.
+- **Review (all APPROVE; conditions applied before the operator step):**
+  - `backfill_ldap_display_names.js` and `test_ldap_sync.js` built their own settings path.
+    They now read through settings-store, or after the move they would have read a stale
+    file or none.
+  - Under `SETTINGS_DIR`, a missing file is DEGRADED, so writers refuse and a script cannot
+    create a near-empty `settings.json` that the startup check would then accept.
+  - A relative `SETTINGS_DIR` resolves against the repo, not the cwd.
+  - A directory named `settings.json` is refused.
+  - **Runbook fixes:**
+    - the precondition that a SETTINGS_DIR-aware image is `:previous` before the compose
+      change deploys, so the automatic rollback cannot start without settings;
+    - redo the copy right before deploying;
+    - volume names are project-prefixed, other apps' databases live on this host, and every
+      volume gets a tar backup before removal;
+    - psql commands use the container's own variables;
+    - the log windows are marked UTC.
 
 ### [x] UP-9 `refresh_igdb_token.js` can have no effect
 - **Where:** `refresh_igdb_token.js:69`.

@@ -21,19 +21,20 @@ cache (19.4 GB). CI now clears that cache on every build and refuses to build be
 free, and the disk recovered to 71% (25 GB free). Production's database **ran on a full disk**
 for part of that window, so check for damage before anything else.
 
-1. **The database.** Look for write failures during the window:
+1. **The database.** Look for write failures during the window. The times below are **UTC**;
+   `--since` and `--until` are read in the host's local timezone unless they end in `Z`.
    ```bash
-   docker compose -f docker-compose.yaml logs --since 2026-09-26T09:00:00 --until 2026-09-26T11:10:00 db \
+   docker compose -f docker-compose.yaml logs --since 2026-09-26T09:00:00Z --until 2026-09-26T11:10:00Z db \
      | grep -iE "no space|could not (write|extend)|PANIC|FATAL" | head -50
-   docker compose -f docker-compose.yaml logs --since 2026-09-26T09:00:00 --until 2026-09-26T11:10:00 backend \
+   docker compose -f docker-compose.yaml logs --since 2026-09-26T09:00:00Z --until 2026-09-26T11:10:00Z backend \
      | grep -iE "ENOSPC|no space|DB error|Database error" | head -50
    ```
    - If both are empty, nothing was lost.
    - If Postgres logged `PANIC` or `could not write`, run the integrity check below and compare
      row counts against the last backup:
      ```bash
-     docker compose -f docker-compose.yaml exec db psql -U gametracker -c \
-       "SELECT count(*) AS users FROM users; SELECT count(*) AS games FROM user_games;"
+     docker compose -f docker-compose.yaml exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
+       "SELECT count(*) AS users FROM users; SELECT count(*) AS games FROM user_games;"'
      ```
 2. **Where the other ~20 GB goes.** Docker accounted for about 35 GB of the 59 GB used after the
    prune. Find the rest:
@@ -45,18 +46,29 @@ for part of that window, so check for damage before anything else.
    The usual suspects are container logs under `/var/lib/docker/containers/*/*-json.log`, the
    journal, and other projects on the same host (GameTracker-stg shares this daemon).
 3. **The 1.9 GB of unreferenced Docker volumes.** CI never prunes volumes, because this host
-   holds the production database. Look before deleting anything:
+   holds the production database, and **other applications' databases** too (see the header of
+   `docker-compose.yaml`: another app and Guacamole run Postgres here). "Dangling" only means
+   no container is attached right now: a database volume whose stack is stopped is dangling.
    ```bash
    docker volume ls -f dangling=true
-   docker volume inspect <name>        # check what created it and when
+   docker volume inspect <name> --format '{{ index .Labels "com.docker.compose.project" }} {{ .CreatedAt }}'
    ```
-   Never remove `gametracker-pgdata`, or any volume a staging stack still uses. Remove the
-   others one at a time with `docker volume rm <name>`. `docker volume prune` is not safe here.
+   - The production volume is PROJECT-PREFIXED, e.g. `<project>_gametracker-pgdata`, because
+     the compose file sets no `name:`. Never remove it, or any volume whose project label
+     belongs to a stack you still run, staging included.
+   - Before removing anything, take a backup, then remove volumes one at a time:
+     ```bash
+     docker run --rm -v <name>:/v -v "$PWD":/b alpine tar czf /b/<name>.tgz -C /v .
+     docker volume rm <name>
+     ```
+   - `docker volume prune` is **not** safe on this host.
 4. **Disk alerting.** Nothing warned before the disk filled. A minimal version reuses the ntfy
    server you already run. Add it to root's crontab:
    ```
    */30 * * * * [ "$(df -P / | awk 'NR==2 {print $5+0}')" -ge 85 ] && curl -s -d "gametracker host disk at $(df -P / | awk 'NR==2 {print $5}')" https://<your-ntfy>/<topic>
    ```
+   If that ntfy server runs on this same host, a full disk can stop it delivering the alert.
+   Prefer an ntfy server somewhere else, or ntfy.sh.
 
 ---
 
@@ -82,8 +94,10 @@ they did.
    - **A real directory user**, created by an LDAP login, whose row somehow gained a hash.
      Clear the hash so only the directory decides:
      ```sql
-     UPDATE users SET password = NULL WHERE id = <id> AND origin = 'ldap';
+     UPDATE users SET password = NULL
+      WHERE id = <id> AND origin = 'ldap' AND username NOT IN ('root', 'me');
      ```
+     Never clear root's hash: that locks root out. Root is always a local account.
    - **A local account that was taken over**, for example `root` or an admin created by hand.
      Give it back and rotate its password:
      ```sql
@@ -92,7 +106,19 @@ they did.
      Then set a new password. For root, use `reset-root-password.js` with `NEW_ROOT_PASSWORD`;
      for anyone else, use User Management.
 
-   Run the SQL with `docker compose -f docker-compose.yaml exec db psql -U gametracker`.
+     Then **review what the takeover could have changed**:
+     - The directory login wrote its own `email` into the row.
+     - Whoever held the account could have set notification channels (`ntfy_url`,
+       `ntfy_topic`, `gotify_url`, `gotify_token`, `telegram_chat_id`), or shared the library
+       with themselves.
+     ```sql
+     SELECT email, ntfy_url, ntfy_topic, gotify_url, telegram_chat_id FROM users WHERE id = <id>;
+     SELECT * FROM user_shares WHERE from_user = '<username>' OR to_user = '<username>';
+     ```
+     Reset anything the real owner does not recognise.
+
+   Run the SQL with
+   `docker compose -f docker-compose.yaml exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`.
 3. **Either way, revoke the account's API tokens.** A token minted during a takeover survives
    every step above.
    ```bash
@@ -121,6 +147,12 @@ the first admin save would write a near-empty file.
 
 **Do it on staging first** (GameTracker-stg), then on production.
 
+**Precondition.** A release that understands `SETTINGS_DIR` (commit 9e38767 or later) must
+ALREADY be deployed and running before the compose change below deploys. The deploy job keeps
+the running image as `:previous` and rolls back to it automatically on a failed health check.
+If that previous image predates `SETTINGS_DIR`, the rollback would start it on the new mounts
+with no settings file at all.
+
 1. **On the host, copy the file into a new directory.** Keep the original file too; it is the
    rollback:
    ```bash
@@ -145,7 +177,12 @@ the first admin save would write a near-empty file.
 
    In the same commit, remove `SETTINGS_DIR` from the `NOT_PASSED` table in
    `test/runtime.test.js`, since compose now passes it.
-3. **Deploy.** Then check:
+3. **Right before deploying, redo the step-1 copy.** A settings save made between step 1 and
+   the deploy would otherwise be lost:
+   ```bash
+   sudo cp -p /home/docker/gametracker/data/settings.json /home/docker/gametracker/data/config/settings.json
+   ```
+   Then deploy, and check:
    - Settings → LDAP and API Keys still show as configured, and a directory user can sign in.
    - A save is atomic: change a harmless value, save, and confirm the file changed inside the
      directory:
