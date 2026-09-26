@@ -1015,6 +1015,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
       and accent-dot hover scales (measured).
     - The markup scan strips comments before matching, uses `innerHTML =` but not `==`,
       and also catches `outerHTML =` and `document.write`.
+  - **Review fixes (UI/UX rejected the first cut):**
+    - `.theme-dot:hover` also matched the ACTIVE dot, so under reduced motion hovering it
+      snapped the dot from 1.2 to 1.0. It is now `:not(.active):hover`. Measured: the
+      active dot stays at 1.2 and an inactive dot doesn't grow.
+    - Only the transform transition goes now; colour transitions stay, as in the card
+      rule.
+    - The comment stripper was not string-aware: `'//'` or `'image/*'` in a string could
+      hide the code after it. It now strips only comments that START a line, and JSX
+      `{/* */}`. Mutation-checked: code after `'image/*'` is caught, and a comment
+      mentioning innerHTML is ignored.
+    - The axios pin also catches `import('axios')` and `'axios/…'` subpaths.
+    - Stale "global interceptor" and `axios.post` comments are updated.
 
 ### [x] FE-17 One `endSession()` in `session.js`
 - **Why:** three call sites remove the token, and a count of 3 is pinned. One function

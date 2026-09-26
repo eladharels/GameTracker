@@ -762,8 +762,10 @@ body, html {
      status pills and accent dots are movement too. The active dot keeps its size — that
      is a state, not an animation — so only the transition goes. */
   .login-page::before { animation: none !important; }
-  .status-pill:hover, .theme-dot:hover { transform: none !important; }
-  .status-pill, .theme-dot { transition: none !important; }
+  /* :not(.active): the ACTIVE dot's 1.2 is its state and must not snap to 1.0 on hover
+     (review of FE-16). Only the transform transition goes; colour changes stay. */
+  .status-pill:hover, .theme-dot:not(.active):hover { transform: none !important; }
+  .status-pill, .theme-dot { transition-property: background-color, border-color, box-shadow, color, opacity !important; }
 }
 
 .game-card:hover {

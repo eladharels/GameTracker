@@ -4,9 +4,9 @@ import { FaUserPlus, FaUserTimes, FaShareAlt } from 'react-icons/fa';
 import { useToast } from './contexts/ToastContext';
 import { readSession } from './session';
 
-// Always call our own origin's /api (nginx proxies it to the backend). The previous
-// hardcoded host/port fell back to the PRODUCTION backend (:3000) from staging, and
-// being cross-origin it also bypassed the shared axios auth interceptor.
+// Requests go through ./api's client, always to our own origin's /api. A hardcoded
+// host/port once sent staging to the PRODUCTION backend (:3000), and being cross-origin
+// it bypassed the auth interceptor.
 
 // Token and user from localStorage, decoded by session.js — the ONE client-side JWT
 // decode. The inline atob() this replaced threw on base64URL payloads, and this page
@@ -83,7 +83,7 @@ function SharedLibrary() {
       setSharedWith(sharedWithRes.data.toUsers || []);
       setLoading(false);
     }).catch((err) => {
-      // A 401 is the global interceptor's (it ends the session and reloads to /login).
+      // A 401 is the api.js interceptor's (it ends the session and reloads to /login).
       // A 403 is "not allowed", never "logged out" (ROADMAP P0-6) — this used to delete
       // the token and rely on a global setter nothing ever assigned.
       // A 401 is normally overtaken by the interceptor's reload; it only reaches here

@@ -209,8 +209,11 @@ check("the SPA's CSP has no 'unsafe-inline' and nothing in the SPA needs it (FE-
     return /\.jsx?$/.test(e.name) && !/\.test\./.test(e.name) ? [rel] : [];
   });
   for (const f of walk('frontend')) {
-    // Comments stripped: a note saying "never use innerHTML" is not a use of it.
-    const text = fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    // Comments stripped — but only ones that START a line (or a JSX `{/* */}`), because a
+    // stripper that is not string-aware lets '//' or 'image/*' inside a STRING hide real
+    // code after it (review of FE-16). A note saying "never use innerHTML" is not a use.
+    const text = fs.readFileSync(path.join(ROOT, f), 'utf8')
+      .replace(/^\s*\/\*[\s\S]*?\*\//gm, '').replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '').replace(/^\s*\/\/.*$/gm, '');
     // Every way markup — and so a style attribute or a <style> — gets in: React's escape
     // hatch, the two DOM sinks, setAttribute('style'), a created or JSX <style>.
     assert.ok(!/dangerouslySetInnerHTML|\.(?:inner|outer)HTML\s*=(?!=)|insertAdjacentHTML|document\.write|setAttribute\(\s*['"]style['"]|createElement\(\s*['"]style['"]|<style[\s>{]/.test(text),
@@ -593,7 +596,8 @@ console.log('the SPA has one auth header and one way to end a session:');
   // page can quietly send a request without the token, and the interceptors cannot be
   // re-installed on the global instance.
   check('only src/api.js imports axios, and API_BASE is defined once (FE-16)', () => {
-    const importers = files.filter((f) => /from\s+['"]axios['"]|require\(\s*['"]axios['"]/.test(src[f]));
+    // Static, dynamic and require(), and any 'axios/...' subpath.
+    const importers = files.filter((f) => /(?:from\s+|import\s*\(\s*|require\(\s*)['"]axios(?:\/[^'"]*)?['"]/.test(src[f]));
     assert.deepStrictEqual(importers, ['frontend/src/api.js'], `axios imported directly by: ${importers.join(', ')}`);
     const defs = files.filter((f) => /\bconst API_BASE\s*=/.test(src[f]));
     assert.deepStrictEqual(defs, ['frontend/src/api.js'], `API_BASE defined in: ${defs.join(', ')}`);

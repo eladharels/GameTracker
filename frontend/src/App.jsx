@@ -419,7 +419,7 @@ function UserManagementPage({ user }) {
       setLoadFailed(false)
       setLoading(false)
     } catch (err) {
-      // 401 is the global interceptor's to handle (it ends the session). A 403 is NOT
+      // 401 is the api.js interceptor's to handle (it ends the session). A 403 is NOT
       // "logged out" (ROADMAP P0-6): this handler used to delete the token and navigate
       // to /login while React still held the user, so the app bounced to /search looking
       // signed in and every later request failed.
@@ -1069,7 +1069,7 @@ function LibraryPage({ user }) {
   // Keyed on a counter bumped by SERVER-CONFIRMED writes, never on the `userGames` array.
   //
   // The array identity changes on the OPTIMISTIC setState inside setGameStatus — before
-  // `await axios.post` — so an effect depending on it issued this read concurrently with
+  // `await api.post` — so an effect depending on it issued this read concurrently with
   // the write it exists to observe, and nothing refetched afterwards. Marking a game done
   // therefore left its "Took 12d" badge missing or stale until a full page reload: the
   // feature failing precisely when used. The same dependency also refired on every
@@ -2623,7 +2623,7 @@ function SettingsPage() {
     if (!isAdmin) return
     api.get(`${API_BASE}/settings/apikeys`)
       .then(r => { setApiKeysMeta(r.data); setApiKeysEdit({}) })
-      // A 401 is the global interceptor's (FE-15): it ends the session and reloads to the
+      // A 401 is the api.js interceptor's (FE-15): it ends the session and reloads to the
       // login page, which says why. The "log out and log back in" banner this used to set
       // either never rendered or raced that reload.
       .catch(() => {})
