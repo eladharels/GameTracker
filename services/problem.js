@@ -82,4 +82,20 @@ function send(res, err, { fallback = 'DB error', log, messages } = {}) {
   return res.status(500).json({ error: fallback });
 }
 
-module.exports = { PROBLEMS, toProblem, send };
+// The status for an error NOTHING handled — the last resort in index.js's final handler.
+//
+// It answered `err.status || 500`, and `status` is not ours to trust: axios sets it on
+// every AxiosError to the UPSTREAM's status. An uncaught IGDB call with an expired token
+// therefore answered this client 401 — and the SPA ends the session on any 401 (P0-6),
+// so a provider's credential problem logged the user out (UP-18 review).
+//
+// Only an error that says it is SAFE to expose keeps its status: http-errors and
+// body-parser set `expose: true` on their 4xx (malformed JSON 400, 413 too large). Never
+// a 401 — nothing that reaches here is an authentication decision; those are made, and
+// answered, by the auth middleware. Everything else is a 500.
+function statusForUnhandled(err) {
+  const s = Number(err?.status ?? err?.statusCode);
+  return err?.expose === true && Number.isInteger(s) && s >= 400 && s < 500 && s !== 401 ? s : 500;
+}
+
+module.exports = { PROBLEMS, toProblem, send, statusForUnhandled };

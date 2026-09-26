@@ -107,10 +107,12 @@ function scheduleWhenServer(expression, handler) {
 // differs. Do NOT set to `true` (trust all hops) — that lets clients spoof X-Forwarded-For.
 app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 1);
 
-// Simple rate limiting for login attempts
-const loginAttempts = new Map();
-const MAX_LOGIN_ATTEMPTS = 5;
-const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+// Every in-process rate limit — the login and sudo counters' primitives and the three
+// per-user limiters — lives in rate-limits.js (ROADMAP UP-22): one store, one sweep.
+const {
+  lockoutMinutes, trackFailures, clearFailures,
+  libraryWriteLimit, testNotificationLimit, crackCheckLimit,
+} = require('./rate-limits');
 
 // CORS: browser calls from the web app are same-origin (nginx proxies /api to the
 // backend), so no cross-origin allowance is needed by default. Any cross-origin
@@ -1635,152 +1637,8 @@ const DIRECTORY_KEYS = (userId) => [`sudo-dir:${userId}`];
 const DIRECTORY_MAX_ATTEMPTS = 20;
 const DIRECTORY_WINDOW_MS = 2 * 60 * 1000;
 
-// Both counters share one store and one implementation. Writing a second copy of
-// "count failures, lock out for a window" is how the two would drift on the day one
-// of them is tuned — and the sweep below only evicts from the store it knows about.
-function lockoutMinutes(keys, max = MAX_LOGIN_ATTEMPTS, duration = LOCKOUT_DURATION) {
-  const now = Date.now();
-  for (const key of keys) {
-    const attempts = loginAttempts.get(key);
-    if (!attempts) continue;
-    if (attempts.count >= max) {
-      const elapsed = now - attempts.firstAttempt;
-      if (elapsed < duration) return Math.ceil((duration - elapsed) / 1000 / 60);
-      loginAttempts.delete(key);
-    }
-  }
-  return 0;
-}
-
-function trackFailures(keys) {
-  const now = Date.now();
-  for (const key of keys) {
-    const attempts = loginAttempts.get(key) || { count: 0, firstAttempt: now };
-    attempts.count++;
-    if (attempts.count === 1) attempts.firstAttempt = now;
-    loginAttempts.set(key, attempts);
-  }
-}
-
-const clearFailures = (keys) => { for (const key of keys) loginAttempts.delete(key); };
-
-// --- library write limiter --------------------------------------------------------
-//
-// Every status write appends a row to user_game_status_events, and that table has no
-// UNIQUE to bound it — done -> playing -> done must produce two rows, so duplicates are
-// the point. An authenticated caller alternating one game between two statuses
-// therefore inflates it indefinitely, needing no growing working set. Raised by the
-// CISO review of the statistics feature.
-//
-// Deliberately GENEROUS. This bounds abuse; it must not shape normal use. Reorganising
-// a library is a burst of dozens of status changes, and an agent working through a
-// backlog is another — 240 in five minutes is roughly one write every 1.25 seconds
-// sustained, far above either and far below what it takes to matter.
-//
-// Keyed by USER, not IP: the point is to bound one account's writes, and several users
-// behind one NAT must not share a budget. Its own key namespace, like sudo: and
-// sudo-dir:, so it cannot consume or be consumed by the login budget.
-//
-// Built on lockoutMinutes/trackFailures rather than a second counter, for the reason
-// already recorded there: a second copy is how the two drift, and the eviction sweep
-// only knows about this store.
-const LIBRARY_WRITE_KEYS = (userId) => [`libwrite:${userId}`];
-const LIBRARY_WRITE_MAX = 240;
-const LIBRARY_WRITE_WINDOW_MS = 5 * 60 * 1000;
-
-function libraryWriteLimit(req, res, next) {
-  const userId = req.user && req.user.id;
-  // No id means an unauthenticated request, which cannot reach these routes anyway —
-  // fail open here rather than 500, because authRequired is the control that matters
-  // and this middleware always runs after it.
-  if (!userId) return next();
-
-  const keys = LIBRARY_WRITE_KEYS(userId);
-  const lockedFor = lockoutMinutes(keys, LIBRARY_WRITE_MAX, LIBRARY_WRITE_WINDOW_MS);
-  if (lockedFor > 0) {
-    console.warn(`[RateLimit] library writes throttled for user ${userId}`);
-    res.set('Retry-After', String(lockedFor * 60));
-    const err = {
-      code: SVC.RATE_LIMITED,
-      message: `Too many library changes. Try again in ${lockedFor} minute${lockedFor === 1 ? '' : 's'}.`,
-    };
-    // The two surfaces have DIFFERENT wire formats and one renderer cannot serve both:
-    // problem.send emits v1's {error} envelope, v2.send emits problem+json. Branching
-    // on the mount is the honest way to share one limiter between them — the
-    // alternative is two middlewares that must be kept in step.
-    return req.originalUrl.startsWith('/api/v2')
-      ? v2.send(res, err)
-      : problem.send(res, err);
-  }
-  // Counts EVERY write, not just failures — the resource being protected is consumed
-  // by success. Same reasoning as the directory budget above.
-  trackFailures(keys);
-  return next();
-}
-
-// --- test-notification limiter ---------------------------------------------------
-//
-// The Diagnostics "send test notification" button makes this SERVER send an outbound
-// request to a URL the USER chose (their own ntfy/Gotify server). The metadata block
-// (services/notifications.js#guardedLookup) stops the worst target, but what is left
-// is still an outbound request per click, and the 10-second timeout against an
-// instant refusal is a timing signal about the server's network (ROADMAP SEC-1).
-// Bounding it per user keeps that from becoming a scanner. Generous for a person
-// testing their own setup; far below anything useful for probing.
-const TEST_NOTIFY_KEYS = (userId) => [`notifytest:${userId}`];
-const TEST_NOTIFY_MAX = 10;
-const TEST_NOTIFY_WINDOW_MS = 5 * 60 * 1000;
-
-function testNotificationLimit(req, res, next) {
-  const userId = req.user && req.user.id;
-  if (!userId) return next();   // authRequired runs first; see libraryWriteLimit
-  const keys = TEST_NOTIFY_KEYS(userId);
-  const lockedFor = lockoutMinutes(keys, TEST_NOTIFY_MAX, TEST_NOTIFY_WINDOW_MS);
-  if (lockedFor > 0) {
-    console.warn(`[RateLimit] test notifications throttled for user ${userId}`);
-    res.set('Retry-After', String(lockedFor * 60));
-    return problem.send(res, {
-      code: SVC.RATE_LIMITED,
-      message: `Too many test notifications. Try again in ${lockedFor} minute${lockedFor === 1 ? '' : 's'}.`,
-    });
-  }
-  trackFailures(keys);   // every attempt counts: the outbound request is the cost
-  return next();
-}
-
-// --- CrackRelease check limiter (ROADMAP SEC-15) -----------------------------------
-//
-// Each check fetches a third-party site (crackrelease.com), and the per-game route also
-// writes the answer to user_games (the admin test route does not write). An unbounded
-// loop from a script or a PAT is outbound traffic this server originates, plus a database
-// write loop on the per-game route. BOTH routes draw on ONE budget per caller: the cost
-// is the same outbound request. The SPA's in-flight dedupe (FE-1) is a courtesy in one
-// client, not a control. A library page can legitimately ask for up to 24 at once and a
-// user paging through asks for more, so the budget is generous for a person and far
-// below a loop. Every attempt counts: the outbound request is the cost.
-const CRACK_CHECK_KEYS = (userId) => [`crackcheck:${userId}`];
-const CRACK_CHECK_MAX = 60;
-const CRACK_CHECK_WINDOW_MS = 5 * 60 * 1000;
-
-function crackCheckLimit(req, res, next) {
-  const userId = req.user && req.user.id;
-  if (!userId) return next();   // authRequired runs first; see libraryWriteLimit
-  const keys = CRACK_CHECK_KEYS(userId);
-  const lockedFor = lockoutMinutes(keys, CRACK_CHECK_MAX, CRACK_CHECK_WINDOW_MS);
-  if (lockedFor > 0) {
-    console.warn(`[RateLimit] crack-status checks throttled for user ${userId}`);
-    res.set('Retry-After', String(lockedFor * 60));
-    return problem.send(res, {
-      code: SVC.RATE_LIMITED,
-      message: `Too many crack-status checks. Try again in ${lockedFor} minute${lockedFor === 1 ? '' : 's'}.`,
-    });
-  }
-  trackFailures(keys);
-  return next();
-}
-
-// The login limiter, expressed in terms of the shared primitives above. Behaviour is
-// unchanged — same keys, same window, same log line.
+// The login limiter, expressed in terms of the shared primitives in rate-limits.js.
+// Behaviour is unchanged — same keys, same window, same log line.
 const isLockedOut = (clientIP, username) => lockoutMinutes(attemptKeys(clientIP, username));
 
 function trackFailedAttempt(clientIP, username) {
@@ -1791,14 +1649,6 @@ function trackFailedAttempt(clientIP, username) {
 // Clear only the keys belonging to the account that actually authenticated.
 const clearFailedAttempts = (clientIP, username) => clearFailures(attemptKeys(clientIP, username));
 
-// Entries for IPs that fail a few times and never return were never evicted — an
-// unbounded slow leak under background scanning traffic. Sweep hourly.
-setInterval(() => {
-  const cutoff = Date.now() - LOCKOUT_DURATION;
-  for (const [key, attempts] of loginAttempts) {
-    if (attempts.firstAttempt < cutoff) loginAttempts.delete(key);
-  }
-}, 60 * 60 * 1000).unref();
 
 // --- Auth Endpoints ---
 app.post('/api/auth/login', (req, res) => {
@@ -3567,7 +3417,9 @@ app.use('/api', (req, res) => {
 app.use((err, req, res, next) => {
   console.error(`[Error] ${req.method} ${req.path}:`, err?.stack || err);
   if (res.headersSent) return;
-  res.status(err?.status || 500).json({ error: 'Internal server error' });
+  // NOT err.status: see problem.js#statusForUnhandled — an upstream's 401 on an axios
+  // error used to reach the client as a 401 and sign the user out.
+  res.status(problem.statusForUnhandled(err)).json({ error: 'Internal server error' });
 });
 
 // A rejected promise with no handler exits the process under Node's default

@@ -103,6 +103,14 @@ GameTracker/
 │                                   #   services/notifications.js can require it without a cycle;
 │                                   #   passing it in as a parameter made the address validation
 │                                   #   conditional on the caller remembering to
+├── rate-limits.js                  # EVERY in-process rate limit: one store, one hourly
+│                                   #   sweep, the login/sudo primitives, and perUserLimit()
+│                                   #   — the factory for the per-user budgets (library
+│                                   #   writes, test notifications, crack checks). A limiter
+│                                   #   is a NAMED middleware (the route gates find it by
+│                                   #   name) that renders {error} on v1 and problem+json on
+│                                   #   v2. A new budget is one perUserLimit() call, never a
+│                                   #   hand-written copy (UP-22)
 ├── settings-store.js               # The SOLE reader/writer of settings.json, with the one
 │                                   #   mtime-validated cache and the settings-over-env
 │                                   #   API-key precedence (resolveApiKey). readSettings()

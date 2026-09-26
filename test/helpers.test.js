@@ -3827,6 +3827,79 @@ console.log('telegramText — HTML parse mode, escaped (UP-12):');
   });
 }
 
+console.log('problem.statusForUnhandled — the last-resort status (UP-18 review):');
+{
+  const { statusForUnhandled } = require('../services/problem');
+  const { AxiosError } = require('axios');
+  check('an upstream 401 on an AxiosError is a 500 here, never a 401 (the SPA would log out)', () => {
+    const upstream = new AxiosError('Request failed with status code 401', 'ERR_BAD_REQUEST', {}, {},
+      { status: 401, statusText: 'Unauthorized', headers: {}, config: {}, data: {} });
+    assert.strictEqual(upstream.status, 401, 'fixture: axios no longer copies the status (update the reasoning)');
+    assert.strictEqual(statusForUnhandled(upstream), 500);
+  });
+  check("body-parser's exposed 4xx keep their status; nothing else does", () => {
+    assert.strictEqual(statusForUnhandled({ status: 400, expose: true, type: 'entity.parse.failed' }), 400);
+    assert.strictEqual(statusForUnhandled({ status: 413, expose: true }), 413);
+    for (const e of [{ status: 401, expose: true }, { status: 403 }, { status: 502, expose: true },
+      { status: '400', expose: 'yes' }, new Error('x'), null, undefined]) {
+      assert.strictEqual(statusForUnhandled(e), 500, `${JSON.stringify(e)} kept its status`);
+    }
+  });
+}
+
+console.log('rate-limits.perUserLimit — one factory for every per-user budget (UP-22):');
+{
+  const rl = require('../rate-limits');
+  const fakeRes = () => {
+    const r = { headers: {}, statusCode: 200, body: null, type: null };
+    r.set = (k, v) => { r.headers[k.toLowerCase()] = v; return r; };
+    r.setHeader = r.set; r.getHeader = (k) => r.headers[k.toLowerCase()];
+    r.status = (c) => { r.statusCode = c; return r; };
+    r.type = (t) => { r.contentType = t; return r; };
+    r.json = (b) => { r.body = b; return r; };
+    r.send = (b) => { r.body = b; return r; };
+    return r;
+  };
+  const run = (mw, req) => { const res = fakeRes(); let passed = false; mw(req, res, () => { passed = true; }); return { res, passed }; };
+
+  check('the middleware carries its NAME (the route gates find limiters by it)', () => {
+    for (const n of ['libraryWriteLimit', 'testNotificationLimit', 'crackCheckLimit']) {
+      assert.strictEqual(rl[n].name, n);
+    }
+    assert.strictEqual(rl.perUserLimit({ name: 'x', prefix: 'p', max: 1, windowMs: 1000, what: 'x' }).name, 'x');
+  });
+  check('within budget passes; past it, 429 + Retry-After in the SURFACE\'s format — v1 AND v2', () => {
+    for (const [url, isV2] of [['/api/user/u/games', false], ['/api/v2/library/games', true]]) {
+      const lim = rl.perUserLimit({ name: 't', prefix: `t${isV2}`, max: 2, windowMs: 60000, what: 'widgets' });
+      const req = { user: { id: 42 }, originalUrl: url };
+      assert.ok(run(lim, req).passed && run(lim, req).passed, 'a request within budget was refused');
+      const { res, passed } = run(lim, req);
+      assert.ok(!passed, 'the third request passed a budget of two');
+      assert.strictEqual(res.statusCode, 429);
+      assert.ok(Number(res.headers['retry-after']) > 0, 'no Retry-After');
+      const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
+      if (isV2) assert.strictEqual(body.code, 'rate_limited', `v2 did not get problem+json: ${JSON.stringify(body)}`);
+      else assert.deepStrictEqual(Object.keys(body), ['error'], `v1 did not get the frozen envelope: ${JSON.stringify(body)}`);
+      assert.match(isV2 ? body.detail : body.error, /Too many widgets/);
+    }
+  });
+  check('no req.user fails OPEN (authRequired is the control; the order is pinned elsewhere)', () => {
+    const lim = rl.perUserLimit({ name: 't', prefix: 'open', max: 0, windowMs: 1000, what: 'x' });
+    assert.ok(run(lim, { originalUrl: '/api/x' }).passed);
+  });
+  check('a window longer than the sweep horizon is refused at definition', () => {
+    assert.throws(() => rl.perUserLimit({ name: 'long', prefix: 'l', max: 1, windowMs: rl.LOCKOUT_DURATION + 1, what: 'x' }),
+      /outlives the sweep/);
+  });
+  check('limiters do not share budgets with each other or with login keys', () => {
+    const a = rl.perUserLimit({ name: 'a', prefix: 'iso-a', max: 1, windowMs: 60000, what: 'a' });
+    const b = rl.perUserLimit({ name: 'b', prefix: 'iso-b', max: 1, windowMs: 60000, what: 'b' });
+    const req = { user: { id: 7 }, originalUrl: '/api/x' };
+    assert.ok(run(a, req).passed && run(b, req).passed, 'one limiter consumed the other\'s budget');
+    assert.strictEqual(rl.lockoutMinutes(['user:7']), 0, 'a limiter wrote into the login namespace');
+  });
+}
+
 console.log('settings-store.replaceFileContents — atomic where the mount allows (UP-8):');
 {
   const { replaceFileContents } = require('../settings-store');

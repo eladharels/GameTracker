@@ -1182,7 +1182,7 @@ jobs:
       - name: Check the reverse-proxy pairing (TRUST_PROXY / BACKEND_BIND)
         run: |
           tp="${TRUST_PROXY:-1}"; bind="${BACKEND_BIND:-0.0.0.0}"
-          case "$tp" in ''|*[!0-9]*) echo "::warning title=TRUST_PROXY::TRUST_PROXY='${tp}' is not a hop count; the backend's parsing decides what it means"; exit 0 ;; esac
+          case "$tp" in ''|*[!0-9]*) echo "::warning title=TRUST_PROXY::TRUST_PROXY is not a number. index.js reads it with Number(), so a value like loopback, true or a CIDR becomes NaN and Express then trusts NO proxy hop: every request appears to come from nginx and one user's failed logins lock everyone out. Use a hop count (1, or 2 behind the frontend's nginx)."; exit 0 ;; esac
           loopback=false; case "$bind" in 127.*|localhost|::1|'[::1]') loopback=true ;; esac
           if [ "$tp" -ge 2 ] && [ "$loopback" = false ]; then
             echo "::warning title=Reverse proxy pairing::TRUST_PROXY=${tp} but the backend is published on ${bind}. A client reaching port 3000 directly can spoof X-Forwarded-For past the login rate limiter. Set BACKEND_BIND=127.0.0.1 (README: Reverse proxy topology)."

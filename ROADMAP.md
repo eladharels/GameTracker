@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 24 | 18 |
-| **Total** | **84** | **66** |
+| UP — Tidying & upkeep | 24 | 19 |
+| **Total** | **84** | **67** |
 
 ---
 
@@ -1339,6 +1339,24 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 
   Mutation-checked: turning the sudo refusal into a 401 fails with the line and the route
   named.
+- **Review fixes:**
+  - **The latent case, fixed.** The final error handler answered `err.status || 500`, and
+    axios sets `status` on every `AxiosError` to the UPSTREAM's status. So an uncaught IGDB
+    call with an expired token answered the client 401, and the SPA signed the user out.
+    `problem.js#statusForUnhandled` now lets only an `expose: true` 4xx other than 401
+    through (body-parser's 400 and 413); everything else is 500.
+    - Tested with a real `AxiosError`.
+    - Checked over HTTP that malformed JSON still answers 400.
+  - **The scan is harder to fool:**
+    - Attribution resets at every column-0 closer, so code placed after an allowed
+      function no longer inherits its name.
+    - It matches ANY non-comment `401` literal (`sendStatus`, `statusCode =`,
+      `writeHead`).
+    - It refuses a status set from a variable, unless it is allowlisted with a reason.
+    - It covers the top-level modules as well as `services/`.
+    - Three mutations, all caught.
+  - **Deploy warning:** a non-numeric `TRUST_PROXY` now explains what actually happens.
+    `Number()` gives NaN, so no proxy hop is trusted and everyone shares one limiter key.
 
 ### [ ] UP-19 Library duplicate detection belongs in the service (Architect, FE-3 review)
 - **Why:** cross-provider "same game" detection on add lives only in the SPA
@@ -1405,7 +1423,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   do not count it. This is a new status on a frozen v1 route: it needs an Architect and
   CISO decision, recorded in `test/api-contract.test.js`, before code.
 
-### [ ] UP-22 One `perUserLimit()` factory and a `rate-limits.js` module (Architect, SEC-15)
+### [x] UP-22 One `perUserLimit()` factory and a `rate-limits.js` module (Architect, SEC-15)
 - **Why:** `libraryWriteLimit`, `testNotificationLimit` and `crackCheckLimit` are the same
   eight lines with different keys and budgets — and only the first uses the v1/v2 renderer
   branch, so the other two would send the v1 envelope if ever mounted on a v2 route.
@@ -1414,6 +1432,29 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   renderer branch; move it, the shared store, `lockoutMinutes`/`trackFailures`/`clearFailures`
   and the hourly sweep into `rate-limits.js`, required at the top of index.js so nothing relies
   on function hoisting. A behaviour-preserving refactor: its own commit, not inside a fix.
+- **Done:** `rate-limits.js` now holds:
+  - the one store;
+  - `lockoutMinutes`/`trackFailures`/`clearFailures`;
+  - the hourly sweep (`unref`'d, so importing it keeps no process alive);
+  - `perUserLimit({ name, prefix, max, windowMs, what })`;
+  - the three budgets, defined through `perUserLimit`.
+
+  `index.js` requires it at the top and keeps only the login and sudo WRAPPERS, which own
+  their key namespaces.
+  - **Named middleware:** each limiter keeps its function NAME, so `api-surface.test.js`
+    and `api-contract.test.js` still find all three in the live route stack, unchanged.
+  - **Both surfaces:** every limiter now renders v1's `{error}` or v2's problem+json
+    according to the mount. Before, only `libraryWriteLimit` did.
+  - **Window guard:** a window longer than the sweep's horizon is refused when the limiter
+    is defined, since the sweep would otherwise evict a live lockout.
+  - **Tests:**
+    - the names;
+    - within budget / 429 + `Retry-After` on BOTH surfaces;
+    - fail-open without `req.user`;
+    - the window guard;
+    - budget isolation from each other and from the login keys.
+
+    Every existing contract and route-tier test passes unchanged.
 
 ### [x] UP-23 Vite ≥ 6.4.3 (HIGH dev-server advisories; unblocks Vitest 4) (CISO, UP-20 review)
 - **Why:** `npm audit` rates `vite <=6.4.2` HIGH. The issues are the dev server's path
@@ -1539,3 +1580,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-14 | this batch | 2026-09-26 | Unproduced `rate_limited` removed from job REASONS and the spec's FailureReason together |
 | UP-11 | this batch | 2026-09-26 | RAWG detail skipped when the list rules Steam out, answers cached (bounded, TTL); Steam price sweep deduped per app id |
 | UP-17, UP-18 | this batch | 2026-09-26 | Deploy warns on either TRUST_PROXY/BACKEND_BIND mismatch; a 401 may only come from authentication (the SPA logs out on every 401) |
+| UP-22 (+UP-18 review) | this batch | 2026-09-26 | rate-limits.js: one store, one sweep, a named perUserLimit() factory rendering both surfaces; the final error handler no longer passes an upstream 401 through |

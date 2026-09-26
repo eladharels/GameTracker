@@ -142,23 +142,45 @@ check('a 401 comes only from authentication (the SPA logs out on every 401, UP-1
   const src = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8').split('\n');
   const ALLOWED = ['function authRequired(', 'function patRequired(', 'function selfOnly(',
     'function ownershipRequired(', "app.post('/api/auth/login'"];
-  const opener = /^(?:async )?function \w+\(|^const \w+ = |^app\.(?:get|post|put|patch|delete|use)\(|^v2Router\.(?:get|post|put|patch|delete|use)\(/;
+  // The block a line belongs to is the last column-0 opener; a column-0 closer ends it, so
+  // code after an allowed function never inherits its name (review: without the reset, an
+  // `app.all(…401…)` placed after ownershipRequired passed).
+  const opener = /^(?:async )?function \w+\(|^(?:const|let|var) [\w{}, ]+ = |^(?:app|v2Router|router)\.\w+\(/;
   let enclosing = '(top level)'; const found = [];
   src.forEach((line, i) => {
     if (opener.test(line)) enclosing = line;
-    if (/status\(401\)|UNAUTHENTICATED/.test(line) && !/^\s*\/\//.test(line)) {
+    else if (/^[})]/.test(line)) enclosing = '(top level)';
+    const code = line.replace(/\/\/.*$/, '');
+    if (/^\s*\*/.test(line) || !code.trim()) return;
+    // ANY 401 literal, however it is sent (status, sendStatus, statusCode =, writeHead),
+    // plus the service code that problem.js renders as 401.
+    if (/\b401\b|UNAUTHENTICATED/.test(code)) {
       found.push(enclosing);
       assert.ok(ALLOWED.some((a) => enclosing.startsWith(a)),
-        `index.js:${i + 1} answers 401 inside ${enclosing.trim().slice(0, 80)} — a 401 logs the SPA user out; use 403 unless the CREDENTIAL is missing or invalid`);
+        `index.js:${i + 1} can answer 401 inside ${enclosing.trim().slice(0, 80)} — a 401 logs the SPA user out; use 403 unless the CREDENTIAL is missing or invalid`);
+    }
+    // A status taken from a VARIABLE cannot be checked by reading it — which is exactly
+    // how an upstream's 401 on an AxiosError reached the client. Each is allowlisted by
+    // reason: a created/ok pair, and the final handler's clamp (problem.js).
+    const variable = /(?:\.status|sendStatus)\(\s*(?!\d)([^)]*)\)|statusCode\s*=\s*(?!\d)/.exec(code);
+    if (variable) {
+      assert.ok(/^result\.created \? 201 : 200$|^problem\.statusForUnhandled\(err$/.test((variable[1] || '').trim()),
+        `index.js:${i + 1} sets a status from a value (${code.trim().slice(0, 70)}). Map it through a table that cannot yield 401, and allowlist it here with the reason`);
     }
   });
   assert.ok(found.length >= 5, 'found no 401 producers — the scan itself is broken');
   // Services never decide "unauthenticated": that is the adapters' job, and a service
-  // throwing it would reach both surfaces as a 401 through problem.js.
-  for (const f of fs.readdirSync(path.join(ROOT, 'services'))) {
-    if (['errors.js', 'problem.js', 'v2.js'].includes(f)) continue;
-    const text = fs.readFileSync(path.join(ROOT, 'services', f), 'utf8');
-    assert.ok(!/CODES\.UNAUTHENTICATED/.test(text), `services/${f} throws UNAUTHENTICATED`);
+  // throwing it would reach both surfaces as a 401 through problem.js. Every top-level
+  // module the backend requires, too — not only services/.
+  const modules = [
+    ...fs.readdirSync(path.join(ROOT, 'services')).filter((f) => !['errors.js', 'problem.js', 'v2.js'].includes(f))
+      .map((f) => `services/${f}`),
+    'ldap-helpers.js', 'directory.js', 'settings-store.js', 'user-rules.js', 'rate-limits.js',
+  ];
+  for (const f of modules) {
+    const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    assert.ok(!/UNAUTHENTICATED|['"]unauthenticated['"]|\b401\b/.test(text.replace(/\/\/.*$/gm, '')),
+      `${f} can produce an unauthenticated/401 answer`);
   }
 });
 
