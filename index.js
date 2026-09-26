@@ -1741,9 +1741,11 @@ function testNotificationLimit(req, res, next) {
 
 // --- CrackRelease check limiter (ROADMAP SEC-15) -----------------------------------
 //
-// Each check writes to user_games AND fetches a third-party site (crackrelease.com), so
-// an unbounded loop from a script or a PAT is both a database write loop and outbound
-// traffic this server originates. The SPA's in-flight dedupe (FE-1) is a courtesy in one
+// Each check fetches a third-party site (crackrelease.com), and the per-game route also
+// writes the answer to user_games (the admin test route does not write). An unbounded
+// loop from a script or a PAT is outbound traffic this server originates, plus a database
+// write loop on the per-game route. BOTH routes draw on ONE budget per caller: the cost
+// is the same outbound request. The SPA's in-flight dedupe (FE-1) is a courtesy in one
 // client, not a control. A library page can legitimately ask for up to 24 at once and a
 // user paging through asks for more, so the budget is generous for a person and far
 // below a loop. Every attempt counts: the outbound request is the cost.

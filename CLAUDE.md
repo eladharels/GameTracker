@@ -754,6 +754,14 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
 >
 > Each still has to be recorded in `test/api-surface.test.js` with its tier like any other
 > route.
+>
+> **A per-user abuse limit is not a "status move".** Three v1 routes answer 429 when a caller
+> exceeds a budget no person reaches: `libraryWriteLimit` on `POST /api/user/:u/games`,
+> `testNotificationLimit` on `POST /api/admin/test-notification`, and `crackCheckLimit` on both
+> crack-status routes. That is within the freeze on three conditions: the body is the frozen
+> `{error}` envelope, it carries `Retry-After`, and no existing status changes meaning for a
+> request within budget. The limiter must sit AFTER authentication in the chain — before it,
+> `req.user` is unset and the limiter fails open (`test/api-surface.test.js` pins the order).
 - **User-chosen notification servers (SSRF)**: private/LAN ntfy and Gotify URLs are allowed on
   purpose (self-hosting is the feature); cloud-metadata and link-local addresses are not. The
   refusal is enforced on the **resolved address at connect time**
@@ -762,9 +770,11 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   Diagnostics test button is limited to 10 per user per 5 minutes (`testNotificationLimit`,
   pinned in `test/api-surface.test.js`)
 - **CrackRelease checks** (`POST /api/user/:u/games/:id/crackrelease-status` and the admin
-  variant) are limited to 60 per user per 5 minutes (`crackCheckLimit`, ROADMAP SEC-15): each
-  one writes to `user_games` and fetches a third-party site, and the SPA's in-flight dedupe is
-  a courtesy, not a control. Same 429 `{error}` + `Retry-After` shape as the other limiters
+  variant) share ONE budget of 60 per caller per 5 minutes (`crackCheckLimit`, ROADMAP SEC-15):
+  each fetches a third-party site, and the per-game route also writes to `user_games` (the
+  admin variant does not). The SPA's in-flight dedupe is a courtesy, not a control. Same 429
+  `{error}` + `Retry-After` shape as the other limiters; the SPA honours `Retry-After` and
+  does not record a throttled check as `unknown`
 - **Rate limiting**: 5 failed login attempts → 15-minute IP lockout (`trust proxy` set so `req.ip` is the real client behind nginx; `TRUST_PROXY` configurable)
 - **CORS**: deny-by-default allowlist via `CORS_ORIGINS` (same-origin app needs none)
 - **Security headers**: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy from the Node app; CSP + Permissions-Policy from `frontend/nginx.conf`. **HSTS is not set anywhere in this repo** — it belongs on the TLS-terminating edge proxy.

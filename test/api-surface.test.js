@@ -456,6 +456,19 @@ check('every status-write route carries the library write limiter', () => {
   }
 });
 
+// A per-user limiter reads req.user.id and does `if (!userId) return next()`. Mounted
+// BEFORE authentication it is a silent no-op, and a presence-only pin stays green (CISO,
+// SEC-15 review). So its POSITION is pinned: after authRequired and every authz guard.
+function assertAfterAuthz(route, limiter) {
+  const at = route.names.indexOf(limiter);
+  for (const guard of ['authRequired', 'ownershipRequired', 'requirePermissionMiddleware']) {
+    const g = route.names.indexOf(guard);
+    if (g !== -1) assert.ok(at > g, `${route.key}: ${limiter} runs before ${guard} — it would fail open`);
+  }
+  assert.ok(route.names.indexOf('authRequired') !== -1 && at > route.names.indexOf('authRequired'),
+    `${route.key}: ${limiter} is not after authRequired`);
+}
+
 // Same reason, SEC-1: the test-notification route makes the SERVER send a request to a
 // URL the user chose. Not an authorization middleware, so no tier assertion sees it.
 check('the test-notification route carries its per-user limiter', () => {
@@ -463,6 +476,7 @@ check('the test-notification route carries its per-user limiter', () => {
   assert.ok(route, 'POST /api/admin/test-notification is not a live route — update this pin with the rename');
   assert.ok(route.names.includes('testNotificationLimit'),
     `the test-notification route has no limiter. Its chain is: ${route.names.join(' -> ')}`);
+  assertAfterAuthz(route, 'testNotificationLimit');
 });
 
 // SEC-15: each CrackRelease check writes to the database AND fetches a third-party site.
@@ -471,6 +485,7 @@ check('both crack-status routes carry the per-user limiter', () => {
     const route = liveRoutes().find((r) => r.key === key);
     assert.ok(route, `${key} is not a live route — update this pin with the rename`);
     assert.ok(route.names.includes('crackCheckLimit'), `${key} has no limiter. Its chain is: ${route.names.join(' -> ')}`);
+    assertAfterAuthz(route, 'crackCheckLimit');
   }
 });
 

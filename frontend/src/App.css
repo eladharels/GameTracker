@@ -781,13 +781,14 @@ body, html {
   transform: scale(1.02);
   transition: transform 0.15s ease, box-shadow 0.15s ease !important;
 }
-/* Keyboard-selected card for reordering. DASHED, and lifted like a drag-over: it used the
-   exact 2px accent ring focus uses, so after picking a card up and tabbing on, the held
-   card and the focused one looked identical. */
+/* Keyboard-selected card for reordering. DASHED and offset: it used the exact 2px accent
+   ring focus uses, so after picking a card up and tabbing on, the held card and the
+   focused one looked identical. */
 .card-keyboard-selected {
   outline: 2px dashed var(--color-accent);
   outline-offset: 3px;
-  transform: translateY(-3px);
+  /* No transform: .game-card's cardEnter animation (fill-mode both) overrides every
+     transform on the card, so a lift here never applied (FE-21). */
 }
 
 /* Subtle glow on non-active cards during a drag to show they're droppable */
@@ -1022,10 +1023,9 @@ body, html {
   margin-bottom: 0.2rem;
   color: var(--text-primary);
   line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  /* The two-line clamp lives on .game-title-btn now (FE-6): a <button> is an atomic
+     inline-block, so a clamp HERE never cut its text — long titles grew over the cover —
+     and this box's overflow:hidden clipped the button's focus ring. */
 }
 .game-release-date {
   font-size: 0.75rem;
@@ -1777,11 +1777,28 @@ button.stats-chip { font-family: inherit; line-height: inherit; appearance: none
 .game-title-btn {
   background: none; border: 0; padding: 0; margin: 0;
   font: inherit; color: inherit; text-align: inherit; letter-spacing: inherit;
-  cursor: pointer; display: inline;
+  cursor: pointer; width: 100%;
+  /* The clamp the title had, applied where it can take effect (measured: 2 lines,
+     ellipsis, the same height as the old plain-text title). */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-.game-title-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
-/* A list that only takes focus as the dialog's fallback shows no ring for it. */
-.games-list:focus { outline: none; }
+/* Inset, so the ring is drawn inside the clamped box instead of being clipped by it. */
+.game-title-btn:focus-visible { outline-offset: -2px; }
+/* Hovering ANYWHERE on a card shows it opens details; hover-capable pointers only, so a
+   touch screen keeps no stuck underline. */
+@media (hover: hover) {
+  .game-card:hover .game-title-btn,
+  .game-title-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
+}
+/* The dialog's focus fallback: a subtle ring, so a keyboard user can see where focus went. */
+.page-title:focus { outline: none; }   /* script-focus fallback only; never tabbed to */
+.games-list:focus-visible {
+  outline: 1px dashed color-mix(in srgb, var(--color-accent) 45%, transparent);
+  outline-offset: 4px;
+}
 
 /* The filter currently applied — it had no visible state at all. */
 .stats-chip[aria-pressed="true"] { box-shadow: 0 0 0 1.5px currentColor inset; }

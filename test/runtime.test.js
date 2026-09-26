@@ -461,6 +461,12 @@ console.log('the SPA has one auth header and one way to end a session:');
     // the expiry timer — all go through it. A page deciding on its own is P0-6 again.
     assert.ok((src['frontend/src/App.jsx'].match(/endSession\(\{/g) || []).length >= 4,
       'App.jsx no longer ends sessions through endSession');
+    // A manual sign-out must stay SILENT; every other ending explains itself.
+    const logoutFn = src['frontend/src/App.jsx'].slice(src['frontend/src/App.jsx'].indexOf('const logout = useCallback'),
+      src['frontend/src/App.jsx'].indexOf('}, [setUser, navigate])'));
+    assert.ok(/endSession\(\{ explain: false \}\)/.test(logoutFn), 'sign-out now shows a "session ended" notice');
+    assert.strictEqual((src['frontend/src/App.jsx'].match(/explain: false/g) || []).length, 1,
+      'more than one path ends a session silently');
   });
   check('the login page clears the "session ended" flag once it has shown it', () => {
     // session.js#peekSessionEnd deliberately does NOT clear (StrictMode double-renders).
@@ -501,7 +507,7 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
         .match(/if \(seq !== searchSeq\.current\) return/g) || []).length;
     assert.ok(guards >= 4, `stale-response guards: ${guards} of 4 (result, error, price ok, price error)`);
   });
-  check('stats chips are buttons and every library card is keyboard-focusable (FE-6)', () => {
+  check('stats chips are buttons; card details open from a title button (FE-6)', () => {
     assert.ok(!/<div className="stats-chip/.test(app), 'a stats chip is a <div onClick> again — not reachable by keyboard');
     const chips = (app.match(/<button type="button" className="stats-chip /g) || []).length;
     const pressed = (app.match(/aria-pressed=\{filter === '/g) || []).length;
@@ -512,6 +518,13 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
       'library and search cards no longer open their details from a title button');
     assert.ok(/role="group"\s*\n\s*aria-labelledby=\{`lib-title-/.test(app), 'library cards are no longer labelled groups');
     assert.ok(!/aria-label=\{filter === 'backlog'/.test(app), 'a card div carries an aria-label again');
+    // Keyboard reordering: the backlog card stays focusable, Escape comes before the
+    // inner-control guard, and Enter/Space still pick up and drop.
+    assert.ok(/tabIndex=\{filter === 'backlog' \? 0 : undefined\}/.test(app), 'backlog cards are no longer focusable');
+    const kb = app.slice(app.indexOf("onKeyDown={filter !== 'backlog' ? undefined"), app.indexOf('setKeyboardDragId(null)\n', app.indexOf("onKeyDown={filter !== 'backlog' ? undefined")) + 400);
+    assert.ok(kb.indexOf("e.key === 'Escape'") > -1 && kb.indexOf("e.key === 'Escape'") < kb.indexOf('e.target !== e.currentTarget'),
+      'Escape no longer cancels a held card from a control inside it');
+    assert.ok(/handleBacklogDrop\(game\.game_id\)/.test(kb), 'keyboard reordering no longer drops the held card');
     for (const name of ['Status for ', 'Refresh metadata for ', 'Remove ']) {
       assert.ok(app.includes('aria-label={`' + name + '${game.game_name}'), `a card control lost its name: "${name}…"`);
     }
@@ -521,7 +534,8 @@ console.log('frontend component fixes keep their shape (stopgap until a DOM harn
     assert.ok(/onKeyDown=\{handleModalFocusTrap\}/.test(modal), 'GameDetailModal no longer traps Tab');
     assert.ok(/closeRef\.current\?\.focus\(\)/.test(modal), 'GameDetailModal no longer moves focus into itself on open');
     assert.ok(/opener\.focus\(\)/.test(modal), 'GameDetailModal no longer returns focus to its opener');
-    assert.ok(/fallbackTarget\(\)\?\.focus\(\)/.test(modal), 'no focus fallback when the opener card is gone');
+    assert.ok(/fallbackTarget\(\)\?\.focus\(\{ preventScroll: true \}\)/.test(modal),
+      'no focus fallback when the opener card is gone (or it scrolls the page on close)');
     assert.strictEqual((app.match(/fallbackFocusRef=\{/g) || []).length, 2, 'a GameDetailModal is rendered without a focus fallback');
   });
   check('a failed status change rolls back that game only (FE-5)', () => {

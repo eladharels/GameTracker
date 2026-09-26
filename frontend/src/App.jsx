@@ -290,7 +290,9 @@ function App() {
         </nav>
       </aside>
       <main className="main-content">
-        {pageTitle && <div className="page-title">{pageTitle}</div>}
+        {/* A heading, and focusable by script only: the detail dialog's last-resort focus
+            target when the list it was opened from no longer exists (FE-7). */}
+        {pageTitle && <div className="page-title" role="heading" aria-level={1} tabIndex={-1}>{pageTitle}</div>}
         <Routes>
           <Route path="/search" element={<SearchPage user={user} />} />
           <Route path="/library" element={<LibraryPage user={user} />} />
@@ -935,8 +937,10 @@ function SearchPage({ user }) {
       {searchError && <div className="error-msg">{searchError}</div>}
       {searchResults.length > 0 && (
         <>
-          <h2>Search Results</h2>
-          <div ref={resultsListRef} tabIndex={-1} aria-label="Search results"
+          <h2 id="search-results-heading">Search Results</h2>
+          {/* role="region": an aria-label/labelledby on a role-less div is not allowed —
+              the list is where focus lands when the dialog's opener is gone (FE-7). */}
+          <div ref={resultsListRef} tabIndex={-1} role="region" aria-labelledby="search-results-heading"
             className={`games-list ${viewMode === 'list' ? 'list-view' : 'grid-view'}`}>
             {searchResults.map(game => {
               // Determine if unreleased (dateless or future release date)
@@ -1217,6 +1221,9 @@ function LibraryPage({ user }) {
   // add one without changing any id, and the price would never load.
   const currentPriceKey = currentGames.map(g => `${g.game_id}:${g.steamAppId || ''}`).join('\u0001')
   const crackInFlight = useRef(new Set())
+  // A 429 is "not now", not "no DRM information" (SEC-15 review): nothing is cached for the
+  // throttled game, and no check is sent until the server's Retry-After has passed.
+  const crackThrottledUntil = useRef(0)
   // Where focus goes when the detail dialog closes and the card that opened it is gone —
   // removed, or filtered out by a status change made in the dialog (FE-7, UI/UX review).
   const gamesListRef = useRef(null)
@@ -1252,6 +1259,11 @@ function LibraryPage({ user }) {
       const res = await axios.post(`${API_BASE}/user/${user.username}/games/${game.game_id}/crackrelease-status`);
       setCrackStatusMap(prev => ({ ...prev, [game.game_id]: res.data.status || 'unknown' }));
     } catch (err) {
+      if (err.response?.status === 429) {
+        const retryAfter = Number(err.response.headers?.['retry-after']) || 60
+        crackThrottledUntil.current = Date.now() + retryAfter * 1000
+        return   // leave it unset: a later page view (after the wait) checks it again
+      }
       setCrackStatusMap(prev => ({ ...prev, [game.game_id]: 'unknown' }));
     } finally {
       crackInFlight.current.delete(id)
@@ -1261,6 +1273,7 @@ function LibraryPage({ user }) {
   // When showCrackStatus is toggled on, fetch crack status for visible games that don't have it yet
   useEffect(() => {
     if (!showCrackStatus || !user) return;
+    if (Date.now() < crackThrottledUntil.current) return;   // the server asked us to wait
     currentGames.forEach(game => {
       const existing = game.crackStatus || crackStatusMap[game.game_id];
       if (!existing) {
@@ -1653,7 +1666,7 @@ function LibraryPage({ user }) {
                 : ''}
             </div>
           )}
-          <div key={`${filter}-${currentPage}`} ref={gamesListRef} tabIndex={-1} aria-label="Your games"
+          <div key={`${filter}-${currentPage}`} ref={gamesListRef} tabIndex={-1} role="region" aria-label="Your games"
             className={`games-list ${viewMode === 'list' ? 'list-view' : ''}${isDraggingAny ? ' backlog-drag-active' : ''}`}>
             {currentGames.map((game, index) => {
               const isUnreleased = isGameUnreleased(game);
@@ -1681,10 +1694,12 @@ function LibraryPage({ user }) {
                   onDrop={() => handleBacklogDrop(game.game_id)}
                   onDragEnd={() => { setDraggedGameId(null); setDragOverGameId(null); setIsDraggingAny(false) }}
                   onKeyDown={filter !== 'backlog' ? undefined : (e) => {
-                    // Same guard as the other branch: Space on the status select inside a
-                    // backlog card must not also pick the card up.
-                    if (e.target !== e.currentTarget) return
+                    // Escape cancels a held card from ANYWHERE in it — including its title
+                    // button or status select — so it comes before the guard below.
                     if (e.key === 'Escape') { setKeyboardDragId(null); return }
+                    // Enter/Space on a control INSIDE the card (the status select, the
+                    // title button) must do that control's job, not pick the card up.
+                    if (e.target !== e.currentTarget) return
                     if (e.key === ' ' || e.key === 'Enter') {
                       e.preventDefault()
                       if (!keyboardDragId) {

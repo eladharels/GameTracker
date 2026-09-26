@@ -93,12 +93,17 @@ export default function GameDetailModal({ game, onClose, onSetStatus, onRemove, 
     closeRef.current?.focus()
     // Read at CLOSE time on purpose: the list is re-keyed on filter/page, so the node that
     // existed when the dialog opened may have been replaced by the one to focus now.
-    const fallbackTarget = () => fallbackFocusRef && fallbackFocusRef.current
+    // Removing the LAST game (or the last one matching the filter) replaces the list with
+    // the empty state, so the ref is null — then the page's main heading, never <body>.
+    const fallbackTarget = () => (fallbackFocusRef && fallbackFocusRef.current)
+      || document.querySelector('.page-title')
     return () => {
       // The opener may be GONE: Remove deletes the card, and a status change under a filter
       // unmounts it. Focus then goes to the list the card was in, not to <body>.
       if (opener && typeof opener.focus === 'function' && opener !== document.body && document.contains(opener)) opener.focus()
-      else fallbackTarget()?.focus()
+      // preventScroll: a mouse user's opener is <body> (the card is not focusable), so this
+      // runs for them too — and must not jump the page on close.
+      else fallbackTarget()?.focus({ preventScroll: true })
     }
     // fallbackFocusRef is a ref object (stable); only isOpen should re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps

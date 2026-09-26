@@ -40,9 +40,9 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | P0 — Fix first | 6 | 6 |
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 15 | 13 |
-| FE — Frontend | 20 | 12 |
-| UP — Tidying & upkeep | 21 | 0 |
-| **Total** | **78** | **47** |
+| FE — Frontend | 21 | 12 |
+| UP — Tidying & upkeep | 22 | 0 |
+| **Total** | **80** | **47** |
 
 ---
 
@@ -711,7 +711,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Done:** `crackCheckLimit` — 60 checks per user per 5 minutes, every attempt counted, 429
   `{error}` with `Retry-After` — on the per-game route AND the admin variant (same outbound
   cost). Pinned on both chains in `test/api-surface.test.js`; the 61st call is a 429 in
-  `test/api-contract.test.js`. The SPA already treats a failed check as `unknown`.
+  `test/api-contract.test.js`. BOTH routes share ONE budget per caller.
+- **Review fixes:** the limiter's POSITION (after authentication and authz — before it, it fails
+  open) is pinned for this and `testNotificationLimit` (CISO). A throttled check is no longer
+  cached as `unknown` for the session: the SPA leaves it unset and sends nothing until
+  `Retry-After` has passed (CISO). The admin route does not write — docs corrected — and
+  CLAUDE.md's freeze note now says an abuse-bounding 429 in the `{error}` envelope with
+  `Retry-After` is not a "status move" (Architect).
+- **Watch in operation (CISO):** titles CrackRelease does not know stay NULL, so a large library
+  of them re-requests on every reload and hits the budget first. If that is reported, stop
+  re-requesting known misses (a server-side checked-at time). **Do not raise the budget.**
 
 ### [x] SEC-12 `library` scope never actually required
 - **Where:** `services/auth.js:299-305` (`authorize` checks only `admin`).
@@ -945,6 +954,15 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** give Wishlist a colour independent of `--color-accent`, or pick the status palette
   so no preset collides.
 
+### [ ] FE-21 `.game-card`'s entry animation overrides every card transform (UI/UX, code review)
+- **Where:** `App.css` — `.game-card { animation: cardEnter 0.3s ease both }`. Fill-mode `both`
+  keeps the last keyframe's `transform: translateY(0)`, which beats normal declarations, so
+  the grid and list hover lifts and the backlog drag-over `scale(1.02)` never apply (measured
+  in Chromium: identity matrix).
+- **Fix:** `animation-fill-mode: backwards`, or animate `translate`/`opacity` instead of
+  `transform`. Then mind the cascade: `.game-card:hover` (0,2,0) beats
+  `.card-keyboard-selected` (0,1,0).
+
 ---
 
 ## UP — Tidying & upkeep
@@ -1088,6 +1106,16 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** answer 503 when the directory is unreachable AND the row has no local hash, and
   do not count it. This is a new status on a frozen v1 route: it needs an Architect and
   CISO decision, recorded in `test/api-contract.test.js`, before code.
+
+### [ ] UP-22 One `perUserLimit()` factory and a `rate-limits.js` module (Architect, SEC-15)
+- **Why:** `libraryWriteLimit`, `testNotificationLimit` and `crackCheckLimit` are the same
+  eight lines with different keys and budgets — and only the first uses the v1/v2 renderer
+  branch, so the other two would send the v1 envelope if ever mounted on a v2 route.
+- **Fix:** `perUserLimit({ name, keys, max, windowMs, what })` returning a NAMED middleware (the
+  name is load-bearing for `api-surface.test.js` and `api-contract.test.js`), always using the
+  renderer branch; move it, the shared store, `lockoutMinutes`/`trackFailures`/`clearFailures`
+  and the hourly sweep into `rate-limits.js`, required at the top of index.js so nothing relies
+  on function hoisting. A behaviour-preserving refactor: its own commit, not inside a fix.
 
 ---
 
