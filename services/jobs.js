@@ -300,15 +300,29 @@ async function fetchSteamPrice(steamAppId, { region = steamRegion() } = {}) {
 async function updatePrices({ region = steamRegion() } = {}) {
   const report = { checked: 0, updated: 0, withoutPrice: 0, errors: 0 };
   const games = await priceableGames();
+  // ONE Steam request per app id per sweep (ROADMAP UP-11). Rows are per user, so a game
+  // five people own was fetched five times — same id, same region, same answer, five
+  // times the traffic against an unauthenticated API that rate-limits by IP. The report
+  // still counts ROWS, so its meaning is unchanged; a failure is logged once per id.
+  const byAppId = new Map();
+  const lookup = (id) => {
+    if (!byAppId.has(id)) {
+      // A stored value that is not a Steam id is never sent (the same rule the routes
+      // apply): it was interpolated into the outbound request as-is.
+      byAppId.set(id, isSteamAppId(id)
+        ? fetchSteamPrice(id, { region }).then((r) => {
+          if (!r.ok) console.error(`[Jobs] Price lookup failed for app ${safe(id, 20)}:`, r.error);
+          return r;
+        })
+        : Promise.resolve({ ok: false, error: 'not a Steam app id' }));
+    }
+    return byAppId.get(id);
+  };
   for (const game of games) {
     report.checked++;
     {
-      const result = await fetchSteamPrice(game.steam_app_id, { region });
-      if (!result.ok) {
-        report.errors++;
-        console.error(`[Jobs] Price lookup failed for app ${safe(game.steam_app_id, 20)}:`, result.error);
-        continue;
-      }
+      const result = await lookup(String(game.steam_app_id).trim());
+      if (!result.ok) { report.errors++; continue; }
       const price = result.price;
       if (!price) { report.withoutPrice++; continue; }
       // AWAITED. v1 fired this through the callback shim without waiting, which

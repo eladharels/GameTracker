@@ -2713,6 +2713,87 @@ console.log('jobs.steamRegion — one region for every price path (P0-4):');
   });
 }
 
+console.log('catalog RAWG detail lookups (UP-11):');
+checkAsync('a list that rules Steam out costs no detail request; a known answer is not asked twice', async () => {
+  const axiosMod = require('axios');
+  const catalog = require('../services/catalog');
+  // catalog.js DESTRUCTURES resolveApiKey, so stubbing settings-store would be the
+  // documented silent false pass. The key resolves settings-then-env; set the env.
+  const realGet = axiosMod.get, realKey = process.env.RAWG_API_KEY;
+  const details = [];
+  process.env.RAWG_API_KEY = 'k';
+  axiosMod.get = async (url) => {
+    if (url.endsWith('/api/games')) {
+      return { data: { results: [
+        { id: 1, name: 'On Steam', stores: [{ store: { id: 1 } }] },
+        { id: 2, name: 'Console only', stores: [{ store: { id: 3 } }] },   // no Steam: skip
+        { id: 3, name: 'Stores unknown' },                                  // must ask
+      ] } };
+    }
+    const id = url.split('/').pop(); details.push(id);
+    if (id === '3') throw new Error('ETIMEDOUT');                           // never cached
+    return { data: { stores: [{ store: { id: 1 }, url_en: `https://store.steampowered.com/app/${id}0/` }] } };
+  };
+  catalog.rawgDetailCache.clear();
+  try {
+    const first = await catalog.searchRawg('x', 20);
+    assert.deepStrictEqual(details.sort(), ['1', '3'], `details fetched: ${details}`);
+    assert.deepStrictEqual(first.results.map((r) => r.steamAppId), ['10', null, null]);
+    details.length = 0;
+    await catalog.searchRawg('x', 20);
+    assert.deepStrictEqual(details, ['3'], 'a cached answer was fetched again, or a FAILURE was cached');
+  } finally {
+    axiosMod.get = realGet; catalog.rawgDetailCache.clear();
+    if (realKey === undefined) delete process.env.RAWG_API_KEY; else process.env.RAWG_API_KEY = realKey;
+  }
+});
+checkAsync('the RAWG detail cache is bounded and expires', async () => {
+  const axiosMod = require('axios');
+  const catalog = require('../services/catalog');
+  const realGet = axiosMod.get;
+  let calls = 0;
+  axiosMod.get = async () => { calls++; return { data: { stores: [] } }; };
+  catalog.rawgDetailCache.clear();
+  try {
+    for (let i = 0; i < catalog.RAWG_DETAIL_MAX + 10; i++) await catalog.rawgSteamAppId(i, 'k', undefined, { now: 0 });
+    assert.strictEqual(catalog.rawgDetailCache.size, catalog.RAWG_DETAIL_MAX, 'the cache grew past its bound');
+    assert.ok(!catalog.rawgDetailCache.has('0'), 'the OLDEST entry was not the one evicted');
+    calls = 0;
+    await catalog.rawgSteamAppId(20, 'k', undefined, { now: catalog.RAWG_DETAIL_TTL_MS + 1 });
+    assert.strictEqual(calls, 1, 'an expired entry was served without asking again');
+  } finally {
+    axiosMod.get = realGet; catalog.rawgDetailCache.clear();
+  }
+});
+
+console.log('jobs.updatePrices — one Steam request per app id (UP-11):');
+checkAsync('five owners of one game cost ONE request, and every row is still written', async () => {
+  const axiosMod = require('axios');
+  const dbMod = require('../db');
+  const jobsSvc = require('../services/jobs');
+  const realGet = axiosMod.get, realAll = dbMod.promises.all, realRun = dbMod.promises.run;
+  const asked = []; const written = [];
+  dbMod.promises.all = async () => ([
+    ...[1, 2, 3, 4, 5].map((id) => ({ id, steam_app_id: '440' })),
+    { id: 6, steam_app_id: ' 440 ' },          // same id, stored untrimmed
+    { id: 7, steam_app_id: '440?cc=us' },      // not an id: never sent to Steam
+  ]);
+  dbMod.promises.run = async (sql, params) => { written.push(params[2]); return { changes: 1 }; };
+  axiosMod.get = async (url, cfg) => {
+    asked.push(cfg.params.appids);
+    return { data: { [cfg.params.appids]: { success: true, data: { price_overview: { final_formatted: '₪59.99' } } } } };
+  };
+  try {
+    const report = await jobsSvc.updatePrices({ region: 'il' });
+    assert.deepStrictEqual(asked, ['440'], `Steam was asked ${JSON.stringify(asked)}`);
+    assert.deepStrictEqual(written.sort(), [1, 2, 3, 4, 5, 6], 'a row sharing the id was not written');
+    assert.deepStrictEqual(report, { checked: 7, updated: 6, withoutPrice: 0, errors: 1 },
+      `rows are still what the report counts: ${JSON.stringify(report)}`);
+  } finally {
+    axiosMod.get = realGet; dbMod.promises.all = realAll; dbMod.promises.run = realRun;
+  }
+});
+
 console.log('jobs.updatePrices — the sweep counts three outcomes separately:');
 checkAsync('updated / withoutPrice / errors are not collapsed, and only priced rows are written', async () => {
   // The counting was rewritten when the Steam call was extracted for the v2 price

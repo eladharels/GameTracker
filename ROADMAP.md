@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 24 | 15 |
-| **Total** | **84** | **63** |
+| UP — Tidying & upkeep | 24 | 16 |
+| **Total** | **84** | **64** |
 
 ---
 
@@ -1200,7 +1200,7 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     absent, free, down, `44a` and `..%2Fx`. Unit tests cover the new fields, typing and the
     id rule.
 
-### [ ] UP-11 Provider call volume
+### [x] UP-11 Provider call volume
 - **Problem:**
   - RAWG makes one detail request per result (`catalog.js:163`), up to 20 per search and
     about 10 per game on refresh.
@@ -1208,6 +1208,22 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     (`jobs.js:161,225`).
 - **Fix:** skip RAWG details where the list payload is enough, cache them, and dedupe Steam
   lookups by app id within a sweep.
+- **Done, all three:**
+  - **Skip:** RAWG's list payload names each game's stores by id, without URLs. When those
+    stores exclude Steam (id 1), the detail request cannot find a Steam App ID, so it is
+    not made. When the list omits `stores`, it still asks.
+  - **Cache:** detail ANSWERS, "Steam id X" or "not on Steam", are kept per RAWG id in a
+    process-local map, bounded at 5,000 entries (oldest evicted first) with a 7-day TTL.
+    Failures are never cached, so an outage is not remembered as "not on Steam". Search
+    and the metadata refresh both go through `searchRawg`, so both benefit.
+  - **Dedupe:** `updatePrices` makes one Steam request per app id per sweep, so a game five
+    users own costs one request instead of five. The report still counts rows, and a
+    failure is logged once per id. A stored value that is not a Steam id is no longer sent
+    to Steam; it counts as an error.
+  - **Tests:** the skip, the cache (including that a failure is NOT cached), the bound, the
+    oldest-first eviction, the TTL, and the dedupe (seven rows, one request). The old code
+    fails them.
+  - **Not done:** telling an upstream 429 apart from an outage (see UP-14).
 
 ### [x] UP-12 Telegram legacy Markdown on unescaped game names
 - **Where:** `services/notifications.js:256,272,278`.
@@ -1497,3 +1513,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-8, UP-9 | this batch | 2026-09-26 | settings.json saved atomically where the mount allows, else write-then-truncate-then-fsync; production atomicity split out as UP-24. The IGDB token script stores through the settings service like the UI button |
 | UP-10, 12, 13, 15 | this batch | 2026-09-26 | v1 Steam price route adapted over the shared lookup (shape kept, no error.message); Telegram HTML mode; share list as one array param + the spec's 200 cap enforced; leftovers, backend lint at 0 |
 | UP-14 | this batch | 2026-09-26 | Unproduced `rate_limited` removed from job REASONS and the spec's FailureReason together |
+| UP-11 | this batch | 2026-09-26 | RAWG detail skipped when the list rules Steam out, answers cached (bounded, TTL); Steam price sweep deduped per app id |

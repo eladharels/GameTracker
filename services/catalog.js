@@ -153,14 +153,14 @@ async function searchRawg(query, limit) {
     // clause and TheGamesDB already sliced; RAWG was the one taking the provider's
     // word for it.
     const games = (response.data.results || []).slice(0, limit);
-    // N+1, preserved from v1: RAWG only exposes store links on the DETAIL endpoint,
-    // so finding a Steam App ID costs one extra request per result — up to 21 per
-    // search. They run concurrently and each is individually bounded and individually
-    // catchable, so the worst case is TIMEOUT_MS rather than 20x it. Dropping the
-    // detail fetch would silently stop resolving Steam prices for RAWG-sourced games;
-    // any fix belongs in a caching layer, not here.
+    // N+1: RAWG only exposes store LINKS on the DETAIL endpoint, so finding a Steam App
+    // ID costs one extra request per result. They run concurrently and each is
+    // individually bounded and catchable, so the worst case is TIMEOUT_MS rather than
+    // 20x it. Dropping the detail fetch would silently stop resolving Steam prices for
+    // RAWG-sourced games. rawgSteamAppId now skips it when the list already rules
+    // Steam out and caches what it learns (ROADMAP UP-11).
     const rows = await Promise.all(games.map(async (game) =>
-      rawgRow(game, await rawgSteamAppId(game.id, key))));
+      rawgRow(game, await rawgSteamAppId(game.id, key, game.stores))));
     return { status: 'ok', results: rows.filter((game) => game.name) };
   } catch (err) {
     logProviderError('RAWG', err);
@@ -182,15 +182,38 @@ function rawgRow(game, steamAppId) {
   };
 }
 
+// What RAWG's DETAIL endpoint told us, per RAWG game id: the Steam App ID, or null
+// for "no Steam store". Bounded (oldest evicted first, by insertion order) and expiring,
+// because it lives for the life of the process. Only ANSWERS are cached — a failed
+// lookup is retried next time, never remembered as "not on Steam".
+const RAWG_DETAIL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const RAWG_DETAIL_MAX = 5000;
+const rawgDetailCache = new Map();
+
+// The list payload names each game's stores by id but without URLs. When it is present
+// and has no Steam store (id 1), the detail request cannot find a Steam App ID, so it
+// is not made. When the list omits `stores` entirely, we cannot tell, so we ask.
+const listRulesOutSteam = (stores) => Array.isArray(stores)
+  && !stores.some((s) => s?.store?.id === 1);
+
 // One game's Steam App ID, or null. Never throws: a detail lookup failing must cost
 // that one id, not the whole provider's results.
-async function rawgSteamAppId(gameId, key) {
+async function rawgSteamAppId(gameId, key, listStores, { now = Date.now() } = {}) {
+  if (listRulesOutSteam(listStores)) return null;
+  const hit = rawgDetailCache.get(String(gameId));
+  if (hit && now - hit.at < RAWG_DETAIL_TTL_MS) return hit.steamAppId;
   try {
     const detail = await axios.get(`https://api.rawg.io/api/games/${encodeURIComponent(gameId)}`, {
       ...REQUEST,
       params: { key },
     });
-    return steamAppIdFromStores(detail.data.stores);
+    const steamAppId = steamAppIdFromStores(detail.data.stores);
+    rawgDetailCache.delete(String(gameId));   // re-insert: refreshes its eviction order
+    rawgDetailCache.set(String(gameId), { steamAppId, at: now });
+    while (rawgDetailCache.size > RAWG_DETAIL_MAX) {
+      rawgDetailCache.delete(rawgDetailCache.keys().next().value);
+    }
+    return steamAppId;
   } catch {
     return null;
   }
@@ -684,4 +707,5 @@ module.exports = {
   mergeResults, searchAll, findExactMatch, matchForRow,
   search, fetchById, resolveGame, parseGameRef, boundedLimit, steamAppIdFromStores,
   igdbByIdQuery, GAME_REF_PATTERN, nobodyAnswered,
+  rawgSteamAppId, rawgDetailCache, RAWG_DETAIL_MAX, RAWG_DETAIL_TTL_MS,
 };
