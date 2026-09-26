@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 22 | 1 |
-| **Total** | **82** | **49** |
+| UP — Tidying & upkeep | 23 | 1 |
+| **Total** | **83** | **49** |
 
 ---
 
@@ -1146,9 +1146,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Versions (Architect review):** Vitest **3.2.7** — the first cut used Vitest 2, which the full
   audit rates CRITICAL (GHSA-5xrq-8626-4rwp, the UI server; <3.2.6). Vitest 3 runs on this Vite 5.
 - **Known (dev-only, never shipped):** the moderate `@vitest/mocker` advisory
-  (GHSA-82fw-gwwq-j7x9, <4.1.11) remains until Vitest 4, which needs Vite 6+; so do the older
-  Vite 5.4 / esbuild dev-server advisories (e.g. GHSA-fx2h-pf6j-xcff, a `server.fs.deny` bypass
-  on Windows). `vitest run` opens no server; none of this reaches the nginx image.
+  (GHSA-82fw-gwwq-j7x9, <4.1.11) remains until Vitest 4, which needs Vite 6+. The Vite 5.4 dev
+  server itself is rated **HIGH** by the full audit (`vite <=6.4.2`), and that includes
+  GHSA-4w7w-66w2-5vf9, a path traversal through the optimized-deps `.map` handler on every OS.
+  Also open: esbuild GHSA-67mh-4wv8-2f99 and GHSA-fx2h-pf6j-xcff (`server.fs.deny` on Windows).
+  They matter because `server.host` is `0.0.0.0`, so `npm run dev` is reachable from the LAN.
+  `vitest run` opens no server, and none of this reaches the nginx image. Tracked as UP-23.
 - **Review fixes:** the login tests render under `<StrictMode>` (as `main.jsx` does — the property
   the retired pin guarded); the wiring pin "both call sites pass `fallbackFocusRef`" is restored
   until FE-10, since the component test uses its own harness.
@@ -1186,6 +1189,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   renderer branch; move it, the shared store, `lockoutMinutes`/`trackFailures`/`clearFailures`
   and the hourly sweep into `rate-limits.js`, required at the top of index.js so nothing relies
   on function hoisting. A behaviour-preserving refactor: its own commit, not inside a fix.
+
+### [ ] UP-23 Vite ≥ 6.4.3 (HIGH dev-server advisories; unblocks Vitest 4) (CISO, UP-20 review)
+- **Why:** `npm audit` rates `vite <=6.4.2` HIGH. The issues are the dev server's path
+  traversal (GHSA-4w7w-66w2-5vf9) and esbuild's GHSA-67mh-4wv8-2f99, and `vite.config.js`
+  binds the dev server to `0.0.0.0`. They are dev-only: production is nginx serving the
+  emitted assets. The upgrade also clears Vitest 4's prerequisite (`@vitest/mocker`
+  GHSA-82fw-gwwq-j7x9).
+- **Fix:** Vite 6.4.3+ with a matching `@vitejs/plugin-react`, then Vitest 4. Re-run the build,
+  the component tests and the `/api-docs` browser check. Until then, prefer
+  `npm run dev -- --host 127.0.0.1` on an untrusted network. **Do it before the next
+  frontend-dependency change** (CISO).
 
 ---
 

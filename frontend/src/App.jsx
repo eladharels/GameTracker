@@ -38,7 +38,8 @@ const API_BASE = `${window.location.origin}/api`;
 axios.interceptors.request.use((config) => {
   try {
     const url = config.url || '';
-    const isOwnApi = url.startsWith(API_BASE) || url.startsWith('/api');
+    // Trailing slash: a bare '/api' prefix also matches the SPA's own /api-docs route.
+    const isOwnApi = url.startsWith(`${API_BASE}/`) || url.startsWith('/api/');
     if (isOwnApi) {
       const token = localStorage.getItem('token');
       if (token) {
