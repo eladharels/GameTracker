@@ -913,6 +913,17 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
      - Verified: lint, the 27 component tests, the runtime pins (the dialog-per-hook pin now
        covers the new file), and both User Management browser checks from FE-18 and FE-19,
        unchanged.
+  2. `SystemStatusPage` → `src/pages/`. It renders mocked probe results in the built app
+     with no page errors.
+  3. `SettingsPage`, with the five components only it uses (`SettingsSection`,
+     `SettingsField`, `SectionSaveBar`, `DiagSelect`, `AkField`), → `src/pages/`. App.jsx is
+     now 1,845 lines.
+     - Verified in the built app: all seven tabs render with no page errors. The first run
+       hit "J.map is not a function" on Diagnostics; it was the same on `HEAD` and came from
+       my mock answering `{}` where `/user/me/games` returns an array (pinned in
+       `api-contract.test.js`), so it was not the extraction.
+     - Remaining in App.jsx: the App shell, LoginPage, SearchPage, LibraryPage (both
+       pinned), CalendarPage and AccountPage.
 
 ### [x] FE-11 CSP allows `style-src 'unsafe-inline'`
 - **Where:** `frontend/nginx.conf:30`.
@@ -1897,4 +1908,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | FE-19 | this batch | 2026-09-26 | One useDialogFocus() hook for all six dialogs: focus in/back, trap (now also from the container); alertdialog opens on Cancel |
 | FE-18 (+FE-19 review) | this batch | 2026-09-26 | User Management successes → toast, dialog errors = page banner style, sticky banner opaque at 1rem; Add User shows the server's reason; dialog trap on the role element, delete returns focus to the heading |
 | UP-7 | this batch | 2026-09-26 | Smoke stage mints a real PAT and drives v2 (401, read, write) and MCP whoami through to the backend |
-| FE-22 | this batch | 2026-09-26 | React Router 7.18.4: npm audit (dev + prod) at 0; no code change needed; routing verified on the built bundle |
+| FE-22 | this batch | 2026-09-26 | React Router 7.18.4: npm audit (dev + prod) at 0; router transitions turned off (`routerConfig.js`) after review caught them breaking the post-login return path |

@@ -363,7 +363,8 @@ GameTracker/
 │   │   ├── SharedLibrary.jsx       # Shared-library page (moved into src/, FE-9)
 │   │   ├── pages/                  # Pages extracted from App.jsx, one per change (FE-10):
 │   │   │   ├── UserManagementPage.jsx  #   admin user table, dialogs, LDAP sync
-│   │   │   └── SystemStatusPage.jsx    #   the six dependency probes (admin)
+│   │   │   ├── SystemStatusPage.jsx    #   the six dependency probes (admin)
+│   │   │   └── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
 │   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
 │   │   │                           #   (`cd frontend && npm test`, run by frontend-quality).
 │   │   │                           #   They replace test/runtime.test.js's source-text shape
