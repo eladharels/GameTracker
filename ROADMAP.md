@@ -817,6 +817,41 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   1. **Server:** conditions 1-12 and the server half of 19. It is additive: the SPA still
      uses Bearer.
   2. **SPA:** conditions 13-18 and the rest of 19.
+- **Phase 1 done (server, 2026-09-26):**
+  - `services/session.js`, with seven unit tests: the mode, the parser, duplicates, the
+    mode-specific name, CSRF, cookie attributes, issue/verify and the view.
+  - `authRequired`:
+    - an Authorization header ALONE decides;
+    - the cookie path is `cookieSession`, which answers 403 on CSRF, and 401 plus a clear on
+      an invalid cookie, a duplicated one or a PAT in the cookie;
+    - the privilege re-read is shared in `sessionUser`, and `req.auth.via` records the
+      carrier.
+  - Login routes both success paths through one `respondWithSession`. The opt-in is
+    validated (400), requires CSRF (403), and both modes send `no-store`.
+  - `GET /api/auth/session` and `POST /api/auth/logout` sit behind `cookieSessionOnly`, as a
+    new `browser-session` tier in api-surface.
+  - `SESSION_COOKIE_INSECURE` is validated at startup (a typo is fatal), WARNs when set,
+    and is passed in both compose files (fixed EMPTY in the test stack) and by the deploy
+    job.
+  - **Tests:**
+    - `api-contract.test.js`:
+      - both login shapes, exact;
+      - no Set-Cookie without the opt-in;
+      - CSRF on login, and a P0-1 takeover in cookie mode;
+      - the session route answers the ROW's privilege, not the JWT's;
+      - the six refusals;
+      - Bearer / non-Bearer precedence;
+      - logout;
+      - v2 refusing the cookie.
+    - `runtime.test.js` pins credentialed CORS off and no header logging.
+    - The smoke stage checks the real `Set-Cookie` through Express AND nginx, 200/403/v2-401,
+      and the logout clear.
+  - **Mutation-checked:** removing the CSRF check, making it a 401, dropping the clear,
+    letting a non-Bearer header fall through, dropping `cookieSessionOnly`, sending a cookie
+    without the opt-in, skipping login's CSRF check, answering the JWT's claims, and
+    dropping the duplicate or Sec-Fetch-Site checks. Each is caught.
+  - **Deferred to phase 2:** showing insecure mode on System Status, which needs a frontend
+    change and a decision on which response carries the flag.
 
 ### [x] SEC-15 `crackrelease-status` has no server-side rate limit (CISO, FE-1 review)
 - **Where:** `POST /api/user/:username/games/:gameId/crackrelease-status` (`index.js`).

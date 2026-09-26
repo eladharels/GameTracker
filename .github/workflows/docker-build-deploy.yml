@@ -1081,6 +1081,44 @@ jobs:
       # The token is a fake. `initialize` is answered by the transport and never reaches
       # the API, so a valid one would prove nothing extra; what is under test is that the
       # server can complete an exchange at all.
+      # SEC-14: the browser session cookie, against the REAL stack. The contract tests
+      # drive the middleware in-process; this proves the wire: that the Set-Cookie header
+      # really leaves Express and nginx with its attributes, and that v2 refuses it.
+      # The cookie is sent with an explicit Cookie header, never a curl cookie jar, which
+      # may drop a Secure cookie over http. The test stack leaves SESSION_COOKIE_INSECURE
+      # empty, so this is the SECURE default: __Host- prefix, Secure, SameSite=Strict.
+      - name: Verify the browser session cookie (SEC-14)
+        run: |
+          set -euo pipefail
+          for BASE in "http://127.0.0.1:${{ env.BACKEND_TEST_PORT }}" "http://127.0.0.1:${{ env.FRONTEND_TEST_PORT }}"; do
+            echo "[smoke] session cookie via $BASE"
+            curl -s -D ${SMOKE_TMP}/sess-h.txt -o ${SMOKE_TMP}/sess-b.json -X POST "$BASE/api/auth/login" \
+              -H 'content-type: application/json' -H 'X-Requested-With: GameTracker' \
+              -d '{"username":"root","password":"smoke-test-root-not-a-real-password","session":"cookie"}'
+            SETC=$(grep -i '^set-cookie:' ${SMOKE_TMP}/sess-h.txt | head -1 | tr -d '\r')
+            echo "[smoke] $(echo "$SETC" | sed 's/=[^;]*;/=<redacted>;/')"
+            for attr in '__Host-gt_session=' 'HttpOnly' 'Secure' 'SameSite=Strict' 'Path=/'; do
+              echo "$SETC" | grep -q "$attr" || { echo "[smoke] ERROR: the session cookie lacks $attr"; exit 1; }
+            done
+            if grep -q '"token"' ${SMOKE_TMP}/sess-b.json; then echo "[smoke] ERROR: a cookie login returned a token in its body"; exit 1; fi
+            COOKIE=$(echo "$SETC" | sed -n 's/^[Ss]et-[Cc]ookie: *\(__Host-gt_session=[^;]*\).*/\1/p')
+            [ -n "$COOKIE" ] || { echo "[smoke] ERROR: no session cookie to send back"; exit 1; }
+
+            code() { curl -o /dev/null -sw "%{http_code}" "$@"; }
+            OK=$(code -H "Cookie: $COOKIE" -H 'X-Requested-With: GameTracker' "$BASE/api/auth/session")
+            NOHDR=$(code -H "Cookie: $COOKIE" "$BASE/api/auth/session")
+            V2=$(code -H "Cookie: $COOKIE" -H 'X-Requested-With: GameTracker' "$BASE/api/v2/me")
+            echo "[smoke] session with header -> $OK, without -> $NOHDR, cookie on v2 -> $V2"
+            [ "$OK" -eq 200 ] || { echo "[smoke] ERROR: a valid session cookie was refused"; exit 1; }
+            [ "$NOHDR" -eq 403 ] || { echo "[smoke] ERROR: a cookie request WITHOUT the CSRF header answered $NOHDR, expected 403"; exit 1; }
+            [ "$V2" -eq 401 ] || { echo "[smoke] ERROR: /api/v2 answered $V2 to a session cookie, expected 401 (v2 is PAT-only)"; exit 1; }
+
+            curl -s -D ${SMOKE_TMP}/out-h.txt -o /dev/null -X POST -H "Cookie: $COOKIE" -H 'X-Requested-With: GameTracker' "$BASE/api/auth/logout"
+            grep -i '^set-cookie:' ${SMOKE_TMP}/out-h.txt | grep -q 'Max-Age=0' || { echo "[smoke] ERROR: logout did not clear the cookie"; exit 1; }
+          done
+          rm -f ${SMOKE_TMP}/sess-h.txt ${SMOKE_TMP}/sess-b.json ${SMOKE_TMP}/out-h.txt
+          echo "[smoke] Browser session cookie checks PASSED"
+
       - name: Verify the MCP server completes an initialize handshake
         run: |
           set -euo pipefail
@@ -1257,6 +1295,8 @@ jobs:
       TRUST_PROXY: ${{ vars.TRUST_PROXY || secrets.TRUST_PROXY }}
       CORS_ORIGINS: ${{ vars.CORS_ORIGINS || secrets.CORS_ORIGINS }}
       STEAM_REGION: ${{ vars.STEAM_REGION || secrets.STEAM_REGION }}
+      # SEC-14: 1 only for a plain-HTTP LAN install. Unset here = the secure default.
+      SESSION_COOKIE_INSECURE: ${{ vars.SESSION_COOKIE_INSECURE || secrets.SESSION_COOKIE_INSECURE }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

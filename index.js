@@ -60,6 +60,20 @@ const statsService = require('./services/stats');
 const jobRunner = require('./services/job-runner');
 const usersService = require('./services/users');
 const authService = require('./services/auth');
+// The browser session cookie (SEC-14). Its mode is decided ONCE, at startup, and a typo in
+// SESSION_COOKIE_INSECURE is fatal rather than silently picking either (sign-off cond. 10).
+const sessionService = require('./services/session');
+let SESSION_COOKIE_MODE;
+try {
+  SESSION_COOKIE_MODE = sessionService.cookieMode();
+} catch (err) {
+  console.error(`[FATAL] ${err.message}`);
+  process.exit(1);
+}
+if (SESSION_COOKIE_MODE === 'insecure') {
+  console.warn('[WARN] SESSION_COOKIE_INSECURE=1: the browser session cookie is NOT marked Secure '
+    + 'and has no __Host- prefix. Use this only for a plain-HTTP LAN install; serve over HTTPS instead.');
+}
 const v2 = require('./services/v2');
 const settingsService = require('./services/settings');
 const notifications = require('./services/notifications');
@@ -1377,7 +1391,11 @@ app.post('/api/user/:username/games/:gameId/refresh-metadata', authRequired, own
 // existed. Re-reading the user costs one indexed primary-key lookup per request.
 function authRequired(req, res, next) {
   const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  // SEC-14: when an Authorization header is present it ALONE decides -- an invalid Bearer
+  // is a 401 and never falls through to a cookie (sign-off condition 5). Only a request
+  // with NO Authorization header may use the browser session cookie.
+  if (auth === undefined) return cookieSession(req, res, next);
+  if (!auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
   const credential = auth.slice(7);
 
   // Personal access tokens, ADDITIVE to v1 rather than a change to it: a new
@@ -1402,7 +1420,7 @@ function authRequired(req, res, next) {
         // existing route keeps working unchanged: a library-scoped token simply
         // arrives with can_manage_users false and requirePermission refuses it.
         req.user = authService.authorize(identity);
-        req.auth = { kind: 'pat', scopes: identity.scopes, tokenId: identity.tokenId };
+        req.auth = { kind: 'pat', via: 'bearer', scopes: identity.scopes, tokenId: identity.tokenId };
         // An admin-only token manages users and settings; it does not read or write
         // libraries (SEC-12). 403, not 401: the credential is valid, the scope is not.
         if (!authService.holdsScope(req.user, identity.scopes, authService.SCOPES.LIBRARY)
@@ -1423,6 +1441,42 @@ function authRequired(req, res, next) {
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
+  return sessionUser(req, res, next, payload, 'bearer');
+}
+
+// The browser session cookie (SEC-14). Every refusal here is decided in AUTH code, so the
+// UP-18 pin (a 401 comes only from authentication) holds, and the order matters:
+//   1. no cookie -> 401, as a request with no credential always was;
+//   2. a duplicated cookie name -> 401 and cleared: a tossing attempt, or a state nothing
+//      should guess about (condition 1);
+//   3. no CSRF header -> 403, NEVER 401: the credential may be fine, and a 401 would sign
+//      the SPA out (condition 2);
+//   4. an invalid or non-JWT value -> 401, and the cookie is CLEARED, so a session whose
+//      secret was rotated or whose user was deleted cannot loop the browser (condition 6).
+function cookieSession(req, res, next) {
+  const found = sessionService.readSessionCookie(req.headers.cookie, SESSION_COOKIE_MODE);
+  if (!found) return res.status(401).json({ error: 'Unauthorized' });
+  const clear = () => res.append('Set-Cookie', sessionService.clearCookie(SESSION_COOKIE_MODE));
+  if (found.duplicate) {
+    console.warn('[Auth] Refused a request carrying the session cookie more than once.');
+    clear();
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  const refusal = sessionService.csrfRefusal(req.headers);
+  if (refusal) return res.status(403).json({ error: refusal });
+  // A PAT is a Bearer credential only. One in the cookie is refused, never promoted.
+  const payload = authService.looksLikePat(found.token) ? null : sessionService.verify(found.token, JWT_SECRET);
+  if (!payload) {
+    clear();
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  return sessionUser(req, res, next, payload, 'cookie');
+}
+
+// The one privilege re-read for a session JWT, from either carrier. `via` records which,
+// so a route that is for browser sessions alone can say so (cookieSessionOnly), and
+// `kind` stays 'jwt' so nothing keyed on it changes (condition 5).
+function sessionUser(req, res, next, payload, via) {
   db.get('SELECT id, username, can_manage_users, origin, display_name FROM users WHERE id = ?',
     [payload.id], (err, user) => {
       if (err) {
@@ -1431,7 +1485,10 @@ function authRequired(req, res, next) {
       }
       // Account deleted (or the DB was replaced) — the signature is still valid but
       // the identity is gone, so the token is worthless.
-      if (!user) return res.status(401).json({ error: 'Invalid token' });
+      if (!user) {
+        if (via === 'cookie') res.append('Set-Cookie', sessionService.clearCookie(SESSION_COOKIE_MODE));
+        return res.status(401).json({ error: 'Invalid token' });
+      }
       req.user = {
         id: user.id,
         username: user.username,
@@ -1442,10 +1499,22 @@ function authRequired(req, res, next) {
       // A password login carries no scope restriction — the interactive session is
       // the account. Recorded so a handler can tell the two credential types apart
       // without inspecting the header again.
-      req.auth = { kind: 'jwt', scopes: authService.ALL_SCOPES, tokenId: null };
+      req.auth = { kind: 'jwt', via, exp: payload.exp, scopes: authService.ALL_SCOPES, tokenId: null };
       next();
     });
 }
+
+// SEC-14: GET /api/auth/session and POST /api/auth/logout exist for the BROWSER session
+// alone. A Bearer JWT or a PAT there is refused, not answered: the session route would
+// otherwise tell a script about a cookie it does not hold. Named, like every guard the
+// route gates read (condition 7). Runs after authRequired, so req.auth is set.
+function cookieSessionOnly(req, res, next) {
+  if (!req.auth || req.auth.via !== 'cookie') {
+    return res.status(403).json({ error: 'This route is for browser sessions only' });
+  }
+  next();
+}
+cookieSessionOnly.isCookieSessionOnly = true;
 // v2's authentication: PERSONAL ACCESS TOKENS ONLY.
 //
 // Named, so test/api-surface.test.js can derive a v2 route's tier from the middleware
@@ -1673,6 +1742,31 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Username and password are required' });
   }
   
+  // SEC-14: the SPA opts in to a cookie session. Without the field the response is the
+  // frozen `{token}`, byte for byte, with no Set-Cookie -- Android and scripts see nothing
+  // new. With it, the CSRF header is REQUIRED here too: login is the one route a sibling
+  // subdomain could otherwise post to and fix a victim into the attacker's session
+  // (sign-off condition 4).
+  const sessionField = req.body.session;
+  if (sessionField !== undefined && sessionField !== 'cookie') {
+    return res.status(400).json({ error: 'session must be "cookie" when present' });
+  }
+  const wantsCookie = sessionField === 'cookie';
+  if (wantsCookie) {
+    const refusal = sessionService.csrfRefusal(req.headers);
+    if (refusal) return res.status(403).json({ error: refusal });
+  }
+  // One success path for BOTH the local and the directory login: the claims, the signature
+  // and the response shape can no longer drift between them (sign-off condition 8).
+  // `no-store` in both modes, so no proxy ever caches a token or a Set-Cookie (cond. 9).
+  const respondWithSession = (user) => {
+    const { token, exp } = sessionService.issue(user, JWT_SECRET);
+    res.set('Cache-Control', 'no-store');
+    if (!wantsCookie) return res.json({ token });
+    res.append('Set-Cookie', sessionService.setCookie(token, exp, SESSION_COOKIE_MODE));
+    return res.json({ session: sessionService.sessionView(sessionService.claimsFor(user), exp) });
+  };
+
   // Normalize username to lowercase to prevent case sensitivity issues
   const normalizedUsername = username.toLowerCase();
 
@@ -1753,14 +1847,7 @@ app.post('/api/auth/login', (req, res) => {
         console.log('[Auth] Password validation successful for user:', safeForLog(normalizedUsername, 64));
         // Clear failed attempts on successful login
         clearFailedAttempts(clientIP, normalizedUsername);
-        const token = jwt.sign({
-          id: user.id,
-          username: user.username,
-          can_manage_users: !!user.can_manage_users,
-          origin: user.origin || 'local',
-          display_name: user.display_name || user.username
-        }, JWT_SECRET, { expiresIn: '12h' });
-        res.json({ token });
+        respondWithSession(user);
       } catch (bcryptError) {
         console.error('[Auth] Error during password comparison:', bcryptError);
         return res.status(500).json({ error: 'Authentication error' });
@@ -1951,16 +2038,9 @@ app.post('/api/auth/login', (req, res) => {
         console.error('[LDAP] Could not sync profile for', safeForLog(normalizedUsername, 64), '-', syncErr.message);
       }
 
-      const token = jwt.sign({
-        id: user.id,
-        username: user.username,
-        can_manage_users: !!user.can_manage_users,
-        origin: 'ldap',
-        display_name: displayName,
-      }, JWT_SECRET, { expiresIn: '12h' });
       if (authCompleted) return;
       authCompleted = true;
-      res.json({ token });
+      respondWithSession({ ...user, origin: 'ldap', display_name: displayName });
     }, { origin: 'ldap', display_name: displayName });
   }).catch((ldapError) => {
     // verifyLdapCredentials never rejects, so this is a defect in the handling above
@@ -1999,6 +2079,26 @@ function parseRouteId(value) {
   const INT4_MAX = 2147483647;
   return n >= 1 && n <= INT4_MAX ? n : null;
 }
+
+// SEC-14: the browser session's two routes. NEW and browser-only, so within the v1 freeze's
+// narrow door (CLAUDE.md): the client is the SPA, no existing shape moves, and the logic is
+// services/session.js. Both are behind authRequired + cookieSessionOnly and send no 401 of
+// their own (the UP-18 pin), and `no-store` keeps the session out of every cache.
+//
+// GET answers the privilege RE-READ from the database (req.user), never the JWT's claims,
+// with the server-clock `expiresIn` the SPA's expiry timer runs on.
+app.get('/api/auth/session', authRequired, cookieSessionOnly, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ session: sessionService.sessionView(req.user, req.auth.exp) });
+});
+
+// Clears the cookie. The JWT it held stays valid until its exp if it was COPIED -- HttpOnly
+// makes copying it a device-compromise-level act, and that limit is recorded (SEC-14).
+app.post('/api/auth/logout', authRequired, cookieSessionOnly, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.append('Set-Cookie', sessionService.clearCookie(SESSION_COOKIE_MODE));
+  res.status(204).end();
+});
 
 // Create user (admin only)
 app.post('/api/users', authRequired, requirePermission('can_manage_users'), (req, res) => {

@@ -143,6 +143,11 @@ GameTracker/
 │   │                               #   scope rule. Scopes only ever NARROW the privilege
 │   │                               #   read from `users` — never grant. Deliberately does
 │   │                               #   NOT contain the interactive LDAP login
+│   ├── session.js                  # The BROWSER session (SEC-14): issue/verify the 12h JWT,
+│   │                               #   the __Host-gt_session cookie strings, the cookie parser,
+│   │                               #   the CSRF rule and the session view. The one owner: the
+│   │                               #   login route, authRequired and /api/auth/{session,logout}
+│   │                               #   are adapters over it. Never read by /api/v2
 │   ├── shares.js                   # Library sharing (outgoing/incoming/shared reads)
 │   ├── library.js                  # Game library + backlog ordering + the upsert, and the
 │   │                               #   ONE "already in the library?" rule (UP-19). The SPA's
@@ -522,13 +527,16 @@ GameTracker/
 > it would silently demote a game already in the library on every re-add.
 
 > **Every new route must be added to `test/api-surface.test.js`.** It walks the live Express
-> router and asserts the authorization tier of all 84 routes — public / auth / owner-or-admin /
-> admin / self-only / pat / pat-library / pat-admin — derived from the middleware chain, not from the path. CI
+> router and asserts the authorization tier of all 86 routes — public / auth / browser-session /
+> owner-or-admin / admin / self-only / pat / pat-library / pat-admin — derived from the middleware chain, not from the path. CI
 > fails on a route that is not in the inventory, on a tier that changed, and on any
 > unauthenticated route outside the two-item allowlist (`GET /api/health`,
 > `POST /api/auth/login`).
 >
-> The eight tiers are not decoration. `pat` is distinct from `auth` because folding them together
+> The nine tiers are not decoration. `browser-session` (authRequired + `cookieSessionOnly`,
+> SEC-14) is distinct from `auth` so its guard is asserted: recorded as `auth`, deleting the
+> guard would let a Bearer script read `/api/auth/session` with the table green.
+> `pat` is distinct from `auth` because folding them together
 > would hide the fact that `/api/v2` refuses session JWTs, which is the whole admin boundary;
 > `pat-library` is distinct from `pat` because a v2 route with NO scope guard looks exactly like
 > a library route otherwise — a new v2 route needs `requireLibraryScope` or `requireAdminScope`,
@@ -765,6 +773,33 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   to mean deleting the account and its library. The bulk delete answers 200 with a COUNT
   rather than 204: zero revoked is a success, and a 204 could not tell "revoked seven"
   from "revoked none", which is v1's `{success:true}` defect wearing a new status code.
+- **Browser session cookie (SEC-14, phase 1: server).** The SPA opts in at login with
+  `{"session": "cookie"}`. The answer is then `{session: {...}}` plus
+  `Set-Cookie: __Host-gt_session=<the same 12h JWT>; Path=/; HttpOnly; Secure; SameSite=Strict`,
+  with no token in the body. Without the field, login is byte-for-byte the frozen `{token}` and
+  sends no Set-Cookie: Android and scripts see nothing new. `services/session.js` owns it all.
+  - **CSRF:** every cookie-authenticated request, of EVERY method, must carry
+    `X-Requested-With: GameTracker`, and `Sec-Fetch-Site` if sent must be `same-origin`.
+    Otherwise it gets a **403, never a 401** (a 401 signs the SPA out). The cookie login itself
+    requires the header too. This works only while credentialed CORS stays OFF, which is pinned.
+  - **Precedence:** any `Authorization` header alone decides. An invalid or non-Bearer one is a
+    401 and never falls through to the cookie. The cookie takes a JWT only, never a PAT.
+  - **A 401 on the cookie path clears the cookie,** so a rotated secret or a deleted user cannot
+    loop the browser. A duplicated cookie name is refused.
+  - **`/api/v2` never reads the cookie.** This is tested in `api-contract.test.js` and in the
+    smoke stage.
+  - **Two browser-only routes (the narrow door):** `GET /api/auth/session` (the privilege
+    RE-READ from `users`, plus a server-clock `expiresIn`) and `POST /api/auth/logout` (clears
+    the cookie, 204). Both sit behind `cookieSessionOnly`, tier `browser-session`.
+  - **`SESSION_COOKIE_INSECURE=1`:** no `Secure`, plain `gt_session`, ONLY for a plain-HTTP LAN
+    install. It WARNs on every boot. Any value other than unset, 0 or 1 is fatal.
+  - **Known limitations:**
+    - Logout clears the cookie but cannot revoke a COPIED JWT before its exp. HttpOnly makes
+      copying one a device-compromise-level act.
+    - An XSS can still USE the session while the tab is open. It cannot take it away, or mint
+      a PAT without the password.
+    - In insecure mode, a sibling subdomain can toss a cookie.
+  - **Phase 2** switches the SPA from localStorage to the cookie.
 - **JWT tokens**: 12-hour expiry, signed with `JWT_SECRET`. **`JWT_SECRET` is required** — the backend fail-fasts (exits) if it is missing, `<16` chars, or the old `supersecretkey` default. Supplied via env (GitHub Actions secret → compose); rotating it invalidates all sessions.
 - **Route authorization**: every `/api/user/:username/*` route requires `authRequired` + ownership (self-or-admin); data routes (search/price/crack-status) require auth; `GET/POST /api/settings` never exposes secrets and all server sections are admin-only to write. See `SECURITY_HARDENING_2026-07.md`.
 - **Version discovery**: `GET /api/capabilities` (auth tier, NOT `/api/health`) returns
@@ -891,6 +926,8 @@ NODE_ENV=production
 # TRUST_PROXY=<reverse-proxy hop count for the login rate limiter; default 1>
 # STEAM_REGION=<Steam storefront country code for ALL prices; default il. Read ONLY via
 #   services/jobs.js#steamRegion — the cron, the v2 job and the script once disagreed>
+# SESSION_COOKIE_INSECURE=<unset/0 = Secure __Host- session cookie (default); 1 = plain-HTTP LAN
+#   only: no Secure flag. Anything else refuses to start. SEC-14>
 # SETTINGS_DIR=<directory holding settings.json; unset = the legacy single-file mount>
 #   Set ONLY together with the directory mount, per OPERATOR_RUNBOOK.md (UP-24). The backend
 #   refuses to start if the directory holds no settings.json.

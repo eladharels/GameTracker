@@ -158,6 +158,10 @@ function tierOf(route) {
   // its own tier so the table states the real rule — it previously logged these as
   // plain 'auth', which understated them.
   if (route.selfOnly) return 'self-only';
+  // SEC-14: routes that answer the BROWSER session alone (cookieSessionOnly). Its own tier
+  // so the guard is asserted, not assumed: recorded as plain 'auth', deleting the guard
+  // would leave this table green while a Bearer script read /api/auth/session.
+  if (route.names.includes('authRequired') && route.names.includes('cookieSessionOnly')) return 'browser-session';
   if (route.names.includes('authRequired')) return 'auth';
   // v2. A DISTINCT tier, not folded into 'auth': patRequired refuses a session JWT,
   // and a table that showed the two as the same tier would hide exactly the property
@@ -176,6 +180,10 @@ const EXPECTED = {
   // --- public: only these two, ever ---
   'GET /api/health': 'public',
   'POST /api/auth/login': 'public',
+
+  // --- the browser session (SEC-14): authRequired + cookieSessionOnly ---
+  'GET /api/auth/session': 'browser-session',
+  'POST /api/auth/logout': 'browser-session',
 
   // --- authenticated ---
   'GET /api/all-users': 'auth',

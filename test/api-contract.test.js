@@ -248,6 +248,13 @@ function recordingRes() {
   const res = { statusCode: 200, body: undefined, headersSent: false, headers: {} };
   res.status = (code) => { res.statusCode = code; return res; };
   res.set = (name, value) => { res.headers[String(name).toLowerCase()] = value; return res; };
+  // Set-Cookie is the one header that repeats; append collects every value (SEC-14).
+  res.append = (name, value) => {
+    const k = String(name).toLowerCase();
+    res.headers[k] = [].concat(res.headers[k] || [], value);
+    return res;
+  };
+  res.end = () => { res.headersSent = true; return res; };
   res.json = (body) => { res.body = body; res.headersSent = true; return res; };
   return res;
 }
@@ -1265,6 +1272,156 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
   assert.deepStrictEqual(res.body.possibleDuplicates,
     [{ gameId: 'igdb_1', name: 'Halo', releaseDate: '2001-11-15', match: 'same' }], 'the hint did not reach the caller');
 });
+
+// SEC-14: the browser session cookie. Driven through the REAL middleware chains, so what
+// is pinned is what a request meets, not what a function returns in isolation.
+{
+  const sess = require('../services/session');
+  const SECRET = process.env.JWT_SECRET;
+  const ROW = { id: 31, username: 'cookie-user', can_manage_users: 0, origin: 'local', display_name: 'Cookie User' };
+  const CSRF = { 'x-requested-with': 'GameTracker' };
+  const cookieFor = (token) => `__Host-gt_session=${token}`;
+  // Run a chain of middleware the way Express would, stopping at the first response.
+  const runChain = async (handlers, req) => {
+    const res = recordingRes();
+    res.statusCode = 0;
+    for (const h of handlers) {
+      let advanced = false;
+      await new Promise((resolve) => {
+        const done = () => { advanced = true; resolve(); };
+        h(req, res, done);
+        const poll = () => (res.headersSent || advanced ? resolve() : setTimeout(poll, 2));
+        poll();
+      });
+      if (!advanced) break;
+    }
+    return res;
+  };
+  const withUserRow = async (row, fn) => {
+    const realGet = db.get;
+    db.get = (sql, params, cb) => cb(null, row);
+    try { return await fn(); } finally { db.get = realGet; }
+  };
+  const v1Chain = (method, path) => routeChain((require('../index.js').app.router || require('../index.js').app._router).stack, method, path)
+    .stack.map((l) => l.handle);
+  const setCookies = (res) => [].concat(res.headers['set-cookie'] || []);
+
+  checkAsync('login WITHOUT the opt-in: the frozen {token}, no Set-Cookie, no-store (SEC-14 cond. 4, 9)', async () => {
+    const hash = require('bcryptjs').hashSync('pw-cookie-1', 4);
+    const res = await withUserRow({ ...ROW, password: hash }, () =>
+      runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'cookie-user', password: 'pw-cookie-1' }, headers: {}, ip: '198.51.100.201' }));
+    assertKeys(res.body, ['token'], 'login without the opt-in');
+    assert.strictEqual(setCookies(res).length, 0, 'a no-opt-in login sent a Set-Cookie -- Android would store it');
+    assert.strictEqual(res.headers['cache-control'], 'no-store');
+  });
+
+  checkAsync('login WITH the opt-in: {session}, exact keys, the __Host- cookie, NO token in the body', async () => {
+    const hash = require('bcryptjs').hashSync('pw-cookie-2', 4);
+    const res = await withUserRow({ ...ROW, password: hash }, () =>
+      runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'cookie-user', password: 'pw-cookie-2', session: 'cookie' }, headers: CSRF, ip: '198.51.100.202' }));
+    assertKeys(res.body, ['session'], 'cookie login');
+    assertKeys(res.body.session, ['can_manage_users', 'display_name', 'exp', 'expiresIn', 'origin', 'username'], 'cookie login session');
+    assert.ok(!JSON.stringify(res.body).includes('eyJ'), 'a JWT reached the cookie-mode body');
+    const [c] = setCookies(res);
+    assert.ok(c && c.startsWith('__Host-gt_session=') && /HttpOnly/.test(c) && /Secure/.test(c) && /SameSite=Strict/.test(c) && /Path=\//.test(c), `cookie: ${c}`);
+  });
+
+  checkAsync('cookie login needs the CSRF header (403, no cookie); a bad `session` value is 400', async () => {
+    const hash = require('bcryptjs').hashSync('pw-cookie-3', 4);
+    const noHeader = await withUserRow({ ...ROW, password: hash }, () =>
+      runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'cookie-user', password: 'pw-cookie-3', session: 'cookie' }, headers: {}, ip: '198.51.100.203' }));
+    assert.strictEqual(noHeader.statusCode, 403, 'login CSRF from a sibling subdomain would fix a session');
+    assert.strictEqual(setCookies(noHeader).length, 0);
+    const bad = await runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'x', password: 'y', session: 'jwt' }, headers: {}, ip: '198.51.100.204' });
+    assert.strictEqual(bad.statusCode, 400);
+  });
+
+  checkAsync('a P0-1 directory takeover in COOKIE mode sets no cookie either', async () => {
+    const hash = require('bcryptjs').hashSync('the-local-password', 4);
+    const ldapHelpers = require('../ldap-helpers');
+    const settingsStore = require('../settings-store');
+    const realVerify = ldapHelpers.verifyLdapCredentials, realLoad = settingsStore.loadSettings;
+    settingsStore.loadSettings = () => ({ ldap: { url: 'ldaps://dc', base: 'dc=x', bindDn: 'cn=svc', bindPass: 'pw' } });
+    ldapHelpers.verifyLdapCredentials = async () => ({ ok: true, entry: { dn: 'uid=root,dc=x', cn: 'root', memberOf: [] } });
+    const row = { id: 1, username: 'root', can_manage_users: 1, origin: 'local', password: hash };
+    // The directory path reads and syncs through db.promises, the local fallback through
+    // db.get: both are stubbed, as ldapLoginAs does, or the answer is a DB-error 500.
+    const realPGet = db.promises.get, realPRun = db.promises.run;
+    db.promises.get = async () => row;
+    db.promises.run = async () => ({ changes: 1 });
+    try {
+      const res = await withUserRow(row, () =>
+        runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'root', password: 'the-directory-password', session: 'cookie' }, headers: CSRF, ip: '198.51.100.205' }));
+      assert.strictEqual(res.statusCode, 401);
+      assert.strictEqual(setCookies(res).length, 0, 'a refused takeover still received a session cookie');
+    } finally {
+      ldapHelpers.verifyLdapCredentials = realVerify; settingsStore.loadSettings = realLoad;
+      db.promises.get = realPGet; db.promises.run = realPRun;
+    }
+  });
+
+  checkAsync('GET /api/auth/session: cookie + header answers the RE-READ privilege; each refusal is the right one', async () => {
+    const { token } = sess.issue({ ...ROW, can_manage_users: 1 }, SECRET);   // the JWT says admin...
+    const chain = v1Chain('get', '/api/auth/session');
+    const ok = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: cookieFor(token) } }));
+    assertKeys(ok.body, ['session'], 'GET /api/auth/session');
+    assert.strictEqual(ok.body.session.can_manage_users, false, '...but the ROW says not: the JWT claim was answered');
+    assert.strictEqual(ok.headers['cache-control'], 'no-store');
+    // No CSRF header: 403, and the cookie is NOT cleared (the credential may be fine).
+    const noCsrf = await withUserRow(ROW, () => runChain(chain, { headers: { cookie: cookieFor(token) } }));
+    assert.strictEqual(noCsrf.statusCode, 403, 'a missing CSRF header was a 401 -- that signs the SPA out');
+    assert.strictEqual(setCookies(noCsrf).length, 0);
+    // An invalid cookie: 401, and CLEARED so it cannot loop the browser (cond. 6).
+    const bad = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: cookieFor('garbage') } }));
+    assert.strictEqual(bad.statusCode, 401);
+    assert.match(setCookies(bad)[0] || '', /Max-Age=0/, 'a rejected cookie was not cleared');
+    // The user is gone: 401 and cleared too.
+    const gone = await withUserRow(undefined, () => runChain(chain, { headers: { ...CSRF, cookie: cookieFor(token) } }));
+    assert.strictEqual(gone.statusCode, 401);
+    assert.match(setCookies(gone)[0] || '', /Max-Age=0/);
+    // The cookie twice: refused and cleared (cond. 1).
+    const dup = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: `${cookieFor(token)}; ${cookieFor(token)}` } }));
+    assert.strictEqual(dup.statusCode, 401);
+    // A PAT is never accepted from the cookie.
+    const pat = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: cookieFor('gt_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') } }));
+    assert.strictEqual(pat.statusCode, 401);
+  });
+
+  checkAsync('an Authorization header ALONE decides: a bad Bearer never falls through to the cookie (cond. 5)', async () => {
+    const { token } = sess.issue(ROW, SECRET);
+    const chain = v1Chain('get', '/api/capabilities');
+    const res = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, authorization: 'Bearer nope', cookie: cookieFor(token) } }));
+    assert.strictEqual(res.statusCode, 401, 'an invalid Bearer fell through to a valid cookie');
+    // ANY Authorization header decides, not only a Bearer one: another scheme next to a valid
+    // cookie is a 401, never a quiet fall-through to the cookie.
+    const basic = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, authorization: 'Basic cm9vdDpwdw==', cookie: cookieFor(token) } }));
+    assert.strictEqual(basic.statusCode, 401, 'a non-Bearer Authorization header fell through to the cookie');
+    // And the browser-only routes refuse a valid Bearer session: they are for the cookie.
+    const viaBearer = await withUserRow(ROW, () => runChain(v1Chain('get', '/api/auth/session'), { headers: { authorization: `Bearer ${token}` } }));
+    assert.strictEqual(viaBearer.statusCode, 403);
+  });
+
+  checkAsync('POST /api/auth/logout clears the cookie with 204', async () => {
+    const { token } = sess.issue(ROW, SECRET);
+    const res = await withUserRow(ROW, () => runChain(v1Chain('post', '/api/auth/logout'), { headers: { ...CSRF, cookie: cookieFor(token) } }));
+    assert.strictEqual(res.statusCode, 204);
+    assert.match(setCookies(res)[0] || '', /^__Host-gt_session=; Path=\/; Max-Age=0/);
+  });
+
+  checkAsync('/api/v2 NEVER accepts the session cookie, even with the CSRF header (SEC-14 constraint)', async () => {
+    const { token } = sess.issue({ ...ROW, can_manage_users: 1 }, SECRET);
+    const guard = v2Stack().find((l) => l.handle && l.handle.name === 'patRequired').handle;
+    const res = v2Res();
+    res.statusCode = 0;
+    let passed = false;
+    await withUserRow(ROW, async () => {
+      guard({ headers: { ...CSRF, cookie: cookieFor(token) } }, res, () => { passed = true; });
+      for (let i = 0; i < 50 && !res.body && !passed; i++) await new Promise((r) => setTimeout(r, 2));
+    });
+    assert.strictEqual(passed, false, 'v2 accepted a browser session cookie');
+    assert.strictEqual(res.statusCode, 401);
+  });
+}
 
 // The async cases run last. A rejection here must fail the process — an async
 // assertion that only prints would be a test that always passes.

@@ -3055,6 +3055,71 @@ console.log('settings-store.checkSettingsLocation (UP-24: never start on a half-
   });
 }
 
+console.log('services/session.js (SEC-14: the browser session cookie):');
+{
+  const sess = require('../services/session');
+  check('cookieMode: unset/empty/0 is secure, 1 is insecure, anything else refuses (cond. 10)', () => {
+    for (const v of [undefined, '', '0', ' 0 ']) assert.strictEqual(sess.cookieMode(v), 'secure');
+    assert.strictEqual(sess.cookieMode('1'), 'insecure');
+    for (const v of ['true', 'yes', '2', 'false', 'on']) assert.throws(() => sess.cookieMode(v), /must be unset, 0 or 1/);
+  });
+  check('parseCookies keeps every value per name, strips quotes, skips malformed pairs', () => {
+    const m = sess.parseCookies('a=1; b="two"; malformed; =nameless; a=3; c=x=y');
+    assert.deepStrictEqual(m.get('a'), ['1', '3']);
+    assert.deepStrictEqual(m.get('b'), ['two']);
+    assert.deepStrictEqual(m.get('c'), ['x=y']);
+    assert.ok(!m.has('malformed') && !m.has(''));
+    assert.strictEqual(sess.parseCookies(undefined).size, 0);
+  });
+  check('readSessionCookie reads ONLY the name for its mode, and reports a duplicate (cond. 1)', () => {
+    assert.deepStrictEqual(sess.readSessionCookie('__Host-gt_session=abc', 'secure'), { token: 'abc' });
+    assert.strictEqual(sess.readSessionCookie('gt_session=abc', 'secure'), null,
+      'secure mode accepted the unprefixed name -- a sibling subdomain could toss it');
+    assert.deepStrictEqual(sess.readSessionCookie('gt_session=abc', 'insecure'), { token: 'abc' });
+    assert.strictEqual(sess.readSessionCookie('__Host-gt_session=abc', 'insecure'), null);
+    assert.deepStrictEqual(sess.readSessionCookie('__Host-gt_session=a; __Host-gt_session=b', 'secure'), { duplicate: true });
+    assert.strictEqual(sess.readSessionCookie('__Host-gt_session=', 'secure'), null);
+  });
+  check('csrfRefusal: the exact header, and Sec-Fetch-Site same-origin when sent (cond. 2)', () => {
+    assert.strictEqual(sess.csrfRefusal({ 'x-requested-with': 'GameTracker' }), null);
+    assert.strictEqual(sess.csrfRefusal({ 'x-requested-with': 'GameTracker', 'sec-fetch-site': 'same-origin' }), null);
+    assert.ok(sess.csrfRefusal({}));
+    assert.ok(sess.csrfRefusal({ 'x-requested-with': 'XMLHttpRequest' }));
+    assert.ok(sess.csrfRefusal({ 'x-requested-with': 'gametracker' }), 'the value must match exactly');
+    assert.ok(sess.csrfRefusal({ 'x-requested-with': 'GameTracker', 'sec-fetch-site': 'same-site' }),
+      'a sibling subdomain (same-site) was accepted');
+    assert.ok(sess.csrfRefusal({ 'x-requested-with': 'GameTracker', 'sec-fetch-site': 'cross-site' }));
+  });
+  check('Set-Cookie: __Host-, Secure, HttpOnly, SameSite=Strict, Path=/, Max-Age to the exp (cond. 1)', () => {
+    const now = 1_700_000_000_000;
+    const c = sess.setCookie('tok', now / 1000 + 3600, 'secure', now);
+    for (const part of ['__Host-gt_session=tok', 'Path=/', 'Max-Age=3600', 'HttpOnly', 'Secure', 'SameSite=Strict']) {
+      assert.ok(c.includes(part), `the secure cookie lacks ${part}: ${c}`);
+    }
+    assert.ok(!/Domain=/i.test(c), 'a Domain attribute would void __Host-');
+    const ins = sess.setCookie('tok', now / 1000 + 60, 'insecure', now);
+    assert.ok(ins.startsWith('gt_session=tok') && !/Secure/.test(ins) && /HttpOnly/.test(ins) && /SameSite=Strict/.test(ins));
+    assert.match(sess.clearCookie('secure'), /^__Host-gt_session=; Path=\/; Max-Age=0; HttpOnly; Secure; SameSite=Strict$/);
+  });
+  check('issue/verify round-trip, with one claims shape; a wrong secret is null, never a throw', () => {
+    const secret = 'abcdefghijklmnopqrstu';
+    const { token, exp } = sess.issue({ id: 5, username: 'jane', can_manage_users: 1, origin: 'ldap', display_name: 'Jane' }, secret);
+    const p = sess.verify(token, secret);
+    assert.deepStrictEqual({ id: p.id, username: p.username, can_manage_users: p.can_manage_users, origin: p.origin, display_name: p.display_name },
+      { id: 5, username: 'jane', can_manage_users: true, origin: 'ldap', display_name: 'Jane' });
+    assert.strictEqual(p.exp, exp);
+    assert.ok(exp - Math.floor(Date.now() / 1000) <= sess.SESSION_TTL_SECONDS);
+    assert.strictEqual(sess.verify(token, 'another-secret-entirely'), null);
+    assert.strictEqual(sess.verify('not.a.jwt', secret), null);
+  });
+  check('sessionView: exact keys, server-clock expiresIn, privilege from the row given', () => {
+    const v = sess.sessionView({ username: 'jane', can_manage_users: 0 }, 2_000, 1_000_000);
+    assert.deepStrictEqual(Object.keys(v).sort(), ['can_manage_users', 'display_name', 'exp', 'expiresIn', 'origin', 'username']);
+    assert.strictEqual(v.expiresIn, 1_000);
+    assert.strictEqual(v.can_manage_users, false);
+  });
+}
+
 console.log('users.verifyPassword (sudo mode for minting a token from the browser):');
   check('readSettings() really does return { settings, degraded }', () => {
     // The stubs below imitate this shape. When they imitated it WRONGLY — returning

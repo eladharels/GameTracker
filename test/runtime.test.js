@@ -133,6 +133,18 @@ check('smoke stacks are per-run and a PR cannot evict a main run (UP-6)', () => 
   }
 });
 
+// SEC-14 condition 3. The session cookie's CSRF defence is that a cross-origin page cannot
+// send the custom header without a preflight that CORS refuses. That holds only while
+// credentialed CORS stays OFF: `credentials: true` (or an ACAC header set by hand) would let
+// an allowlisted origin make cookie-carrying requests. And nothing may log Cookie headers.
+check('credentialed CORS stays off, and no request headers are logged (SEC-14)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8');
+  assert.ok(!/credentials\s*:\s*true/.test(src), 'cors() allows credentials -- the session cookie loses its CSRF defence');
+  assert.ok(!/Access-Control-Allow-Credentials/i.test(src), 'an Access-Control-Allow-Credentials header is set by hand');
+  assert.ok(!/console\.\w+\([^)]*req\.headers(?![.\[]\s*['"]?(?:x-|sec-))/.test(src),
+    'a log line prints request headers, which carry the session cookie');
+});
+
 // ROADMAP UP-18. Since P0-6 the SPA's interceptor ENDS THE SESSION on any 401. So a 401
 // must mean exactly "no valid credential": an endpoint answering 401 for anything else —
 // a wrong sudo password, a stale CSRF token, an upstream's 401 passed through — would
@@ -140,8 +152,11 @@ check('smoke stacks are per-run and a PR cannot evict a main run (UP-6)', () => 
 // this pins the general rule, by WHERE 401s can come from.
 check('a 401 comes only from authentication (the SPA logs out on every 401, UP-18)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8').split('\n');
+  // cookieSession and sessionUser are authRequired's two halves for a session JWT (SEC-14):
+  // the cookie carrier and the shared privilege re-read. Still authentication, still here.
   const ALLOWED = ['function authRequired(', 'function patRequired(', 'function selfOnly(',
-    'function ownershipRequired(', "app.post('/api/auth/login'"];
+    'function ownershipRequired(', "app.post('/api/auth/login'",
+    'function cookieSession(', 'function sessionUser('];
   // The block a line belongs to is the last column-0 opener; a column-0 closer ends it, so
   // code after an allowed function never inherits its name (review: without the reset, an
   // `app.all(…401…)` placed after ownershipRequired passed).

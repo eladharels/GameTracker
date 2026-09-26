@@ -90,6 +90,10 @@ services:
       - TRUST_PROXY=${TRUST_PROXY:-1}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - STEAM_REGION=${STEAM_REGION:-il}
+      # SEC-14: empty = the browser session cookie is Secure with the __Host- prefix (the
+      # default). 1 = NOT Secure, ONLY for a plain-HTTP LAN install, whose browser would
+      # otherwise drop the cookie; anything else refuses to start.
+      - SESSION_COOKIE_INSECURE=${SESSION_COOKIE_INSECURE:-}
       # No insecure default — JWT_SECRET must be provided (via .env or the shell env).
       # The backend refuses to start if it is missing, too short, or 'supersecretkey'.
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set (see .env)}

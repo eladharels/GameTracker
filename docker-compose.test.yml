@@ -72,6 +72,9 @@ services:
       - TRUST_PROXY=${TRUST_PROXY:-1}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - STEAM_REGION=${STEAM_REGION:-il}
+      # Fixed EMPTY, not interpolated: CI must exercise the secure default (SEC-14), and a
+      # stray value in the runner's environment must not flip it.
+      - SESSION_COOKIE_INSECURE=
       - JWT_SECRET=${JWT_SECRET:-smoke-test-jwt-secret-not-real}
       # Deterministic so the smoke test can LOG IN and exercise a route through
       # Express. Without it the root seed generates a random password printed once,
