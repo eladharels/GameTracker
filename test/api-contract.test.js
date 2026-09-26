@@ -1633,7 +1633,15 @@ checkAsync('GET /api/user/me: exact keys, no credential column, v1\'s notificati
     const ok = await call(ROW);
     assertKeys(ok.res.body, Object.keys(ROW), 'GET /api/user/me');
     assert.deepStrictEqual(ok.res.body.notification_days, [1, 3]);
-    assert.ok(!/password|can_manage_users|\*/.test(ok.sql), `the profile read selects a credential column: ${ok.sql}`);
+    // The EXACT column list, from the SQL actually issued -- not the stub's keys, which cannot
+    // see a dropped column, and not a denylist, which a future sensitive column would pass
+    // (review of 6df162e).
+    const cols = /^SELECT (.+) FROM users WHERE id = \?$/.exec(ok.sql);
+    assert.ok(cols, `unexpected profile query: ${ok.sql}`);
+    assert.deepStrictEqual(cols[1].split(',').map((c) => c.trim()),
+      ['id', 'username', 'email', 'ntfy_topic', 'ntfy_url', 'gotify_token', 'gotify_url', 'telegram_chat_id',
+        'notification_days', 'display_name', 'shares_library'],
+      'the profile read no longer selects exactly the frozen v1 columns');
     assert.strictEqual((await call({ ...ROW, notification_days: null })).res.body.notification_days, null,
       'a NULL notification_days no longer answers null (v1\'s frozen rendering)');
     assert.deepStrictEqual((await call({ ...ROW, notification_days: 'not json' })).res.body.notification_days, [0, 7, 30]);

@@ -2136,11 +2136,31 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
      - Neither route had a pinned shape. New contract tests pin both: exact keys, no
        credential column, the NULL/garbage `notification_days` answers, 404/500 texts, and
        the toggle's coercion and 400. Five mutations tried, each caught.
+     - One recorded edge: a sharing PUT with NO body used to throw on destructuring and reach
+       Express's final handler as a 500; it now answers the route's own 400. That request
+       was a crash, never part of the contract, and `/me/settings` already treated a missing
+       body this way.
+     - **Review of 7a1e8fb and 6df162e (CISO/Architect APPROVE WITH CONDITIONS, UI/UX
+       APPROVE), met:** the previous review's conditions were all mutation-verified; the
+       profile test now pins the EXACT column list from the issued SQL (a dropped column
+       had survived, and the credential check was a denylist); this edge is recorded; and
+       the note below no longer claims no inline SQL is left.
 - **Done (2026-09-26).** Every item listed above is a service. `index.js` went from 3,612 at
-  the start of this item to 2,876; what remains is routing, middleware, the adapters and the
-  process wiring (cron, CACHE_DIR, startup). Further moves are opportunistic, one reviewed
-  step each, as before.
+  the start of this item to 2,876. Mostly routing, middleware, adapters and process wiring
+  remain, with **known inline SQL left** (found by the review; the step-4 commit message
+  wrongly called the /me routes the last): the per-game CrackRelease check's `SELECT` and
+  `UPDATE` of `user_games`, and `GET /api/user/:username/crack-status`'s read. Both belong in
+  `services/library.js` or `services/crackwatch.js`; tracked as UP-26. Further moves are
+  opportunistic, one reviewed step each.
 
+
+### [ ] UP-26 The CrackRelease routes still issue their own SQL (from the UP-16 review)
+- **Why:** UP-16 moved every item it listed, but two routes in `index.js` still query
+  `user_games` directly: `POST /api/user/:u/games/:id/crackrelease-status` (a `SELECT` of the
+  game name and an `UPDATE` of `crack_status`) and `GET /api/user/:u/crack-status`.
+- **Fix:** move both into a service (the row access into `services/library.js`, alongside the
+  other `user_games` reads), keeping the v1 shapes, statuses and `crackCheckLimit` exactly.
+  One reviewed step, with contract tests pinning both responses first.
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with
   `BACKEND_BIND=127.0.0.1`. Set on its own, a client connecting directly can spoof
