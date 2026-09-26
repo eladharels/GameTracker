@@ -3103,6 +3103,20 @@ console.log('services/crackwatch.js (UP-16: moved out of index.js unchanged):');
       assert.strictEqual({}.polluted, undefined);
     } finally { fsMod.existsSync = realExists; fsMod.readFileSync = realRead; cw.reset(); }
   });
+  checkAsync('the CrackRelease warning cleans the user-controlled name and the error (review of 5ac5af4)', async () => {
+    const realGet = axiosMod.get;
+    const realWarn = console.warn;
+    const lines = [];
+    axiosMod.get = async () => { throw new Error('boom\u009b[2J\nforged'); };
+    console.warn = (...a) => { lines.push(a.join(' ')); };
+    let r;
+    try { r = await cw.scrapeCrackRelease('Halo\u009b[2J\n[Auth] login ok\u007f'); }
+    finally { axiosMod.get = realGet; console.warn = realWarn; }
+    assert.strictEqual(r.fetched, false);
+    assert.strictEqual(lines.length, 1);
+    assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(lines[0]), `a control character reached the log line: ${JSON.stringify(lines[0])}`);
+    assert.ok(lines[0].includes('Halo?[2J\\n[Auth] login ok?'), lines[0]);
+  });
   check('CrackRelease slugs and the storable statuses are unchanged', () => {
     assert.strictEqual(cw.slugifyForCrackRelease("Assassin's Creed: Unity"), 'assassins-creed-unity');
     assert.strictEqual(cw.slugifyForCrackRelease(''), '');
@@ -3111,6 +3125,27 @@ console.log('services/crackwatch.js (UP-16: moved out of index.js unchanged):');
   });
 }
 
+
+console.log('user-rules.js#safeForLog (the ONE log-line rule; moved out of index.js):');
+{
+  const { safeForLog } = require('../user-rules');
+  check('CR, LF and TAB become visible escapes: one value stays one log line', () => {
+    assert.strictEqual(safeForLog('bob\n[LDAP] bind ok\r\tx'), 'bob\\n[LDAP] bind ok\\r\\tx');
+  });
+  check('other C0, DEL and C1 controls (a CSI moves a terminal cursor) become "?"', () => {
+    assert.strictEqual(safeForLog('a\u0000b\u001bc\u007fd\u0085e\u009bf'), 'a?b?c?d?e?f');
+  });
+  check('output is cut at the limit and says so', () => {
+    assert.strictEqual(safeForLog('x'.repeat(10), 4), 'xxxx…[truncated]');
+    assert.strictEqual(safeForLog('x'.repeat(200)), 'x'.repeat(200), 'the default limit cut a 200-char value');
+    assert.ok(safeForLog('x'.repeat(201)).endsWith('…[truncated]'));
+  });
+  check('a non-string is serialised first, then cleaned', () => {
+    assert.strictEqual(safeForLog({ cn: 'a\nb' }), '{"cn":"a\\nb"}');
+    assert.strictEqual(safeForLog(42), '42');
+    assert.strictEqual(safeForLog(undefined), 'undefined');
+  });
+}
 
 console.log('services/ldap-sync.js (UP-16: the admin LDAP sync out of index.js):');
 {
@@ -3188,6 +3223,20 @@ console.log('services/ldap-sync.js (UP-16: the admin LDAP sync out of index.js):
       'the display name was not sanitised, the email not trimmed, or a value was interpolated');
     assert.deepStrictEqual(writes[1], ['UPDATE users SET display_name = ? WHERE id = ?', ['Gus', 7]]);
     assert.strictEqual(writes.length, 2, 'an ambiguous, missing or unchanged account was written');
+  });
+
+  checkAsync('syncAll logs a directory-supplied username and error through safeForLog', async () => {
+    const realAll = db.promises.all; const realErr = console.error; const realWarn = console.warn;
+    const lines = [];
+    db.promises.all = async () => [{ id: 1, username: 'eve\n[LDAP] ok', email: null, display_name: null },
+      { id: 2, username: 'dup\u009b', email: null, display_name: null }];
+    console.error = (...a) => { lines.push(a.join(' ')); };
+    console.warn = (...a) => { lines.push(a.join(' ')); };
+    try {
+      await sync.syncAll(LDAP, { lookup: async (l, u) => { if (u.startsWith('eve')) throw new Error('bind\r\nforged'); return sync.AMBIGUOUS; } });
+    } finally { db.promises.all = realAll; console.error = realErr; console.warn = realWarn; }
+    assert.strictEqual(lines.length, 2);
+    for (const l of lines) assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(l), `a control character reached the log: ${JSON.stringify(l)}`);
   });
 
   // A fake ldapjs client. `entries` is what the search yields; `bindErr` fails the bind.

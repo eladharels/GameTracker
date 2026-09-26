@@ -17,7 +17,7 @@
 // against that user and the run continues.
 const db = require('../db');
 const ldapHelpers = require('../ldap-helpers');
-const { sanitizeText, isValidEmailAddress } = require('../user-rules');
+const { sanitizeText, isValidEmailAddress, safeForLog } = require('../user-rules');
 const { serviceError, CODES } = require('./errors');
 
 const AMBIGUOUS = Symbol('ambiguous-ldap-match');
@@ -100,7 +100,7 @@ async function syncAll(ldap, { lookup = lookupUser } = {}) {
     try {
       const attrs = await lookup(ldap, user.username);
       if (attrs === AMBIGUOUS) {
-        console.warn(`[LDAP Sync] More than one entry matched '${user.username}'; skipping.`);
+        console.warn(`[LDAP Sync] More than one entry matched '${safeForLog(user.username, 64)}'; skipping.`);
         results.details.push({ username: user.username, action: 'ambiguous_ldap_match', changes: [] });
       } else if (!attrs) {
         results.details.push({ username: user.username, action: 'not_found_in_ldap', changes: [] });
@@ -122,7 +122,9 @@ async function syncAll(ldap, { lookup = lookupUser } = {}) {
         }
       }
     } catch (err) {
-      console.error(`[LDAP Sync] Error processing ${user.username}:`, err.message);
+      // Both values can carry directory text: ldap-origin usernames came from login input,
+      // and an ldapjs message can quote the server's diagnostic.
+      console.error(`[LDAP Sync] Error processing ${safeForLog(user.username, 64)}:`, safeForLog(err.message));
       results.errors.push({ username: user.username, error: err.message });
       results.details.push({ username: user.username, action: 'error', error: err.message });
     }

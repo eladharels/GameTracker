@@ -2071,6 +2071,18 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
        socket closed each time; the filter escaped), and contract tests for the adapter's
        three answers. All eight mutations tried were caught. Checked against a real
        Postgres too. 3,404 → 3,180 lines.
+     - **Review of 5ac5af4 (CISO/Architect APPROVE WITH CONDITIONS, UI/UX APPROVE), all met:**
+       - CISO: the sync's two log lines pass the username and the error through `safeForLog`;
+         `safeForLog` itself now has unit tests (escapes, C0/DEL/C1, the limit, non-strings),
+         and the CrackRelease warning and the sync's logs are pinned by capturing
+         `console.warn`/`console.error`. Five mutations tried, each caught.
+       - Architect: the adapter test stubs settings-store and asserts the CONFIGURED ldap
+         section reaches `syncAll` (`syncAll({})` had survived); the insecure-mode child test
+         now drives the real cookie login and reads its own `Set-Cookie` (a hard-coded
+         `'secure'` in the login had survived); the 500 body is asserted exactly; a comment
+         now names what the SPA really reads.
+       - Accepted, not changed: `crackwatch.reset()` and `refresh({ rateMs })` are test-only
+         seams, so mutating them costs only a slower or leakier test.
 
 ### [x] UP-17 Warn at deploy when `TRUST_PROXY > 1` but the backend is still published on `0.0.0.0`
 - **Why:** from the CISO review of P0-3. `TRUST_PROXY=2` is only safe with

@@ -1429,23 +1429,49 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
     // in the other mode. The test above cannot tell a route that passes the mode from one
     // that hard-codes 'secure' on a secure instance; this one can (Architect review).
     const { execFileSync } = require('child_process');
+    // Both routes that take the mode run for real: the session view, and the cookie LOGIN,
+    // whose Set-Cookie is read off its own response (not built by calling setCookie here,
+    // which proved nothing about the route -- review of 5ac5af4).
     const probe = `
+      const db = require('./db');
+      const hash = require('bcryptjs').hashSync('pw-insecure', 4);
+      db.get = (sql, params, cb) => cb(null, { id: 9, username: 'jane', password: hash, can_manage_users: 0, origin: 'local', display_name: 'Jane' });
       const { app } = require('./index.js');
-      const route = (app.router || app._router).stack.find((l) => l.route && l.route.path === '/api/auth/session' && l.route.methods.get).route;
-      const out = {};
-      const res = { status() { return res; }, set() { return res; }, json(b) { out.body = b; return res; } };
-      route.stack[route.stack.length - 1].handle({ user: { username: 'jane', can_manage_users: 0 }, auth: { exp: Math.floor(Date.now() / 1000) + 60 } }, res);
-      out.cookie = require('./services/session').setCookie('t', Math.floor(Date.now() / 1000) + 60, 'insecure');
-      process.stdout.write('\\nRESULT ' + JSON.stringify(out) + '\\n');
-      process.exit(0);`;
+      const stack = (app.router || app._router).stack;
+      const last = (path, method) => { const r = stack.find((l) => l.route && l.route.path === path && l.route.methods[method]).route; return r.stack[r.stack.length - 1].handle; };
+      const fakeRes = () => {
+        const r = { headers: {} };
+        r.done = new Promise((resolve) => { r.json = (b) => { r.body = b; resolve(); return r; }; });
+        r.status = (c) => { r.statusCode = c; return r; };
+        r.set = (k, v) => { r.headers[k.toLowerCase()] = v; return r; };
+        r.append = (k, v) => { r.headers[k.toLowerCase()] = [].concat(r.headers[k.toLowerCase()] || [], v); return r; };
+        return r;
+      };
+      (async () => {
+        const out = {};
+        const view = fakeRes();
+        last('/api/auth/session', 'get')({ user: { username: 'jane', can_manage_users: 0 }, auth: { exp: Math.floor(Date.now() / 1000) + 60 } }, view);
+        await view.done;
+        out.view = view.body;
+        const login = fakeRes();
+        last('/api/auth/login', 'post')({ body: { username: 'jane', password: 'pw-insecure', session: 'cookie' },
+          headers: { 'x-requested-with': 'GameTracker' }, ip: '198.51.100.250', connection: {} }, login);
+        await login.done;
+        out.login = login.body;
+        out.cookies = login.headers['set-cookie'] || [];
+        process.stdout.write('\\nRESULT ' + JSON.stringify(out) + '\\n');
+        process.exit(0);
+      })().catch((e) => { console.error(e); process.exit(1); });`;
     const env = { ...process.env, SESSION_COOKIE_INSECURE: '1', JWT_SECRET: SECRET };
     const stdout = execFileSync(process.execPath, ['-e', probe], { cwd: require('path').join(__dirname, '..'), env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     const line = stdout.split('\n').find((l) => l.startsWith('RESULT '));
     assert.ok(line, `the insecure-mode probe printed no result:\n${stdout}`);
     const out = JSON.parse(line.slice('RESULT '.length));
-    assert.strictEqual(out.body.session.cookieSecure, false, 'the session route ignores the configured cookie mode');
-    assert.match(out.cookie, /^gt_session=t;/);
-    assert.ok(!/Secure/.test(out.cookie));
+    assert.strictEqual(out.view.session.cookieSecure, false, 'the session route ignores the configured cookie mode');
+    assert.strictEqual(out.login.session && out.login.session.cookieSecure, false, 'the login answer ignores the cookie mode');
+    assert.strictEqual(out.cookies.length, 1, `the insecure login set ${out.cookies.length} cookies`);
+    assert.match(out.cookies[0], /^gt_session=[^;]+; Path=\/; /, 'the insecure login did not set the unprefixed cookie');
+    assert.ok(!/Secure/.test(out.cookies[0]), 'the insecure login set a Secure cookie a plain-HTTP browser drops');
   });
 
   checkAsync('POST /api/auth/logout clears the cookie with 204', async () => {
@@ -1471,8 +1497,9 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
 }
 
 // UP-16: the LDAP sync moved to services/ldap-sync.js, and the route is an adapter over it.
-// The SPA's User Management page reads `message` and `results.details`, so the envelope is
-// pinned here, along with the two error mappings the old inline route answered.
+// The SPA's User Management page reads `success`, `results.updated`, `results.total` and,
+// on failure, `error`, so the envelope is pinned here with the two error mappings the old
+// inline route answered.
 console.log('POST /api/admin/ldap-sync (v1 envelope over services/ldap-sync.js):');
 async function callLdapSync(stub) {
   const ldapSync = require('../services/ldap-sync');
@@ -1487,14 +1514,22 @@ async function callLdapSync(stub) {
 }
 checkAsync('success is {success, message, results} with the counts in the message', async () => {
   const results = { total: 3, updated: 1, errors: [], details: [{ username: 'a', action: 'updated', changes: ['email'] }] };
+  // The adapter must hand over THE CONFIGURED ldap section: `syncAll({})` would make every
+  // sync a 400 in production, and "some object" could not tell (review of 5ac5af4).
+  const settingsStore = require('../settings-store');
+  const realLoad = settingsStore.loadSettings;
+  const configured = { url: 'ldaps://dc.example', base: 'dc=example', bindDn: 'cn=svc', bindPass: 'pw' };
+  settingsStore.loadSettings = () => ({ ldap: configured });
   let got;
-  const res = await callLdapSync(async (ldap) => { got = ldap; return results; });
+  let res;
+  try { res = await callLdapSync(async (ldap) => { got = ldap; return results; }); }
+  finally { settingsStore.loadSettings = realLoad; }
   assert.strictEqual(res.statusCode, 200);
   assertKeys(res.body, ['message', 'results', 'success'], 'ldap-sync success');
   assert.strictEqual(res.body.success, true);
   assert.strictEqual(res.body.message, 'LDAP sync completed. 1 users updated out of 3 total LDAP users.');
   assert.strictEqual(res.body.results, results, 'the service result was not passed through unchanged');
-  assert.ok(got && typeof got === 'object', 'the adapter did not hand the service the ldap settings section');
+  assert.strictEqual(got, configured, 'the adapter did not hand the service the configured ldap section');
 });
 checkAsync('not configured is 400 {error} with the message the SPA has always shown', async () => {
   const { serviceError, CODES } = require('../services/errors');
@@ -1505,8 +1540,7 @@ checkAsync('not configured is 400 {error} with the message the SPA has always sh
 checkAsync('an unexpected failure is 500 {error} and does NOT echo the exception message', async () => {
   const res = await callLdapSync(async () => { throw new Error('connect ECONNREFUSED 10.0.0.5:5432'); });
   assert.strictEqual(res.statusCode, 500);
-  assertKeys(res.body, ['error'], 'ldap-sync failure');
-  assert.ok(!res.body.error.includes('10.0.0.5'), 'an internal address reached the response');
+  assert.deepStrictEqual(res.body, { error: 'LDAP sync failed.' }, 'the 500 echoed the exception or changed its text');
 });
 
 // The async cases run last. A rejection here must fail the process — an async
