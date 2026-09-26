@@ -141,7 +141,7 @@ check('credentialed CORS stays off, and no request headers are logged (SEC-14)',
   const src = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8');
   assert.ok(!/credentials\s*:\s*true/.test(src), 'cors() allows credentials -- the session cookie loses its CSRF defence');
   assert.ok(!/Access-Control-Allow-Credentials/i.test(src), 'an Access-Control-Allow-Credentials header is set by hand');
-  assert.ok(!/console\.\w+\([^)]*req\.headers(?![.\[]\s*['"]?(?:x-|sec-))/.test(src),
+  assert.ok(!/console\.\w+\([^)]*req\.headers(?![.[]\s*['"]?(?:x-|sec-))/.test(src),
     'a log line prints request headers, which carry the session cookie');
 });
 

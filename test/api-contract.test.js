@@ -1320,6 +1320,7 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
     const res = await withUserRow({ ...ROW, password: hash }, () =>
       runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'cookie-user', password: 'pw-cookie-2', session: 'cookie' }, headers: CSRF, ip: '198.51.100.202' }));
     assertKeys(res.body, ['session'], 'cookie login');
+    assert.strictEqual(res.headers['cache-control'], 'no-store', 'a Set-Cookie response is cacheable');
     assertKeys(res.body.session, ['can_manage_users', 'display_name', 'exp', 'expiresIn', 'origin', 'username'], 'cookie login session');
     assert.ok(!JSON.stringify(res.body).includes('eyJ'), 'a JWT reached the cookie-mode body');
     const [c] = setCookies(res);
@@ -1382,6 +1383,7 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
     // The cookie twice: refused and cleared (cond. 1).
     const dup = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: `${cookieFor(token)}; ${cookieFor(token)}` } }));
     assert.strictEqual(dup.statusCode, 401);
+    assert.match(setCookies(dup)[0] || '', /Max-Age=0/, 'a duplicated cookie was refused but not cleared');
     // A PAT is never accepted from the cookie.
     const pat = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, cookie: cookieFor('gt_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') } }));
     assert.strictEqual(pat.statusCode, 401);
@@ -1396,6 +1398,10 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
     // cookie is a 401, never a quiet fall-through to the cookie.
     const basic = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, authorization: 'Basic cm9vdDpwdw==', cookie: cookieFor(token) } }));
     assert.strictEqual(basic.statusCode, 401, 'a non-Bearer Authorization header fell through to the cookie');
+    // ...and an EMPTY one: present is present (review: `!auth` in place of `=== undefined`
+    // would let `Authorization:` with no value fall through to the cookie).
+    const empty = await withUserRow(ROW, () => runChain(chain, { headers: { ...CSRF, authorization: '', cookie: cookieFor(token) } }));
+    assert.strictEqual(empty.statusCode, 401, 'an empty Authorization header fell through to the cookie');
     // And the browser-only routes refuse a valid Bearer session: they are for the cookie.
     const viaBearer = await withUserRow(ROW, () => runChain(v1Chain('get', '/api/auth/session'), { headers: { authorization: `Bearer ${token}` } }));
     assert.strictEqual(viaBearer.statusCode, 403);

@@ -1095,7 +1095,8 @@ jobs:
             curl -s -D ${SMOKE_TMP}/sess-h.txt -o ${SMOKE_TMP}/sess-b.json -X POST "$BASE/api/auth/login" \
               -H 'content-type: application/json' -H 'X-Requested-With: GameTracker' \
               -d '{"username":"root","password":"smoke-test-root-not-a-real-password","session":"cookie"}'
-            SETC=$(grep -i '^set-cookie:' ${SMOKE_TMP}/sess-h.txt | head -1 | tr -d '\r')
+            SETC=$(grep -i '^set-cookie:' ${SMOKE_TMP}/sess-h.txt | head -1 | tr -d '\r' || true)
+            [ -n "$SETC" ] || { echo "[smoke] ERROR: the cookie login sent no Set-Cookie: $(head -c 200 ${SMOKE_TMP}/sess-b.json)"; exit 1; }
             echo "[smoke] $(echo "$SETC" | sed 's/=[^;]*;/=<redacted>;/')"
             for attr in '__Host-gt_session=' 'HttpOnly' 'Secure' 'SameSite=Strict' 'Path=/'; do
               echo "$SETC" | grep -q "$attr" || { echo "[smoke] ERROR: the session cookie lacks $attr"; exit 1; }
