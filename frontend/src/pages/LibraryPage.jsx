@@ -45,6 +45,10 @@ export default function LibraryPage({ user }) {
   // What the keyboard move just did, for the live region. Without it the region went
   // silent on drop and a screen-reader user had no way to know the move landed (FE-23).
   const [reorderAnnouncement, setReorderAnnouncement] = useState('')
+  // The card to focus once a keyboard move has re-rendered the list. Focus otherwise stayed
+  // on the drop TARGET, and moving up re-inserts that node, which drops focus to <body> in
+  // browsers (UI/UX review).
+  const [focusGameId, setFocusGameId] = useState(null)
   const [openGame, setOpenGame] = useState(null)
   // The modal reads LIVE library state, not the object captured on click. `openGame` was
   // a snapshot and setGameStatus never refreshed it, so changing a status from inside the
@@ -230,6 +234,20 @@ export default function LibraryPage({ user }) {
   // removed, or filtered out by a status change made in the dialog (FE-7, UI/UX review).
   const gamesListRef = useRef(null)
 
+  // After a confirmed keyboard move: focus the card that moved, once it has re-rendered.
+  // The card may now be on another page of the list; then focus the list, never <body>.
+  useEffect(() => {
+    if (focusGameId == null || !gamesListRef.current) return
+    const card = [...gamesListRef.current.querySelectorAll('[data-game-id]')]
+      .find(el => el.getAttribute('data-game-id') === String(focusGameId))
+    ;(card || gamesListRef.current).focus()
+    setFocusGameId(null)
+  }, [focusGameId, userGames])
+
+  // An announcement belongs to the view it was made in; switching filters clears it so the
+  // re-mounted live region does not carry stale text.
+  useEffect(() => { setReorderAnnouncement('') }, [filter])
+
   // Fetch price for a game by Steam App ID
   const fetchGamePrice = async (gameId, steamAppId) => {
     setGamePrices(prev => ({ ...prev, [gameId]: { loading: true } }))
@@ -367,13 +385,20 @@ export default function LibraryPage({ user }) {
   // Backlog reorder, for BOTH the mouse and the keyboard. The source is a parameter
   // (FE-23): this read `draggedGameId`, which only a mouse drag sets, so the keyboard
   // path returned here on every drop and never moved anything.
+  //
+  // Positions come from the WHOLE backlog, never the list on screen (FE-24). With a search
+  // term typed, `filteredUserGames` is a subset; sending it made the server renumber that
+  // subset 1..k, colliding with every hidden game's backlog_order.
+  const fullBacklog = () => userGames
+    .filter(g => normalizeStatus(g.status) === 'backlog')
+    .sort((a, b) => (a.backlog_order ?? 999999) - (b.backlog_order ?? 999999))
   const handleBacklogDrop = async (sourceGameId, targetGameId) => {
     if (!sourceGameId || String(sourceGameId) === String(targetGameId)) {
       setDraggedGameId(null)
       setDragOverGameId(null)
       return
     }
-    const sorted = [...filteredUserGames]
+    const sorted = fullBacklog()
     const fromIdx = sorted.findIndex(g => String(g.game_id) === String(sourceGameId))
     const toIdx   = sorted.findIndex(g => String(g.game_id) === String(targetGameId))
     if (fromIdx === -1 || toIdx === -1) return
@@ -393,7 +418,7 @@ export default function LibraryPage({ user }) {
   }
 
   const handleMoveToTopOfBacklog = async (gameId) => {
-    const sorted = [...filteredUserGames]
+    const sorted = fullBacklog()   // the whole backlog, as above (FE-24)
     const fromIdx = sorted.findIndex(g => String(g.game_id) === String(gameId))
     if (fromIdx <= 0) return
     const newOrder = sorted.map(g => g.game_id)
@@ -661,7 +686,7 @@ export default function LibraryPage({ user }) {
         <>
           {filter === 'backlog' && (
             <span id="backlog-reorder-hint" className="visually-hidden">
-              Press Enter or Space to pick this game up, then on another game to move it there. Escape cancels.
+              Press Enter or Space to pick this game up, then on another game to move it there. Escape, or Enter on the same game, cancels.
             </span>
           )}
           {filter === 'backlog' && (
@@ -690,6 +715,7 @@ export default function LibraryPage({ user }) {
                   // Details open from the TITLE button below, in every view. The card itself
                   // takes focus only in the backlog, where Enter/Space pick up and drop.
                   role="group"
+                  data-game-id={game.game_id}
                   aria-labelledby={`lib-title-${index}`}
                   aria-describedby={filter === 'backlog' ? 'backlog-reorder-hint' : undefined}
                   tabIndex={filter === 'backlog' ? 0 : undefined}
@@ -710,9 +736,14 @@ export default function LibraryPage({ user }) {
                       if (!keyboardDragId) {
                         setReorderAnnouncement('')
                         setKeyboardDragId(game.game_id)
-                      } else if (String(keyboardDragId) !== String(game.game_id)) {
-                        handleBacklogDrop(keyboardDragId, game.game_id).then((moved) => {
-                          if (moved) setReorderAnnouncement(`Moved ${moved.name} to position ${moved.position} in the backlog.`)
+                      } else if (String(keyboardDragId) === String(game.game_id)) {
+                        setKeyboardDragId(null)   // Enter on the held card puts it back
+                      } else {
+                        const source = keyboardDragId
+                        handleBacklogDrop(source, game.game_id).then((moved) => {
+                          if (!moved) return
+                          setReorderAnnouncement(`Moved ${moved.name} to position ${moved.position} in the backlog.`)
+                          setFocusGameId(source)
                         })
                         setKeyboardDragId(null)
                       }

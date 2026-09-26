@@ -758,12 +758,15 @@ check('the frontend component tests exist and CI runs them', () => {
   const minimums = {
     'frontend/src/GameDetailModal.test.jsx': 1, 'frontend/src/LoginPage.test.jsx': 1,
     'frontend/src/App.relogin.test.jsx': 1, 'frontend/src/useDialogFocus.test.jsx': 1,
-    'frontend/src/pages/SearchPage.test.jsx': 4, 'frontend/src/pages/LibraryPage.test.jsx': 10,
+    'frontend/src/pages/SearchPage.test.jsx': 5, 'frontend/src/pages/LibraryPage.test.jsx': 14,
   };
   for (const [f, min] of Object.entries(minimums)) {
     assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is gone — its source-text pin was retired in its favour`);
-    const n = (fs.readFileSync(path.join(ROOT, f), 'utf8').match(/^\s*it\(/gm) || []).length;
+    const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const n = (text.match(/^\s*(?:it|test)\(/gm) || []).length;
     assert.ok(n >= min, `${f} has ${n} tests, want at least ${min} — pins were retired in their favour`);
+    // A skipped test counts above and runs nowhere; `.only` silently skips its siblings.
+    assert.ok(!/\b(?:it|test|describe)\.(?:skip|only|todo)\(/.test(text), `${f} skips or isolates tests`);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'frontend/package.json'), 'utf8'));
   assert.equal(pkg.scripts.test, 'vitest run', 'frontend `npm test` no longer runs vitest');

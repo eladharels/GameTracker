@@ -992,6 +992,12 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
        without changing behaviour.
      - Verified in the built app: cards, crack dots, and the title button opening the
        dialog with focus returned on Escape; backlog cards take focus. No page errors.
+  - **Review of step 6 (Architect):** two things the retired pins covered were not yet in a
+    test. They are now:
+    - a search result's title BUTTON opens the dialog (`SearchPage.test.jsx`);
+    - no `aria-label` on a BACKLOG card, which is where the FE-6 regression shipped.
+    The test-count guard also counts `test(` and refuses `.skip`/`.only`/`.todo`. A skipped
+    test counted and ran nowhere.
   - **Remaining:** `LoginPage` stays in App.jsx for now. Its component tests import it from
     there, and it is 100 lines.
 
@@ -1336,8 +1342,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Where:** `frontend/src/pages/LibraryPage.jsx`, the card's `onKeyDown` and `handleBacklogDrop`.
 - **Defect:** Enter/Space on a card sets `keyboardDragId`, and Enter on a second card calls
   `handleBacklogDrop(target)`. That function reads `draggedGameId`, which only a MOUSE drag
-  sets, so it returns at its first line. No request is sent. The card is released, the hint
-  says the move happened, and the order is unchanged. The screen-reader path advertised in
+  sets, so it returns at its first line. No request is sent. The card is released, the live
+  region goes silent, and the order is unchanged. The screen-reader path advertised in
   `#backlog-reorder-hint` does nothing.
 - **Why nobody saw it:** the FE-6 pin in `test/runtime.test.js` checked that the TEXT
   `handleBacklogDrop(game.game_id)` appeared in the key handler, and it did. The first
@@ -1357,6 +1363,32 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
     Giving either path the other's id fails its test.
   - **Verified in the built app:** Charlie → Alpha's place sends `[3, 1, 2]`; the cards
     re-render in that order with badges #1–#3, and the move is announced. No page errors.
+  - **Review follow-ups (UI/UX, Architect):**
+    - Enter on the held card now puts it back, as the hint says ("Escape, or Enter on the
+      same game, cancels"). Before, it did nothing.
+    - After a confirmed keyboard move, focus goes to the card that MOVED, via a
+      `data-game-id` lookup. Before, it stayed on the drop target, and moving up
+      re-inserts that node, which drops focus to `<body>` in browsers. Chromium confirms
+      focus lands on the moved card.
+    - The announcement is cleared when the filter changes.
+    - New tests for all three, plus Space as a pick-up/drop key.
+
+### [x] FE-24 Reordering the backlog with a search typed corrupted `backlog_order` (Architect, FE-23 review)
+- **Where:** `frontend/src/pages/LibraryPage.jsx`: `handleBacklogDrop` and
+  `handleMoveToTopOfBacklog`. Pre-existing, on the mouse path too.
+- **Defect:** both built the new order from `filteredUserGames`, which is the SEARCH-filtered
+  list. With "ap" typed over a four-game backlog they sent two ids, and
+  `services/library.js#reorderBacklog` renumbered those two 1..2. That collided with the
+  hidden games' positions, and the announcement stated a position that held only within the
+  filtered list.
+- **Fix:** `fullBacklog()` builds the order from every backlog game in `userGames`, sorted by
+  `backlog_order`. A move then places the game relative to its target in the WHOLE backlog.
+  The announced position is the real one.
+- **Tests** (`pages/LibraryPage.test.jsx`): a keyboard move and "move to top" with a search
+  typed each send the full four- or three-game order. Reverting either to
+  `filteredUserGames` fails its test.
+- **Not fixed here:** the server accepts a partial list. Making `reorderBacklog` refuse or
+  complete one is a v1 behaviour change, and every client now sends the whole list.
 
 ### [x] UP-1 Stale `.trivyignore` entry
 - **Problem:** `CVE-2026-33671` (picomatch via sqlite3) is in none of the three lockfiles,

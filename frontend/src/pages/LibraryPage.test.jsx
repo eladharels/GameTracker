@@ -140,6 +140,8 @@ describe('library cards and chips are reachable and named (FE-6)', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 2/ })) })
     const card = screen.getByRole('group', { name: 'Alpha' })
     expect(card.getAttribute('tabindex')).toBe('0')
+    // The FE-6 regression as it SHIPPED was an aria-label on the card in the BACKLOG view.
+    expect(card.hasAttribute('aria-label')).toBe(false)
     await act(async () => { fireEvent.keyDown(card, { key: 'Enter' }) })
     expect(card.className).toContain('card-keyboard-selected')
     // Escape from the status select, not the card itself.
@@ -178,14 +180,70 @@ describe('keyboard reordering of the backlog (FE-23)', () => {
     expect(puts.map((p) => p.body)).toEqual([{ order: ['igdb_2', 'igdb_1'] }])
   })
 
-  it('Enter twice on the SAME card releases it without sending anything', async () => {
+  it('Enter twice on the SAME card puts it back without sending anything', async () => {
     library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 })]
     await renderLibrary()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 2/ })) })
     const card = screen.getByRole('group', { name: 'Bravo' })
     await act(async () => { fireEvent.keyDown(card, { key: 'Enter' }) })
+    expect(card.className).toContain('card-keyboard-selected')
     await act(async () => { fireEvent.keyDown(card, { key: 'Enter' }) })
     await flush()
+    expect(card.className).not.toContain('card-keyboard-selected')
     expect(puts).toHaveLength(0)
+  })
+
+  it('Space picks up and drops exactly as Enter does', async () => {
+    library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 })]
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 2/ })) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Bravo' }), { key: ' ' }) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Alpha' }), { key: ' ' }) })
+    await flush()
+    expect(puts.map((p) => p.body)).toEqual([{ order: ['igdb_2', 'igdb_1'] }])
+  })
+
+  it('after a keyboard move, focus is on the card that moved', async () => {
+    library = [row('igdb_1', 'Alpha', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Bravo', 'backlog', { backlog_order: 2 }),
+      row('igdb_3', 'Charlie', 'backlog', { backlog_order: 3 })]
+    // The refetch returns the NEW order, as the server would.
+    api.get.mockImplementation((url) => (/\/user\/alice\/games\?t=/.test(url)
+      ? Promise.resolve({ data: puts.length ? puts[puts.length - 1].body.order.map((id, i) => ({ ...library.find((g) => g.game_id === id), backlog_order: i + 1 })) : library })
+      : Promise.resolve({ data: [] })))
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 3/ })) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Charlie' }), { key: 'Enter' }) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Alpha' }), { key: 'Enter' }) })
+    await flush()
+    await flush()
+    expect(document.activeElement).toBe(screen.getByRole('group', { name: 'Charlie' }))
+    // The announcement belongs to that view: leaving it clears the live region.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /total — show all games/ })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 3/ })) })
+    expect(screen.queryByText(/Moved Charlie/)).toBeNull()
+  })
+
+  it('with a search typed, a move reorders the WHOLE backlog, not the visible subset (FE-24)', async () => {
+    library = [row('igdb_1', 'Apple', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Berry', 'backlog', { backlog_order: 2 }),
+      row('igdb_3', 'Cherry', 'backlog', { backlog_order: 3 }), row('igdb_4', 'Apricot', 'backlog', { backlog_order: 4 })]
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 4/ })) })
+    await act(async () => { fireEvent.change(screen.getByPlaceholderText('Search your library...'), { target: { value: 'ap' } }) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Apricot' }), { key: 'Enter' }) })
+    await act(async () => { fireEvent.keyDown(screen.getByRole('group', { name: 'Apple' }), { key: 'Enter' }) })
+    await flush()
+    expect(puts.map((p) => p.body)).toEqual([{ order: ['igdb_4', 'igdb_1', 'igdb_2', 'igdb_3'] }])
+    expect(screen.getByText('Moved Apricot to position 1 in the backlog.')).toBeTruthy()
+  })
+
+  it('with a search typed, "move to top" also sends the whole backlog (FE-24)', async () => {
+    library = [row('igdb_1', 'Apple', 'backlog', { backlog_order: 1 }), row('igdb_2', 'Berry', 'backlog', { backlog_order: 2 }),
+      row('igdb_3', 'Apricot', 'backlog', { backlog_order: 3 })]
+    await renderLibrary()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Backlog: 3/ })) })
+    await act(async () => { fireEvent.change(screen.getByPlaceholderText('Search your library...'), { target: { value: 'ap' } }) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Move Apricot to the top of the backlog' })) })
+    await flush()
+    expect(puts.map((p) => p.body)).toEqual([{ order: ['igdb_3', 'igdb_1', 'igdb_2'] }])
   })
 })

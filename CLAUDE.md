@@ -34,7 +34,7 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **HTTP client**: Axios
 - **Icons**: react-icons
 - **Styling**: Custom CSS, glassmorphism dark theme, 6 accent color presets (Violet default, Blue, Emerald, Amber, Rose, Cyan)
-- **Entry point**: `frontend/src/App.jsx` (~370 lines — the shell, routes and login; every page is in `src/pages/`, FE-10)
+- **Entry point**: `frontend/src/App.jsx` (~370 lines — the shell, routes and login. The pages extracted from it are in `src/pages/`; `StatsPage`, `SharedLibrary` and `ApiDocsPage` were always separate files in `src/`, FE-10)
 
 ### Infrastructure
 - **Containerization**: Docker + docker-compose
@@ -308,8 +308,9 @@ GameTracker/
 │   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx                 # The app shell, routes and LoginPage; every other page is
-│   │   │                           #   in pages/ (FE-10)
+│   │   ├── App.jsx                 # The app shell, routes and LoginPage. Pages extracted from
+│   │   │                           #   it are in pages/ (FE-10); Stats, SharedLibrary and
+│   │   │                           #   ApiDocs were always separate files here in src/
 │   │   ├── App.css                 # Global styles (glassmorphism theme, ~6700 lines)
 │   │   ├── GameDetailModal.jsx     # Game detail overlay
 │   │   ├── StatsPage.jsx           # Statistics. Charts are hand-rolled — CSS bars + an
@@ -370,7 +371,7 @@ GameTracker/
 │   │   │   ├── SystemStatusPage.jsx    #   the six dependency probes (admin)
 │   │   │   ├── SettingsPage.jsx        #   SMTP/push/LDAP/API keys (admin) + Diagnostics
 │   │   │   ├── SearchPage.jsx          #   catalog search; SearchPage.test.jsx pins FE-2
-│   │   │   ├── LibraryPage.jsx         #   the library; LibraryPage.test.jsx pins FE-1/5/6
+│   │   │   ├── LibraryPage.jsx         #   the library; LibraryPage.test.jsx pins FE-1/5/6/23/24
 │   │   │   ├── CalendarPage.jsx        #   release calendar
 │   │   │   └── AccountPage.jsx         #   My Account: channels, reminders, API tokens
 │   │   ├── *.test.jsx              # COMPONENT tests: Vitest + jsdom + Testing Library
@@ -455,8 +456,9 @@ GameTracker/
 
 ### Architectural Pattern
 - **Full-stack monolith**: All backend logic lives in a single `index.js`
-- **Single-page application**: React Router over `App.jsx` (the shell and login) and
-  `src/pages/*` (every other page, extracted verbatim one per change, FE-10)
+- **Single-page application**: React Router over `App.jsx` (the shell and login),
+  `src/pages/*` (the pages extracted from it verbatim, one per change, FE-10), and the
+  three page files that were always separate (`StatsPage`, `SharedLibrary`, `ApiDocsPage`)
 - **File-based config**: Runtime settings (SMTP, LDAP, Telegram, API keys) in `settings.json`,
   read through a cached `loadSettings()` that revalidates on the file's mtime
 - **Stateless API**: JWT-based authentication — no server-side session state. The token carries
@@ -1110,7 +1112,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
 | Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, any of the six `test/integration/` suites failing against the real Postgres, or the end-to-end check with a REAL library-scoped PAT minted in the stack (v2 401/read/write, MCP `whoami` through to the backend) failing (UP-7). Scratch files live in a per-run `mktemp -d` (`SMOKE_TMP`), never a fixed `/tmp` path on this production host |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
-| `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice, stale search responses (FE-2), the library's crack checks, status rollback and card accessibility (FE-1/5/6) |
+| `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice, stale search responses (FE-2), the library's crack checks, status rollback and card accessibility (FE-1/5/6), keyboard backlog reordering and whole-backlog positions (FE-23/24) |
 
 ### Container Hardening
 

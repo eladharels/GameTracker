@@ -96,3 +96,15 @@ describe('a stale search response changes nothing (FE-2)', () => {
     expect(screen.getByText(/\$10\.00/)).toBeTruthy()
   })
 })
+
+describe('search results open their details from a title button (FE-6)', () => {
+  it('each result has a title BUTTON, and it opens the detail dialog', async () => {
+    routes['q=hades'] = () => Promise.resolve({ data: [game('igdb_2', 'Hades')] })
+    renderSearch()
+    await searchFor('hades')
+    await flush()
+    const title = screen.getByRole('button', { name: 'Hades' })
+    await act(async () => { fireEvent.click(title) })
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+})
