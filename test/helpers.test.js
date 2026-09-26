@@ -1145,6 +1145,25 @@ console.log('shares: the v2 surface (the SQL is itself the control here):');
     try { return { issued, result: await fn(issued) }; } finally { Object.assign(dbMod.promises, real); }
   };
 
+  checkAsync('replaceOutgoing binds ONE array, so no list length reaches the parameter limit (UP-13)', async () => {
+    // The old generated `IN (?, ?, …)` bound one parameter per name: past Postgres's
+    // 65,535 the statement failed and the route answered 500.
+    const names = Array.from({ length: 150 }, (_, i) => `u${i}`);
+    const { issued } = await withDb({ all: async (_sql, [arr]) => arr.map((username) => ({ username })) },
+      () => sharesSvc.replaceOutgoing('root', names).catch(() => {}));
+    const lookup = issued.find((q) => /FROM users/.test(q.sql));
+    assert.ok(lookup, 'the recipient lookup no longer goes through db.promises (the stub cannot see it)');
+    assert.match(lookup.sql, /^SELECT username FROM users WHERE username = ANY\(\?::text\[\]\)$/);
+    assert.strictEqual(lookup.params.length, 1, 'one parameter per recipient again');
+    assert.deepStrictEqual(lookup.params[0], names);
+  });
+  checkAsync(`replaceOutgoing refuses more than the spec's maxItems BEFORE any query (UP-13)`, async () => {
+    const tooMany = Array.from({ length: sharesSvc.MAX_SHARE_RECIPIENTS + 1 }, () => 'alice');
+    const { issued } = await withDb({}, () => sharesSvc.replaceOutgoing('root', tooMany)
+      .then(() => assert.fail('accepted'), (err) => assert.strictEqual(err.code, require('../services/errors').CODES.VALIDATION)));
+    assert.strictEqual(issued.length, 0, 'an oversized list still reached the database');
+  });
+
   checkAsync('removeOutgoing NEVER looks at the users table', async () => {
     // This is the username oracle. The adapter turns removed:false into a 404, so if
     // this function distinguished "no such account" from "no such share" — even only
@@ -2576,12 +2595,39 @@ console.log('jobs.fetchSteamPrice — three outcomes, never collapsed:');
       return { data: { 440: { success: true, data: { price_overview: { final_formatted: '₪59.99' } } } } };
     }, async () => {
       const r = await jobsSvc.fetchSteamPrice('440', { region: 'il' });
-      assert.deepStrictEqual(r, { ok: true, price: '₪59.99', reason: null });
+      // No currency/discount in this payload, so the extra fields are null, not absent.
+      assert.deepStrictEqual(r, {
+        ok: true, price: '₪59.99', reason: null, currency: null, discount: null, originalPrice: null,
+      });
     });
     assert.strictEqual(seen.params.cc, 'il', 'the region was not passed to Steam');
     assert.strictEqual(seen.redirects, 0,
       'redirects are followed — a 302 off Steam is not an answer about a price');
     assert.ok(seen.timeout > 0, 'no timeout, so a hung Steam holds the request open');
+  });
+
+  checkAsync('the rest of price_overview is carried for v1, bounded and typed (UP-10)', async () => {
+    await withSteam(async () => ({ data: { 440: { success: true, data: { price_overview: {
+      final_formatted: '₪39.99', initial_formatted: '₪59.99', currency: 'ILS', discount_percent: 33,
+    } } } } }), async () => {
+      const r = await jobsSvc.fetchSteamPrice('440', { region: 'il' });
+      assert.deepStrictEqual(r, {
+        ok: true, price: '₪39.99', reason: null, currency: 'ILS', discount: 33, originalPrice: '₪59.99',
+      });
+    });
+    // Third-party values: anything off-type or out of range becomes null, never passes.
+    await withSteam(async () => ({ data: { 440: { success: true, data: { price_overview: {
+      final_formatted: '₪39.99', initial_formatted: { evil: 1 }, currency: '<script>', discount_percent: 900,
+    } } } } }), async () => {
+      const r = await jobsSvc.fetchSteamPrice('440', { region: 'il' });
+      assert.deepStrictEqual([r.currency, r.discount, r.originalPrice], [null, null, null]);
+    });
+  });
+  check('isSteamAppId: 1-10 digits and nothing else, the one rule for v1 and v2 (UP-10)', () => {
+    for (const ok of ['440', '1', '1234567890']) assert.ok(jobsSvc.isSteamAppId(ok), ok);
+    for (const bad of ['', '12345678901', '44a', '../x', '440?cc=us', ' 440', null, undefined]) {
+      assert.ok(!jobsSvc.isSteamAppId(bad), `${JSON.stringify(bad)} accepted`);
+    }
   });
 
   checkAsync('an app absent from the region is 200-with-null, not an error', async () => {
@@ -3681,6 +3727,24 @@ checkAsync('safeExternalUrl: only absolute http(s) reaches an href (SEC-8)', asy
     assert.strictEqual(safeExternalUrl(bad), null, `${JSON.stringify(bad)} was allowed into an href`);
   }
 });
+
+console.log('telegramText — HTML parse mode, escaped (UP-12):');
+{
+  const { telegramText } = require('../services/notifications');
+  check('names that broke legacy Markdown reach Telegram as literal text', () => {
+    // Under parse_mode Markdown each of these was an unbalanced entity: a 400 from
+    // Telegram, and that channel never delivered for the game.
+    for (const name of ['Rainbow_Six Siege', 'Episode *', '[Remastered] Halo', 'F.E.A.R. `3`']) {
+      const out = telegramText('Release reminder', `${name} releases today!`);
+      assert.ok(out.includes(name), `${name} was altered: ${out}`);
+    }
+  });
+  check('HTML-significant characters are escaped, so a name cannot inject markup', () => {
+    const out = telegramText('<b>x</b>', 'Tom & Jerry\'s <a href="https://evil.example">game</a>');
+    assert.strictEqual(out,
+      '<b>&lt;b&gt;x&lt;/b&gt;</b>\nTom &amp; Jerry&#39;s &lt;a href=&quot;https://evil.example&quot;&gt;game&lt;/a&gt;');
+  });
+}
 
 console.log('settings-store.replaceFileContents — atomic where the mount allows (UP-8):');
 {

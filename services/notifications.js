@@ -315,12 +315,22 @@ async function sendGotify(title, message, token, priority = 5, imageUrl, serverU
   return true;
 }
 
+// The message body, in Telegram's HTML parse mode (ROADMAP UP-12).
+//
+// It was legacy `Markdown` with the game name interpolated raw, so a name containing
+// `_`, `*`, `[` or a backtick — "Tom Clancy's Rainbow Six_Siege", "Half-Life 2: Episode
+// *" — was an unbalanced entity, Telegram answered 400 "can't parse entities", and that
+// channel never delivered for that game. HTML mode needs only &, <, > (and quotes)
+// escaped, which escapeHtml already does; &#39; is a numeric entity, which Telegram
+// accepts. Pure so helpers.test.js can pin it.
+const telegramText = (title, message) => `<b>${escapeHtml(title)}</b>\n${escapeHtml(message)}`;
+
 async function sendTelegram(title, message, chatId, photoUrl) {
   const { telegram } = loadSettings();
   const botToken = telegram?.bot_token;
   if (!botToken) return skip(NOTIFY_CODES.NOT_CONFIGURED, 'No Telegram bot token configured on this server.');
   if (!chatId) return skip(NOTIFY_CODES.NO_DESTINATION, 'No Telegram chat ID.');
-  const text = `*${title}*\n${message}`;
+  const text = telegramText(title, message);
   // Parity with sendNtfy/sendGotify: a hung api.telegram.org must not hold the
   // request open indefinitely.
   const opts = { timeout: 10000, maxRedirects: 0 };
@@ -336,13 +346,13 @@ async function sendTelegram(title, message, chatId, photoUrl) {
       chat_id: chatId,
       photo: safePhoto,
       caption: text,
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
     }, opts);
   } else {
     await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       chat_id: chatId,
       text,
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
     }, opts);
   }
   return true;
@@ -628,7 +638,7 @@ function logOutcomes(tag, username, results) {
 
 module.exports = {
   // transports
-  sendEmail, sendNtfy, sendGotify, sendTelegram,
+  sendEmail, sendNtfy, sendGotify, sendTelegram, telegramText,
   // THE TEST SEAM. The CHANNELS rows are frozen and call through this object, so
   // substituting a transport here is the only way to exercise dispatch() without a
   // network — and dispatch()'s contract (one channel's failure never stops another)

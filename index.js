@@ -164,6 +164,13 @@ app.use((req, res, next) => {
 
 // Ensure root user exists.
 //
+// NOT fatal, and deliberately so (ROADMAP UP-15): it runs after migrateOrExit() has
+// already proved the database reachable, so a failure here is transient, and existing
+// installs already have root. Exiting would crash-loop the whole service over the one
+// account that has two CLI recoveries (create-local-admin.js, reset-root-password.js).
+// It logged `[FATAL]` while the server carried on, which told an operator the wrong
+// thing; the level now matches what happens.
+//
 // Promise-based, and the INSERT is AWAITED. It used to be a fire-and-forget db.run
 // with no callback at all, which under the connection pool meant the row could be
 // abandoned -- pool.end() drops queries still waiting for a connection without
@@ -174,7 +181,8 @@ app.use((req, res, next) => {
 const ensureRootUser = () => new Promise((resolve) => {
   db.get('SELECT * FROM users WHERE username = ?', ['root'], async (err, user) => {
     if (err) {
-      console.error('[FATAL] Could not check for the root user:', err.message);
+      console.error('[ERROR] Could not check for the root user (the server continues; restart to'
+        + ' retry, or use create-local-admin.js):', err.message);
       return resolve();
     }
     if (user) return resolve();
@@ -194,7 +202,8 @@ const ensureRootUser = () => new Promise((resolve) => {
         ['root', hash, 'local', 'root']
       );
     } catch (insertErr) {
-      console.error('[FATAL] Could not create the root user:', insertErr.message);
+      console.error('[ERROR] Could not create the root user (the server continues; restart to'
+        + ' retry, or use create-local-admin.js):', insertErr.message);
       return resolve();
     }
     if (generated) {
@@ -844,37 +853,37 @@ app.get('/api/user/:username/crack-status', authRequired, ownershipRequired, (re
   });
 });
 
-// Remove the in-memory cache for Steam prices
+// A live Steam price. An ADAPTER over jobs.js#fetchSteamPrice (ROADMAP UP-10) — the
+// same lookup as the weekly sweep and GET /api/v2/catalog/prices. It was a second
+// implementation with no timeout, no redirect refusal, no id check (the raw path value
+// went into the outbound request) and unbounded third-party strings, and a Steam
+// failure answered with `details: error.message`.
+//
+// The v1 shape and statuses are frozen and kept: 200 {price, currency, discount,
+// original_price}; 404 for "not on Steam" and "no price"; 500 when Steam fails — now
+// the plain {error} envelope. An id that is not a Steam id cannot be on Steam, so it is
+// the same 404 Steam's own answer produced, not a new 400.
 app.get('/api/game-price/:steamAppId', authRequired, async (req, res) => {
   const { steamAppId } = req.params;
-  if (!steamAppId) {
-    return res.status(400).json({ error: 'Missing Steam App ID' });
+  if (!jobsService.isSteamAppId(steamAppId)) {
+    return res.status(404).json({ error: 'Game not found on Steam' });
   }
-  try {
-    const response = await axios.get(`https://store.steampowered.com/api/appdetails`, {
-      params: {
-        appids: steamAppId,
-        cc: jobsService.steamRegion(), // the instance's store — see jobs.js#steamRegion
-        l: 'en',
-      },
-    });
-    const data = response.data[steamAppId];
-    if (!data.success) {
-      return res.status(404).json({ error: 'Game not found on Steam' });
-    }
-    const priceOverview = data.data.price_overview;
-    if (!priceOverview) {
-      return res.status(404).json({ error: 'Price not available for this game' });
-    }
-    res.json({
-      price: priceOverview.final_formatted,
-      currency: priceOverview.currency,
-      discount: priceOverview.discount_percent,
-      original_price: priceOverview.initial_formatted,
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch price from Steam', details: error.message });
+  const result = await jobsService.fetchSteamPrice(steamAppId);
+  if (!result.ok) {
+    console.error(`[price] Steam lookup failed for ${safeForLog(steamAppId, 20)}:`, safeForLog(result.error, 200));
+    return res.status(500).json({ error: 'Failed to fetch price from Steam' });
   }
+  if (!result.price) {
+    return res.status(404).json({
+      error: result.reason === 'not_in_region' ? 'Game not found on Steam' : 'Price not available for this game',
+    });
+  }
+  res.json({
+    price: result.price,
+    currency: result.currency,
+    discount: result.discount,
+    original_price: result.originalPrice,
+  });
 });
 
 // --- Notification Settings ---
@@ -2387,10 +2396,6 @@ v2Router.post('/library/games', requireLibraryScope, libraryWriteLimit, (req, re
     .catch((err) => v2.send(res, err, { log: '[v2] add game failed:' }));
 });
 
-// GET /api/v2/shares — both directions in one call.
-//
-// v1 needs three requests and a directory fetch to build this: one for outgoing, one
-// for incoming, and the whole user list to turn usernames into display names.
 // GET /api/v2/system/status — the same probes the v1 System Status page runs.
 //
 // Admin-scoped, matching v1. A library-scoped credential does not need it:
@@ -2486,7 +2491,7 @@ v2Router.get('/catalog/prices/:steamAppId', requireLibraryScope, (req, res) => {
   const steamAppId = String(req.params.steamAppId || '');
   // Validated here rather than passed through: this value goes into an outbound URL,
   // and the spec's pattern is only a promise until something enforces it.
-  if (!/^[0-9]{1,10}$/.test(steamAppId)) {
+  if (!jobsService.isSteamAppId(steamAppId)) {
     return v2.send(res, { code: SVC.VALIDATION, message: 'steamAppId must be a Steam application id' });
   }
   const region = req.query.region === undefined ? jobsService.steamRegion() : String(req.query.region);
@@ -2506,6 +2511,10 @@ v2Router.get('/catalog/prices/:steamAppId', requireLibraryScope, (req, res) => {
     .catch((err) => v2.send(res, err, { log: '[v2] price lookup failed:' }));
 });
 
+// GET /api/v2/shares — both directions in one call.
+//
+// v1 needs three requests and a directory fetch to build this: one for outgoing, one
+// for incoming, and the whole user list to turn usernames into display names.
 v2Router.get('/shares', requireLibraryScope, (req, res) => {
   Promise.all([
     sharesService.listOutgoingShares(req.user.username),
@@ -2854,7 +2863,6 @@ v2Router.use((req, res) => {
 
 // Same reasoning for anything thrown past a v2 handler. Four arguments: Express
 // identifies an error handler by arity, so `next` must stay even though it is unused.
-// eslint-disable-next-line no-unused-vars
 v2Router.use((err, req, res, next) => {
   v2.send(res, err, { log: '[v2] unhandled:' });
 });
@@ -3451,7 +3459,6 @@ const dedupe = jobsService.REMINDER_LOG;
 // getAllUsers/getUserGames are gone: they existed only so the four copies of the
 // release sweep could enumerate. services/jobs.js does its own enumeration, with one
 // query instead of three round trips per user.
-console.log('About to schedule cron job');
 scheduleWhenServer('0 8 * * *', () => {
   console.log('[CRON] Running scheduled release check...');
   jobsService.checkReleases({ dedupe })
@@ -3554,7 +3561,6 @@ app.use('/api', (req, res) => {
 // NODE_ENV !== 'production' — and staging runs NODE_ENV=staging, so unhandled errors
 // there leaked absolute filesystem paths and internal structure to the client.
 // Express 5 also forwards rejected promises from async handlers here.
-// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error(`[Error] ${req.method} ${req.path}:`, err?.stack || err);
   if (res.headersSent) return;

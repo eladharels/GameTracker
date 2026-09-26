@@ -879,4 +879,12 @@ check('the job enums match the runner and the service, in BOTH directions', () =
   assert.deepStrictEqual([...started.properties.kind.enum].sort(), [...jobs.JOB_KINDS].sort());
 });
 
+check('PUT /shares/outgoing maxItems is the cap the service ENFORCES (UP-13)', () => {
+  // The spec said 200 from the start and nothing enforced it; v1 reaches the same
+  // function with no bound. One number, stated twice, has to be checked twice.
+  const { MAX_SHARE_RECIPIENTS } = require('../services/shares');
+  const body = spec.paths['/shares/outgoing'].put.requestBody.content['application/json'].schema;
+  assert.strictEqual(body.properties.usernames.maxItems, MAX_SHARE_RECIPIENTS);
+});
+
 console.log(`\n${n} spec assertions passed.`);

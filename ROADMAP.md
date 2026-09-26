@@ -41,8 +41,8 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 | CC — Correctness & concurrency | 16 | 16 |
 | SEC — Security (medium/low) | 16 | 14 |
 | FE — Frontend | 22 | 12 |
-| UP — Tidying & upkeep | 24 | 10 |
-| **Total** | **84** | **58** |
+| UP — Tidying & upkeep | 24 | 14 |
+| **Total** | **84** | **62** |
 
 ---
 
@@ -1179,10 +1179,26 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
   - Verified end to end against a stubbed Twitch: the token is stored, other keys are kept,
     and a corrupt file exits 1 untouched.
 
-### [ ] UP-10 v1 Steam price route is a separate implementation
+### [x] UP-10 v1 Steam price route is a separate implementation
 - **Where:** `index.js:812-842`.
 - **Problem:** no timeout, no id validation, and it returns `error.message`.
 - **Fix:** adapt it over `jobsService.fetchSteamPrice` without changing the v1 shape.
+- **Done:** `GET /api/game-price/:steamAppId` is now an adapter over `fetchSteamPrice`, the
+  same lookup the weekly sweep and v2 use. That brings the timeout, the refused redirects
+  and the bounded third-party strings.
+  - **Service:** it now also returns `currency` (three capital letters), `discount` (an
+    integer from 0 to 100) and `originalPrice`, each `null` when off-type. v2 picks its own
+    fields and never sees them.
+  - **One id rule:** `isSteamAppId` (1-10 digits) is shared by v1 and v2. Before, v1 put the
+    raw path value into the outbound request.
+  - **Frozen shape kept:** 200 `{price, currency, discount, original_price}`, 404 for "not on
+    Steam" and for "no price". A non-Steam id gets that same 404, which is what Steam itself
+    answered for it before.
+  - **500 is now the plain `{error}` envelope:** `details: error.message` is gone, and the
+    upstream text is logged instead.
+  - **Verified over real HTTP against the live Express app,** with Steam stubbed: priced,
+    absent, free, down, `44a` and `..%2Fx`. Unit tests cover the new fields, typing and the
+    id rule.
 
 ### [ ] UP-11 Provider call volume
 - **Problem:**
@@ -1193,28 +1209,50 @@ Severity: **P0** means fix first. After that, sections are ordered by impact.
 - **Fix:** skip RAWG details where the list payload is enough, cache them, and dedupe Steam
   lookups by app id within a sweep.
 
-### [ ] UP-12 Telegram legacy Markdown on unescaped game names
+### [x] UP-12 Telegram legacy Markdown on unescaped game names
 - **Where:** `services/notifications.js:256,272,278`.
 - **Failure:** a name containing `_`, `*` or `[` gets a 400 from Telegram, so the channel
   silently never delivers for those games.
 - **Fix:** switch to `HTML` parse mode with escaping, or escape for MarkdownV2.
+- **Done:** HTML parse mode. The text comes from `telegramText()`, a pure exported function
+  that uses the module's existing `escapeHtml`; Telegram accepts every entity it emits,
+  including `&#39;`. Tests cover names that broke legacy Markdown, and markup-injection
+  attempts arriving as literal text.
 
-### [ ] UP-13 `replaceOutgoing` builds an unbounded `IN (...)` list
+### [x] UP-13 `replaceOutgoing` builds an unbounded `IN (...)` list
 - **Where:** `services/shares.js:38`.
 - **Failure:** a huge array exceeds Postgres's 65,535-parameter limit and returns 500.
 - **Fix:** cap the array length (validation 400), or use `= ANY($1::text[])`.
+- **Done, both halves:**
+  - **One array parameter:** the lookup is `username = ANY(?::text[])`. Real Postgres took
+    a 70,000-name array with no parameter-limit error.
+  - **The spec's cap is now enforced:** the v2 spec has declared `maxItems: 200` from the
+    start, but nothing enforced it, and v1 reaches the same function with no bound.
+    `MAX_SHARE_RECIPIENTS = 200` now applies to the raw length before any query, and
+    `test/openapi.test.js` ties the constant to the spec.
+  - **Tests:** the lookup now goes through `db.promises.all`, so a test can assert the SQL
+    and the single parameter. The old code fails both new tests.
 
 ### [ ] UP-14 `rate_limited` in job `REASONS` has no producer
 - **Where:** `services/job-runner.js:47-55`.
 - **Fix:** produce it or remove it. It is in the spec enum, so update
   `openapi/gametracker-v2.yaml` together with `test/openapi.test.js`.
 
-### [ ] UP-15 Leftovers
+### [x] UP-15 Leftovers
 - `console.log('About to schedule cron job')` at `index.js:3354`.
 - A stray "GET /api/v2/shares" comment above the stats route (`index.js:2237`).
 - `ensureRootUser` logs `[FATAL]` but lets the server start (`index.js:176-178`, `196-198`).
   Decide whether that is fatal or a warning, and make the log level match.
 - 3 backend lint warnings (for example the unused `shareCols` at `:121`).
+- **Done:**
+  - The cron log line is gone.
+  - The stray comment is moved onto `GET /api/v2/shares`, the route it describes.
+  - Backend lint is at 0 warnings: two stale disable directives and the unused `shareCols`.
+  - **`ensureRootUser` stays non-fatal, and now logs `[ERROR]` with the recovery path.** It
+    runs after `migrateOrExit()` has already proved the database reachable, so a failure is
+    transient, and existing installs already have root. Exiting would crash-loop the
+    service over the one account with two CLI recoveries. Logging `[FATAL]` while carrying
+    on was the actual defect.
 
 ### [ ] UP-16 Shrink `index.js` (3,517 lines)
 - **Move into services, one per PR, each an adapter-only change:**
@@ -1435,3 +1473,4 @@ review was needed. **Not yet validated on GameTracker-stg.**
 | UP-1–5 | this batch | 2026-09-26 | Node floor 20→22 everywhere (20 is EOL) and the frontend build stage in the runtime gate; scriptless frontend install; stale trivyignore, workflow comment, `.dockerignore`, `MCP_BIND` docs |
 | UP-6 | this batch | 2026-09-26 | Smoke stack per run (project, no container_name) and smoke concurrency split main/PR with separate ports: a PR can no longer cancel a merge's deploy |
 | UP-8, UP-9 | this batch | 2026-09-26 | settings.json saved atomically where the mount allows, else write-then-truncate-then-fsync; production atomicity split out as UP-24. The IGDB token script stores through the settings service like the UI button |
+| UP-10, 12, 13, 15 | this batch | 2026-09-26 | v1 Steam price route adapted over the shared lookup (shape kept, no error.message); Telegram HTML mode; share list as one array param + the spec's 200 cap enforced; leftovers, backend lint at 0 |

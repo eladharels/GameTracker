@@ -258,6 +258,10 @@ function priceString(value) {
 //   { ok: true,  price }              a formatted price for that region
 //   { ok: true,  price: null, reason } Steam answered; the game has no price there
 //   { ok: false, error }              Steam could not be reached or was unusable
+// A Steam application id: 1-10 digits. The ONE rule, for both v1 and v2 — the value is
+// interpolated into an outbound request, so it is checked before it leaves.
+const isSteamAppId = (v) => /^[0-9]{1,10}$/.test(String(v ?? ''));
+
 async function fetchSteamPrice(steamAppId, { region = steamRegion() } = {}) {
   const id = String(steamAppId);
   try {
@@ -273,9 +277,20 @@ async function fetchSteamPrice(steamAppId, { region = steamRegion() } = {}) {
     // store at all — distinct from an app that is there and simply has no price_overview
     // (free, unreleased, or bundled).
     if (!data?.success) return { ok: true, price: null, reason: 'not_in_region' };
-    const price = priceString(data?.data?.price_overview?.final_formatted);
+    const overview = data?.data?.price_overview;
+    const price = priceString(overview?.final_formatted);
     if (!price) return { ok: true, price: null, reason: 'free_or_unpriced' };
-    return { ok: true, price, reason: null };
+    // The rest of price_overview, for v1's GET /api/game-price shape (UP-10). Same
+    // treatment as the price: third-party values, bounded and typed, or null. The v2
+    // adapter picks its own fields and never sees these.
+    const discount = Number.isInteger(overview.discount_percent)
+      && overview.discount_percent >= 0 && overview.discount_percent <= 100 ? overview.discount_percent : null;
+    const currency = typeof overview.currency === 'string' && /^[A-Z]{3}$/.test(overview.currency)
+      ? overview.currency : null;
+    return {
+      ok: true, price, reason: null,
+      currency, discount, originalPrice: priceString(overview.initial_formatted),
+    };
   } catch (err) {
     // Steam's message only, never the response body.
     return { ok: false, error: err.message };
@@ -448,4 +463,5 @@ async function runJob(kind, { scope = 'instance', userId = null, deps = {} } = {
 module.exports = {
   NO_DEDUPE, REMINDER_LOG, checkReleases, updatePrices, reminderDays, usersWithPendingReleases, priceableGames,
   refreshOne, refreshMetadata, refreshMetadataAll, runJob, JOB_KINDS, fetchSteamPrice, steamRegion,
+  isSteamAppId,
 };

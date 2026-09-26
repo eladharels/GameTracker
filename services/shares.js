@@ -36,6 +36,12 @@ async function listIncoming(toUser) {
   );
 }
 
+// The most recipients one replace may name. openapi/gametracker-v2.yaml has declared
+// `maxItems: 200` on PUT /shares/outgoing all along, but nothing ENFORCED it — and v1's
+// POST /api/user/:u/shares, which reaches the same function, had no bound at all
+// (ROADMAP UP-13). test/openapi.test.js ties the two numbers together.
+const MAX_SHARE_RECIPIENTS = 200;
+
 // Replace the whole outgoing share list, atomically.
 //
 // Throws UNKNOWN_USERS listing exactly which recipients do not exist. Postgres now
@@ -45,6 +51,11 @@ async function replaceOutgoing(fromUser, toUsers) {
   const owner = norm(fromUser);
   if (!Array.isArray(toUsers)) {
     throw serviceError(CODES.VALIDATION, 'toUsers must be an array.');
+  }
+  // On the RAW length, as the spec's maxItems is: bounding only the de-duplicated set
+  // would still let a caller hand this function an arbitrarily large array to walk.
+  if (toUsers.length > MAX_SHARE_RECIPIENTS) {
+    throw serviceError(CODES.VALIDATION, `At most ${MAX_SHARE_RECIPIENTS} users can be shared with at once.`);
   }
 
   // Usernames are stored lowercase and every lookup compares lowercase, so a
@@ -60,11 +71,11 @@ async function replaceOutgoing(fromUser, toUsers) {
 
   let existing = [];
   if (requested.length) {
-    // Placeholders are GENERATED, never interpolated values — the one safe form of
-    // dynamic SQL through the ?-to-$n shim, whose arity guard throws rather than
-    // mis-binding if the counts ever diverge.
-    const placeholders = requested.map(() => '?').join(',');
-    const rows = await all(`SELECT username FROM users WHERE username IN (${placeholders})`, requested);
+    // ONE array parameter, not a generated `IN (?, ?, …)` list: that bound one
+    // parameter per name, so a large enough array exceeded Postgres's 65,535-parameter
+    // limit and answered 500 (UP-13). The statement text is now constant. Through the
+    // module (db.promises.all), not the destructured `all`, so a test can see it.
+    const rows = await db.promises.all('SELECT username FROM users WHERE username = ANY(?::text[])', [requested]);
     existing = rows.map((r) => r.username);
     const unknownUsers = requested.filter((u) => !existing.includes(u));
     if (unknownUsers.length) {
@@ -247,6 +258,7 @@ module.exports = {
   removeOutgoing,
   readSharedPage,
   replaceOutgoing,
+  MAX_SHARE_RECIPIENTS,
   readSharedLibrary,
   revokeIncoming,
   listDirectory,
