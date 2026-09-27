@@ -124,10 +124,13 @@ jobs:
         run: |
           for v in sdk gradle; do docker volume create "gametracker-android-${v}-${VOLUME_PARTITION}" >/dev/null; done
           # The volumes (root-owned when new, or holding files from builds that ran as root) and
-          # the checkout's mobile/ go to BUILD_UID, with CHOWN as the ONLY capability and no
-          # network: this container does nothing but change owners. The always() step at the
+          # the checkout's mobile/ go to BUILD_UID. CHOWN and DAC_READ_SEARCH are the ONLY
+          # capabilities, and there is no network: this container does nothing but change
+          # owners. DAC_READ_SEARCH (read and traverse, never write) is needed because a
+          # previous build as BUILD_UID leaves 0700 directories that root without it cannot
+          # enter ("cannot read directory '/gradle/daemon/8.13'", PR #6). The always() step at the
           # end hands mobile/ back to the runner.
-          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
+          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
             -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
             -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
@@ -202,14 +205,14 @@ jobs:
           # First: never leave a build running on the host, even when this job was cancelled.
           docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
           # Give mobile/ back to the runner, so the next checkout can clean and update it.
-          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
+          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
             "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /work \
             || echo "::warning::could not hand mobile/ back to the runner; the next checkout cleans it"
           for v in sdk gradle; do
             name="gametracker-android-${v}-${VOLUME_PARTITION}"
             docker volume inspect "${name}" >/dev/null 2>&1 || continue
-            MB="$(docker run --rm --network none --cap-drop ALL -v "${name}:/v:ro" "${JDK_IMAGE}" du -sm /v | cut -f1)"
+            MB="$(docker run --rm --network none --cap-drop ALL --cap-add DAC_READ_SEARCH -v "${name}:/v:ro" "${JDK_IMAGE}" du -sm /v | cut -f1)"
             echo "[android] ${name}: ${MB} MB"
             if [ "${MB}" -gt "${VOLUME_CAP_MB}" ]; then
               echo "[android] ${name} is over ${VOLUME_CAP_MB} MB: removing it"

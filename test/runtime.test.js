@@ -404,8 +404,10 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     assert.ok(!/chown[^\n]*\s-(?:[a-zA-Z]*[LH])/.test(line), `a chown follows symlinks: ${line.trim()}`);
   }
   for (const m of runs.matchAll(/docker run([\s\S]*?)"\$\{JDK_IMAGE\}" chown/g)) {
-    assert.ok(/--network none/.test(m[1]) && /--cap-drop ALL/.test(m[1]) && /--cap-add CHOWN/.test(m[1]) && !/--cap-add (?!CHOWN)/.test(m[1]),
-      'a chown container is not network-less with CHOWN as its only capability');
+    // CHOWN, plus DAC_READ_SEARCH (read/traverse only) to enter BUILD_UID's 0700 directories.
+    assert.ok(/--network none/.test(m[1]) && /--cap-drop ALL/.test(m[1]) && /--cap-add CHOWN/.test(m[1])
+      && !/--cap-add (?!CHOWN\b|DAC_READ_SEARCH\b)/.test(m[1]),
+      'a chown container is not network-less with CHOWN (and DAC_READ_SEARCH) as its only capabilities');
   }
   const meta = fs.readFileSync(path.join(ROOT, 'mobile/gradle/verification-metadata.xml'), 'utf8');
   assert.match(meta, /<verify-metadata>true<\/verify-metadata>/, 'verification-metadata.xml does not verify metadata');
