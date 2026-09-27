@@ -49,7 +49,16 @@ function parseDataClass(text, name) {
   let i = head.index + head[0].length;
   const start = i;
   for (; i < text.length && depth > 0; i++) {
-    if (text[i] === '(') depth++;
+    // A paren inside a string or char literal is not structure (`val a: String = ")"` hid
+    // the next field, Architect re-review). Raw strings first, then escaped ones.
+    if (text.startsWith('"""', i)) {
+      const end = text.indexOf('"""', i + 3);
+      if (end < 0) break;
+      i = end + 2;
+    } else if (text[i] === '"' || text[i] === "'") {
+      const q = text[i];
+      for (i++; i < text.length && text[i] !== q; i++) if (text[i] === '\\') i++;
+    } else if (text[i] === '(') depth++;
     else if (text[i] === ')') depth--;
   }
   if (depth !== 0) throw new Error(`data class ${name}: unbalanced parentheses`);

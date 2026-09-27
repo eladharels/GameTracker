@@ -1762,6 +1762,9 @@ check('the Kotlin parse fails closed on the shapes a lazy regex got wrong', () =
   // A multi-line default must not cut the class short either.
   assert.deepStrictEqual(parseDataClass('data class Y(val a: String = listOf(1,\n 2).toString(),\n val b: Int)', 'Y'), ['a', 'b']);
   assert.throws(() => parseDataClass('data class Y(val a: String', 'Y'), /unbalanced/);
+  // A paren inside a string literal is not the end of the class.
+  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = ")",\n val b: Int)', 'Y'), ['a', 'b']);
+  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = "\\")(",\n val b: Char = \')\')', 'Y'), ['a', 'b']);
 });
 
 check('every Game field the app binds is a field a pinned response carries', () => {
@@ -1808,7 +1811,9 @@ checkAsync('POST /api/user/:u/games reads EXACTLY the fields GameUpdateRequest s
   // Every field the app sends reaches the service under the same name, and nothing the app
   // does not send is required: a renamed body key would arrive as undefined.
   assert.deepStrictEqual(Object.keys(got).sort(), [...MOBILE.gameUpdateRequest].sort(),
-    'the route and the app disagree on the add/update body');
+    'the route and the Android GameUpdateRequest disagree on the add/update body. They must change '
+    + 'TOGETHER, on purpose: extend models.kt or the route, never loosen this check (the SPA and '
+    + 'the app share this frozen v1 route)');
   for (const f of MOBILE.gameUpdateRequest) assert.strictEqual(got[f], `v-${f}`, `${f} did not reach the service`);
 });
 checkAsync('POST /api/user/:u/games: a refused status is 400 {error}', async () => {

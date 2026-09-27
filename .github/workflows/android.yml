@@ -32,7 +32,7 @@
 #     processors, lint jars, unit tests) can reach every port this host publishes: the backend
 #     on BACKEND_BIND, the MCP port, the smoke stacks, and the LAN, including the directory
 #     server. Splitting the build into a networked resolve phase and an --offline phase under
-#     --network none is recorded in mobile/ROADMAP.md (operational notes).
+#     --network none is MOB-37 in mobile/ROADMAP.md.
 #
 # Deliberately a SEPARATE workflow from docker-build-deploy.yml: path filters exist only at
 # workflow level, and this job must never gate, trigger or delay `deploy` by dependency.

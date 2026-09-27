@@ -31,7 +31,7 @@ class SettingsActivity : AppCompatActivity() {
 
         fun updateButton() {
             val enabled = prefs.getBoolean("fingerprint_enabled", false)
-            btnBiometric.text = if (enabled) "Turn off fingerprint unlock" else "Unlock with fingerprint while signed in"
+            btnBiometric.text = if (enabled) "Turn off fingerprint unlock" else "Turn on fingerprint unlock"
             btnBiometric.isEnabled = canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS || enabled
         }
 

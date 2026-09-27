@@ -697,6 +697,29 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - The offline notice is a Toast. The rest of the app uses `SnackbarHelper`.
 - **Fix:** one small PR, with MOB-35.
 
+### [ ] MOB-37 Medium — Android CI: build code has network access on the production host
+- **Where:** `.github/workflows/android.yml`, the "Build and test inside the container" step.
+- **What:** the Gradle container runs on Docker's default bridge network. Build code (kapt
+  processors, lint jars, unit tests) can therefore reach every port the host publishes:
+  - the backend on `BACKEND_BIND` (0.0.0.0:3000 by default), where `X-Forwarded-For` can be
+    spoofed past the login limiter;
+  - the MCP port;
+  - the smoke stacks;
+  - the LAN, including the directory server.
+
+  Dependencies are hash-verified, so this needs a malicious artifact that was verified
+  anyway, or a compromised PR author. It is still reach the build does not need.
+- **Fix:** two phases:
+  - resolve dependencies and install the SDK with network (e.g. `gradlew --dependency-verification
+    strict dependencies` plus the lint and AGP runtime artifacts);
+  - run `test`/`lint`/`assemble` with `--offline` in a second container under `--network none`.
+
+  Iterate on the runner, since only it can build. Pin `--network none` on the second phase in
+  `test/runtime.test.js`.
+- **Interim mitigation:** `BACKEND_BIND=127.0.0.1` with `TRUST_PROXY=2` (root README, "Reverse
+  proxy topology") takes the backend port off the reachable set.
+- **Source:** CISO review of PR #6.
+
 ---
 
 ## Operational notes
@@ -723,11 +746,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     workflow. The same-repo gate is the boundary.
   - **Residual risk:** the SDK components `sdkmanager` installs are verified only against
     Google's repository metadata.
-  - **Residual risk, open:** the build container is on Docker's default bridge, so build
-    code (kapt, lint jars, unit tests) can reach every port the host publishes and the LAN,
-    including the directory server. The fix is two phases: resolve dependencies and the SDK
-    with network, then run `--offline` test/lint/assemble under `--network none`. It needs
-    iterating on the runner, so it is a follow-up.
+  - **Residual risk, open (MOB-37):** the build container is on Docker's default bridge, so
+    build code can reach every port the host publishes and the LAN.
   - **Upgrades:** any dependency upgrade (MOB-21) must regenerate the verification metadata
     in the same PR.
 - **Visible behaviour change from MOB-3/MOB-5:** after PR #6, a session ends 12 hours after

@@ -1236,8 +1236,10 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 >     jars, unit tests) can reach every port this host publishes: the backend on `BACKEND_BIND`,
 >     the MCP port and the smoke stacks. It can also reach the LAN, including the directory
 >     server. The fix is a networked resolve phase followed by an `--offline` build under
->     `--network none`; it is recorded in `mobile/ROADMAP.md`. Any dependency change in `mobile/` must regenerate the verification
-> metadata in the same PR.
+>     `--network none`; it is MOB-37 in `mobile/ROADMAP.md`. Until then, `BACKEND_BIND=127.0.0.1`
+>     with `TRUST_PROXY=2` takes the backend port off the reachable set.
+>
+> Any dependency change in `mobile/` must regenerate the verification metadata in the same PR.
 
 > **The smoke test speaks the protocol; it does not ping liveness.** The MCP step asserts
 > an `initialize` RESULT, not HTTP 200 — a JSON-RPC error is delivered with a 200, so a
