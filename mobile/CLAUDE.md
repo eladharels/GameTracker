@@ -49,6 +49,13 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   ├── GameTrackerApi.kt             # Retrofit API interface (all endpoints)
 │   │   │   ├── models.kt                     # All data classes (Game, LoginRequest, etc.)
 │   │   │   ├── GameAdapter.kt                # RecyclerView adapter for game lists
+│   │   │   ├── LibraryMatch.kt               # "Already in the library?" — the THIRD copy of the
+│   │   │   │                                 #   server's rule, held equal by the shared vectors
+│   │   │   │                                 #   (MOB-10). Search never adds an owned game
+│   │   │   ├── PendingRemovals.kt            # Undoable removals, sent from a process-lifetime
+│   │   │   │                                 #   scope, never from a view callback (MOB-12)
+│   │   │   ├── GameExtras.kt                 # Rating + note, stored on THIS DEVICE only. Nothing
+│   │   │   │                                 #   may be derived from a hash of the id (MOB-11)
 │   │   │   ├── LoginActivity.kt              # Entry point — auth screen
 │   │   │   ├── MainActivity.kt               # Main container — hosts all fragments
 │   │   │   ├── SettingsActivity.kt           # App settings screen

@@ -19,6 +19,7 @@ import com.example.gmaetrackermobile.GameAdapter
 import com.example.gmaetrackermobile.MainActivity
 import com.example.gmaetrackermobile.R
 import com.example.gmaetrackermobile.Game
+import com.example.gmaetrackermobile.LibraryMatch
 import com.example.gmaetrackermobile.SnackbarHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -41,6 +42,10 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchHistoryChipContainer: LinearLayout
 
     private var currentQuery = ""
+
+    // The library as last fetched, for the "In library" badges (MOB-10). Only for DISPLAY:
+    // an add re-checks against a fresh copy, because this one can be stale.
+    private var library: List<com.example.gmaetrackermobile.Game> = emptyList()
     private val searchHandler = Handler(Looper.getMainLooper())
     private val searchRunnable = Runnable { performSearch() }
 
@@ -129,6 +134,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                     .commit()
             }
         )
+        gameAdapter.ownedStatusOf = { game -> LibraryMatch.owned(library, game)?.status }
         recyclerView.apply {
             layoutManager = LinearLayoutManager(context)
             adapter = gameAdapter
@@ -263,9 +269,12 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         lifecycleScope.launch {
             try {
                 val games = searchAllGames(query)
+                // Refresh the badges' copy of the library; on failure keep the last one.
+                fetchLibrary()?.let { library = it }
                 withContext(Dispatchers.Main) {
                     if (!isAdded) return@withContext
                     gameAdapter.submitList(games)
+                    gameAdapter.notifyDataSetChanged()
                     if (games.isEmpty()) {
                         searchResultsHeader.visibility = View.VISIBLE
                         searchResultsHeader.text = "No games found for '$query'"
@@ -304,6 +313,23 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
     // ── Add to library ────────────────────────────────────────────────────────
 
+    /** The library, or null when it could not be read. */
+    private suspend fun fetchLibrary(): List<Game>? {
+        if (!isAdded) return null
+        return try {
+            val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
+            val token = prefs.getString("token", null) ?: return null
+            val username = prefs.getString("username", null) ?: return null
+            val response = withContext(Dispatchers.IO) {
+                com.example.gmaetrackermobile.ApiClient.api.getLibrary("Bearer $token", username)
+            }
+            if (response.isSuccessful) response.body() ?: emptyList() else null
+        } catch (e: Exception) {
+            android.util.Log.e("SearchFragment", "Library check failed: ${e.message}")
+            null
+        }
+    }
+
     private fun addGameToLibrary(game: Game) {
         if (!isAdded) return
         lifecycleScope.launch {
@@ -312,21 +338,53 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 val token = prefs.getString("token", null) ?: return@launch
                 val username = prefs.getString("username", null) ?: return@launch
 
+                // MOB-10: v1's add OVERWRITES the stored status, so "Add" on a game marked
+                // done demoted it to wishlist, wrote a permanent history row and pushed a
+                // notification. Check a FRESH library first (the badges' copy may be stale),
+                // and never post when the check itself failed: a blind add is the bug.
+                val fresh = fetchLibrary()
+                if (fresh == null) {
+                    withContext(Dispatchers.Main) {
+                        showSnackbar("Couldn't check your library. Try again.", SnackbarHelper.Type.ERROR)
+                    }
+                    return@launch
+                }
+                library = fresh
+                val match = LibraryMatch.match(fresh.map { LibraryMatch.rowOf(it) }, LibraryMatch.candidateOf(game))
+                if (match == LibraryMatch.Kind.SAME) {
+                    val status = LibraryMatch.owned(fresh, game)?.status?.replaceFirstChar { it.uppercase() }
+                    withContext(Dispatchers.Main) {
+                        if (!isAdded) return@withContext
+                        gameAdapter.notifyDataSetChanged()
+                        showSnackbar(
+                            "${game.displayName} is already in your library" + (status?.let { " ($it)" } ?: ""),
+                            SnackbarHelper.Type.DEFAULT
+                        )
+                    }
+                    return@launch
+                }
+
                 val gameRequest = com.example.gmaetrackermobile.GameUpdateRequest(
                     gameId = game.game_id ?: game.id ?: "",
                     gameName = game.displayName,
                     coverUrl = game.cover,
                     releaseDate = game.release,
-                    status = "Wishlist",
+                    status = "wishlist",
                     steamAppId = game.steam_app_id ?: game.steamAppId
                 )
                 val response = com.example.gmaetrackermobile.ApiClient.api
                     .addOrUpdateGame("Bearer $token", username, gameRequest)
+                if (response.isSuccessful) fetchLibrary()?.let { library = it }
 
                 withContext(Dispatchers.Main) {
                     if (!isAdded) return@withContext
                     if (response.isSuccessful) {
-                        showSnackbar("${game.displayName} added to library!", SnackbarHelper.Type.SUCCESS)
+                        gameAdapter.notifyDataSetChanged()
+                        // A same-named game with an unknown year: added (a remake must not be
+                        // refused), but say so, as the web app does.
+                        val note = if (match == LibraryMatch.Kind.POSSIBLE)
+                            ". A game with the same name is already in your library." else "!"
+                        showSnackbar("${game.displayName} added to library$note", SnackbarHelper.Type.SUCCESS)
                         maybeCreateCalendarEvent(game)
                     } else {
                         showSnackbar("Failed to add game to library", SnackbarHelper.Type.ERROR)

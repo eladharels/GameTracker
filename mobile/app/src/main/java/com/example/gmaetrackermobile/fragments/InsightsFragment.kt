@@ -72,9 +72,12 @@ class InsightsFragment : Fragment() {
         v.findViewById<TextView>(R.id.tvCompletionBadge).text =
             "${(pct * 100).toInt()}% completion rate"
 
-        val hours = games.sumOf { GameExtras.hours(it) }
-        v.findViewById<TextView>(R.id.tvTotalHours).text = "${hours}h"
+        // MOB-11: this card showed hours played, invented from a hash of each game id. It
+        // now shows the number of games tracked, which the library actually holds.
+        v.findViewById<TextView>(R.id.tvTotalHours).text = total.toString()
 
+        // Only ratings the user set on this device: a game with no rating counts as unrated,
+        // never as the 4-5 stars the old mock gave every finished game.
         val rated = games.map { GameExtras.rating(requireContext(), it) }.filter { it > 0 }
         v.findViewById<TextView>(R.id.tvAvgRating).text =
             if (rated.isEmpty()) "—" else String.format("%.1f", rated.average())
@@ -87,16 +90,19 @@ class InsightsFragment : Fragment() {
         addBar(statusContainer, "Completed", done, total, Color.parseColor("#22C55E"))
         addBar(statusContainer, "Wishlist", wishlist, total, Color.parseColor("#8890A8"))
 
-        // Top genres
-        val genreContainer = v.findViewById<LinearLayout>(R.id.genreBars)
-        genreContainer.removeAllViews()
-        val genreCounts = games.groupingBy { GameExtras.genre(it) }.eachCount()
-            .entries.sortedByDescending { it.value }.take(5)
+        // Release years (was "Top genres", drawn from random labels: MOB-11). The year is
+        // the one descriptive fact every library row carries; undated games are left out
+        // rather than bucketed as a year they do not have. The five busiest years, newest
+        // first. The view ids keep their old names so the layout is untouched.
+        val yearContainer = v.findViewById<LinearLayout>(R.id.genreBars)
+        yearContainer.removeAllViews()
+        val yearCounts = games.mapNotNull { GameExtras.year(it) }.groupingBy { it }.eachCount()
+            .entries.sortedByDescending { it.value }.take(5).sortedByDescending { it.key }
         val accent = resolveAccent()
         v.findViewById<View>(R.id.tvNoGenres).visibility =
-            if (genreCounts.isEmpty()) View.VISIBLE else View.GONE
-        val gMax = genreCounts.firstOrNull()?.value ?: 1
-        genreCounts.forEach { addBar(genreContainer, it.key, it.value, gMax, accent) }
+            if (yearCounts.isEmpty()) View.VISIBLE else View.GONE
+        val yMax = yearCounts.maxOfOrNull { it.value } ?: 1
+        yearCounts.forEach { addBar(yearContainer, it.key, it.value, yMax, accent) }
     }
 
     private fun resolveAccent(): Int {

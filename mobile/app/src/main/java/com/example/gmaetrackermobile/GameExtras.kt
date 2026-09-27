@@ -3,37 +3,23 @@ package com.example.gmaetrackermobile
 import android.content.Context
 
 /**
- * Supplies the "rich" per-game fields shown in the new design that the production
- * backend does NOT persist (hours played, star rating, genre, personal notes).
+ * Per-game values the backend does NOT hold: the user's star rating and personal note.
  *
- * - Hours / rating / genre are derived **deterministically** from the game id so the
- *   UI looks real and stays stable across reloads (no flicker between random values).
- * - User-set ratings and notes ARE persisted locally (per-device) in SharedPreferences
- *   so editing them in Game Details feels real. They are not synced to the web app.
+ * Both are stored on THIS DEVICE only (SharedPreferences), never synced, and the screens
+ * that show them say so.
  *
- * This keeps the redesigned screens visually faithful to the prototype without
- * inventing backend support. See CLAUDE.md "Known Technical Debt".
+ * MOB-11: this object used to invent hours played, completion progress, a genre and a
+ * default rating from a hash of the game id "so the UI looks real". A finished game showed
+ * "4.5★ · 87h" the user never entered, and Insights drew a "Top genres" chart from random
+ * labels. Nothing here may be derived from the id again. Where the server has no value,
+ * the screen shows nothing or "—": "nothing recorded" is not a number (the web app's
+ * statistics page makes the same choice).
  */
 object GameExtras {
 
     private const val PREFS = "game_extras"
 
-    private val GENRES = listOf(
-        "Action RPG", "RPG", "Roguelike", "Metroidvania", "Adventure",
-        "Platformer", "Simulation", "Action", "Strategy", "Shooter"
-    )
-
     private fun keyOf(game: Game): String = game.game_id ?: game.id ?: game.displayName
-
-    /** Stable non-negative hash for deterministic mock values. */
-    private fun stableHash(s: String): Int {
-        var h = 0
-        for (c in s) h = (h * 31 + c.code) and 0x7fffffff
-        return h
-    }
-
-    /** Derived genre label (deterministic). */
-    fun genre(game: Game): String = GENRES[stableHash(keyOf(game)) % GENRES.size]
 
     /** Release year parsed from the release date, or null. */
     fun year(game: Game): String? {
@@ -42,38 +28,16 @@ object GameExtras {
         return null
     }
 
-    /** "year · genre" subtitle used across cards. */
-    fun subtitle(game: Game): String {
-        val y = year(game)
-        val g = genre(game)
-        return if (y != null) "$y · $g" else g
-    }
+    /** Card subtitle: the release year, the one descriptive fact the library row carries. */
+    fun subtitle(game: Game): String = year(game) ?: "Release date unknown"
 
-    /**
-     * Hours played — deterministic mock. Only "playing"/"done" games show real hours;
-     * everything else is 0 (not started).
-     */
-    fun hours(game: Game): Int = when (game.status?.lowercase()) {
-        "playing" -> 12 + stableHash(keyOf(game)) % 70
-        "done"    -> 8 + stableHash(keyOf(game)) % 100
-        else      -> 0
-    }
+    // ── User-editable rating + note (this device only) ───────────────────────
 
-    /** Completion progress 0..100 for a "playing" game (deterministic mock). */
-    fun progress(game: Game): Int {
-        if (game.status?.lowercase() != "playing") return 0
-        return 18 + stableHash(keyOf(game) + "p") % 70
-    }
-
-    // ── User-editable rating + note (persisted locally) ───────────────────────
-
-    /** Stored rating (1..5), or a deterministic mock for "done" games, else 0. */
-    fun rating(ctx: Context, game: Game): Int {
-        val stored = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getInt("rating_${keyOf(game)}", -1)
-        if (stored >= 0) return stored
-        return if (game.status?.lowercase() == "done") 4 + stableHash(keyOf(game)) % 2 else 0
-    }
+    /** The rating the user set on this device (1..5), or 0 when they never set one. */
+    fun rating(ctx: Context, game: Game): Int =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt("rating_${keyOf(game)}", 0)
+            .coerceIn(0, 5)
 
     fun setRating(ctx: Context, game: Game, rating: Int) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

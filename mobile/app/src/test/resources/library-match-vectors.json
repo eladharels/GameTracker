@@ -1,0 +1,198 @@
+[
+  {
+    "name": "same id",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Halo",
+        "release_date": "2001-11-15"
+      }
+    ],
+    "game": {
+      "id": "igdb_1",
+      "name": "Other",
+      "releaseDate": null
+    },
+    "want": "same"
+  },
+  {
+    "name": "same name and year, other provider",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Hades",
+        "release_date": "2020-09-17"
+      }
+    ],
+    "game": {
+      "id": "rawg_9",
+      "name": "Hades",
+      "releaseDate": "2020-01-01"
+    },
+    "want": "same"
+  },
+  {
+    "name": "a remake: same name, different known years (FE-3)",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Resident Evil 4",
+        "release_date": "2005-01-11"
+      }
+    ],
+    "game": {
+      "id": "igdb_2",
+      "name": "Resident Evil 4",
+      "releaseDate": "2023-03-24"
+    },
+    "want": null
+  },
+  {
+    "name": "same name, result undated",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Hades II",
+        "release_date": "2024-05-06"
+      }
+    ],
+    "game": {
+      "id": "rawg_9",
+      "name": "Hades II",
+      "releaseDate": null
+    },
+    "want": "possible"
+  },
+  {
+    "name": "same name, library row undated",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Hades II",
+        "release_date": null
+      }
+    ],
+    "game": {
+      "id": "rawg_9",
+      "name": "Hades II",
+      "releaseDate": "2024-05-06"
+    },
+    "want": "possible"
+  },
+  {
+    "name": "case and surrounding space are ignored",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "  HALO ",
+        "release_date": "2001-11-15"
+      }
+    ],
+    "game": {
+      "id": "rawg_1",
+      "name": "halo",
+      "releaseDate": "2001-01-01"
+    },
+    "want": "same"
+  },
+  {
+    "name": "different names",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Halo 2",
+        "release_date": "2004-11-09"
+      }
+    ],
+    "game": {
+      "id": "rawg_1",
+      "name": "Halo",
+      "releaseDate": "2001-11-15"
+    },
+    "want": null
+  },
+  {
+    "name": "a known-year match beats a possible one",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Doom",
+        "release_date": null
+      },
+      {
+        "game_id": "igdb_2",
+        "game_name": "Doom",
+        "release_date": "2016-05-13"
+      }
+    ],
+    "game": {
+      "id": "rawg_1",
+      "name": "Doom",
+      "releaseDate": "2016-01-01"
+    },
+    "want": "same"
+  },
+  {
+    "name": "the original and a remake both present, result is the remake",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Doom",
+        "release_date": "1993-12-10"
+      },
+      {
+        "game_id": "igdb_2",
+        "game_name": "Doom",
+        "release_date": "2016-05-13"
+      }
+    ],
+    "game": {
+      "id": "rawg_1",
+      "name": "Doom",
+      "releaseDate": "2016-05-13"
+    },
+    "want": "same"
+  },
+  {
+    "name": "an unnamed result matches nothing",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "",
+        "release_date": null
+      }
+    ],
+    "game": {
+      "id": "rawg_1",
+      "name": "",
+      "releaseDate": null
+    },
+    "want": null
+  },
+  {
+    "name": "empty library",
+    "rows": [],
+    "game": {
+      "id": "rawg_1",
+      "name": "Halo",
+      "releaseDate": null
+    },
+    "want": null
+  },
+  {
+    "name": "doubled or control-character whitespace in the incoming name",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Hades II",
+        "release_date": "2024-05-06"
+      }
+    ],
+    "game": {
+      "id": "rawg_9",
+      "name": "Hades \t II",
+      "releaseDate": "2024-01-01"
+    },
+    "want": "same"
+  }
+]

@@ -14,7 +14,6 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.gmaetrackermobile.ApiClient
 import com.example.gmaetrackermobile.ContinueAdapter
 import com.example.gmaetrackermobile.Game
-import com.example.gmaetrackermobile.GameExtras
 import com.example.gmaetrackermobile.MainActivity
 import com.example.gmaetrackermobile.R
 import com.example.gmaetrackermobile.UpNextAdapter
@@ -121,12 +120,13 @@ class HomeFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         val backlog = games.filter { it.status?.lowercase() == "backlog" }
             .sortedBy { it.backlog_order ?: Int.MAX_VALUE }
         val done = games.filter { it.status?.lowercase() == "done" }
-        val hours = games.sumOf { GameExtras.hours(it) }
+        val wishlist = games.count { it.status?.lowercase() == "wishlist" }
 
         setStat(v, R.id.cardPlaying, playing.size.toString(), "Now playing", R.color.gt_status_playing)
         setStat(v, R.id.cardBacklog, backlog.size.toString(), "In backlog", R.color.gt_status_backlog)
         setStat(v, R.id.cardDone, done.size.toString(), "Completed", R.color.gt_status_done)
-        setStat(v, R.id.cardHours, hours.toString(), "Hours tracked", R.color.gt_text_primary)
+        // Was "Hours tracked", invented from a hash of each game id (MOB-11).
+        setStat(v, R.id.cardHours, wishlist.toString(), "On wishlist", R.color.gt_status_wishlist)
 
         continueAdapter.submit(playing)
         v.findViewById<View>(R.id.tvNoContinue).visibility =

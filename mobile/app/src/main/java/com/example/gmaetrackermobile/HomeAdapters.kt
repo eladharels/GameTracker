@@ -36,9 +36,10 @@ class ContinueAdapter(
         fun bind(game: Game) {
             title.text = game.displayName
             CoverBinder.bind(cover, letter, game)
-            progress.progress = GameExtras.progress(game)
-            val h = GameExtras.hours(game)
-            hours.text = if (h > 0) "${h}h played" else "Not started"
+            // No progress bar and no hours: the server records neither, and inventing them
+            // was MOB-11. The card says what is true: the game is being played.
+            progress.visibility = View.GONE
+            hours.text = GameExtras.year(game)?.let { "Now playing · $it" } ?: "Now playing"
             itemView.setOnClickListener { onClick(game) }
         }
     }
