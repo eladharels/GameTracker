@@ -7,6 +7,10 @@ interface GameTrackerApi {
     @POST("auth/login")
     suspend fun login(@Body loginRequest: LoginRequest): Response<LoginResponse>
 
+    // A cheap authenticated read: does the stored session still work? (MOB-5)
+    @GET("user/me")
+    suspend fun getMe(@Header("Authorization") token: String): Response<Unit>
+
     @GET("games/search")
     suspend fun searchGames(
         @Query("q") query: String,

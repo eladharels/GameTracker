@@ -20,7 +20,7 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 | Library | Version | Purpose |
 |---|---|---|
 | Retrofit | 2.9.0 | HTTP client / REST API calls |
-| OkHttp3 + Logging Interceptor | — | HTTP logging in debug builds |
+| OkHttp3 + Logging Interceptor | 4.11.0 | HTTP logging in **debug builds only**, at BASIC (no headers or bodies). Release builds have none (MOB-1) |
 | Gson | — | JSON serialization/deserialization |
 | Kotlin Coroutines | 1.6.4 | Async/non-blocking operations |
 | Glide | 4.15.1 | Image loading and caching |
@@ -38,11 +38,14 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 
 ### Project Structure
 ```
-GameTracker-mobile/
+mobile/                                       # inside the GameTracker repo (was ../GameTracker-mobile/)
 ├── app/
 │   ├── src/main/
 │   │   ├── java/com/example/gmaetrackermobile/
-│   │   │   ├── ApiClient.kt                  # Retrofit singleton (base URL, interceptors)
+│   │   │   ├── ApiClient.kt                  # Retrofit singleton; buildClient(BuildConfig.DEBUG)
+│   │   │   ├── SessionStore.kt               # The session: token, username, JWT exp, "ended" signal
+│   │   │   ├── SessionExpiryInterceptor.kt   # A 401 for the CURRENT token ends the session (MOB-5)
+│   │   │   ├── GameTrackerApp.kt             # Application: initialises ApiClient
 │   │   │   ├── GameTrackerApi.kt             # Retrofit API interface (all endpoints)
 │   │   │   ├── models.kt                     # All data classes (Game, LoginRequest, etc.)
 │   │   │   ├── GameAdapter.kt                # RecyclerView adapter for game lists
@@ -99,6 +102,14 @@ GameTracker-mobile/
 | DELETE | `/user/{username}/games/{gameId}` | Remove game from library |
 | PUT | `/user/{username}/games/{gameId}/backlog-order` | Move game in backlog |
 | POST | `/user/{username}/games/{gameId}/refresh-metadata` | Refresh game info |
+| GET | `/user/me` | After fingerprint unlock: does the stored session still work? (MOB-5) |
+
+> **This table is enforced.** The app is the v1 client the backend's freeze protects, and it
+> lives in the same repo. `test/api-surface.test.js` fails if a route in `GameTrackerApi.kt` is
+> not a live v1 route at a tier the app can reach. `test/api-contract.test.js` fails if a field
+> in `models.kt` is not in a pinned response. Adding an endpoint or a field here means adding it
+> to the backend's pins first. `@SerializedName` is refused by the parser: keep Kotlin names
+> equal to wire names.
 
 ---
 
@@ -108,10 +119,12 @@ GameTracker-mobile/
 LoginActivity  (LAUNCHER — entry point)
     ↓ on successful login
 MainActivity  (single activity host)
-    ├── Bottom Navigation:
-    │   ├── Search Icon     → SearchFragment
-    │   ├── Library Icon    → LibraryFragment
-    │   └── Profile Icon    → ProfileFragment
+    ├── Bottom Navigation (5 tabs):
+    │   ├── Home            → HomeFragment
+    │   ├── Search          → SearchFragment
+    │   ├── Library         → LibraryFragment
+    │   ├── Insights        → InsightsFragment
+    │   └── Profile         → ProfileFragment
     │
     ├── SearchFragment
     │   ├── Search bar with 400ms debounce
@@ -149,20 +162,32 @@ MainActivity  (single activity host)
 1. User enters username + password in `LoginActivity`
 2. Client validates non-empty, trims whitespace, lowercases username
 3. `POST /auth/login` with `LoginRequest`
-4. On success: token + username saved to SharedPreferences (`"auth"` prefs)
-5. Navigate to `MainActivity`
+4. On success: token + username saved through `SessionStore` (`"auth"` prefs)
+5. Navigate to `MainActivity`. It is **not exported** (MOB-2); it checks for a live session in
+   `onCreate`/`onResume` and sends the user to login without one.
+6. The JWT lasts **12 hours**. A 401 answering the CURRENT token ends the session
+   (`SessionExpiryInterceptor`), and the visible activity shows login with a neutral
+   "Your session expired" notice. Not on a network failure: offline is not signed out.
 
 ### Biometric (Fingerprint) Login
 - Uses `AndroidX BiometricPrompt`
 - Device capability checked via `BiometricManager.BIOMETRIC_STRONG`
 - Toggle in `ProfileFragment` saves `fingerprint_enabled` flag to SharedPreferences
-- On `LoginActivity` load: if biometrics enabled + token exists → show fingerprint prompt
-- On success: navigate to `MainActivity` with existing token
+- On `LoginActivity` load: prompt ONLY if biometrics are enabled AND the stored token is still
+  live (its JWT `exp`, decoded locally with 60 s skew). The fingerprint unlocks a live session;
+  it cannot revive an expired or signed-out one.
+- On success: "Checking session…", then `GET /user/me`. 401 means expired (sign in again). A
+  network failure lets the user in with an offline notice.
+- It is a **UI gate, not a security boundary**: the token is plaintext and no `CryptoObject` is
+  used. MOB-6 records the Keystore-bound fix.
 
 ### Token Storage
 - SharedPreferences key: `"token"` (in `"auth"` prefs)
 - Sent as `Authorization: Bearer <token>` on all authenticated requests
-- Cleared on logout; optionally cleared when biometrics is disabled
+- **Always** cleared on logout (MOB-3), which keeps the username (to prefill) and the
+  fingerprint setting.
+- **Never backed up**: `auth.xml` is excluded from Auto Backup and from both Android 12+
+  sections, including device-to-device transfer (MOB-4).
 
 ---
 
@@ -170,7 +195,8 @@ MainActivity  (single activity host)
 
 - **No ViewModel/LiveData** — fragment-level mutable lists + coroutines
 - **Auth state**: SharedPreferences (token, username, biometric flag)
-- **Network calls**: `lifecycleScope` coroutines on `Dispatchers.IO`, results posted to `Dispatchers.Main`
+- **Network calls**: a mix of `lifecycleScope`, fragment `lifecycleScope` and unscoped
+  `CoroutineScope(Dispatchers.IO)`. The last two are wrong (MOB-17)
 - **State reload**: Fragments reload from API on resume / lifecycle events (no persistent cache)
 
 ---
@@ -178,6 +204,10 @@ MainActivity  (single activity host)
 ## Design System
 
 ### Color Palette
+> **Stale:** the values below are what this file used to claim. The code uses `#111218`
+> backgrounds and a `#5B8DEF` default accent, with 5 accent presets (`ThemeManager`). See
+> MOB-26 and MOB-33 in `mobile/ROADMAP.md` before trusting this table.
+
 | Role | Hex | Usage |
 |---|---|---|
 | Primary Background | `#181A20` | Screen backgrounds |
@@ -219,7 +249,23 @@ MainActivity  (single activity host)
 - Login button disabled during active request (prevents rapid submissions)
 - Username normalized to lowercase before sending
 - HTTPS enforced via hardcoded base URL
-- Token stored in app's private SharedPreferences (not accessible to other apps)
+- Token stored in app's private SharedPreferences, in PLAINTEXT and excluded from backups.
+  Keystore binding is MOB-6.
+- Release builds do not log HTTP at all; debug logs only the request line and status (MOB-1)
+- Only the launcher activity is exported (MOB-2; pinned by the root `test/runtime.test.js`)
+
+The full list of known problems, with severities, is **`mobile/ROADMAP.md`** (MOB-1 to MOB-35).
+
+## CI
+
+`.github/workflows/android.yml` builds every change under `mobile/`: `testDebugUnitTest`,
+`testReleaseUnitTest`, `lintDebug` (against `app/lint-baseline.xml`, so only NEW findings fail)
+and `assembleRelease`. It runs in a pinned container on the self-hosted runner, which is the
+production host. Every download is pinned, and dependencies are verified strictly against
+`gradle/verification-metadata.xml`.
+
+**Adding or upgrading a dependency means regenerating that file in the same PR.** Otherwise the
+build fails verification.
 
 ---
 

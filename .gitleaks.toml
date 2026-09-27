@@ -140,6 +140,11 @@ regexes = [
   # refused. History keeps it. Anchored to exactly that 43-A literal -- a CSPRNG token is never that --
   # and the test now builds its placeholder at runtime so no new literal appears.
   '''^gt_pat_A{43}$''',
+
+  # The Android logging test (MOB-1, commit 7f0017a) sent this made-up password through the
+  # debug HTTP client to prove it never reaches the log. History keeps it. Exact literal only;
+  # the test now builds its placeholder at runtime so no new literal appears.
+  '''^hunter2-password$''',
 ]
 
 [[rules]]

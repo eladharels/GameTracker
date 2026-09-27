@@ -1,0 +1,3146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.11.0" type="baseline" client="gradle" dependencies="false" name="AGP (8.11.0)" variant="all" version="8.11.0">
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            if (rated.isEmpty()) &quot;—&quot; else String.format(&quot;%.1f&quot;, rated.average())"
+        errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="80"
+            column="43"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            if (rated.isEmpty()) &quot;—&quot; else String.format(&quot;%.1f&quot;, rated.average())"
+        errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="80"
+            column="43"/>
+    </issue>
+
+    <issue
+        id="NotificationPermission"
+        message="When targeting Android 13 or higher, posting a permission requires holding the `POST_NOTIFICATIONS` permission (usage from com.bumptech.glide.request.target.NotificationTarget)">
+        <location
+            file="src/main/AndroidManifest.xml"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `clipToOutline` is only used in API level 31 and higher (current min is 24)"
+        errorLine1="    android:clipToOutline=&quot;true&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="13"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `defaultFocusHighlightEnabled` is only used in API level 26 and higher (current min is 24)"
+        errorLine1="    android:defaultFocusHighlightEnabled=&quot;false&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_up_next.xml"
+            line="14"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `defaultFocusHighlightEnabled` is only used in API level 26 and higher (current min is 24)"
+        errorLine1="    android:defaultFocusHighlightEnabled=&quot;false&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_glance_card.xml"
+            line="8"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="InflateParams"
+        message="Avoid passing `null` as the view root (needed to resolve layout parameters on the inflated layout&apos;s root element)"
+        errorLine1="        val sheetView = layoutInflater.inflate(R.layout.bottom_sheet_sort, null)"
+        errorLine2="                                                                           ~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            line="139"
+            column="76"/>
+    </issue>
+
+    <issue
+        id="InflateParams"
+        message="Avoid passing `null` as the view root (needed to resolve layout parameters on the inflated layout&apos;s root element)"
+        errorLine1="        val sheetView = layoutInflater.inflate(R.layout.bottom_sheet_status, null)"
+        errorLine2="                                                                             ~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            line="277"
+            column="78"/>
+    </issue>
+
+    <issue
+        id="RedundantLabel"
+        message="Redundant label can be removed"
+        errorLine1="            android:label=&quot;@string/app_name&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="22"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="RedundantLabel"
+        message="Redundant label can be removed"
+        errorLine1="            android:label=&quot;@string/app_name&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="32"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        message="A newer version of Gradle than 8.13 is available: 8.14.5"
+        errorLine1="distributionUrl=https\://services.gradle.org/distributions/gradle-8.13-bin.zip"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../gradle/wrapper/gradle-wrapper.properties"
+            line="4"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.application than 8.11.0 is available: 9.4.1. (There is also a newer version of 8.11.𝑥 available, if upgrading to 9.4.1 is difficult: 8.11.2)"
+        errorLine1="agp = &quot;8.11.0&quot;"
+        errorLine2="      ~~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="2"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.recyclerview:recyclerview than 1.3.1 is available: 1.4.0"
+        errorLine1="    implementation(&quot;androidx.recyclerview:recyclerview:1.3.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="78"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.material:material than 1.9.0 is available: 1.14.0"
+        errorLine1="    implementation(&quot;com.google.android.material:material:1.9.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="79"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.swiperefreshlayout:swiperefreshlayout than 1.1.0 is available: 1.2.0"
+        errorLine1="    implementation(&quot;androidx.swiperefreshlayout:swiperefreshlayout:1.1.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="80"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.fragment:fragment-ktx than 1.6.2 is available: 1.9.1"
+        errorLine1="    implementation(&quot;androidx.fragment:fragment-ktx:1.6.2&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="81"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.core:core-ktx than 1.16.0 is available: 1.19.1"
+        errorLine1="coreKtx = &quot;1.16.0&quot;"
+        errorLine2="          ~~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="4"
+            column="11"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.test.ext:junit than 1.2.1 is available: 1.3.0"
+        errorLine1="junitVersion = &quot;1.2.1&quot;"
+        errorLine2="               ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="6"
+            column="16"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.test.espresso:espresso-core than 3.6.1 is available: 3.7.0"
+        errorLine1="espressoCore = &quot;3.6.1&quot;"
+        errorLine2="               ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="7"
+            column="16"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.9.1 is available: 2.11.0"
+        errorLine1="lifecycleRuntimeKtx = &quot;2.9.1&quot;"
+        errorLine2="                      ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="8"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.activity:activity-compose than 1.10.1 is available: 1.13.0"
+        errorLine1="activityCompose = &quot;1.10.1&quot;"
+        errorLine2="                  ~~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="9"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.compose:compose-bom than 2024.09.00 is available: 2026.09.00"
+        errorLine1="composeBom = &quot;2024.09.00&quot;"
+        errorLine2="             ~~~~~~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="10"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of com.squareup.retrofit2:retrofit than 2.9.0 is available: 3.0.0"
+        errorLine1="    implementation(&quot;com.squareup.retrofit2:retrofit:2.9.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="67"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of com.squareup.retrofit2:converter-gson than 2.9.0 is available: 3.0.0"
+        errorLine1="    implementation(&quot;com.squareup.retrofit2:converter-gson:2.9.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="68"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of org.jetbrains.kotlinx:kotlinx-coroutines-android than 1.6.4 is available: 1.11.0"
+        errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="71"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of com.github.bumptech.glide:glide than 4.15.1 is available: 5.0.9"
+        errorLine1="    implementation(&quot;com.github.bumptech.glide:glide:4.15.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="74"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of com.github.bumptech.glide:compiler than 4.15.1 is available: 5.0.9"
+        errorLine1="    kapt(&quot;com.github.bumptech.glide:compiler:4.15.1&quot;)"
+        errorLine2="         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="75"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of com.squareup.okhttp3:logging-interceptor than 4.11.0 is available: 5.5.0"
+        errorLine1="    implementation(&quot;com.squareup.okhttp3:logging-interceptor:4.11.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="84"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of org.jetbrains.kotlin.android than 2.0.21 is available: 2.4.20"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="NewerVersionAvailable"
+        message="A newer version of org.jetbrains.kotlin.plugin.compose than 2.0.21 is available: 2.4.20"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                android:tint=&quot;#FFFFFF&quot;"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_login.xml"
+            line="43"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                android:tint=&quot;@color/gt_text_secondary&quot;"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_login.xml"
+            line="84"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                android:tint=&quot;@color/gt_text_secondary&quot;"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_login.xml"
+            line="116"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                    android:tint=&quot;@color/gt_text_primary&quot;"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_settings.xml"
+            line="42"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="75"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="111"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="147"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="183"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="219"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="255"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                android:tint=&quot;@color/gt_text_secondary&quot;"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="62"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;@color/gt_text_secondary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="94"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;@color/gt_text_muted&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="119"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                    android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="177"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                    android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="260"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                        android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="321"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                    android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="396"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                android:tint=&quot;@color/gt_text_muted&quot;"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="414"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="                android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_search.xml"
+            line="51"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;?attr/colorPrimary&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_search.xml"
+            line="135"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;@color/gt_text_muted&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="140"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseAppTint"
+        message="Must use `app:tint` instead of `android:tint`"
+        errorLine1="            android:tint=&quot;@color/gt_logout_red&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="168"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="    fun submit(list: List&lt;Game>) { items = list; notifyDataSetChanged() }"
+        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            line="19"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="    fun submit(list: List&lt;Game>) { items = list; notifyDataSetChanged() }"
+        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            line="54"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="KaptUsageInsteadOfKsp"
+        message="This library supports using KSP instead of kapt, which greatly improves performance. Learn more: https://developer.android.com/studio/build/migrate-to-ksp"
+        errorLine1="    kapt(&quot;com.github.bumptech.glide:compiler:4.15.1&quot;)"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="75"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="DisableBaselineAlignment"
+        message="Set `android:baselineAligned=&quot;false&quot;` on this element for better performance"
+        errorLine1="    &lt;LinearLayout"
+        errorLine2="     ~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="11"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme_GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_login.xml"
+            line="7"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_1` with a theme that also paints a background (inferred theme is `@style/Theme_GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_1&quot;>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_main.xml"
+            line="6"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_settings.xml"
+            line="7"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_game_details.xml"
+            line="7"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_home.xml"
+            line="7"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_insights.xml"
+            line="6"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="8"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="7"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;@color/gt_surface_0&quot;>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_search.xml"
+            line="8"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Overdraw"
+        message="Possible overdraw: Root element paints background `?attr/selectableItemBackgroundBorderless` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        errorLine1="    android:background=&quot;?attr/selectableItemBackgroundBorderless&quot;>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_continue.xml"
+            line="7"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.avatar_circle_bg` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/avatar_circle_bg.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.btn_primary_bg` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/btn_primary_bg.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.card_bg_elevated` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/card_bg_elevated.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.chip_background_color` appears to be unused"
+        errorLine1="&lt;selector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
+        errorLine2="^">
+        <location
+            file="src/main/res/color/chip_background_color.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorPrimary` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorPrimary&quot;>#5B8DEF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="4"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorPrimaryDark` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorPrimaryDark&quot;>#3A5FA0&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="5"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorAccent` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorAccent&quot;>#5B8DEF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="6"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorBackground` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorBackground&quot;>#111218&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="7"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorSurface` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorSurface&quot;>#181A22&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="8"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorOnPrimary` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorOnPrimary&quot;>#FFFFFF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="9"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorOnAccent` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorOnAccent&quot;>#0C0D11&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="10"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorText` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorText&quot;>#F0F1F8&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="11"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.colorSubtle` appears to be unused"
+        errorLine1="    &lt;color name=&quot;colorSubtle&quot;>#8890A8&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="12"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_background` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_background&quot;>#111218&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="16"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_card` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_card&quot;>#181A22&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="17"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_divider` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_divider&quot;>#0FFFFFFF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="22"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_card_elevated` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_card_elevated&quot;>#1F2130&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="24"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_surface_subtle` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_surface_subtle&quot;>#1AFFFFFF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="26"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_surface_4` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_surface_4&quot;>#252840&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="40"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_surface_card` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_surface_card&quot;>#15171F&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="55"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_input_bg` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_input_bg&quot;>#181A22&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="56"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gt_accent_purple` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gt_accent_purple&quot;>#7B5BEF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="60"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_arrow_down` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_arrow_down.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_arrow_up` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_arrow_up.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_launcher_background` appears to be unused"
+        errorLine1="&lt;vector"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_launcher_background.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_launcher_foreground` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_launcher_foreground.xml"
+            line="1"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.search_bar_bg` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/search_bar_bg.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.source_pill_bg` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/source_pill_bg.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.stat_card_bg` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/stat_card_bg.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.status_chip_bg` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/status_chip_bg.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.status_pill_bg` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/status_pill_bg.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.GameTrackerChip` appears to be unused"
+        errorLine1="    &lt;style name=&quot;GameTrackerChip&quot; parent=&quot;Widget.Material3.Chip.Filter&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/themes.xml"
+            line="20"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.GameTrackerChip_Selected` appears to be unused"
+        errorLine1="    &lt;style name=&quot;GameTrackerChip.Selected&quot; parent=&quot;GameTrackerChip&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/themes.xml"
+            line="29"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="MonochromeLauncherIcon"
+        message="The application adaptive icon is missing a monochrome tag"
+        errorLine1="&lt;adaptive-icon xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
+        errorLine2="^">
+        <location
+            file="src/main/res/mipmap-anydpi-v26/ic_launcher.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="MonochromeLauncherIcon"
+        message="The application adaptive roundIcon is missing a monochrome tag"
+        errorLine1="&lt;adaptive-icon xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
+        errorLine2="^">
+        <location
+            file="src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="TextFields"
+        message="This text field does not specify an `inputType`"
+        errorLine1="    &lt;EditText"
+        errorLine2="     ~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_game_search.xml"
+            line="9"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="TextFields"
+        message="This text field does not specify an `inputType`"
+        errorLine1="    &lt;EditText"
+        errorLine2="     ~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_my_library.xml"
+            line="8"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="SmallSp"
+        message="Avoid using sizes smaller than `11sp`: `9sp`"
+        errorLine1="            android:textSize=&quot;9sp&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="55"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="SmallSp"
+        message="Avoid using sizes smaller than `11sp`: `10sp`"
+        errorLine1="                android:textSize=&quot;10sp&quot;"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="103"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="Autofill"
+        message="Missing `autofillHints` attribute"
+        errorLine1="    &lt;EditText"
+        errorLine2="     ~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_game_search.xml"
+            line="9"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="Autofill"
+        message="Missing `autofillHints` attribute"
+        errorLine1="    &lt;EditText"
+        errorLine2="     ~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_my_library.xml"
+            line="8"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="Autofill"
+        message="Missing `autofillHints` attribute"
+        errorLine1="                &lt;EditText"
+        errorLine2="                 ~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_game_details.xml"
+            line="202"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="Autofill"
+        message="Missing `autofillHints` attribute"
+        errorLine1="        &lt;EditText"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="98"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="Autofill"
+        message="Missing `autofillHints` attribute"
+        errorLine1="            &lt;EditText"
+        errorLine2="             ~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_search.xml"
+            line="55"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            line="67"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            line="76"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            line="106"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_EVENTS, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            line="219"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#14FFFFFF&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="26"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#14FFFFFF&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="26"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#22C55E&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="31"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#22C55E&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="31"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#F0F1F8&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="36"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#F0F1F8&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="36"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#8890A8&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="42"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        color = Color.parseColor(&quot;#8890A8&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            line="42"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            val color = Color.parseColor(STATUS_COLORS[key] ?: &quot;#8890A8&quot;)"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="141"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#0F1118&quot;))"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="149"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#0F1118&quot;))"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="149"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#1AFFFFFF&quot;))"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="153"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#1AFFFFFF&quot;))"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="153"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="                    intArrayOf(Color.WHITE, Color.parseColor(&quot;#8890A8&quot;))"
+        errorLine2="                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="157"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        val gold = Color.parseColor(&quot;#FBBF24&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="178"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        val empty = Color.parseColor(&quot;#4A5068&quot;)"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="179"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putString(noteKey(gameId), note).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="225"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/GameExtras.kt"
+            line="79"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/GameExtras.kt"
+            line="88"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        addBar(statusContainer, &quot;Playing&quot;, playing, total, Color.parseColor(&quot;#22B8F6&quot;))"
+        errorLine2="                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="85"
+            column="60"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        addBar(statusContainer, &quot;Backlog&quot;, backlog, total, Color.parseColor(&quot;#F97316&quot;))"
+        errorLine2="                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="86"
+            column="60"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        addBar(statusContainer, &quot;Completed&quot;, done, total, Color.parseColor(&quot;#22C55E&quot;))"
+        errorLine2="                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="87"
+            column="59"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="        addBar(statusContainer, &quot;Wishlist&quot;, wishlist, total, Color.parseColor(&quot;#8890A8&quot;))"
+        errorLine2="                                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="88"
+            column="62"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            setTextColor(Color.parseColor(&quot;#C3C8D8&quot;))"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="122"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="                setColor(Color.parseColor(&quot;#10FFFFFF&quot;))"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="131"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="                setColor(Color.parseColor(&quot;#10FFFFFF&quot;))"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="131"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            setTextColor(Color.parseColor(&quot;#F0F1F8&quot;))"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="152"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                requireContext().getSharedPreferences(&quot;app_prefs&quot;, Context.MODE_PRIVATE)"
+        errorLine2="                ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            line="158"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                                prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, false).apply()"
+        errorLine2="                                ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="112"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                            prefs.edit()"
+        errorLine2="                            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="115"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs.edit().remove(&quot;token&quot;).remove(&quot;username&quot;).apply()"
+        errorLine2="            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            line="152"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                    prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, true).apply()"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="182"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, false).apply()"
+        errorLine2="                ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="208"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs.edit().remove(&quot;token&quot;).remove(&quot;username&quot;).apply()"
+        errorLine2="            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="307"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        requireContext().getSharedPreferences(&quot;app_prefs&quot;, MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="157"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        requireContext().getSharedPreferences(&quot;app_prefs&quot;, MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="165"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        requireContext().getSharedPreferences(&quot;app_prefs&quot;, MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="171"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            setTextColor(android.graphics.Color.parseColor(&quot;#FF4D4F&quot;))"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="211"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                    prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, true).apply()"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SettingsActivity.kt"
+            line="45"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, false).apply()"
+        errorLine2="                ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SettingsActivity.kt"
+            line="75"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            setColor(Color.parseColor(&quot;#2D3142&quot;))"
+        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            line="41"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            setColor(Color.parseColor(&quot;#2D3142&quot;))"
+        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            line="41"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            setStroke(dp(1), Color.parseColor(&quot;#3E4258&quot;))"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            line="43"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            setStroke(dp(1), Color.parseColor(&quot;#3E4258&quot;))"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            line="43"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            Type.SUCCESS -> Color.parseColor(&quot;#22C55E&quot;)   // gt_status_done green"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            line="54"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            Type.ERROR   -> Color.parseColor(&quot;#FF4D4F&quot;)   // gt_logout_red"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            line="55"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toColorInt` instead?"
+        errorLine1="            Type.DEFAULT -> Color.parseColor(&quot;#F5F6FA&quot;)   // gt_text_main"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            line="56"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/ThemeManager.kt"
+            line="60"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;com.squareup.retrofit2:retrofit:2.9.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="67"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;com.squareup.retrofit2:converter-gson:2.9.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="68"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="71"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;com.github.bumptech.glide:glide:4.15.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="74"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    kapt(&quot;com.github.bumptech.glide:compiler:4.15.1&quot;)"
+        errorLine2="         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="75"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;androidx.recyclerview:recyclerview:1.3.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="78"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;com.google.android.material:material:1.9.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="79"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;androidx.swiperefreshlayout:swiperefreshlayout:1.1.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="80"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;androidx.fragment:fragment-ktx:1.6.2&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="81"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;com.squareup.okhttp3:logging-interceptor:4.11.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="84"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    implementation(&quot;androidx.biometric:biometric:1.1.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="87"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="ContentDescription"
+        message="Missing `contentDescription` attribute on image"
+        errorLine1="    &lt;ImageView"
+        errorLine2="     ~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_game_details.xml"
+            line="9"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                tvBacklogPosition.text = &quot;#${game.backlog_order}&quot;"
+        errorLine2="                                         ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/GameAdapter.kt"
+            line="130"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        tvReleaseDate.text = &quot;Release Date: $releaseDate&quot;"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/GameDetailsActivity.kt"
+            line="36"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        tvReleaseDate.text = &quot;Release Date: $releaseDate&quot;"
+        errorLine2="                              ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/GameDetailsActivity.kt"
+            line="36"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        btnRefreshMetadata.text = &quot;Refresh&quot;"
+        errorLine2="                                   ~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            line="306"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            queue.text = &quot;#${position + 1}&quot;"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            line="74"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            queue.text = &quot;#${position + 1}&quot;"
+        errorLine2="                             ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            line="74"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSummary).text = &quot;$done done&quot;"
+        errorLine2="                                                            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="70"
+            column="61"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSummary).text = &quot;$done done&quot;"
+        errorLine2="                                                                  ~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="70"
+            column="67"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSub).text = &quot;of $total tracked games completed&quot;"
+        errorLine2="                                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="71"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSub).text = &quot;of $total tracked games completed&quot;"
+        errorLine2="                                                         ~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="71"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSub).text = &quot;of $total tracked games completed&quot;"
+        errorLine2="                                                                  ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="71"
+            column="67"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            &quot;${(pct * 100).toInt()}% completion rate&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="73"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            &quot;${(pct * 100).toInt()}% completion rate&quot;"
+        errorLine2="                                   ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="73"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        v.findViewById&lt;TextView>(R.id.tvTotalHours).text = &quot;${hours}h&quot;"
+        errorLine2="                                                           ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="76"
+            column="60"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="            text = value.toString()"
+        errorLine2="                   ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            line="151"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            chip.text = &quot;$label  ${n(key)}&quot;"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            line="425"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            &quot;${allGames.size} games · ${hours}h tracked&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            line="555"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            &quot;${allGames.size} games · ${hours}h tracked&quot;"
+        errorLine2="                             ~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            line="555"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            &quot;${allGames.size} games · ${hours}h tracked&quot;"
+        errorLine2="                                              ~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            line="555"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        tvLoginStatus.text = &quot;No saved login found. Please login with username and password first.&quot;"
+        errorLine2="                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="55"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                    tvLoginStatus.text = &quot;Authentication error: $errString&quot;"
+        errorLine2="                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="61"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                    tvLoginStatus.text = &quot;Authentication error: $errString&quot;"
+        errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="61"
+            column="43"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                    tvLoginStatus.text = &quot;Authentication failed. Try again or login with password.&quot;"
+        errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="65"
+            column="43"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                tvLoginStatus.text = &quot;Username and password are required&quot;"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="87"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            btnLogin.text = &quot;Logging in...&quot;"
+        errorLine2="                             ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="93"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        btnLogin.text = &quot;Login&quot;"
+        errorLine2="                                         ~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="105"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                            tvLoginStatus.text = &quot;Login successful!&quot;"
+        errorLine2="                                                  ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="119"
+            column="51"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            tvLoginStatus.text = &quot;Login failed: $errorBody&quot;"
+        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="125"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                            tvLoginStatus.text = &quot;Login failed: $errorBody&quot;"
+        errorLine2="                                                  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="125"
+            column="51"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        btnLogin.text = &quot;Login&quot;"
+        errorLine2="                                         ~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="132"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        tvLoginStatus.text = &quot;Error: ${e.localizedMessage}&quot;"
+        errorLine2="                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="133"
+            column="46"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        tvLoginStatus.text = &quot;Error: ${e.localizedMessage}&quot;"
+        errorLine2="                                              ~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            line="133"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
+        errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            line="130"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            line="130"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
+        errorLine2="                                                                           ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            line="130"
+            column="76"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
+        errorLine2="                                                                                                      ~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            line="130"
+            column="103"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        view.findViewById&lt;TextView>(R.id.tvUsername).text = &quot;@$username&quot;"
+        errorLine2="                                                            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="66"
+            column="61"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="                        view?.findViewById&lt;TextView>(R.id.tvProfileTotal)?.text = games.size.toString()"
+        errorLine2="                                                                                  ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="88"
+            column="83"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="                            games.count { it.status?.lowercase() == &quot;playing&quot; }.toString()"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="90"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="                            games.count { it.status?.lowercase() == &quot;done&quot; }.toString()"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="92"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="                            games.count { it.status?.lowercase() == &quot;backlog&quot; }.toString()"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="94"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                    tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
+        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="253"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                    tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
+        errorLine2="                                     ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="253"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                    btnSync.text = &quot;Syncing…&quot;"
+        errorLine2="                                    ~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="255"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        btnSync.text = &quot;Sync Games to Calendar&quot;"
+        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="259"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
+        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="260"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
+        errorLine2="                                         ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            line="260"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="57"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
+        errorLine2="                        ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="57"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
+        errorLine2="                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="57"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
+        errorLine2="                                                                                    ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="57"
+            column="85"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            text = &quot;Clear all&quot;"
+        errorLine2="                    ~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="209"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        searchResultsHeader.text = &quot;No games found for &apos;$query&apos;&quot;"
+        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="271"
+            column="52"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        searchResultsHeader.text = &quot;No games found for &apos;$query&apos;&quot;"
+        errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="271"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        searchResultsHeader.text = &quot;Found ${games.size} game(s) for &apos;$query&apos;&quot;"
+        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="276"
+            column="52"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        searchResultsHeader.text = &quot;Found ${games.size} game(s) for &apos;$query&apos;&quot;"
+        errorLine2="                                                    ~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="276"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        searchResultsHeader.text = &quot;Found ${games.size} game(s) for &apos;$query&apos;&quot;"
+        errorLine2="                                                                       ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            line="276"
+            column="72"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Game Title&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;Game Title&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_game_details.xml"
+            line="21"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Release Date: YYYY-MM-DD&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;Release Date: YYYY-MM-DD&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_game_details.xml"
+            line="30"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Search games...&quot;, should use `@string` resource"
+        errorLine1="        android:hint=&quot;Search games...&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_game_search.xml"
+            line="13"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;SEARCH&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;SEARCH&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_game_search.xml"
+            line="28"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;GameTracker logo&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;GameTracker logo&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_login.xml"
+            line="44"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Username icon&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Username icon&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_login.xml"
+            line="86"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Password icon&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Password icon&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_login.xml"
+            line="118"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Search your library...&quot;, should use `@string` resource"
+        errorLine1="        android:hint=&quot;Search your library...&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_my_library.xml"
+            line="12"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Back&quot;, should use `@string` resource"
+        errorLine1="                    android:contentDescription=&quot;Back&quot; />"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/activity_settings.xml"
+            line="43"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Home&quot;, should use `@string` resource"
+        errorLine1="        android:title=&quot;Home&quot; />"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/menu/bottom_navigation_menu.xml"
+            line="6"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Discover&quot;, should use `@string` resource"
+        errorLine1="        android:title=&quot;Discover&quot; />"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/menu/bottom_navigation_menu.xml"
+            line="11"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Library&quot;, should use `@string` resource"
+        errorLine1="        android:title=&quot;Library&quot; />"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/menu/bottom_navigation_menu.xml"
+            line="16"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Insights&quot;, should use `@string` resource"
+        errorLine1="        android:title=&quot;Insights&quot; />"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/menu/bottom_navigation_menu.xml"
+            line="21"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Profile&quot;, should use `@string` resource"
+        errorLine1="        android:title=&quot;Profile&quot; />"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/menu/bottom_navigation_menu.xml"
+            line="26"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Sort Library&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;Sort Library&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="24"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Choose how to order your games&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;Choose how to order your games&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="38"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Default order&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Default order&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="66"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Selected&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Selected&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="77"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Name A → Z&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Name A → Z&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="102"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Selected&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Selected&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="113"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Name Z → A&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Name Z → A&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="138"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Selected&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Selected&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="149"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Release — Newest first&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Release — Newest first&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="174"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Selected&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Selected&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="185"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Release — Oldest first&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Release — Oldest first&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="210"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Selected&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Selected&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="221"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Group by status&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Group by status&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="246"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Selected&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Selected&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_sort.xml"
+            line="257"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Change Status&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;Change Status&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="24"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Game Name&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;Game Name&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="39"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;🎉  Mark as Done&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;🎉  Mark as Done&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="61"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Add Release Reminder&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Add Release Reminder&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="87"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Wishlist&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Wishlist&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="132"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Playing&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Playing&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="176"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Done&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Done&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="220"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Backlog&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Backlog&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="264"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Unreleased&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Unreleased&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/bottom_sheet_status.xml"
+            line="308"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Game cover&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Game cover&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_game_details.xml"
+            line="27"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Back&quot;, should use `@string` resource"
+        errorLine1="                    android:contentDescription=&quot;Back&quot; />"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_game_details.xml"
+            line="50"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Sort library&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Sort library&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="64"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Search library&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Search library&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="96"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Clear search&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Clear search&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="122"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Empty library&quot;, should use `@string` resource"
+        errorLine1="                    android:contentDescription=&quot;Empty library&quot; />"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_library.xml"
+            line="180"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Biometric&quot;, should use `@string` resource"
+        errorLine1="                    android:contentDescription=&quot;Biometric&quot; />"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="261"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Calendar Sync&quot;, should use `@string` resource"
+        errorLine1="                        android:contentDescription=&quot;Calendar Sync&quot; />"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="322"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Settings&quot;, should use `@string` resource"
+        errorLine1="                    android:contentDescription=&quot;Settings&quot; />"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="397"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Open settings&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Open settings&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_profile.xml"
+            line="415"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Search&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Search&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_search.xml"
+            line="53"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Search illustration&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Search illustration&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/fragment_search.xml"
+            line="138"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Game cover&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Game cover&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_continue.xml"
+            line="37"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Game cover&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Game cover&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="42"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Drag to reorder&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Drag to reorder&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="141"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;+&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;+&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_game.xml"
+            line="151"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Game cover&quot;, should use `@string` resource"
+        errorLine1="                android:contentDescription=&quot;Game cover&quot; />"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/item_up_next.xml"
+            line="42"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Logout&quot;, should use `@string` resource"
+        errorLine1="        android:title=&quot;Logout&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/menu/main_menu.xml"
+            line="8"
+            column="9"/>
+    </issue>
+
+</issues>

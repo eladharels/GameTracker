@@ -7,7 +7,10 @@
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
+    <!-- allowBackup stays true so theme and accent choices restore on a new phone; the auth
+         preferences (the session token) are excluded by BOTH rules files (MOB-4). -->
     <application
+        android:name=".GameTrackerApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -16,6 +19,10 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.GmaeTrackerMobile">
+        <!-- The launcher MUST be exported: Android starts it from the home screen. It is the
+             only exported component (pinned by test/runtime.test.js), holds no session of its
+             own, and takes only a boolean extra (never text) from its intent.
+             nosemgrep: java.android.security.exported_activity.exported_activity -->
         <activity
             android:name=".LoginActivity"
             android:exported="true"
@@ -26,9 +33,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- NOT exported (MOB-2): exported, any app or `adb am start` could open it directly
+             and skip the login and fingerprint screen, running on the stored token.
+             LoginActivity is the only entry point. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true"
+            android:exported="false"
             android:label="@string/app_name"
             android:theme="@style/Theme.GmaeTrackerMobile" />
         <activity android:name=".SettingsActivity" />

@@ -268,32 +268,215 @@ check('main.jsx renders the router with the shared ROUTER_PROPS (FE-22)', () => 
 // Tool installs on the production host (review of UP-7). Every binary the pipeline
 // downloads is installed as ROOT, so it must come from a private mktemp dir (a fixed /tmp
 // path can be pre-planted) and match a SHA-256 PINNED in this file before it is extracted.
+// EVERY workflow file, not only the deploy pipeline: android.yml runs on the same host.
+const WORKFLOW_DIR = path.join(ROOT, '.github/workflows');
+const WORKFLOW_FILES = fs.readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
+const loadWorkflow = (f) => require('js-yaml').load(fs.readFileSync(path.join(WORKFLOW_DIR, f), 'utf8'));
+const stepRun = (st) => (st.run || '').replace(/^\s*#.*$/gm, '');
+
 check('CI installs tools from a private dir, checksum-verified before sudo install', () => {
-  const yaml = require('js-yaml');
-  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
   let installs = 0;
-  for (const [jobName, job] of Object.entries(wf.jobs)) {
-    for (const st of job.steps || []) {
-      const run = (st.run || '').replace(/^\s*#.*$/gm, '');
-      // Quoted or not, as an argument or an assignment (review of SEC-17: `-o "/tmp/x"`,
-      // `-C "/tmp"` and `DL=/tmp/fixed` all slipped past the first version).
-      assert.ok(!/(?:\s|=)["']?\/tmp(?:\/|["'\s]|$)/m.test(run),
-        `${jobName} / "${st.name}" uses a fixed /tmp path`);
-      if (/sudo install\b/.test(run)) {
-        installs++;
-        const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
-        assert.ok(check >= 0 && check < untar && untar < inst,
-          `${jobName} / "${st.name}" installs as root without checking a pinned SHA-256 first`);
-        // The PINNED value must be what feeds sha256sum -c — not merely a hash somewhere.
-        const fed = /echo "\$\{(\w+)\}\s+[^"]*" \| sha256sum -c/.exec(run);
-        assert.ok(fed, `${jobName} / "${st.name}" does not feed a named pin to sha256sum -c`);
-        const pinned = { ...(st.env || {}) };
-        for (const m of run.matchAll(/^\s*(\w+)="([0-9a-f]{64})"/gm)) pinned[m[1]] = m[2];
-        assert.ok(/^[0-9a-f]{64}$/.test(pinned[fed[1]] || ''), `${jobName} / "${st.name}": ${fed[1]} is not a pinned 64-hex SHA-256`);
+  for (const file of WORKFLOW_FILES) {
+    const wf = loadWorkflow(file);
+    for (const [jobName, job] of Object.entries(wf.jobs)) {
+      for (const st of job.steps || []) {
+        const run = stepRun(st);
+        const where = `${file} / ${jobName} / "${st.name}"`;
+        // Quoted or not, as an argument or an assignment (review of SEC-17: `-o "/tmp/x"`,
+        // `-C "/tmp"` and `DL=/tmp/fixed` all slipped past the first version).
+        assert.ok(!/(?:\s|=)["']?\/tmp(?:\/|["'\s]|$)/m.test(run), `${where} uses a fixed /tmp path`);
+        // ANY extraction of a downloaded archive, root install or not (android.yml review):
+        // a pinned SHA-256 must be checked first, fed by name to sha256sum -c.
+        const extract = run.search(/\btar -x|\bunzip\b/);
+        if (extract >= 0) {
+          const verify = run.search(/sha256sum -c/);
+          assert.ok(verify >= 0 && verify < extract, `${where} extracts an archive without checking a pinned SHA-256 first`);
+          const fed = /echo "\$\{(\w+)\}\s+[^"]*" \| sha256sum -c/.exec(run);
+          assert.ok(fed, `${where} does not feed a named pin to sha256sum -c`);
+          const pinned = { ...(wf.env || {}), ...(job.env || {}), ...(st.env || {}) };
+          for (const m of run.matchAll(/^\s*(\w+)="([0-9a-f]{64})"/gm)) pinned[m[1]] = m[2];
+          assert.ok(/^[0-9a-f]{64}$/.test(pinned[fed[1]] || ''), `${where}: ${fed[1]} is not a pinned 64-hex SHA-256`);
+        }
+        if (/sudo install\b/.test(run)) {
+          installs++;
+          const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
+          assert.ok(check >= 0 && check < untar && untar < inst,
+            `${where} installs as root without checking a pinned SHA-256 first`);
+        }
       }
     }
   }
   assert.ok(installs >= 4, `found ${installs} root installs — expected gitleaks and three trivy`);
+});
+
+// This repository is public and every job runs on the production host. A job reachable from
+// a fork's pull request runs a stranger's code there, so each job must either carry the
+// same-repo gate or not run on pull_request at all (push-only, like deploy). No test pinned
+// this before, for any workflow. Both triggers that run a fork's code WITH this repo's
+// secrets are refused outright.
+check('every PR-triggered job is gated to same-repo PRs; no pull_request_target / workflow_run', () => {
+  const GATE = "github.event.pull_request.head.repo.full_name == github.repository";
+  for (const file of WORKFLOW_FILES) {
+    const wf = loadWorkflow(file);
+    const on = wf.on || wf[true] || {};
+    const triggers = typeof on === 'string' ? [on] : Array.isArray(on) ? on : Object.keys(on);
+    for (const t of ['pull_request_target', 'workflow_run']) {
+      assert.ok(!triggers.includes(t), `${file} uses the ${t} trigger`);
+    }
+    if (!triggers.includes('pull_request')) continue;
+    for (const [jobName, job] of Object.entries(wf.jobs)) {
+      const cond = String(job.if || '');
+      const gated = cond.includes(GATE);
+      const pushOnly = /^github\.event_name == 'push'( && [^|]*)?$/.test(cond.trim());
+      assert.ok(gated || pushOnly, `${file} / ${jobName} can run for a fork's pull request (if: ${cond || 'none'})`);
+    }
+  }
+  assert.ok(WORKFLOW_FILES.includes('docker-build-deploy.yml'), 'the deploy workflow was not found -- the scan is broken');
+});
+
+// android.yml builds third-party code (Gradle plugins, kapt processors, lint jars) on the
+// production host. The isolation and the pins are the whole control, so each is asserted.
+check('android.yml: path-filtered, containerised, pinned, and never a deploy dependency', () => {
+  const file = 'android.yml';
+  assert.ok(WORKFLOW_FILES.includes(file), 'android.yml is missing');
+  const wf = loadWorkflow(file);
+  const text = fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8');
+  const on = wf.on || wf[true];
+  for (const t of ['push', 'pull_request']) {
+    const paths = (on[t] && on[t].paths) || [];
+    assert.ok(paths.includes('mobile/**'), `android.yml ${t} is not filtered to mobile/**`);
+  }
+  assert.match(wf.env.JDK_IMAGE, /^[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}$/, 'the JDK image is not pinned by digest');
+  assert.match(wf.env.CMDLINE_TOOLS_SHA256, /^[0-9a-f]{64}$/, 'the command-line tools are not SHA-256 pinned');
+  const runs = Object.values(wf.jobs).flatMap((j) => (j.steps || []).map(stepRun)).join('\n');
+  // Gradle must never run on the host: every gradlew invocation is inside the docker run.
+  const build = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((st) => /gradlew/.test(st.run || ''));
+  assert.ok(build, 'no step runs gradlew');
+  const b = stepRun(build);
+  assert.ok(b.indexOf('docker run') >= 0 && b.indexOf('docker run') < b.indexOf('gradlew'), 'gradlew runs outside the container');
+  for (const flag of ['--cap-drop ALL', 'no-new-privileges', '--memory', '--pids-limit', '--user', '/tmp:rw,noexec']) {
+    assert.ok(b.includes(flag), `the build container lost ${flag}`);
+  }
+  assert.ok(/\$\{JDK_IMAGE\}/.test(b), 'the build container does not use the pinned JDK_IMAGE');
+  assert.ok(!/docker\.sock|--privileged|--network host|-v "?\$\{?HOME|GITHUB_WORKSPACE\}:/.test(runs),
+    'a container gets the Docker socket, privileges, the host network, $HOME or the whole workspace');
+  assert.ok(/GITHUB_WORKSPACE\}\/mobile:\/work/.test(b), 'the build container must mount only mobile/');
+  assert.ok(/VOLUME_PARTITION/.test(b) && /'main' \|\| 'pr'/.test(wf.env.VOLUME_PARTITION), 'cache volumes are not split between PRs and main');
+  // The wrapper jar pin must be the jar actually committed.
+  const jar = fs.readFileSync(path.join(ROOT, 'mobile/gradle/wrapper/gradle-wrapper.jar'));
+  const sha = require('crypto').createHash('sha256').update(jar).digest('hex');
+  assert.strictEqual(wf.env.GRADLE_WRAPPER_JAR_SHA256, sha, 'GRADLE_WRAPPER_JAR_SHA256 is not the committed wrapper jar');
+  assert.ok(/sha256sum -c/.test(runs) && /GRADLE_WRAPPER_JAR_SHA256/.test(runs), 'the wrapper jar is not verified');
+  const props = fs.readFileSync(path.join(ROOT, 'mobile/gradle/wrapper/gradle-wrapper.properties'), 'utf8');
+  assert.match(props, /^distributionSha256Sum=[0-9a-f]{64}$/m, 'the Gradle distribution is not SHA-256 pinned');
+  const gprops = fs.readFileSync(path.join(ROOT, 'mobile/gradle.properties'), 'utf8');
+  assert.match(gprops, /^android\.builder\.sdkDownload=false$/m, 'AGP may download SDK components on its own');
+  // Strict dependency verification against the committed, reviewed metadata. Regenerating it in
+  // CI (--write-verification-metadata) would verify every dependency against itself.
+  assert.ok(/--dependency-verification strict/.test(b), 'Gradle does not run with --dependency-verification strict');
+  assert.ok(!/--write-verification-metadata|--dependency-verification (lenient|off)|-M\s/.test(runs),
+    'the workflow regenerates or relaxes the dependency verification metadata');
+  assert.ok(!/org\.gradle\.dependency\.verification/.test(gprops), 'gradle.properties overrides dependency verification');
+  // Nothing executable is trusted from a writable cache volume (CISO review, PR #6): the Gradle
+  // home is pruned BEFORE gradlew (a killed build never reaches the prune after it, and an
+  // init.d script would run next time), the whole SDK is reinstalled, and the wrapper
+  // distribution is not kept, so distributionSha256Sum checks it every run.
+  const gradlewAt = b.indexOf('bash gradlew');
+  const firstPrune = b.indexOf('find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf');
+  assert.ok(firstPrune >= 0 && firstPrune < gradlewAt, 'the Gradle home is not pruned before gradlew runs');
+  assert.ok(!/! -name wrapper/.test(b), 'the Gradle wrapper distribution is kept in a writable volume');
+  assert.ok(b.indexOf('find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf') >= 0 && b.indexOf('find /sdk -mindepth 1') < b.indexOf('sdkmanager'),
+    'the SDK is not wiped before sdkmanager installs it');
+  assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(b), 'the build container does not refuse uid 0');
+  // The runner is root, so its own uid is not a non-root uid: Gradle runs as a fixed BUILD_UID
+  // (PR #6's first run with the guard refused uid 0), and mobile/ is handed back afterwards.
+  assert.ok(/^[1-9]\d*$/.test(String(wf.env.BUILD_UID)), 'BUILD_UID is not a fixed non-root uid');
+  assert.ok(/--user "\$\{BUILD_UID\}:\$\{BUILD_UID\}"/.test(b) && !/--user "\$\(id -u\)/.test(runs),
+    'the build container does not run as BUILD_UID');
+  const cleanup = stepRun(wf.jobs.android.steps.find((st) => st.if === 'always()'));
+  assert.ok(/chown -R "\$\(id -u\):\$\(id -g\)" \/work/.test(cleanup), 'mobile/ is not handed back to the runner after the build');
+  // Every chown runs in a network-less container whose ONLY capability is CHOWN, never on the
+  // host, and never follows symlinks (-L/-H): mobile/ is PR-controlled (CISO re-check, 74d21bf).
+  const chowns = runs.split('\n').filter((l) => /\bchown\b/.test(l));
+  assert.ok(chowns.length >= 2, 'the chown steps are missing');
+  for (const line of chowns) {
+    assert.ok(/"\$\{JDK_IMAGE\}" chown -R? ?"/.test(line), `a chown runs outside the pinned container: ${line.trim()}`);
+    assert.ok(!/chown[^\n]*\s-(?:[a-zA-Z]*[LH])/.test(line), `a chown follows symlinks: ${line.trim()}`);
+  }
+  for (const m of runs.matchAll(/docker run([\s\S]*?)"\$\{JDK_IMAGE\}" chown/g)) {
+    // CHOWN, plus DAC_READ_SEARCH (read/traverse only) to enter BUILD_UID's 0700 directories.
+    assert.ok(/--network none/.test(m[1]) && /--cap-drop ALL/.test(m[1]) && /--cap-add CHOWN/.test(m[1])
+      && !/--cap-add (?!CHOWN\b|DAC_READ_SEARCH\b)/.test(m[1]),
+      'a chown container is not network-less with CHOWN (and DAC_READ_SEARCH) as its only capabilities');
+  }
+  const meta = fs.readFileSync(path.join(ROOT, 'mobile/gradle/verification-metadata.xml'), 'utf8');
+  assert.match(meta, /<verify-metadata>true<\/verify-metadata>/, 'verification-metadata.xml does not verify metadata');
+  assert.ok((meta.match(/<sha256 value="[0-9a-f]{64}"/g) || []).length > 100, 'verification-metadata.xml holds almost no checksums');
+  assert.ok(!/<trusted-artifacts>|<trusted-keys>|<ignored-keys>/.test(meta), 'verification-metadata.xml trusts artifacts without a checksum');
+  // Never a deploy dependency, and deploy never waits on it.
+  const deploy = loadWorkflow('docker-build-deploy.yml').jobs.deploy;
+  assert.ok(!JSON.stringify(deploy.needs).includes('android'), 'deploy depends on the Android job');
+  assert.ok(wf.jobs.android['timeout-minutes'] > 0, 'the Android job has no timeout: a hung Gradle would block the one runner');
+  // A cancelled job kills the docker CLIENT, not the container (seen on PR #6: the orphan
+  // held the Gradle lock). The build container is named, cleared before, and removed in an
+  // always() step -- which is what runs on cancellation.
+  const steps = wf.jobs.android.steps;
+  const name = /--name "(gametracker-android-build-\$\{VOLUME_PARTITION\})"/.exec(b);
+  assert.ok(name, 'the build container has no fixed per-partition name');
+  const idx = steps.indexOf(build);
+  assert.ok(steps.slice(0, idx).some((st) => stepRun(st).includes(`docker rm -f "${name[1]}"`)), 'a leftover build container is not removed before the build');
+  assert.ok(steps.slice(idx + 1).some((st) => /always\(\)/.test(String(st.if)) && stepRun(st).includes(`docker rm -f "${name[1]}"`)),
+    'no always() step removes the build container after a cancelled or failed run');
+});
+
+// The Android app's critical security fixes (mobile/ROADMAP.md MOB-1, MOB-2, MOB-4), pinned
+// from source: these are properties of the manifest and the build, which no JVM unit test in
+// mobile/ can see, and they fail silently -- a re-exported activity or a dropped backup
+// exclude breaks nothing a user notices.
+{
+  const APP = path.join(ROOT, 'mobile/app/src/main');
+  const manifest = fs.readFileSync(path.join(APP, 'AndroidManifest.xml'), 'utf8');
+  // A self-closing <activity .../>, or <activity ...> through its </activity> -- NOT up to the
+  // first "/>", which inside an activity is a child element's.
+  const activities = [...manifest.matchAll(/<activity\b[^>]*?\/>|<activity\b[^>]*>[\s\S]*?<\/activity>/g)].map((m) => m[0]);
+  check('Android: only the launcher activity is exported (MOB-2)', () => {
+    assert.ok(activities.length >= 3, `parsed ${activities.length} activities from the manifest -- the scan is broken`);
+    for (const a of activities) {
+      const name = /android:name="([^"]+)"/.exec(a)[1];
+      const launcher = /android\.intent\.category\.LAUNCHER/.test(a);
+      if (/android:exported="true"/.test(a)) {
+        assert.ok(launcher, `${name} is exported but is not the launcher: any app can open it and skip the login`);
+      }
+    }
+    assert.ok(/android:name="\.MainActivity"[\s\S]*?android:exported="false"/.test(manifest), 'MainActivity must say exported="false" explicitly');
+  });
+  check('Android: the session token is excluded from every backup path (MOB-4)', () => {
+    const exclude = /<exclude\s+domain="sharedpref"\s+path="auth\.xml"\s*\/>/;
+    const backup = fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8');
+    assert.ok(exclude.test(backup), 'backup_rules.xml (Android 11 and older) does not exclude auth.xml');
+    const extraction = fs.readFileSync(path.join(APP, 'res/xml/data_extraction_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    for (const section of ['cloud-backup', 'device-transfer']) {
+      const m = new RegExp(`<${section}>([\\s\\S]*?)</${section}>`).exec(extraction);
+      assert.ok(m && exclude.test(m[1]), `data_extraction_rules.xml <${section}> does not exclude auth.xml`);
+    }
+    assert.ok(/android:dataExtractionRules="@xml\/data_extraction_rules"/.test(manifest) && /android:fullBackupContent="@xml\/backup_rules"/.test(manifest),
+      'the manifest no longer points at the backup rules');
+  });
+  check('Android: HTTP logging is debug-only and never logs headers or bodies (MOB-1)', () => {
+    // Code only: the KDoc explaining the old bug names Level.BODY on purpose.
+    const client = fs.readFileSync(path.join(APP, 'java/com/example/gmaetrackermobile/ApiClient.kt'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    assert.ok(!/Level\.(BODY|HEADERS)/.test(client), 'ApiClient logs at BODY or HEADERS: that is the bearer token and the password');
+    assert.ok(/buildClient\(BuildConfig\.DEBUG/.test(client), 'the shipped client is not built from BuildConfig.DEBUG');
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
+    assert.ok(/buildConfig\s*=\s*true/.test(gradle), 'buildFeatures.buildConfig is off, so BuildConfig.DEBUG does not exist');
+  });
+}
+
+// The backend image is `COPY . .`; the Android app has no business in it.
+check('.dockerignore keeps the Android app out of the backend image', () => {
+  const lines = fs.readFileSync(path.join(ROOT, '.dockerignore'), 'utf8').split('\n').map((l) => l.trim());
+  assert.ok(lines.some((l) => /^\/?mobile\/?(\*\*)?$/.test(l)), '.dockerignore does not exclude mobile/');
 });
 
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
@@ -550,13 +733,18 @@ console.log('the semgrep gate runs a pinned binary:');
 console.log('every GitHub Action is pinned to a commit:');
 {
   const raw = fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8');
-  check('no `uses:` references a tag or branch', () => {
-    const uses = [...raw.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)(.*)$/gm)];
-    assert.ok(uses.length > 0, 'no uses: lines found -- the scan is broken');
-    for (const [, ref, rest] of uses) {
-      assert.match(ref, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${ref} is not pinned to a commit SHA`);
-      assert.match(rest, /#\s*v\d/, `${ref} has no "# vX.Y.Z" comment saying which release it is`);
+  check('no `uses:` in ANY workflow references a tag or branch', () => {
+    let total = 0;
+    for (const file of WORKFLOW_FILES) {
+      const text = fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8');
+      const uses = [...text.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)(.*)$/gm)];
+      total += uses.length;
+      for (const [, ref, rest] of uses) {
+        assert.match(ref, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${file}: ${ref} is not pinned to a commit SHA`);
+        assert.match(rest, /#\s*v\d/, `${file}: ${ref} has no "# vX.Y.Z" comment saying which release it is`);
+      }
     }
+    assert.ok(total > 0, 'no uses: lines found -- the scan is broken');
   });
   check('the Semgrep rule that flags a mutable action tag is not excluded', () => {
     assert.ok(!/github-actions-mutable-action-tag/.test(raw), 'the mutable-action-tag rule is excluded again');

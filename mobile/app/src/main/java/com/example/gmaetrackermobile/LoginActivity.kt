@@ -16,6 +16,7 @@ import com.example.gmaetrackermobile.ThemeManager
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 
 class LoginActivity : AppCompatActivity() {
     private lateinit var biometricPrompt: BiometricPrompt
@@ -34,6 +35,18 @@ class LoginActivity : AppCompatActivity() {
         val tvLoginStatus = findViewById<TextView>(R.id.tvLoginStatus)
 
         val prefs = getSharedPreferences("auth", Context.MODE_PRIVATE)
+        val session = Session.get(this)
+        Session.redirecting = false
+        errorColor = tvLoginStatus.currentTextColor
+
+        // Signing out keeps the username (MOB-3): prefill it.
+        session.username?.let { if (etUsername.text.isNullOrEmpty()) etUsername.setText(it) }
+
+        // Arrived here because the session expired (a boolean extra, never text: this activity
+        // is exported, and any app could otherwise put its own words on the login screen).
+        val sessionEnded = intent.getBooleanExtra(EXTRA_SESSION_ENDED, false)
+        if (sessionEnded) notice(tvLoginStatus, SESSION_EXPIRED_TEXT)
+
         val biometricManager = BiometricManager.from(this)
         val canAuthenticate = biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
         val fingerprintEnabled = prefs.getBoolean("fingerprint_enabled", false)
@@ -44,42 +57,38 @@ class LoginActivity : AppCompatActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    // If token exists, log user in
-                    val token = prefs.getString("token", null)
-                    val username = prefs.getString("username", null)
-                    if (token != null && username != null) {
-                        // Navigate to main screen
-                        startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                        finish()
-                    } else {
-                        tvLoginStatus.text = "No saved login found. Please login with username and password first."
-                    }
+                    // The fingerprint unlocks a LIVE session; the server still has the last word.
+                    verifyAndEnter(tvLoginStatus)
                 }
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
                     // Show login form if authentication is cancelled or fails
-                    tvLoginStatus.text = "Authentication error: $errString"
+                    showError(tvLoginStatus, "Authentication error: $errString")
                 }
                 override fun onAuthenticationFailed() {
                     super.onAuthenticationFailed()
-                    tvLoginStatus.text = "Authentication failed. Try again or login with password."
+                    showError(tvLoginStatus, "Authentication failed. Try again or login with password.")
                 }
             })
 
         promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Login with Fingerprint")
-            .setSubtitle("Use your fingerprint to login")
+            .setTitle("Unlock GameTracker")
+            .setSubtitle("Use your fingerprint to continue your session")
             .setNegativeButtonText("Cancel")
             .build()
 
-        // If biometrics are enabled and available, prompt immediately
-        if (fingerprintEnabled && canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS) {
+        // Prompt only when there is a LIVE session to unlock (MOB-5). Signing out ends the
+        // session, and a fingerprint cannot bring back an expired one: prompting anyway would
+        // end in "no saved login" after the user had already touched the sensor.
+        if (!sessionEnded && fingerprintEnabled && canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS &&
+            session.hasLiveToken()) {
             biometricPrompt.authenticate(promptInfo)
         }
 
         btnLogin.setOnClickListener {
             val username = etUsername.text.toString()
             val password = etPassword.text.toString()
+            tvLoginStatus.setTextColor(errorColor)
             tvLoginStatus.text = ""
 
             // Client-side validation to prevent empty credentials
@@ -111,11 +120,7 @@ class LoginActivity : AppCompatActivity() {
                             if (oldUsername != null && oldUsername != normalizedUsername) {
                                 prefs.edit().putBoolean("fingerprint_enabled", false).apply()
                             }
-                            // Save token and username in SharedPreferences
-                            prefs.edit()
-                                .putString("token", token)
-                                .putString("username", normalizedUsername)
-                                .apply()
+                            session.save(token, normalizedUsername)
                             tvLoginStatus.text = "Login successful!"
                             // Navigate to main screen
                             startActivity(Intent(this@LoginActivity, MainActivity::class.java))
@@ -136,4 +141,61 @@ class LoginActivity : AppCompatActivity() {
             }
         }
     }
-} 
+
+    private var errorColor: Int = 0
+
+    private fun notice(status: TextView, text: String) {
+        status.setTextColor(ContextCompat.getColor(this, R.color.gt_text_secondary))
+        status.text = text
+    }
+
+    private fun showError(status: TextView, text: String) {
+        status.setTextColor(errorColor)
+        status.text = text
+    }
+
+    /**
+     * After the fingerprint: ask the server whether the stored session still works, then go in.
+     * A 401 means it has ended (the interceptor has already cleared it). A network failure is
+     * NOT a sign-out: the user goes in and is told they are offline.
+     */
+    private fun verifyAndEnter(status: TextView) {
+        val session = Session.get(this)
+        val bearer = session.bearer()
+        if (bearer == null || !session.hasLiveToken()) {
+            session.endSession()
+            notice(status, SESSION_EXPIRED_TEXT)
+            return
+        }
+        notice(status, "Checking session…")
+        lifecycleScope.launch {
+            val code: Int? = try {
+                withContext(Dispatchers.IO) { ApiClient.api.getMe(bearer).code() }
+            } catch (e: java.io.IOException) {
+                null
+            }
+            when (code) {
+                null -> enterApp(offline = true)
+                401 -> {
+                    // Only if it is still the token that was checked: the user may have signed
+                    // in with the password while the check was in flight.
+                    session.clearIfCurrent(bearer)
+                    Session.redirecting = false
+                    notice(status, SESSION_EXPIRED_TEXT)
+                }
+                else -> enterApp(offline = false)
+            }
+        }
+    }
+
+    private fun enterApp(offline: Boolean) {
+        Session.redirecting = false
+        startActivity(Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_OFFLINE, offline))
+        finish()
+    }
+
+    companion object {
+        const val EXTRA_SESSION_ENDED = "session_ended"
+        const val SESSION_EXPIRED_TEXT = "Your session expired. Please sign in again."
+    }
+}

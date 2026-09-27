@@ -270,7 +270,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Fingerprint login"
+                    android:text="Fingerprint unlock"
                     android:textSize="14.5sp"
                     android:textStyle="bold"
                     android:textColor="@color/gt_text_primary"
@@ -280,7 +280,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="Use biometrics to sign in"
+                    android:text="Unlock the app while you're signed in"
                     android:textSize="12sp"
                     android:textColor="@color/gt_text_secondary"
                     tools:ignore="HardcodedText" />

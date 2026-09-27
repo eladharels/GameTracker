@@ -51,6 +51,10 @@ const assertKeys = (actual, expected, what) =>
     + `tolerant client but leaks whatever it holds; removing one breaks every client. `
     + `If this is deliberate, it is a v2 change — /api is frozen.`);
 
+// The published key sets, as NAMED constants shared with the Android gate at the end of this
+// file and with test/integration/library-shape.test.js, so the three cannot drift apart.
+const { LIBRARY_ROW_KEYS, SEARCH_ITEM_KEYS, LOGIN_TOKEN_KEYS } = require('./v1-shapes');
+
 console.log('library row (GET /api/user/:username/games):');
 
 check('both spellings are emitted, snake_case AND camelCase', () => {
@@ -69,11 +73,7 @@ check('both spellings are emitted, snake_case AND camelCase', () => {
   assert.strictEqual(row.steamAppId, '440');
   assert.strictEqual(row.crackStatus, 'cracked');
 
-  assertKeys(row, [
-    'id', 'user_id', 'game_id', 'game_name', 'cover_url', 'release_date', 'status',
-    'steam_app_id', 'last_price', 'last_price_updated', 'crack_status', 'backlog_order',
-    'steamAppId', 'crackStatus',
-  ], 'library row');
+  assertKeys(row, LIBRARY_ROW_KEYS, 'library row');
 });
 
 check('an absent optional becomes null, never undefined', () => {
@@ -127,7 +127,7 @@ check('a search item carries exactly the six published fields', () => {
     [{ id: 'igdb_1', name: 'Hades', releaseDate: '2020-09-17', coverUrl: 'https://c/1.jpg', source: 'igdb', steamAppId: '1145360' }],
     [], []
   );
-  assertKeys(item, ['id', 'name', 'releaseDate', 'coverUrl', 'source', 'steamAppId'], 'search item');
+  assertKeys(item, SEARCH_ITEM_KEYS, 'search item');
 });
 
 check('a search id is a SOURCE-PREFIXED string, and the client posts it verbatim', () => {
@@ -1387,7 +1387,7 @@ checkAsync('v2 POST /library/games: the duplicate policy goes IN, the hint comes
     const hash = require('bcryptjs').hashSync('pw-cookie-1', 4);
     const res = await withUserRow({ ...ROW, password: hash }, () =>
       runChain([handlerFor('post', '/api/auth/login')], { body: { username: 'cookie-user', password: 'pw-cookie-1' }, headers: {}, ip: '198.51.100.201' }));
-    assertKeys(res.body, ['token'], 'login without the opt-in');
+    assertKeys(res.body, LOGIN_TOKEN_KEYS, 'login without the opt-in');
     assert.strictEqual(setCookies(res).length, 0, 'a no-opt-in login sent a Set-Cookie -- Android would store it');
     assert.strictEqual(res.headers['cache-control'], 'no-store');
   });
@@ -1646,7 +1646,7 @@ checkAsync('each outcome maps to the status and {error} text v1 always answered'
     const ok = recordingRes();
     await handlerFor('post', '/api/auth/login')({ body: { username: 'Outcome-Map-User', password: 'pw' }, headers: {}, ip: '203.0.113.80', connection: {} }, ok);
     assert.strictEqual(ok.statusCode, 200);
-    assertKeys(ok.body, ['token'], 'login OK');
+    assertKeys(ok.body, LOGIN_TOKEN_KEYS, 'login OK');
     assert.strictEqual(seen.username, 'outcome-map-user', 'the service was not given the normalised username');
   } finally { loginService.authenticate = real; console.error = errors; }
 });
@@ -1744,6 +1744,131 @@ checkAsync('PUT /api/user/me/sharing: truthiness to 1/0, a missing value is 400,
     assert.deepStrictEqual([missing.statusCode, missing.body], [400, { error: 'Missing shares_library value' }]);
     assert.strictEqual(writes.length, 0, 'a refused toggle wrote');
   } finally { dbMod.promises.run = realRun; }
+});
+
+// ── The Android app (mobile/) against the frozen v1 contract ────────────────────────────
+// The app is the v1 client this freeze exists for, and it lives in this repository. Its
+// models are read from source (test/mobile-api.js, which fails closed) and checked against
+// the SAME key constants the pins above assert, so a backend rename that would break the app
+// fails here, naming the Android field it breaks.
+console.log('the Android app (mobile/) against the v1 contract:');
+const { mobileContract, parseDataClass } = require('./mobile-api');
+const MOBILE = mobileContract();
+
+check('the Kotlin parse fails closed on the shapes a lazy regex got wrong', () => {
+  // A parameterised annotation ended the old lazy match early, and the dropped field went
+  // unnoticed because both counts were taken on the shortened body.
+  assert.throws(() => parseDataClass('data class Y(val a: String,\n  @Expose(serialize = false)\n  val b: String)', 'Y'), /annotation with arguments/);
+  // A multi-line default must not cut the class short either.
+  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = listOf(1,\n 2).toString(),\n val b: Int)', 'Y'), ['a', 'b']);
+  assert.throws(() => parseDataClass('data class Y(val a: String', 'Y'), /unbalanced/);
+  // A paren inside a string literal is not the end of the class.
+  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = ")",\n val b: Int)', 'Y'), ['a', 'b']);
+  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = "\\")(",\n val b: Char = \')\')', 'Y'), ['a', 'b']);
+});
+
+check('every Game field the app binds is a field a pinned response carries', () => {
+  // One Kotlin class serves both library rows and search results (models.kt), so a field is
+  // covered by either key set.
+  const published = new Set([...LIBRARY_ROW_KEYS, ...SEARCH_ITEM_KEYS]);
+  const orphans = MOBILE.game.filter((f) => !published.has(f));
+  assert.deepStrictEqual(orphans, [], `the app binds Game fields no pinned v1 response carries: ${orphans}`);
+});
+check('the app\'s LoginResponse is exactly the pinned {token}', () => {
+  assert.deepStrictEqual([...MOBILE.loginResponse].sort(), [...LOGIN_TOKEN_KEYS].sort());
+  assert.deepStrictEqual(MOBILE.loginRequest, ['username', 'password'], 'LoginRequest changed shape');
+});
+
+// Tiny route harness for the pins below: the handler off the live router, with the user
+// lookup (withExistingUser -> db.get) answered by a fixed row.
+async function callRoute(method, path, req, stubs = {}) {
+  const realGet = db.get;
+  db.get = (sql, params, cb) => cb(null, { id: 7, username: 'jane' });
+  const saved = [];
+  for (const [obj, name, fn] of stubs.replace || []) { saved.push([obj, name, obj[name]]); obj[name] = fn; }
+  const res = recordingRes();
+  try {
+    await handlerFor(method, path)({ params: {}, query: {}, body: {}, ...req }, res);
+    for (let i = 0; i < 50 && !res.headersSent; i++) await new Promise((r) => setTimeout(r, 5));
+  } finally {
+    db.get = realGet;
+    for (const [obj, name, fn] of saved) obj[name] = fn;
+  }
+  return res;
+}
+const libraryService = require('../services/library');
+
+checkAsync('POST /api/user/:u/games reads EXACTLY the fields GameUpdateRequest sends', async () => {
+  // A GameUpdateRequest exactly as the app builds it -- its own field names, from source.
+  const body = Object.fromEntries(MOBILE.gameUpdateRequest.map((f) => [f, `v-${f}`]));
+  let got;
+  const res = await callRoute('post', '/api/user/:username/games', { params: { username: 'Jane' }, body }, {
+    replace: [[libraryService, 'upsertGame', async (userId, fields) => { got = fields; return { status: 'wishlist', coerced: false, events: [] }; }]],
+  });
+  assert.strictEqual(res.statusCode, 200);
+  assertKeys(res.body, ['success', 'status', 'coerced'], 'POST /api/user/:u/games');
+  assert.deepStrictEqual(res.body, { success: true, status: 'wishlist', coerced: false });
+  // Every field the app sends reaches the service under the same name, and nothing the app
+  // does not send is required: a renamed body key would arrive as undefined.
+  assert.deepStrictEqual(Object.keys(got).sort(), [...MOBILE.gameUpdateRequest].sort(),
+    'the route and the Android GameUpdateRequest disagree on the add/update body. They must change '
+    + 'TOGETHER, on purpose: extend models.kt or the route, never loosen this check (the SPA and '
+    + 'the app share this frozen v1 route)');
+  for (const f of MOBILE.gameUpdateRequest) assert.strictEqual(got[f], `v-${f}`, `${f} did not reach the service`);
+});
+checkAsync('POST /api/user/:u/games: a refused status is 400 {error}', async () => {
+  const res = await callRoute('post', '/api/user/:username/games', { params: { username: 'jane' }, body: { gameId: 'igdb_1', gameName: 'A', status: 'Nope' } }, {
+    replace: [[libraryService, 'upsertGame', async () => { throw serviceError(CODES.VALIDATION, 'Invalid status'); }]],
+  });
+  assert.strictEqual(res.statusCode, 400);
+  assertKeys(res.body, ['error'], 'POST games 400');
+});
+checkAsync('DELETE /api/user/:u/games/:id is {success:true}', async () => {
+  let removed;
+  const res = await callRoute('delete', '/api/user/:username/games/:gameId', { params: { username: 'jane', gameId: 'igdb_1' } }, {
+    replace: [[libraryService, 'removeGame', async (u, g) => { removed = [u, g]; return { removed: true }; }]],
+  });
+  assert.deepStrictEqual([res.statusCode, res.body, removed], [200, { success: true }, [7, 'igdb_1']]);
+});
+checkAsync('PUT .../backlog-order reads BacklogOrderRequest.direction; a bad direction is 400', async () => {
+  assert.deepStrictEqual(MOBILE.backlogOrderRequest, ['direction'], 'BacklogOrderRequest changed shape');
+  let moved;
+  const replace = [[libraryService, 'moveBacklogItem', async (u, g, d) => { moved = d; }]];
+  const ok = await callRoute('put', '/api/user/:username/games/:gameId/backlog-order',
+    { params: { username: 'jane', gameId: 'igdb_1' }, body: { [MOBILE.backlogOrderRequest[0]]: 'up' } }, { replace });
+  assert.deepStrictEqual([ok.statusCode, ok.body, moved], [200, { success: true }, 'up']);
+  const bad = await callRoute('put', '/api/user/:username/games/:gameId/backlog-order',
+    { params: { username: 'jane', gameId: 'igdb_1' }, body: { direction: 'sideways' } }, { replace });
+  assert.strictEqual(bad.statusCode, 400);
+  assertKeys(bad.body, ['error'], 'backlog-order 400');
+});
+checkAsync('GET /api/games/search is a BARE array of search items; no q is 400 {error}', async () => {
+  const catalogService = require('../services/catalog');
+  const item = { id: 'igdb_1', name: 'Hades', releaseDate: '2020-09-17', coverUrl: null, source: 'igdb', steamAppId: null };
+  const replace = [[catalogService, 'searchAll', async () => ({
+    results: [item], counts: { igdb: 1, rawg: 0, thegamesdb: 0 }, providers: { igdb: 'ok', rawg: 'ok', thegamesdb: 'skipped' }, degraded: false,
+  })]];
+  const log = console.log; console.log = () => {};
+  let ok;
+  try { ok = await callRoute('get', '/api/games/search', { query: { q: 'hades' } }, { replace }); } finally { console.log = log; }
+  assert.strictEqual(ok.statusCode, 200);
+  assert.ok(Array.isArray(ok.body), 'search is no longer a bare array -- the app deserialises List<Game>');
+  assertKeys(ok.body[0], SEARCH_ITEM_KEYS, 'search route item');
+  const none = await callRoute('get', '/api/games/search', { query: {} }, { replace });
+  assert.deepStrictEqual([none.statusCode, keysOf(none.body)], [400, ['error']]);
+});
+checkAsync('a v1 library route with no credential is 401 {error}', async () => {
+  // authRequired itself, from the live chain of the route the app calls most.
+  const { app } = require('../index.js');
+  const layer = (app.router || app._router).stack.find((l) => l.route && l.route.path === '/api/user/:username/games' && l.route.methods.get);
+  const auth = layer.route.stack[0].handle;
+  assert.strictEqual(auth.name, 'authRequired');
+  const res = recordingRes();
+  let passed = false;
+  await auth({ headers: {}, params: { username: 'jane' } }, res, () => { passed = true; });
+  assert.strictEqual(passed, false, 'an unauthenticated request reached the handler');
+  assert.strictEqual(res.statusCode, 401);
+  assertKeys(res.body, ['error'], '401');
 });
 
 // The async cases run last. A rejection here must fail the process — an async

@@ -31,7 +31,7 @@ class SettingsActivity : AppCompatActivity() {
 
         fun updateButton() {
             val enabled = prefs.getBoolean("fingerprint_enabled", false)
-            btnBiometric.text = if (enabled) "Cancel biometrics" else "Enable biometrics"
+            btnBiometric.text = if (enabled) "Turn off fingerprint unlock" else "Turn on fingerprint unlock"
             btnBiometric.isEnabled = canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS || enabled
         }
 
@@ -44,7 +44,7 @@ class SettingsActivity : AppCompatActivity() {
                     super.onAuthenticationSucceeded(result)
                     prefs.edit().putBoolean("fingerprint_enabled", true).apply()
                     runOnUiThread {
-                        Toast.makeText(this@SettingsActivity, "Biometric login enabled!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@SettingsActivity, "Fingerprint unlock on (while signed in)", Toast.LENGTH_SHORT).show()
                         updateButton()
                     }
                 }
@@ -63,8 +63,8 @@ class SettingsActivity : AppCompatActivity() {
             })
 
         promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Enable biometric login")
-            .setSubtitle("Use your fingerprint to enable login")
+            .setTitle("Unlock with fingerprint")
+            .setSubtitle("Unlock the app with your fingerprint while you are signed in")
             .setNegativeButtonText("Cancel")
             .build()
 
@@ -73,7 +73,7 @@ class SettingsActivity : AppCompatActivity() {
             if (enabled) {
                 // Cancel biometrics
                 prefs.edit().putBoolean("fingerprint_enabled", false).apply()
-                Toast.makeText(this, "Biometric login disabled.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Fingerprint unlock off.", Toast.LENGTH_SHORT).show()
                 updateButton()
             } else {
                 // Enable biometrics

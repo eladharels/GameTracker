@@ -16,6 +16,12 @@ import com.google.android.material.appbar.MaterialToolbar
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.content.Intent
+import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -40,6 +46,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // No live session, no main screen (MOB-2). This also covers a process restored from
+        // Recents after the session was ended elsewhere.
+        if (!ensureLiveSession()) return
         // Apply the user's chosen accent theme overlay BEFORE view inflation (after super so
         // AppCompat is initialised, but before setContentView so views pick up the colours)
         theme.applyStyle(ThemeManager.getThemeResId(this), true)
@@ -62,6 +71,45 @@ class MainActivity : AppCompatActivity() {
 
         // Attach the listener for subsequent user taps
         setupBottomNavigation()
+
+        // A request found the session expired (SessionExpiryInterceptor). Handled here, by the
+        // visible activity, never from OkHttp's thread.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                Session.ended.collect { toLogin(sessionEnded = true) }
+            }
+        }
+        if (intent.getBooleanExtra(EXTRA_OFFLINE, false)) {
+            Toast.makeText(this, "You're offline. Some screens may not load until you reconnect.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ensureLiveSession()
+    }
+
+    /** False (and on the way to the login screen) when there is no live session. */
+    private fun ensureLiveSession(): Boolean {
+        val session = Session.get(this)
+        // A 401 while another activity was on top clears the token and sets `redirecting`, but
+        // the "ended" event is dropped (nothing collects it off-screen): still say why.
+        if (session.token == null) { toLogin(sessionEnded = Session.redirecting); return false }
+        if (!session.hasLiveToken(skewSeconds = 0)) {
+            session.endSession()
+            toLogin(sessionEnded = true)
+            return false
+        }
+        return true
+    }
+
+    private fun toLogin(sessionEnded: Boolean) {
+        if (isFinishing) return
+        val intent = Intent(this, LoginActivity::class.java)
+            .putExtra(LoginActivity.EXTRA_SESSION_ENDED, sessionEnded)
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(intent)
+        finish()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -146,16 +194,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Sign out: ALWAYS ends the session (MOB-3). It used to keep the token whenever
+     *  fingerprint unlock was on, so "log out" left a working credential on the phone. */
     private fun logout() {
-        val prefs = getSharedPreferences("auth", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("fingerprint_enabled", false)) {
-            prefs.edit().remove("token").remove("username").apply()
-        }
-        val intent = android.content.Intent(this, LoginActivity::class.java)
-        intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                       android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
-        startActivity(intent)
-        finish()
+        Session.get(this).endSession()
+        toLogin(sessionEnded = false)
     }
 
     fun refreshCurrentFragment() {
@@ -167,5 +210,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val KEY_SELECTED_TAB = "selected_tab"
+        const val EXTRA_OFFLINE = "offline"
     }
 }
