@@ -127,7 +127,7 @@ class GameDetailsFragment : Fragment() {
 
         // Where "Nh played" was (invented, MOB-11): the rating beside it is stored on this
         // device only, and the card says so.
-        tvHoursPlayed.text = "Not synced"
+        tvHoursPlayed.visibility = View.GONE
     }
 
     // ── Status chips ─────────────────────────────────────────────────────────

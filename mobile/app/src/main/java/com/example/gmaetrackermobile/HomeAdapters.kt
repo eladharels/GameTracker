@@ -39,7 +39,7 @@ class ContinueAdapter(
             // No progress bar and no hours: the server records neither, and inventing them
             // was MOB-11. The card says what is true: the game is being played.
             progress.visibility = View.GONE
-            hours.text = GameExtras.year(game)?.let { "Now playing · $it" } ?: "Now playing"
+            hours.text = GameExtras.year(game)?.let { "Released $it" } ?: ""
             itemView.setOnClickListener { onClick(game) }
         }
     }

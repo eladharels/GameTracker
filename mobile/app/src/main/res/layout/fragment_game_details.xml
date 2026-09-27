@@ -169,7 +169,7 @@
                         android:textSize="12sp"
                         android:textStyle="bold"
                         android:textColor="@color/gt_text_secondary"
-                        tools:text="Not synced" />
+                        tools:ignore="HardcodedText" />
                 </LinearLayout>
 
                 <LinearLayout

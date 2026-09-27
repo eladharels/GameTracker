@@ -518,7 +518,7 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     assert.ok(!/onDismissed/.test(lib), 'LibraryFragment sends the removal from Snackbar.onDismissed again: it outlives the view');
     assert.ok(/PendingRemovals\.app\.schedule\(/.test(lib) && /PendingRemovals\.app\.undo\(/.test(lib),
       'the library removal does not go through PendingRemovals');
-    assert.ok(/pendingIds\(\)/.test(lib), 'a reload no longer hides removals still inside their undo window');
+    assert.ok(/pendingIds\(username\)/.test(lib), 'a reload no longer hides THIS user\'s removals still inside their undo window');
   });
 }
 

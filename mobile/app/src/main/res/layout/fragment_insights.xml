@@ -194,7 +194,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textStyle="bold"
-                android:text="By release year"
+                android:text="Top release years"
                 android:textColor="@color/gt_text_primary"
                 android:textSize="15sp"
                 android:layout_marginBottom="16dp"

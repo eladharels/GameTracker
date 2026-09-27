@@ -466,7 +466,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                     allGames.clear()
                     // A removal still inside its undo window has not reached the server yet,
                     // so the server still lists it. Keep it hidden until it lands or is undone.
-                    val pendingRemoval = PendingRemovals.app.pendingIds()
+                    val pendingRemoval = PendingRemovals.app.pendingIds(username)
                     allGames.addAll((response.body() ?: emptyList()).filterNot {
                         (it.game_id ?: it.id) in pendingRemoval
                     })
@@ -526,7 +526,9 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             filterGames()
             return
         }
+        val snackbar = Snackbar.make(requireView(), "\"${game.displayName}\" removed", UNDO_WINDOW_MS.toInt())
         PendingRemovals.app.schedule(
+            owner = username,
             gameId = gameId,
             delayMs = UNDO_WINDOW_MS,
             delete = {
@@ -547,14 +549,21 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                     showSnackbar("Couldn't remove ${game.displayName}", SnackbarHelper.Type.ERROR)
                 }
             },
+            // The window has closed, so Undo would do nothing: take it off screen. Snackbar
+            // extends its own timeout for accessibility services, past UNDO_WINDOW_MS.
+            onCommitted = { snackbar.dismiss() },
         )
 
-        val snackbar = Snackbar.make(requireView(), "\"${game.displayName}\" removed", UNDO_WINDOW_MS.toInt())
         snackbar.setAction("UNDO") {
             // Undo only cancels the countdown: no network, no view needed after this line.
-            if (PendingRemovals.app.undo(gameId) && isAdded && view != null) {
-                allGames.add(game)
-                filterGames()
+            if (PendingRemovals.app.undo(username, gameId)) {
+                if (isAdded && view != null) {
+                    allGames.add(game)
+                    filterGames()
+                }
+            } else if (isAdded) {
+                // Too late: the removal was already sent. Say so rather than do nothing.
+                showSnackbar("Already removed. Couldn't undo.", SnackbarHelper.Type.DEFAULT)
             }
         }
         activity?.findViewById<android.view.View>(R.id.bottom_navigation)

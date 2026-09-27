@@ -736,6 +736,26 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Owner / date:** the repository owner, date to be set. Recorded by the CISO re-check of PR
   #6 (74d21bf).
 
+### [ ] MOB-39 Low — Follow-ups from the PR #8 reviews (MOB-10/11/12)
+- **Where and what:**
+  - A search result opened in `GameDetailsFragment` falls back to `currentStatus = "Wishlist"`
+    (`GameDetailsFragment.kt`, status chips). For a game the user already owns, tapping a chip
+    overwrites a status they were never shown. It is an explicit tap and predates PR #8. Show
+    the owned status (`LibraryMatch.owned`) there too. Source: CISO review.
+  - A small race remains between Search's fresh library check and the add. The real fix is
+    server-side: v1's upsert overwrites the stored status (frozen), and v2's
+    `addResolvedGame` already keeps it. Moving the app to v2 (MOB-9's PAT) closes it.
+  - The "In library · Done" badge needs a contentDescription ("In your library, status Done"),
+    and `maxLines` for large font scales.
+  - Add makes up to three requests with no in-flight state: disable the button while it runs.
+  - "Couldn't check your library. Try again." has no Retry action.
+  - Insights "Games tracked" repeats the library total; consider "Completed this year" once
+    `GET /api/user/:username/stats` is on mobile.
+  - New strings are hardcoded, like the rest of the app (MOB-35).
+  - Contrast of 10 sp white on the green and grey status fills, and the 44 dp add button
+    (MOB-29, MOB-32).
+- **Source:** CISO and UI/UX reviews of PR #8.
+
 ---
 
 ## Operational notes
