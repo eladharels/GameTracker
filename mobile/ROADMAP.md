@@ -752,6 +752,12 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Insights "Games tracked" repeats the library total; consider "Completed this year" once
     `GET /api/user/:username/stats` is on mobile.
   - New strings are hardcoded, like the rest of the app (MOB-35).
+  - A removal that fails after the library screen was replaced is not reported to the NEW
+    screen: its next load shows the game again (the server still has it), but nothing
+    reloads it at that moment. Emit failures on a flow the visible screen collects.
+  - Search runs its library refresh after the search, not in parallel, and the search row
+    re-normalises every library name on each bind (`LibraryMatch.owned`). Fetch in
+    parallel and precompute the normalised rows once per fetch. Source: Architect review.
   - Contrast of 10 sp white on the green and grey status fills, and the 44 dp add button
     (MOB-29, MOB-32).
 - **Source:** CISO and UI/UX reviews of PR #8.

@@ -180,6 +180,22 @@
     "want": null
   },
   {
+    "name": "a non-breaking space in the incoming name",
+    "rows": [
+      {
+        "game_id": "igdb_1",
+        "game_name": "Hades II",
+        "release_date": "2024-05-06"
+      }
+    ],
+    "game": {
+      "id": "rawg_9",
+      "name": "Hades II",
+      "releaseDate": "2024-01-01"
+    },
+    "want": "same"
+  },
+  {
     "name": "doubled or control-character whitespace in the incoming name",
     "rows": [
       {

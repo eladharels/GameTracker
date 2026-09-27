@@ -22,5 +22,8 @@ module.exports = [
   { name: 'empty library', rows: [], game: { id: 'rawg_1', name: 'Halo', releaseDate: null }, want: null },
   // A STORED name is whitespace-collapsed on write (user-rules.js#sanitizeText); a raw
   // incoming one is not. They must still meet (UP-19 review).
+  // JavaScript's \s matches Unicode spaces; Java's plain \s does not, so the Android copy
+  // (LibraryMatch.kt) needs (?U). Held here so all three copies agree (MOB-10 review).
+  { name: 'a non-breaking space in the incoming name', rows: [row('igdb_1', 'Hades II', '2024-05-06')], game: { id: 'rawg_9', name: 'Hades\u00a0II', releaseDate: '2024-01-01' }, want: 'same' },
   { name: 'doubled or control-character whitespace in the incoming name', rows: [row('igdb_1', 'Hades II', '2024-05-06')], game: { id: 'rawg_9', name: 'Hades \u0009 II', releaseDate: '2024-01-01' }, want: 'same' },
 ];

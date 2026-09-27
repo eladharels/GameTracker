@@ -543,8 +543,12 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             onFailed = {
                 // Only if this screen is still showing; otherwise the next load shows the
                 // game again, which is the truth: it was not removed.
+                // The id leaves the pending set BEFORE the DELETE is sent, so a reload that
+                // landed mid-request already shows the game again: never add it twice.
+                // (This lambda keeps the fragment reachable until the request ends; that is
+                // bounded by OkHttp's timeouts.)
                 if (isAdded && view != null) {
-                    allGames.add(game)
+                    if (allGames.none { (it.game_id ?: it.id) == gameId }) allGames.add(game)
                     filterGames()
                     showSnackbar("Couldn't remove ${game.displayName}", SnackbarHelper.Type.ERROR)
                 }
