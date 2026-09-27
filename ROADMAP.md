@@ -9,6 +9,12 @@ and 3 warnings. The `test/integration/` suites need Postgres and were not run.
 
 Items marked ✔ were re-checked by hand against the code, not only reported by a reviewer.
 
+**The Android app** (`mobile/`, moved into this repo on 2026-09-27) has its own roadmap:
+[`mobile/ROADMAP.md`](mobile/ROADMAP.md), items MOB-1 to MOB-35. The five critical items are
+fixed in PR #6: tokens and the password in release logs, an exported `MainActivity`, logout
+keeping the token, the token in backups, and no 401 handling. Visible change: a session now
+ends after 12 hours, and the user must sign in again with their password.
+
 ---
 
 ## How to use this file

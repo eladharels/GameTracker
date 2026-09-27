@@ -307,15 +307,26 @@ GameTracker/
 │   │                               #   migration-lock.test.js asks pg_locks that the
 │   │                               #   migration lock does not outlive its run, and runs
 │   │                               #   a second migrating PROCESS (CC-7).
-│   │                               #   All six call services directly, so the adapters
+│   │                               #   All of them call services directly, so the adapters
 │   │                               #   between the socket and the service are covered by
-│   │                               #   curl steps in the same job instead
-│   └── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
-│                                   #   routes exist; this proves what they still RETURN.
-│                                   #   Without it "frozen" is only an intention: a service
-│                                   #   can rename a field and every client breaks with CI
-│                                   #   green. Two of the three clients (Android, the planned
-│                                   #   MCP) are not in this repo and cannot be grepped
+│   │                               #   curl steps in the same job instead.
+│   │                               #   library-shape.test.js pins the v1 library row's EXACT
+│   │                               #   keys from a REAL row: its SELECT * put added_at on the
+│   │                               #   wire unnoticed, and a stubbed row cannot see a column
+│   ├── api-contract.test.js        # v1 RESPONSE-SHAPE contract. api-surface proves which
+│   │                               #   routes exist; this proves what they still RETURN.
+│   │                               #   Without it "frozen" is only an intention: a service
+│   │                               #   can rename a field and every client breaks with CI
+│   │                               #   green. Ends with the ANDROID GATE: every field of the
+│   │                               #   app's models is in a pinned key set, and its request
+│   │                               #   bodies are driven through the real handlers
+│   ├── mobile-api.js               # NOT a test: reads mobile/'s GameTrackerApi.kt and
+│   │                               #   models.kt for the Android gate (api-surface: every route
+│   │                               #   the app calls is live at a reachable tier; api-contract:
+│   │                               #   every field is pinned). Regex over Kotlin, so it FAILS
+│   │                               #   CLOSED: counts, anchors, and a refusal of @SerializedName
+│   └── v1-shapes.js                # The published v1 key sets, ONE copy shared by the pins,
+│                                   #   the Android gate and library-shape.test.js
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
 ├── migrations/                     # Numbered .sql schema migrations. 006 adds
 │                                   #   sent_reminders (the reminder dedupe log). 005 adds
@@ -339,7 +350,12 @@ GameTracker/
 ├── eslint.config.mjs               # Backend lint. `no-undef` is the rule that earns its
 │                                   #   keep — see the CI table below
 ├── .github/workflows/
-│   └── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
+│   ├── docker-build-deploy.yml     # CI: scan → build → smoke test → deploy
+│   └── android.yml                 # The Android app: build, JVM tests, lint, release APK.
+│                                   #   mobile/** only; NEVER a deploy dependency. Gradle runs
+│                                   #   ONLY in a digest-pinned, cap-dropped container (no socket,
+│                                   #   $HOME, .git or secrets), with every download pinned and
+│                                   #   strict dependency verification. See the CI section
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx                 # The app shell and routes only. Pages extracted from
@@ -438,6 +454,11 @@ GameTracker/
 │   ├── eslint.config.js
 │   ├── package.json
 │   └── Dockerfile                  # Frontend image (multi-stage: Node build → Nginx)
+├── mobile/                         # The Android companion app (Kotlin), moved into this repo.
+│                                   #   Its own mobile/CLAUDE.md and mobile/ROADMAP.md (MOB-*).
+│                                   #   The v1 client the freeze exists for: the Android gate in
+│                                   #   test/ checks its models and routes. Excluded from the
+│                                   #   backend image by .dockerignore (the smoke stage proves it)
 ├── mcp/                            # The MCP server — a SEPARATE container and a separate
 │                                   #   npm package. Exposes 16 task-shaped tools over
 │                                   #   /api/v2 for AI clients. HOLDS NO CREDENTIALS: every
@@ -1019,7 +1040,12 @@ NODE_ENV=production
 ## Relationship to Other Projects
 
 - **GameTracker-stg** (`../GameTracker-stg/`): The staging environment for this project. All new features and fixes are developed and tested there first. The `STAGING_CHANGELOG.txt` in that project documents every pending change with step-by-step migration instructions for applying to this production instance.
-- **GameTracker-mobile** (`../GameTracker-mobile/`): A native Android companion app (Kotlin) that connects to this backend's REST API at `https://gametracker.etech.ink/api/`.
+- **GameTracker Mobile** now lives IN this repo at `mobile/` (it was a separate
+  `../GameTracker-mobile/` checkout). A native Android app (Kotlin) that connects to this
+  backend's v1 REST API at `https://gametracker.etech.ink/api/` with the 12-hour session JWT.
+  It has its own `mobile/CLAUDE.md` and `mobile/ROADMAP.md`. Built by
+  `.github/workflows/android.yml`; its routes and fields are gated by `test/api-surface.test.js`
+  and `test/api-contract.test.js`, so a backend change that would break it fails CI by name.
 
 ---
 
@@ -1175,6 +1201,31 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 > removes them: the deploy job's prune is `docker image prune -f`, which is dangling-only, and
 > these carry a tag. This runner has already failed a build once with "You don't have enough
 > free space in /var/cache/apt/archives/".
+
+> **The Android job (`android.yml`) runs on this same production host, so Gradle never runs on
+> the host.** A Gradle build executes third-party code: plugins, `kapt` processors, and the
+> lint jars inside dependencies. So it runs in a throwaway `eclipse-temurin:17` container pinned
+> by digest, as the runner uid, with `--cap-drop ALL`, `no-new-privileges`, memory/CPU/PID
+> limits and a noexec `/tmp`, and with ONLY `mobile/` mounted (no Docker socket, `$HOME`, `.git`,
+> secrets or runner environment). Every download is pinned:
+>   - the command-line tools zip (SHA-256, re-verified and re-extracted every run);
+>   - the Gradle distribution (`distributionSha256Sum`);
+>   - the wrapper jar;
+>   - every dependency (`gradle/verification-metadata.xml`, strict);
+>   - `android.builder.sdkDownload=false`.
+>
+> The SDK and Gradle caches are named volumes split between PRs and main. A volume over 4 GiB is
+> wiped, and the job refuses to build below 5 GiB free (UP-25). It is path-filtered to `mobile/**`,
+> never in `deploy.needs`, and on one runner it can delay a deploy but never skip one.
+> `test/runtime.test.js` pins all of this, and it now holds EVERY workflow file to:
+>   - SHA-pinned actions and no fixed `/tmp`;
+>   - checksum-before-extract for any `tar -x`/`unzip`;
+>   - the same-repo gate on every PR-triggered job;
+>   - no `pull_request_target` or `workflow_run`.
+>
+> Residual risk: the SDK components `sdkmanager` installs are verified only against Google's
+> repository metadata. Any dependency change in `mobile/` must regenerate the verification
+> metadata in the same PR.
 
 > **The smoke test speaks the protocol; it does not ping liveness.** The MCP step asserts
 > an `initialize` RESULT, not HTTP 200 — a JSON-RPC error is delivered with a 200, so a
