@@ -110,9 +110,17 @@ jobs:
             -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
             "${JDK_IMAGE}" chown "$(id -u):$(id -g)" /sdk /gradle
 
+      # A cancelled job kills the `docker run` CLIENT, not the container: the build kept running
+      # on the production host and held the Gradle cache lock, so the next run timed out
+      # waiting for it (seen on PR #6). The container therefore has a fixed name per partition,
+      # any leftover is removed before starting, and the always() step at the end removes it,
+      # cancelled or not.
+      - name: Remove a build container left behind by a cancelled run
+        run: docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
+
       - name: Build and test inside the container
         run: |
-          docker run --rm \
+          docker run --rm --name "gametracker-android-build-${VOLUME_PARTITION}" \
             --user "$(id -u):$(id -g)" \
             --cap-drop ALL --security-opt no-new-privileges \
             --memory 4g --cpus 2 --pids-limit 1024 \
@@ -168,6 +176,8 @@ jobs:
       - name: Report disk and cap the cache volumes (UP-25)
         if: always()
         run: |
+          # First: never leave a build running on the host, even when this job was cancelled.
+          docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
           for v in sdk gradle; do
             name="gametracker-android-${v}-${VOLUME_PARTITION}"
             docker volume inspect "${name}" >/dev/null 2>&1 || continue

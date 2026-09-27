@@ -375,6 +375,16 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   const deploy = loadWorkflow('docker-build-deploy.yml').jobs.deploy;
   assert.ok(!JSON.stringify(deploy.needs).includes('android'), 'deploy depends on the Android job');
   assert.ok(wf.jobs.android['timeout-minutes'] > 0, 'the Android job has no timeout: a hung Gradle would block the one runner');
+  // A cancelled job kills the docker CLIENT, not the container (seen on PR #6: the orphan
+  // held the Gradle lock). The build container is named, cleared before, and removed in an
+  // always() step -- which is what runs on cancellation.
+  const steps = wf.jobs.android.steps;
+  const name = /--name "(gametracker-android-build-\$\{VOLUME_PARTITION\})"/.exec(b);
+  assert.ok(name, 'the build container has no fixed per-partition name');
+  const idx = steps.indexOf(build);
+  assert.ok(steps.slice(0, idx).some((st) => stepRun(st).includes(`docker rm -f "${name[1]}"`)), 'a leftover build container is not removed before the build');
+  assert.ok(steps.slice(idx + 1).some((st) => /always\(\)/.test(String(st.if)) && stepRun(st).includes(`docker rm -f "${name[1]}"`)),
+    'no always() step removes the build container after a cancelled or failed run');
 });
 
 // The Android app's critical security fixes (mobile/ROADMAP.md MOB-1, MOB-2, MOB-4), pinned
