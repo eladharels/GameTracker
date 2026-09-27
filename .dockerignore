@@ -22,6 +22,10 @@ system-status-cache.json
 **/node_modules
 **/dist
 
+# The Android app. It is built by .github/workflows/android.yml, never by the backend
+# image, and `COPY . .` would otherwise ship its sources, Gradle wrapper jar and assets.
+mobile
+
 # VCS / CI / tooling
 .git
 .github

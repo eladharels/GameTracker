@@ -268,32 +268,76 @@ check('main.jsx renders the router with the shared ROUTER_PROPS (FE-22)', () => 
 // Tool installs on the production host (review of UP-7). Every binary the pipeline
 // downloads is installed as ROOT, so it must come from a private mktemp dir (a fixed /tmp
 // path can be pre-planted) and match a SHA-256 PINNED in this file before it is extracted.
+// EVERY workflow file, not only the deploy pipeline: android.yml runs on the same host.
+const WORKFLOW_DIR = path.join(ROOT, '.github/workflows');
+const WORKFLOW_FILES = fs.readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
+const loadWorkflow = (f) => require('js-yaml').load(fs.readFileSync(path.join(WORKFLOW_DIR, f), 'utf8'));
+const stepRun = (st) => (st.run || '').replace(/^\s*#.*$/gm, '');
+
 check('CI installs tools from a private dir, checksum-verified before sudo install', () => {
-  const yaml = require('js-yaml');
-  const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8'));
   let installs = 0;
-  for (const [jobName, job] of Object.entries(wf.jobs)) {
-    for (const st of job.steps || []) {
-      const run = (st.run || '').replace(/^\s*#.*$/gm, '');
-      // Quoted or not, as an argument or an assignment (review of SEC-17: `-o "/tmp/x"`,
-      // `-C "/tmp"` and `DL=/tmp/fixed` all slipped past the first version).
-      assert.ok(!/(?:\s|=)["']?\/tmp(?:\/|["'\s]|$)/m.test(run),
-        `${jobName} / "${st.name}" uses a fixed /tmp path`);
-      if (/sudo install\b/.test(run)) {
-        installs++;
-        const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
-        assert.ok(check >= 0 && check < untar && untar < inst,
-          `${jobName} / "${st.name}" installs as root without checking a pinned SHA-256 first`);
-        // The PINNED value must be what feeds sha256sum -c — not merely a hash somewhere.
-        const fed = /echo "\$\{(\w+)\}\s+[^"]*" \| sha256sum -c/.exec(run);
-        assert.ok(fed, `${jobName} / "${st.name}" does not feed a named pin to sha256sum -c`);
-        const pinned = { ...(st.env || {}) };
-        for (const m of run.matchAll(/^\s*(\w+)="([0-9a-f]{64})"/gm)) pinned[m[1]] = m[2];
-        assert.ok(/^[0-9a-f]{64}$/.test(pinned[fed[1]] || ''), `${jobName} / "${st.name}": ${fed[1]} is not a pinned 64-hex SHA-256`);
+  for (const file of WORKFLOW_FILES) {
+    const wf = loadWorkflow(file);
+    for (const [jobName, job] of Object.entries(wf.jobs)) {
+      for (const st of job.steps || []) {
+        const run = stepRun(st);
+        const where = `${file} / ${jobName} / "${st.name}"`;
+        // Quoted or not, as an argument or an assignment (review of SEC-17: `-o "/tmp/x"`,
+        // `-C "/tmp"` and `DL=/tmp/fixed` all slipped past the first version).
+        assert.ok(!/(?:\s|=)["']?\/tmp(?:\/|["'\s]|$)/m.test(run), `${where} uses a fixed /tmp path`);
+        // ANY extraction of a downloaded archive, root install or not (android.yml review):
+        // a pinned SHA-256 must be checked first, fed by name to sha256sum -c.
+        const extract = run.search(/\btar -x|\bunzip\b/);
+        if (extract >= 0) {
+          const verify = run.search(/sha256sum -c/);
+          assert.ok(verify >= 0 && verify < extract, `${where} extracts an archive without checking a pinned SHA-256 first`);
+          const fed = /echo "\$\{(\w+)\}\s+[^"]*" \| sha256sum -c/.exec(run);
+          assert.ok(fed, `${where} does not feed a named pin to sha256sum -c`);
+          const pinned = { ...(wf.env || {}), ...(job.env || {}), ...(st.env || {}) };
+          for (const m of run.matchAll(/^\s*(\w+)="([0-9a-f]{64})"/gm)) pinned[m[1]] = m[2];
+          assert.ok(/^[0-9a-f]{64}$/.test(pinned[fed[1]] || ''), `${where}: ${fed[1]} is not a pinned 64-hex SHA-256`);
+        }
+        if (/sudo install\b/.test(run)) {
+          installs++;
+          const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
+          assert.ok(check >= 0 && check < untar && untar < inst,
+            `${where} installs as root without checking a pinned SHA-256 first`);
+        }
       }
     }
   }
   assert.ok(installs >= 4, `found ${installs} root installs — expected gitleaks and three trivy`);
+});
+
+// This repository is public and every job runs on the production host. A job reachable from
+// a fork's pull request runs a stranger's code there, so each job must either carry the
+// same-repo gate or not run on pull_request at all (push-only, like deploy). No test pinned
+// this before, for any workflow. Both triggers that run a fork's code WITH this repo's
+// secrets are refused outright.
+check('every PR-triggered job is gated to same-repo PRs; no pull_request_target / workflow_run', () => {
+  const GATE = "github.event.pull_request.head.repo.full_name == github.repository";
+  for (const file of WORKFLOW_FILES) {
+    const wf = loadWorkflow(file);
+    const on = wf.on || wf[true] || {};
+    const triggers = typeof on === 'string' ? [on] : Array.isArray(on) ? on : Object.keys(on);
+    for (const t of ['pull_request_target', 'workflow_run']) {
+      assert.ok(!triggers.includes(t), `${file} uses the ${t} trigger`);
+    }
+    if (!triggers.includes('pull_request')) continue;
+    for (const [jobName, job] of Object.entries(wf.jobs)) {
+      const cond = String(job.if || '');
+      const gated = cond.includes(GATE);
+      const pushOnly = /^github\.event_name == 'push'( && [^|]*)?$/.test(cond.trim());
+      assert.ok(gated || pushOnly, `${file} / ${jobName} can run for a fork's pull request (if: ${cond || 'none'})`);
+    }
+  }
+  assert.ok(WORKFLOW_FILES.includes('docker-build-deploy.yml'), 'the deploy workflow was not found -- the scan is broken');
+});
+
+// The backend image is `COPY . .`; the Android app has no business in it.
+check('.dockerignore keeps the Android app out of the backend image', () => {
+  const lines = fs.readFileSync(path.join(ROOT, '.dockerignore'), 'utf8').split('\n').map((l) => l.trim());
+  assert.ok(lines.some((l) => /^\/?mobile\/?(\*\*)?$/.test(l)), '.dockerignore does not exclude mobile/');
 });
 
 // The gap that let the original bug through: CI ran Node 20 while the image ran 18, so
@@ -550,13 +594,18 @@ console.log('the semgrep gate runs a pinned binary:');
 console.log('every GitHub Action is pinned to a commit:');
 {
   const raw = fs.readFileSync(path.join(ROOT, '.github/workflows/docker-build-deploy.yml'), 'utf8');
-  check('no `uses:` references a tag or branch', () => {
-    const uses = [...raw.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)(.*)$/gm)];
-    assert.ok(uses.length > 0, 'no uses: lines found -- the scan is broken');
-    for (const [, ref, rest] of uses) {
-      assert.match(ref, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${ref} is not pinned to a commit SHA`);
-      assert.match(rest, /#\s*v\d/, `${ref} has no "# vX.Y.Z" comment saying which release it is`);
+  check('no `uses:` in ANY workflow references a tag or branch', () => {
+    let total = 0;
+    for (const file of WORKFLOW_FILES) {
+      const text = fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8');
+      const uses = [...text.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)(.*)$/gm)];
+      total += uses.length;
+      for (const [, ref, rest] of uses) {
+        assert.match(ref, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${file}: ${ref} is not pinned to a commit SHA`);
+        assert.match(rest, /#\s*v\d/, `${file}: ${ref} has no "# vX.Y.Z" comment saying which release it is`);
+      }
     }
+    assert.ok(total > 0, 'no uses: lines found -- the scan is broken');
   });
   check('the Semgrep rule that flags a mutable action tag is not excluded', () => {
     assert.ok(!/github-actions-mutable-action-tag/.test(raw), 'the mutable-action-tag rule is excluded again');

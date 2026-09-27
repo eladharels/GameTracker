@@ -891,6 +891,17 @@ jobs:
           }
           echo "[smoke] Backend health check PASSED"
 
+      # The Android app is built by android.yml, never by this image. .dockerignore keeps
+      # mobile/ out of the build context; this proves it against the image that ships,
+      # because a dropped .dockerignore line would otherwise go unnoticed.
+      - name: Verify the backend image carries no Android sources
+        run: |
+          docker run --rm --entrypoint sh "${TEST_BACKEND_IMAGE}" -c 'test -e /app/index.js && test ! -e /app/mobile' || {
+            echo "[smoke] ERROR: /app/mobile is in the backend image (.dockerignore must exclude mobile/)"
+            exit 1
+          }
+          echo "[smoke] Backend image has no mobile/ PASSED"
+
       - name: Wait for frontend to become reachable
         run: |
           MAX_WAIT=30
