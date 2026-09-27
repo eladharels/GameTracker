@@ -371,6 +371,16 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   assert.match(props, /^distributionSha256Sum=[0-9a-f]{64}$/m, 'the Gradle distribution is not SHA-256 pinned');
   const gprops = fs.readFileSync(path.join(ROOT, 'mobile/gradle.properties'), 'utf8');
   assert.match(gprops, /^android\.builder\.sdkDownload=false$/m, 'AGP may download SDK components on its own');
+  // Strict dependency verification against the committed, reviewed metadata. Regenerating it in
+  // CI (--write-verification-metadata) would verify every dependency against itself.
+  assert.ok(/--dependency-verification strict/.test(b), 'Gradle does not run with --dependency-verification strict');
+  assert.ok(!/--write-verification-metadata|--dependency-verification (lenient|off)|-M\s/.test(runs),
+    'the workflow regenerates or relaxes the dependency verification metadata');
+  assert.ok(!/org\.gradle\.dependency\.verification/.test(gprops), 'gradle.properties overrides dependency verification');
+  const meta = fs.readFileSync(path.join(ROOT, 'mobile/gradle/verification-metadata.xml'), 'utf8');
+  assert.match(meta, /<verify-metadata>true<\/verify-metadata>/, 'verification-metadata.xml does not verify metadata');
+  assert.ok((meta.match(/<sha256 value="[0-9a-f]{64}"/g) || []).length > 100, 'verification-metadata.xml holds almost no checksums');
+  assert.ok(!/<trusted-artifacts>|<trusted-keys>|<ignored-keys>/.test(meta), 'verification-metadata.xml trusts artifacts without a checksum');
   // Never a deploy dependency, and deploy never waits on it.
   const deploy = loadWorkflow('docker-build-deploy.yml').jobs.deploy;
   assert.ok(!JSON.stringify(deploy.needs).includes('android'), 'deploy depends on the Android job');
