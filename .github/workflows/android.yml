@@ -204,7 +204,8 @@ jobs:
           # Give mobile/ back to the runner, so the next checkout can clean and update it.
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
-            "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /work || true
+            "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /work \
+            || echo "::warning::could not hand mobile/ back to the runner; the next checkout cleans it"
           for v in sdk gradle; do
             name="gametracker-android-${v}-${VOLUME_PARTITION}"
             docker volume inspect "${name}" >/dev/null 2>&1 || continue

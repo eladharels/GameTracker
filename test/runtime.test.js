@@ -395,6 +395,18 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     'the build container does not run as BUILD_UID');
   const cleanup = stepRun(wf.jobs.android.steps.find((st) => st.if === 'always()'));
   assert.ok(/chown -R "\$\(id -u\):\$\(id -g\)" \/work/.test(cleanup), 'mobile/ is not handed back to the runner after the build');
+  // Every chown runs in a network-less container whose ONLY capability is CHOWN, never on the
+  // host, and never follows symlinks (-L/-H): mobile/ is PR-controlled (CISO re-check, 74d21bf).
+  const chowns = runs.split('\n').filter((l) => /\bchown\b/.test(l));
+  assert.ok(chowns.length >= 2, 'the chown steps are missing');
+  for (const line of chowns) {
+    assert.ok(/"\$\{JDK_IMAGE\}" chown -R? ?"/.test(line), `a chown runs outside the pinned container: ${line.trim()}`);
+    assert.ok(!/chown[^\n]*\s-(?:[a-zA-Z]*[LH])/.test(line), `a chown follows symlinks: ${line.trim()}`);
+  }
+  for (const m of runs.matchAll(/docker run([\s\S]*?)"\$\{JDK_IMAGE\}" chown/g)) {
+    assert.ok(/--network none/.test(m[1]) && /--cap-drop ALL/.test(m[1]) && /--cap-add CHOWN/.test(m[1]) && !/--cap-add (?!CHOWN)/.test(m[1]),
+      'a chown container is not network-less with CHOWN as its only capability');
+  }
   const meta = fs.readFileSync(path.join(ROOT, 'mobile/gradle/verification-metadata.xml'), 'utf8');
   assert.match(meta, /<verify-metadata>true<\/verify-metadata>/, 'verification-metadata.xml does not verify metadata');
   assert.ok((meta.match(/<sha256 value="[0-9a-f]{64}"/g) || []).length > 100, 'verification-metadata.xml holds almost no checksums');

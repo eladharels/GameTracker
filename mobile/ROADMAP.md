@@ -720,6 +720,22 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   proxy topology") takes the backend port off the reachable set.
 - **Source:** CISO review of PR #6.
 
+### [ ] MOB-38 High — The self-hosted runner (the production host) runs every CI job as root
+- **Where:** the runner service on the production host. It is not in this repository.
+- **What:** every CI step runs as uid 0 beside the live stack. That covers `npm ci`, the image
+  builds, Trivy, the smoke stacks, deploy and the Android job's host-side steps. PR #6 found
+  this when the Android job's uid-0 guard fired. Gradle itself now runs as `BUILD_UID` 10001,
+  but the other jobs are unchanged.
+- **Fix (operator):**
+  - Run the runner service as a dedicated non-root user in the `docker` group. Note that `docker`
+    group membership is still root-equivalent on the host, so this narrows accidents, not a
+    determined attacker. The durable answer is the one root `CLAUDE.md` already gives: move the
+    PR path to GitHub-hosted runners, or make the repository private.
+  - Re-check every step that writes outside `RUNNER_TEMP` and the workspace. For example, deploy
+    writes to `/home/docker/gametracker`.
+- **Owner / date:** the repository owner, date to be set. Recorded by the CISO re-check of PR
+  #6 (74d21bf).
+
 ---
 
 ## Operational notes
@@ -747,7 +763,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     hands it the volumes and `mobile/` before the build and gives `mobile/` back afterwards.
     The first builds ran as uid 0 (inside the capability-dropped container) because `--user`
     took the runner's own uid; the in-container guard caught it. Running the runner service as
-    a dedicated non-root user (with docker group access) is an operator decision for the host.
+    a dedicated non-root user is MOB-38.
   - The PR/main volume split prevents accidents, not attacks: a PR runs its own copy of the
     workflow. The same-repo gate is the boundary.
   - **Residual risk:** the SDK components `sdkmanager` installs are verified only against
