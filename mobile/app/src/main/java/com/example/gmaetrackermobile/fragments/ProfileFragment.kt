@@ -181,7 +181,7 @@ class ProfileFragment : Fragment() {
                     super.onAuthenticationSucceeded(result)
                     prefs.edit().putBoolean("fingerprint_enabled", true).apply()
                     switchBiometric.isChecked = true
-                    showSnackbar("Fingerprint login enabled", SnackbarHelper.Type.SUCCESS)
+                    showSnackbar("Fingerprint unlock on (while signed in)", SnackbarHelper.Type.SUCCESS)
                 }
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
@@ -196,8 +196,8 @@ class ProfileFragment : Fragment() {
             })
 
         promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Enable fingerprint login")
-            .setSubtitle("Use your fingerprint to sign in faster")
+            .setTitle("Unlock with fingerprint")
+            .setSubtitle("Unlock the app with your fingerprint while you are signed in")
             .setNegativeButtonText("Cancel")
             .build()
 
@@ -206,7 +206,7 @@ class ProfileFragment : Fragment() {
                 biometricPrompt.authenticate(promptInfo)
             } else {
                 prefs.edit().putBoolean("fingerprint_enabled", false).apply()
-                showSnackbar("Fingerprint login disabled", SnackbarHelper.Type.DEFAULT)
+                showSnackbar("Fingerprint unlock off", SnackbarHelper.Type.DEFAULT)
             }
         }
     }
@@ -302,10 +302,8 @@ class ProfileFragment : Fragment() {
     }
 
     private fun logout() {
-        val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("fingerprint_enabled", false)) {
-            prefs.edit().remove("token").remove("username").apply()
-        }
+        // ALWAYS ends the session (MOB-3); the username and the fingerprint setting stay.
+        com.example.gmaetrackermobile.Session.get(requireContext()).endSession()
         val intent = Intent(requireContext(), LoginActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)

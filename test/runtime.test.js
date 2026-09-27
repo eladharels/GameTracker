@@ -377,6 +377,50 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   assert.ok(wf.jobs.android['timeout-minutes'] > 0, 'the Android job has no timeout: a hung Gradle would block the one runner');
 });
 
+// The Android app's critical security fixes (mobile/ROADMAP.md MOB-1, MOB-2, MOB-4), pinned
+// from source: these are properties of the manifest and the build, which no JVM unit test in
+// mobile/ can see, and they fail silently -- a re-exported activity or a dropped backup
+// exclude breaks nothing a user notices.
+{
+  const APP = path.join(ROOT, 'mobile/app/src/main');
+  const manifest = fs.readFileSync(path.join(APP, 'AndroidManifest.xml'), 'utf8');
+  // A self-closing <activity .../>, or <activity ...> through its </activity> -- NOT up to the
+  // first "/>", which inside an activity is a child element's.
+  const activities = [...manifest.matchAll(/<activity\b[^>]*?\/>|<activity\b[^>]*>[\s\S]*?<\/activity>/g)].map((m) => m[0]);
+  check('Android: only the launcher activity is exported (MOB-2)', () => {
+    assert.ok(activities.length >= 3, `parsed ${activities.length} activities from the manifest -- the scan is broken`);
+    for (const a of activities) {
+      const name = /android:name="([^"]+)"/.exec(a)[1];
+      const launcher = /android\.intent\.category\.LAUNCHER/.test(a);
+      if (/android:exported="true"/.test(a)) {
+        assert.ok(launcher, `${name} is exported but is not the launcher: any app can open it and skip the login`);
+      }
+    }
+    assert.ok(/android:name="\.MainActivity"[\s\S]*?android:exported="false"/.test(manifest), 'MainActivity must say exported="false" explicitly');
+  });
+  check('Android: the session token is excluded from every backup path (MOB-4)', () => {
+    const exclude = /<exclude\s+domain="sharedpref"\s+path="auth\.xml"\s*\/>/;
+    const backup = fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8');
+    assert.ok(exclude.test(backup), 'backup_rules.xml (Android 11 and older) does not exclude auth.xml');
+    const extraction = fs.readFileSync(path.join(APP, 'res/xml/data_extraction_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    for (const section of ['cloud-backup', 'device-transfer']) {
+      const m = new RegExp(`<${section}>([\\s\\S]*?)</${section}>`).exec(extraction);
+      assert.ok(m && exclude.test(m[1]), `data_extraction_rules.xml <${section}> does not exclude auth.xml`);
+    }
+    assert.ok(/android:dataExtractionRules="@xml\/data_extraction_rules"/.test(manifest) && /android:fullBackupContent="@xml\/backup_rules"/.test(manifest),
+      'the manifest no longer points at the backup rules');
+  });
+  check('Android: HTTP logging is debug-only and never logs headers or bodies (MOB-1)', () => {
+    // Code only: the KDoc explaining the old bug names Level.BODY on purpose.
+    const client = fs.readFileSync(path.join(APP, 'java/com/example/gmaetrackermobile/ApiClient.kt'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    assert.ok(!/Level\.(BODY|HEADERS)/.test(client), 'ApiClient logs at BODY or HEADERS: that is the bearer token and the password');
+    assert.ok(/buildClient\(BuildConfig\.DEBUG/.test(client), 'the shipped client is not built from BuildConfig.DEBUG');
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
+    assert.ok(/buildConfig\s*=\s*true/.test(gradle), 'buildFeatures.buildConfig is off, so BuildConfig.DEBUG does not exist');
+  });
+}
+
 // The backend image is `COPY . .`; the Android app has no business in it.
 check('.dockerignore keeps the Android app out of the backend image', () => {
   const lines = fs.readFileSync(path.join(ROOT, '.dockerignore'), 'utf8').split('\n').map((l) => l.trim());

@@ -17,6 +17,9 @@ object SnackbarHelper {
         type: Type = Type.DEFAULT,
         duration: Int = Snackbar.LENGTH_SHORT
     ) {
+        // While an expired session is on its way to the login screen, the screen's own
+        // "failed to load" error is noise on top of the real reason (MOB-5).
+        if (type == Type.ERROR && Session.redirecting) return
         val view = fragment.view ?: return
         val snackbar = Snackbar.make(view, message, duration)
         // Anchor above the bottom nav bar so it's never hidden behind it

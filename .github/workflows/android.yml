@@ -142,10 +142,12 @@ jobs:
               (yes || true) | "${SDKM}" --sdk_root=/sdk --licenses >/dev/null
               "${SDKM}" --sdk_root=/sdk "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
 
-              # BOOTSTRAP (this commit only): build the unmodified app once with no dependency
-              # verification yet, and print the generated verification metadata and lint
-              # baseline so they can be reviewed and committed. Trust-on-first-use, recorded.
-              # The next commit replaces this with --dependency-verification strict.
+              # BOOTSTRAP (transitional, PR #6 only): no dependency verification yet. The build
+              # prints the generated verification metadata (and the lint baseline) so they can
+              # be reviewed and committed -- trust-on-first-use, recorded. The lint baseline is
+              # committed; the metadata is taken from the run over the FINAL dependency set
+              # (the tests add mockwebserver), and the commit that adds it replaces this block
+              # with --dependency-verification strict.
               status=0
               bash gradlew --no-daemon --continue --write-verification-metadata sha256 \
                 testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease || status=$?

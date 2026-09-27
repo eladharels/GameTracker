@@ -38,6 +38,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // ApiClient.buildClient(BuildConfig.DEBUG): release builds get no HTTP logging (MOB-1).
+        buildConfig = true
     }
     lint {
         // Findings that predate CI are recorded here, so lint fails only on NEW ones.
@@ -56,6 +58,8 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     testImplementation(libs.junit)
+    // Same version as the OkHttp the app resolves (logging-interceptor 4.11.0).
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.11.0")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

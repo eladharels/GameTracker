@@ -699,5 +699,25 @@ check('sharing routes do NOT use ownershipRequired (no admin bypass)', () => {
     'sharing route(s) gained the admin bypass:\n    ' + leaked.join('\n    '));
 });
 
+// The Android app (mobile/) is the v1 client the freeze exists for, and it lives in this
+// repository. Every route it calls must be a live v1 route, at a tier the app can reach with
+// the session it holds: its own library (owner-or-admin), an authenticated read, or the
+// login itself. An admin-only, self-only, browser-session or /api/v2 route here would work
+// for nobody who uses the app.
+console.log('the Android app calls only live v1 routes it can reach:');
+check('every route in mobile/.../GameTrackerApi.kt is live, at an app-reachable tier', () => {
+  const { apiRoutes } = require('./mobile-api');
+  const REACHABLE = new Set(['auth', 'owner-or-admin']);
+  const byKey = new Map(routes.map((r) => [r.key, r]));
+  for (const { key } of apiRoutes()) {
+    const live = byKey.get(key);
+    assert.ok(live, `the Android app calls ${key}, which is not a live route`);
+    const tier = tierOf(live);
+    const ok = key === 'POST /api/auth/login' ? tier === 'public' : REACHABLE.has(tier);
+    assert.ok(ok, `the Android app calls ${key}, whose tier is '${tier}'`);
+    assert.strictEqual(EXPECTED[key], tier, `${key} is not pinned in the inventory at its live tier`);
+  }
+});
+
 console.log(`\n${n} assertions passed.  ${routes.length} routes, tiers: ` +
   JSON.stringify(routes.reduce((acc, r) => { const t = tierOf(r); acc[t] = (acc[t] || 0) + 1; return acc; }, {})));
