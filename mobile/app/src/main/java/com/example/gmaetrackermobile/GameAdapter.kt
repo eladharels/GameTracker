@@ -27,6 +27,14 @@ class GameAdapter(
 
     private var games: MutableList<Game> = mutableListOf()
     var showBacklogControls: Boolean = false
+
+    /**
+     * Search only (MOB-10): the status of the library game this result IS, or null when it is
+     * not in the library. An owned result gets an "In library · Done" badge instead of the
+     * Add button, because v1's add overwrites the stored status: Add on a finished game
+     * demoted it to wishlist.
+     */
+    var ownedStatusOf: ((Game) -> String?)? = null
     private var itemTouchHelper: ItemTouchHelper? = null
 
     fun setItemTouchHelper(helper: ItemTouchHelper) {
@@ -86,8 +94,10 @@ class GameAdapter(
             tvName.text = game.displayName
             tvReleaseDate.text = formatReleaseLabel(game.release)
 
-            // Status badge + left border color
-            val status = game.status ?: ""
+            // Status badge + left border color. A search result carries no status of its
+            // own; when it is already in the library, the badge shows the library's.
+            val ownedStatus = if (game.status == null) ownedStatusOf?.invoke(game) else null
+            val status = game.status ?: ownedStatus ?: ""
             val statusColor = when (status.lowercase()) {
                 "playing" -> ContextCompat.getColor(itemView.context, R.color.gt_status_playing)
                 "done" -> ContextCompat.getColor(itemView.context, R.color.gt_status_done)
@@ -98,7 +108,8 @@ class GameAdapter(
             viewStatusBorder.setBackgroundColor(statusColor)
 
             if (status.isNotBlank()) {
-                tvStatus.text = status.replaceFirstChar { it.uppercase() }
+                val label = status.replaceFirstChar { it.uppercase() }
+                tvStatus.text = if (ownedStatus != null) "In library · $label" else label
                 tvStatus.visibility = View.VISIBLE
                 tvStatus.backgroundTintList = ColorStateList.valueOf(statusColor)
             } else {
@@ -148,7 +159,9 @@ class GameAdapter(
                 btnDelete.visibility = View.VISIBLE
                 btnDelete.setOnClickListener { onDelete?.invoke(game) }
             } else {
-                btnAdd.visibility = View.VISIBLE
+                // No Add for a game the user already owns (MOB-10); the badge above says so.
+                btnAdd.visibility = if (ownedStatus != null) View.GONE else View.VISIBLE
+                btnAdd.contentDescription = "Add ${game.displayName} to library"
                 btnAdd.setOnClickListener { onAddToLibrary(game) }
                 btnDelete.visibility = View.GONE
             }

@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.example.gmaetrackermobile.ApiClient
+import com.example.gmaetrackermobile.PendingRemovals
 import com.example.gmaetrackermobile.BacklogOrderRequest
 import com.example.gmaetrackermobile.CalendarHelper
 import com.example.gmaetrackermobile.GameAdapter
@@ -463,7 +464,12 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 }
                 if (response.isSuccessful) {
                     allGames.clear()
-                    allGames.addAll(response.body() ?: emptyList())
+                    // A removal still inside its undo window has not reached the server yet,
+                    // so the server still lists it. Keep it hidden until it lands or is undone.
+                    val pendingRemoval = PendingRemovals.app.pendingIds(username)
+                    allGames.addAll((response.body() ?: emptyList()).filterNot {
+                        (it.game_id ?: it.id) in pendingRemoval
+                    })
                     filterGames()
                 }
             } catch (e: Exception) {
@@ -507,42 +513,66 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         allGames.removeAll { it.game_id == gameId || it.id == gameId }
         filterGames()
 
-        val snackbar = Snackbar.make(requireView(), "\"${game.displayName}\" removed", 5000)
-        snackbar.setAction("UNDO") {
+        // MOB-12: the countdown and the DELETE live in PendingRemovals, which outlives this
+        // view. They used to run from the snackbar's onDismissed through viewLifecycleOwner:
+        // leaving the screen within 5 s crashed the app, and the removal was never sent.
+        // Everything below is captured up front, so nothing reaches for the view later.
+        val appContext = requireContext().applicationContext
+        val session = com.example.gmaetrackermobile.Session.get(appContext)
+        val bearer = session.bearer()
+        val username = session.username
+        if (bearer == null || username == null) {
             allGames.add(game)
             filterGames()
+            return
+        }
+        val snackbar = Snackbar.make(requireView(), "\"${game.displayName}\" removed", UNDO_WINDOW_MS.toInt())
+        PendingRemovals.app.schedule(
+            owner = username,
+            gameId = gameId,
+            delayMs = UNDO_WINDOW_MS,
+            delete = {
+                val response = withContext(Dispatchers.IO) {
+                    ApiClient.api.deleteGame(bearer, username, gameId)
+                }
+                if (response.isSuccessful) {
+                    withContext(Dispatchers.IO) { CalendarHelper.deleteGameEvent(appContext, gameId) }
+                }
+                response.isSuccessful
+            },
+            onFailed = {
+                // Only if this screen is still showing; otherwise the next load shows the
+                // game again, which is the truth: it was not removed.
+                // The id leaves the pending set BEFORE the DELETE is sent, so a reload that
+                // landed mid-request already shows the game again: never add it twice.
+                // (This lambda keeps the fragment reachable until the request ends; that is
+                // bounded by OkHttp's timeouts.)
+                if (isAdded && view != null) {
+                    if (allGames.none { (it.game_id ?: it.id) == gameId }) allGames.add(game)
+                    filterGames()
+                    showSnackbar("Couldn't remove ${game.displayName}", SnackbarHelper.Type.ERROR)
+                }
+            },
+            // The window has closed, so Undo would do nothing: take it off screen. Snackbar
+            // extends its own timeout for accessibility services, past UNDO_WINDOW_MS.
+            onCommitted = { snackbar.dismiss() },
+        )
+
+        snackbar.setAction("UNDO") {
+            // Undo only cancels the countdown: no network, no view needed after this line.
+            if (PendingRemovals.app.undo(username, gameId)) {
+                if (isAdded && view != null) {
+                    allGames.add(game)
+                    filterGames()
+                }
+            } else if (isAdded) {
+                // Too late: the removal was already sent. Say so rather than do nothing.
+                showSnackbar("Already removed. Couldn't undo.", SnackbarHelper.Type.DEFAULT)
+            }
         }
         activity?.findViewById<android.view.View>(R.id.bottom_navigation)
             ?.let { snackbar.anchorView = it }
         SnackbarHelper.applyStyle(snackbar, SnackbarHelper.Type.DEFAULT)
-        snackbar.addCallback(object : Snackbar.Callback() {
-            override fun onDismissed(transientBottomBar: Snackbar, event: Int) {
-                if (event == DISMISS_EVENT_ACTION) return
-                viewLifecycleOwner.lifecycleScope.launch {
-                    try {
-                        val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                        val token = prefs.getString("token", null) ?: return@launch
-                        val username = prefs.getString("username", null) ?: return@launch
-                        val response = withContext(Dispatchers.IO) {
-                            ApiClient.api.deleteGame("Bearer $token", username, gameId)
-                        }
-                        if (response.isSuccessful) {
-                            withContext(Dispatchers.IO) {
-                                CalendarHelper.deleteGameEvent(requireContext(), gameId)
-                            }
-                        } else {
-                            allGames.add(game)
-                            filterGames()
-                            showSnackbar("Failed to remove ${game.displayName}", SnackbarHelper.Type.ERROR)
-                        }
-                    } catch (e: Exception) {
-                        allGames.add(game)
-                        filterGames()
-                        showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR)
-                    }
-                }
-            }
-        })
         snackbar.show()
     }
 
@@ -550,9 +580,8 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
     private fun updateStats() {
         val v = view ?: return
-        val hours = allGames.sumOf { com.example.gmaetrackermobile.GameExtras.hours(it) }
         v.findViewById<TextView>(R.id.tvTotalGames)?.text =
-            "${allGames.size} games · ${hours}h tracked"
+            if (allGames.size == 1) "1 game" else "${allGames.size} games"
         updateChipCounts()
     }
 
@@ -562,3 +591,6 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
     override fun onGameStatusUpdated() = loadLibrary()
 }
+
+/** How long a removal can be undone before it is sent (MOB-12). */
+private const val UNDO_WINDOW_MS = 5000L

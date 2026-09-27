@@ -471,6 +471,55 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
     assert.ok(/buildConfig\s*=\s*true/.test(gradle), 'buildFeatures.buildConfig is off, so BuildConfig.DEBUG does not exist');
   });
+
+  // MOB-10/11/12, the High data bugs. The behaviour is tested by the JVM suite in mobile/;
+  // these pin the WIRING it cannot see. Code only, so an explanatory comment cannot satisfy
+  // or trip a check.
+  const code = (rel) => fs.readFileSync(path.join(APP, 'java/com/example/gmaetrackermobile', rel), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  check('Android: the app\'s library-match vectors are the shared ones (MOB-10)', () => {
+    // The Kotlin copy of the rule is the THIRD, beside services/library.js and the SPA's.
+    // Its vectors cannot be required across the Gradle container boundary (only mobile/ is
+    // mounted), so they are a JSON copy, and this keeps the copy equal to the source.
+    const copy = JSON.parse(fs.readFileSync(path.join(ROOT, 'mobile/app/src/test/resources/library-match-vectors.json'), 'utf8'));
+    assert.deepStrictEqual(copy, JSON.parse(JSON.stringify(require('./library-match-vectors'))),
+      'mobile/app/src/test/resources/library-match-vectors.json differs from test/library-match-vectors.js: regenerate it');
+  });
+
+  check('Android: search never sends an add without checking a fresh library (MOB-10)', () => {
+    const search = code('fragments/SearchFragment.kt');
+    const add = search.slice(search.indexOf('private fun addGameToLibrary'));
+    assert.ok(add.length > 0 && add.indexOf('LibraryMatch.match(') >= 0, 'addGameToLibrary does not consult LibraryMatch');
+    assert.ok(add.indexOf('fetchLibrary()') < add.indexOf('LibraryMatch.match(')
+      && add.indexOf('LibraryMatch.match(') < add.indexOf('addOrUpdateGame('),
+      'the add is not preceded by a fresh library read and a match check');
+    assert.ok(!/status\s*=\s*"Wishlist"/.test(search), 'search still sends a capitalised status');
+  });
+
+  check('Android: no statistic is invented from a game id (MOB-11)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of files) {
+      const src = code(f);
+      assert.ok(!/stableHash|GameExtras\.(hours|genre|progress)\b/.test(src), `${f} derives a value from a hash of the game id`);
+    }
+    assert.ok(!/\bfun (hours|genre|progress)\s*\(/.test(code('GameExtras.kt')), 'GameExtras still offers an invented statistic');
+  });
+
+  check('Android: a removal is never sent from a snackbar callback (MOB-12)', () => {
+    const lib = code('fragments/LibraryFragment.kt');
+    assert.ok(!/onDismissed/.test(lib), 'LibraryFragment sends the removal from Snackbar.onDismissed again: it outlives the view');
+    assert.ok(/PendingRemovals\.app\.schedule\(/.test(lib) && /PendingRemovals\.app\.undo\(/.test(lib),
+      'the library removal does not go through PendingRemovals');
+    assert.ok(/pendingIds\(username\)/.test(lib), 'a reload no longer hides THIS user\'s removals still inside their undo window');
+  });
 }
 
 // The backend image is `COPY . .`; the Android app has no business in it.

@@ -155,7 +155,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="YOUR RATING"
+                        android:text="YOUR RATING · THIS DEVICE"
                         android:textSize="11sp"
                         android:textStyle="bold"
                         android:textColor="@color/gt_text_muted"
@@ -169,7 +169,7 @@
                         android:textSize="12sp"
                         android:textStyle="bold"
                         android:textColor="@color/gt_text_secondary"
-                        tools:text="47h played" />
+                        tools:ignore="HardcodedText" />
                 </LinearLayout>
 
                 <LinearLayout
@@ -191,7 +191,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="PERSONAL NOTES"
+                    android:text="PERSONAL NOTES · THIS DEVICE"
                     android:textSize="11sp"
                     android:textStyle="bold"
                     android:textColor="@color/gt_text_muted"

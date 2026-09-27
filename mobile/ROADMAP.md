@@ -214,7 +214,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 
 ## COR — Correctness
 
-### [ ] MOB-10 ✔ High — "Add" on a search result silently demotes a game already in the library
+### [x] MOB-10 ✔ High — "Add" on a search result silently demotes a game already in the library
 - **Where:** `SearchFragment.kt:315-321` (always sends `status = "Wishlist"`),
   `GameAdapter.kt:150-153` (the Add button shows for every result). On the backend:
   `services/library.js:408` (`ON CONFLICT(user_id, game_id) DO UPDATE SET status=excluded.status`)
@@ -232,7 +232,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Show "In library · Done" instead of Add.
   - Never send a status on a re-add of an owned game.
 
-### [ ] MOB-11 High — Invented statistics are presented as the user's own
+### [x] MOB-11 High — Invented statistics are presented as the user's own
 - **Where:** `GameExtras.kt:5-16`, `:36`, `:56-66`, `:71-77`. They are consumed at:
   - `HomeFragment.kt:124,129` ("Hours tracked");
   - `HomeAdapters.kt:39-41` (progress bar and "Nh played");
@@ -255,7 +255,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Ratings and notes may stay as *local* features only if they are labelled "on this
     device".
 
-### [ ] MOB-12 High — Undo snackbar crashes the app when the user leaves the screen within 5 s, and the delete is lost
+### [x] MOB-12 High — Undo snackbar crashes the app when the user leaves the screen within 5 s, and the delete is lost
 - **Where:** `LibraryFragment.kt:504-547`, especially `:518-523`.
 - **Why:** the delete is deferred to `Snackbar.onDismissed`. That callback calls
   `viewLifecycleOwner.lifecycleScope` and `requireContext()`. If the user switches tab or opens
@@ -736,6 +736,32 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Owner / date:** the repository owner, date to be set. Recorded by the CISO re-check of PR
   #6 (74d21bf).
 
+### [ ] MOB-39 Low — Follow-ups from the PR #8 reviews (MOB-10/11/12)
+- **Where and what:**
+  - A search result opened in `GameDetailsFragment` falls back to `currentStatus = "Wishlist"`
+    (`GameDetailsFragment.kt`, status chips). For a game the user already owns, tapping a chip
+    overwrites a status they were never shown. It is an explicit tap and predates PR #8. Show
+    the owned status (`LibraryMatch.owned`) there too. Source: CISO review.
+  - A small race remains between Search's fresh library check and the add. The real fix is
+    server-side: v1's upsert overwrites the stored status (frozen), and v2's
+    `addResolvedGame` already keeps it. Moving the app to v2 (MOB-9's PAT) closes it.
+  - The "In library · Done" badge needs a contentDescription ("In your library, status Done"),
+    and `maxLines` for large font scales.
+  - Add makes up to three requests with no in-flight state: disable the button while it runs.
+  - "Couldn't check your library. Try again." has no Retry action.
+  - Insights "Games tracked" repeats the library total; consider "Completed this year" once
+    `GET /api/user/:username/stats` is on mobile.
+  - New strings are hardcoded, like the rest of the app (MOB-35).
+  - A removal that fails after the library screen was replaced is not reported to the NEW
+    screen: its next load shows the game again (the server still has it), but nothing
+    reloads it at that moment. Emit failures on a flow the visible screen collects.
+  - Search runs its library refresh after the search, not in parallel, and the search row
+    re-normalises every library name on each bind (`LibraryMatch.owned`). Fetch in
+    parallel and precompute the normalised rows once per fetch. Source: Architect review.
+  - Contrast of 10 sp white on the green and grey status fills, and the 44 dp add button
+    (MOB-29, MOB-32).
+- **Source:** CISO and UI/UX reviews of PR #8.
+
 ---
 
 ## Operational notes
@@ -796,3 +822,6 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 | MOB-3 | #6 | 2026-09-27 | Logout always removes the token and keeps the username and fingerprint setting (`SessionStore.endSession`, `SessionStoreTest`) |
 | MOB-4 | #6 | 2026-09-27 | `auth.xml` excluded from legacy backup, cloud backup and device transfer (pinned) |
 | MOB-5 | #6 | 2026-09-27 | `SessionExpiryInterceptor` ends the session only for a 401 on the CURRENT token. The fingerprint unlocks only a live token, then checks `GET /api/user/me`; offline is not a sign-out. Neutral expiry notice |
+| MOB-10 | #8 | 2026-09-27 | `LibraryMatch.kt`, the third copy of the shared rule, run over the same vectors (JSON copy pinned equal to `test/library-match-vectors.js`). Owned search results show "In library · Status" instead of Add; every add re-checks a FRESH library and refuses to post when that check fails |
+| MOB-11 | #8 | 2026-09-27 | Invented hours, progress, genre and default ratings removed. Home shows the wishlist count, Insights games tracked and release years, details the year only. Rating and notes are labelled "this device". Pinned: nothing may be derived from a hash of the id |
+| MOB-12 | #8 | 2026-09-27 | `PendingRemovals`: the undo window and the DELETE run in a process-lifetime scope, never from `Snackbar.onDismissed`; Undo only cancels; a reload keeps pending removals hidden. `PendingRemovalsTest` (JVM, no Robolectric: no new dependency) |

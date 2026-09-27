@@ -112,8 +112,8 @@ class GameDetailsFragment : Fragment() {
         val game = currentGame ?: return
         tvGameTitle.text = game.displayName
 
-        val year = GameExtras.year(game)
-        tvMeta.text = if (year != null) "$year · ${GameExtras.genre(game)}" else GameExtras.genre(game)
+        // The year only: the genre that used to follow it was invented (MOB-11).
+        tvMeta.text = GameExtras.subtitle(game)
 
         val price = game.last_price
         tvPrice.text = if (!price.isNullOrBlank()) price else "TBA"
@@ -125,8 +125,9 @@ class GameDetailsFragment : Fragment() {
                 .into(ivGameCover)
         }
 
-        val hours = GameExtras.hours(game)
-        tvHoursPlayed.text = if (hours > 0) "${hours}h played" else "Not started"
+        // Where "Nh played" was (invented, MOB-11): the rating beside it is stored on this
+        // device only, and the card says so.
+        tvHoursPlayed.visibility = View.GONE
     }
 
     // ── Status chips ─────────────────────────────────────────────────────────
@@ -255,9 +256,6 @@ class GameDetailsFragment : Fragment() {
                     if (response.isSuccessful) {
                         currentStatus = newStatus
                         currentGame = game.copy(status = newStatus)
-                        tvHoursPlayed.text = GameExtras.hours(currentGame!!).let {
-                            if (it > 0) "${it}h played" else "Not started"
-                        }
                         showSnackbar("Status: $newStatus", SnackbarHelper.Type.SUCCESS)
                         callback?.onGameStatusUpdated()
                     } else {
