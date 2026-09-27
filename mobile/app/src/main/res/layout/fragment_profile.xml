@@ -1,0 +1,435 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/gt_surface_0"
+    android:scrollbars="none"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="22dp"
+        android:paddingTop="18dp"
+        android:paddingBottom="40dp">
+
+        <!-- Profile header card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="@drawable/profile_header_bg"
+            android:paddingVertical="30dp"
+            android:paddingHorizontal="24dp">
+
+            <TextView
+                android:id="@+id/tvAvatarInitial"
+                android:layout_width="84dp"
+                android:layout_height="84dp"
+                android:background="@drawable/avatar_gradient"
+                android:gravity="center"
+                android:textStyle="bold"
+                android:text="?"
+                android:textColor="#FFFFFF"
+                android:textSize="32sp"
+                tools:ignore="HardcodedText" />
+
+            <TextView
+                android:id="@+id/tvDisplayName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:textStyle="bold"
+                android:text="Display Name"
+                android:textSize="22sp"
+                android:textColor="@color/gt_text_primary"
+                tools:ignore="HardcodedText" />
+
+            <TextView
+                android:id="@+id/tvUsername"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="@username"
+                android:textSize="13sp"
+                android:textColor="@color/gt_text_secondary"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- Stats row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="16dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="@drawable/card_surface_16"
+                android:paddingVertical="16dp">
+
+                <TextView
+                    android:id="@+id/tvProfileTotal"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textStyle="bold"
+                    android:text="—"
+                    android:textSize="21sp"
+                    android:textColor="?attr/colorPrimary"
+                    tools:ignore="HardcodedText" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Total"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/gt_text_secondary"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+
+            <Space android:layout_width="10dp" android:layout_height="0dp" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="@drawable/card_surface_16"
+                android:paddingVertical="16dp">
+
+                <TextView
+                    android:id="@+id/tvProfilePlaying"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textStyle="bold"
+                    android:text="—"
+                    android:textSize="21sp"
+                    android:textColor="@color/gt_status_playing"
+                    tools:ignore="HardcodedText" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Playing"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/gt_text_secondary"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+
+            <Space android:layout_width="10dp" android:layout_height="0dp" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="@drawable/card_surface_16"
+                android:paddingVertical="16dp">
+
+                <TextView
+                    android:id="@+id/tvProfileDone"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textStyle="bold"
+                    android:text="—"
+                    android:textSize="21sp"
+                    android:textColor="@color/gt_status_done"
+                    tools:ignore="HardcodedText" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Done"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/gt_text_secondary"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Hidden backlog stat (for Kotlin compatibility) -->
+        <TextView
+            android:id="@+id/tvProfileBacklog"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:visibility="gone"
+            tools:ignore="HardcodedText" />
+
+        <!-- Accent color -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="ACCENT COLOR"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/gt_text_muted"
+            android:letterSpacing="0.1"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="12dp"
+            tools:ignore="HardcodedText" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_surface"
+            android:padding="14dp">
+
+            <View android:id="@+id/colorPreset0"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:layout_marginEnd="6dp" android:padding="4dp"
+                android:background="@drawable/color_preset_dot"
+                android:clickable="true" android:focusable="true" />
+
+            <View android:id="@+id/colorPreset1"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:layout_marginEnd="6dp" android:padding="4dp"
+                android:background="@drawable/color_preset_dot"
+                android:clickable="true" android:focusable="true" />
+
+            <View android:id="@+id/colorPreset2"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:layout_marginEnd="6dp" android:padding="4dp"
+                android:background="@drawable/color_preset_dot"
+                android:clickable="true" android:focusable="true" />
+
+            <View android:id="@+id/colorPreset3"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:layout_marginEnd="6dp" android:padding="4dp"
+                android:background="@drawable/color_preset_dot"
+                android:clickable="true" android:focusable="true" />
+
+            <View android:id="@+id/colorPreset4"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:padding="4dp"
+                android:background="@drawable/color_preset_dot"
+                android:clickable="true" android:focusable="true" />
+        </LinearLayout>
+
+        <!-- Preferences -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="PREFERENCES"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/gt_text_muted"
+            android:letterSpacing="0.1"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="12dp"
+            tools:ignore="HardcodedText" />
+
+        <!-- Biometric -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_surface_16"
+            android:padding="15dp"
+            android:layout_marginBottom="10dp">
+
+            <LinearLayout
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:gravity="center"
+                android:background="@drawable/icon_badge_bg"
+                android:layout_marginEnd="14dp">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_fingerprint"
+                    android:tint="?attr/colorPrimary"
+                    android:contentDescription="Biometric" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Fingerprint login"
+                    android:textSize="14.5sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/gt_text_primary"
+                    tools:ignore="HardcodedText" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="Use biometrics to sign in"
+                    android:textSize="12sp"
+                    android:textColor="@color/gt_text_secondary"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switchBiometric"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <!-- Calendar sync -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_surface_16"
+            android:padding="15dp"
+            android:layout_marginBottom="10dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:gravity="center"
+                    android:background="@drawable/icon_badge_bg"
+                    android:layout_marginEnd="14dp">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:src="@drawable/ic_calendar"
+                        android:tint="?attr/colorPrimary"
+                        android:contentDescription="Calendar Sync" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Calendar sync"
+                        android:textSize="14.5sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/gt_text_primary"
+                        tools:ignore="HardcodedText" />
+
+                    <TextView
+                        android:id="@+id/tvCalendarStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Off — not syncing"
+                        android:textSize="12sp"
+                        android:textColor="@color/gt_text_secondary"
+                        tools:ignore="HardcodedText" />
+                </LinearLayout>
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/switchCalendarSync"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSyncCalendar"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:text="Sync Games to Calendar"
+                android:textAllCaps="false"
+                android:textSize="14sp"
+                android:backgroundTint="?attr/colorPrimary"
+                android:textColor="?attr/colorOnPrimary"
+                android:layout_marginTop="14dp"
+                android:visibility="gone"
+                app:cornerRadius="12dp"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- Settings row -->
+        <LinearLayout
+            android:id="@+id/rowSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_surface_16"
+            android:padding="15dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackground">
+
+            <LinearLayout
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:gravity="center"
+                android:background="@drawable/icon_badge_bg"
+                android:layout_marginEnd="14dp">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_settings"
+                    android:tint="?attr/colorPrimary"
+                    android:contentDescription="Settings" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Settings"
+                android:textSize="14.5sp"
+                android:textStyle="bold"
+                android:textColor="@color/gt_text_primary"
+                tools:ignore="HardcodedText" />
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_arrow_right"
+                android:tint="@color/gt_text_muted"
+                android:contentDescription="Open settings" />
+        </LinearLayout>
+
+        <!-- Sign out -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnLogout"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="24dp"
+            android:text="Sign Out"
+            android:textAllCaps="false"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:backgroundTint="#0FFF4D4F"
+            android:textColor="@color/gt_logout_red"
+            app:strokeColor="#66FF4D4F"
+            app:strokeWidth="1dp"
+            app:cornerRadius="15dp"
+            tools:ignore="HardcodedText" />
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compact input / pill field (#15171F, 13dp) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#15171F" />
+    <corners android:radius="13dp" />
+    <stroke android:width="1dp" android:color="#12FFFFFF" />
+</shape>

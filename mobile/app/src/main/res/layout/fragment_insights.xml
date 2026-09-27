@@ -1,0 +1,220 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/gt_surface_0"
+    android:scrollbars="none"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="22dp"
+        android:paddingTop="14dp"
+        android:paddingBottom="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textStyle="bold"
+            android:text="Insights"
+            android:textColor="@color/gt_text_primary"
+            android:textSize="26sp"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:text="Your gaming at a glance"
+            android:textColor="@color/gt_text_secondary"
+            android:textSize="14sp"
+            tools:ignore="HardcodedText" />
+
+        <!-- Completion donut -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/glance_card_bg"
+            android:padding="20dp">
+
+            <com.example.gmaetrackermobile.DonutView
+                android:id="@+id/donut"
+                android:layout_width="118dp"
+                android:layout_height="118dp" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="18dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvDoneSummary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textStyle="bold"
+                    android:textColor="@color/gt_text_primary"
+                    android:textSize="20sp"
+                    tools:text="6 done" />
+
+                <TextView
+                    android:id="@+id/tvDoneSub"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textColor="@color/gt_text_secondary"
+                    android:textSize="13sp"
+                    tools:text="of 13 tracked games completed" />
+
+                <TextView
+                    android:id="@+id/tvCompletionBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/pill_soft_bg"
+                    android:backgroundTint="#2422C55E"
+                    android:paddingHorizontal="11dp"
+                    android:paddingVertical="6dp"
+                    android:textColor="@color/gt_status_done"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    tools:text="46% completion rate" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Hours + rating -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="14dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_surface"
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/tvTotalHours"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textStyle="bold"
+                    android:textColor="?attr/colorPrimary"
+                    android:textSize="24sp"
+                    tools:text="180h" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Total tracked"
+                    android:textColor="@color/gt_text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+
+            <Space android:layout_width="12dp" android:layout_height="0dp" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_surface"
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/tvAvgRating"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textStyle="bold"
+                    android:textColor="@color/gt_gold"
+                    android:textSize="24sp"
+                    tools:text="4.6" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Avg rating"
+                    android:textColor="@color/gt_text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Status breakdown -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/card_surface_20"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textStyle="bold"
+                android:text="Status breakdown"
+                android:textColor="@color/gt_text_primary"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp"
+                tools:ignore="HardcodedText" />
+
+            <LinearLayout
+                android:id="@+id/statusBars"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+
+        <!-- Top genres -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/card_surface_20"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textStyle="bold"
+                android:text="Top genres"
+                android:textColor="@color/gt_text_primary"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp"
+                tools:ignore="HardcodedText" />
+
+            <LinearLayout
+                android:id="@+id/genreBars"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/tvNoGenres"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Add games to your library to see genre insights."
+                android:textColor="@color/gt_text_secondary"
+                android:textSize="13sp"
+                android:visibility="gone"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

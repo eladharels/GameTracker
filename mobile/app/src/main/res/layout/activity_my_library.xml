@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <EditText
+        android:id="@+id/etSearchLibrary"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:hint="Search your library..."
+        android:background="@drawable/rounded_edittext_bg"
+        android:paddingStart="40dp"
+        android:paddingEnd="12dp"
+        android:textColor="@color/gt_text_main"
+        android:textColorHint="@color/gt_text_secondary"
+        android:layout_marginTop="32dp"
+        android:layout_marginBottom="8dp"
+        android:drawableStart="@android:drawable/ic_menu_search"
+        android:drawablePadding="12dp" />
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:visibility="gone"
+        android:layout_marginTop="8dp" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvLibrary"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp" />
+
+</LinearLayout> 

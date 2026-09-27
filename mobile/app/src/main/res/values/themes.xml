@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GmaeTrackerMobile" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/gt_accent</item>
+        <item name="colorPrimaryDark">@color/gt_accent_dim</item>
+        <item name="android:windowBackground">@color/gt_surface_1</item>
+        <item name="colorAccent">@color/gt_accent</item>
+        <item name="android:colorBackground">@color/gt_surface_1</item>
+        <item name="android:textColor">@color/gt_text_primary</item>
+        <item name="colorSurface">@color/gt_surface_2</item>
+        <item name="colorSurfaceVariant">@color/gt_surface_3</item>
+        <item name="colorOnSurface">@color/gt_text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/gt_text_secondary</item>
+        <item name="colorOnPrimary">#0C0D11</item>
+        <!-- Chip styling -->
+        <item name="chipStyle">@style/Widget.Material3.Chip.Filter</item>
+    </style>
+
+    <!-- Default filter chip style -->
+    <style name="GameTrackerChip" parent="Widget.Material3.Chip.Filter">
+        <item name="chipBackgroundColor">@color/gt_surface_3</item>
+        <item name="chipStrokeColor">@color/gt_border_strong</item>
+        <item name="chipStrokeWidth">1dp</item>
+        <item name="android:textColor">@color/gt_text_secondary</item>
+        <item name="chipCornerRadius">20dp</item>
+    </style>
+
+    <!-- Selected chip style -->
+    <style name="GameTrackerChip.Selected" parent="GameTrackerChip">
+        <item name="chipBackgroundColor">@color/gt_accent_dim</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
+        <item name="chipStrokeColor">?attr/colorPrimary</item>
+    </style>
+
+    <!-- ── Accent colour theme overlays ─────────────────────────────────────── -->
+    <!-- parent="" intentionally: each overlay only overrides what it declares.  -->
+    <!-- Apply with: theme.applyStyle(ThemeManager.getThemeResId(this), true)    -->
+    <!-- called in Activity.onCreate() BEFORE setContentView().                  -->
+
+    <style name="ThemeOverlay.GameTracker.Sky" parent="">
+        <item name="colorPrimary">#5B8DEF</item>
+        <item name="colorPrimaryDark">#3A5FA0</item>
+        <item name="colorAccent">#5B8DEF</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+
+    <style name="ThemeOverlay.GameTracker.Purple" parent="">
+        <item name="colorPrimary">#8B5CF6</item>
+        <item name="colorPrimaryDark">#7C3AED</item>
+        <item name="colorAccent">#8B5CF6</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+
+    <style name="ThemeOverlay.GameTracker.Green" parent="">
+        <item name="colorPrimary">#22C55E</item>
+        <item name="colorPrimaryDark">#16A34A</item>
+        <item name="colorAccent">#22C55E</item>
+        <item name="colorOnPrimary">#0C0D11</item>
+    </style>
+
+    <style name="ThemeOverlay.GameTracker.Orange" parent="">
+        <item name="colorPrimary">#F97316</item>
+        <item name="colorPrimaryDark">#EA580C</item>
+        <item name="colorAccent">#F97316</item>
+        <item name="colorOnPrimary">#0C0D11</item>
+    </style>
+
+    <style name="ThemeOverlay.GameTracker.Pink" parent="">
+        <item name="colorPrimary">#EC4899</item>
+        <item name="colorPrimaryDark">#DB2777</item>
+        <item name="colorAccent">#EC4899</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+
+</resources>

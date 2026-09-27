@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Legacy / compat colors (kept for any remaining references) -->
+    <color name="colorPrimary">#5B8DEF</color>
+    <color name="colorPrimaryDark">#3A5FA0</color>
+    <color name="colorAccent">#5B8DEF</color>
+    <color name="colorBackground">#111218</color>
+    <color name="colorSurface">#181A22</color>
+    <color name="colorOnPrimary">#FFFFFF</color>
+    <color name="colorOnAccent">#0C0D11</color>
+    <color name="colorText">#F0F1F8</color>
+    <color name="colorSubtle">#8890A8</color>
+    <color name="white">#FFFFFF</color>
+
+    <!-- Legacy GameTracker palette (kept for Kotlin references) -->
+    <color name="gt_background">#111218</color>
+    <color name="gt_card">#181A22</color>
+    <color name="gt_accent_blue">#5B8DEF</color>
+    <color name="gt_logout_red">#FF4D4F</color>
+    <color name="gt_text_main">#F0F1F8</color>
+    <color name="gt_text_secondary">#8890A8</color>
+    <color name="gt_divider">#0FFFFFFF</color>
+    <color name="gt_card_bg">#181A22</color>
+    <color name="gt_card_elevated">#1F2130</color>
+    <color name="gt_accent_dim">#3A5FA0</color>
+    <color name="gt_surface_subtle">#1AFFFFFF</color>
+
+    <!-- Status colors -->
+    <color name="gt_status_wishlist">#8890A8</color>
+    <color name="gt_status_playing">#22B8F6</color>
+    <color name="gt_status_done">#22C55E</color>
+    <color name="gt_status_backlog">#F97316</color>
+    <color name="gt_status_unreleased">#8B5CF6</color>
+
+    <!-- New Design Token Surface Scale -->
+    <color name="gt_surface_0">#0C0D11</color>
+    <color name="gt_surface_1">#111218</color>
+    <color name="gt_surface_2">#181A22</color>
+    <color name="gt_surface_3">#1F2130</color>
+    <color name="gt_surface_4">#252840</color>
+
+    <!-- New Design Token Borders -->
+    <color name="gt_border">#0FFFFFFF</color>
+    <color name="gt_border_strong">#1AFFFFFF</color>
+
+    <!-- New Design Token Accent -->
+    <color name="gt_accent">#5B8DEF</color>
+    <color name="gt_accent_glow">#335B8DEF</color>
+
+    <!-- New Design Token Text -->
+    <color name="gt_text_primary">#F0F1F8</color>
+    <color name="gt_text_muted">#4A5068</color>
+
+    <!-- Prototype-aligned tokens -->
+    <color name="gt_surface_card">#15171F</color>
+    <color name="gt_input_bg">#181A22</color>
+    <color name="gt_text_light">#C3C8D8</color>
+    <color name="gt_text_dim">#5B6175</color>
+    <color name="gt_gold">#FBBF24</color>
+    <color name="gt_accent_purple">#7B5BEF</color>
+</resources>

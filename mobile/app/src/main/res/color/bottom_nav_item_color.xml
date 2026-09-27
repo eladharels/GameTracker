@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Selected item uses the current theme's primary colour (set by ThemeManager overlay) -->
+    <item android:color="?attr/colorPrimary" android:state_checked="true" />
+    <item android:color="@color/gt_text_muted" android:state_checked="false" />
+</selector>

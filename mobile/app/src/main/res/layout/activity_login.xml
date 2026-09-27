@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/gt_surface_0"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:paddingHorizontal="30dp"
+        android:paddingTop="84dp"
+        android:paddingBottom="40dp">
+
+        <!-- Logo -->
+        <FrameLayout
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            android:layout_marginBottom="26dp">
+
+            <View
+                android:layout_width="120dp"
+                android:layout_height="120dp"
+                android:layout_gravity="center"
+                android:background="@drawable/glow_circle_bg"
+                android:backgroundTint="?attr/colorPrimary"
+                android:alpha="0.4" />
+
+            <View
+                android:layout_width="96dp"
+                android:layout_height="96dp"
+                android:background="@drawable/logo_gradient_bg" />
+
+            <ImageView
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_gamepad"
+                android:tint="#FFFFFF"
+                android:contentDescription="GameTracker logo" />
+        </FrameLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textStyle="bold"
+            android:text="GameTracker"
+            android:textSize="32sp"
+            android:textColor="@color/gt_text_primary"
+            android:letterSpacing="-0.02"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:layout_width="250dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="Your backlog, your progress, your next obsession — all in one place."
+            android:textSize="15sp"
+            android:textColor="@color/gt_text_secondary"
+            android:lineSpacingMultiplier="1.4"
+            tools:ignore="HardcodedText" />
+
+        <!-- Username field -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/input_field_bg"
+            android:paddingStart="16dp"
+            android:paddingEnd="14dp"
+            android:layout_marginTop="34dp"
+            android:layout_marginBottom="12dp">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_person"
+                android:tint="@color/gt_text_secondary"
+                android:layout_marginEnd="12dp"
+                android:contentDescription="Username icon" />
+
+            <EditText
+                android:id="@+id/etUsername"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:hint="Username"
+                android:inputType="text"
+                android:background="@android:color/transparent"
+                android:textColor="@color/gt_text_primary"
+                android:textColorHint="@color/gt_text_muted"
+                android:textSize="15sp"
+                tools:ignore="HardcodedText,Autofill" />
+        </LinearLayout>
+
+        <!-- Password field -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/input_field_bg"
+            android:paddingStart="16dp"
+            android:paddingEnd="14dp"
+            android:layout_marginBottom="18dp">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_lock"
+                android:tint="@color/gt_text_secondary"
+                android:layout_marginEnd="12dp"
+                android:contentDescription="Password icon" />
+
+            <EditText
+                android:id="@+id/etPassword"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:hint="Password"
+                android:inputType="textPassword"
+                android:background="@android:color/transparent"
+                android:textColor="@color/gt_text_primary"
+                android:textColorHint="@color/gt_text_muted"
+                android:textSize="15sp"
+                tools:ignore="HardcodedText,Autofill" />
+        </LinearLayout>
+
+        <!-- Sign In -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnLogin"
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:text="Sign In"
+            android:textStyle="bold"
+            android:textSize="16sp"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="?attr/colorPrimary"
+            app:cornerRadius="16dp"
+            tools:ignore="HardcodedText" />
+
+        <!-- Biometric -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnBiometric"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="10dp"
+            android:text="Use Biometrics"
+            android:textSize="14sp"
+            android:textColor="@color/gt_text_secondary"
+            app:icon="@drawable/ic_fingerprint"
+            app:iconTint="@color/gt_text_secondary"
+            app:iconSize="18dp"
+            app:iconGravity="textStart"
+            android:visibility="gone"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:id="@+id/tvLoginStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:textAlignment="center"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp" />
+    </LinearLayout>
+</ScrollView>

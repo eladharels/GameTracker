@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bottom_sheet_surface_bg"
+    android:paddingBottom="32dp">
+
+    <!-- Drag handle pill -->
+    <View
+        android:layout_width="40dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="16dp"
+        android:background="@drawable/status_badge_bg"
+        android:backgroundTint="@color/gt_text_muted" />
+
+    <!-- Sheet title -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Sort Library"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="@color/gt_text_primary"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:layout_marginBottom="4dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="16dp"
+        android:text="Choose how to order your games"
+        android:textSize="13sp"
+        android:textColor="@color/gt_text_secondary" />
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/gt_border"
+        android:layout_marginBottom="4dp" />
+
+    <!-- Default / API order -->
+    <LinearLayout
+        android:id="@+id/sortDefault"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Default order"
+            android:textSize="15sp"
+            android:textColor="@color/gt_text_primary" />
+
+        <ImageView
+            android:id="@+id/ivCheckDefault"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_check_circle"
+            android:tint="?attr/colorPrimary"
+            android:visibility="gone"
+            android:contentDescription="Selected" />
+
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/gt_border" android:layout_marginStart="20dp" />
+
+    <!-- Name A → Z -->
+    <LinearLayout
+        android:id="@+id/sortNameAz"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Name A → Z"
+            android:textSize="15sp"
+            android:textColor="@color/gt_text_primary" />
+
+        <ImageView
+            android:id="@+id/ivCheckNameAz"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_check_circle"
+            android:tint="?attr/colorPrimary"
+            android:visibility="gone"
+            android:contentDescription="Selected" />
+
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/gt_border" android:layout_marginStart="20dp" />
+
+    <!-- Name Z → A -->
+    <LinearLayout
+        android:id="@+id/sortNameZa"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Name Z → A"
+            android:textSize="15sp"
+            android:textColor="@color/gt_text_primary" />
+
+        <ImageView
+            android:id="@+id/ivCheckNameZa"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_check_circle"
+            android:tint="?attr/colorPrimary"
+            android:visibility="gone"
+            android:contentDescription="Selected" />
+
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/gt_border" android:layout_marginStart="20dp" />
+
+    <!-- Release — Newest first -->
+    <LinearLayout
+        android:id="@+id/sortRelNewest"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Release — Newest first"
+            android:textSize="15sp"
+            android:textColor="@color/gt_text_primary" />
+
+        <ImageView
+            android:id="@+id/ivCheckRelNewest"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_check_circle"
+            android:tint="?attr/colorPrimary"
+            android:visibility="gone"
+            android:contentDescription="Selected" />
+
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/gt_border" android:layout_marginStart="20dp" />
+
+    <!-- Release — Oldest first -->
+    <LinearLayout
+        android:id="@+id/sortRelOldest"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Release — Oldest first"
+            android:textSize="15sp"
+            android:textColor="@color/gt_text_primary" />
+
+        <ImageView
+            android:id="@+id/ivCheckRelOldest"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_check_circle"
+            android:tint="?attr/colorPrimary"
+            android:visibility="gone"
+            android:contentDescription="Selected" />
+
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/gt_border" android:layout_marginStart="20dp" />
+
+    <!-- Group by status -->
+    <LinearLayout
+        android:id="@+id/sortByStatus"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Group by status"
+            android:textSize="15sp"
+            android:textColor="@color/gt_text_primary" />
+
+        <ImageView
+            android:id="@+id/ivCheckByStatus"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_check_circle"
+            android:tint="?attr/colorPrimary"
+            android:visibility="gone"
+            android:contentDescription="Selected" />
+
+    </LinearLayout>
+
+</LinearLayout>

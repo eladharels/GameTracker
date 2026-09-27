@@ -1,0 +1,30 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="124dp"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/glance_card_bg"
+    android:defaultFocusHighlightEnabled="false"
+    android:focusable="false"
+    android:padding="15dp">
+
+    <TextView
+        android:id="@+id/tvStatNumber"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textStyle="bold"
+        android:textColor="@color/gt_text_primary"
+        android:textSize="26sp"
+        tools:text="3" />
+
+    <TextView
+        android:id="@+id/tvStatLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textColor="@color/gt_text_secondary"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        tools:text="Now playing" />
+</LinearLayout>
