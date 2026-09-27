@@ -377,6 +377,17 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   assert.ok(!/--write-verification-metadata|--dependency-verification (lenient|off)|-M\s/.test(runs),
     'the workflow regenerates or relaxes the dependency verification metadata');
   assert.ok(!/org\.gradle\.dependency\.verification/.test(gprops), 'gradle.properties overrides dependency verification');
+  // Nothing executable is trusted from a writable cache volume (CISO review, PR #6): the Gradle
+  // home is pruned BEFORE gradlew (a killed build never reaches the prune after it, and an
+  // init.d script would run next time), the whole SDK is reinstalled, and the wrapper
+  // distribution is not kept, so distributionSha256Sum checks it every run.
+  const gradlewAt = b.indexOf('bash gradlew');
+  const firstPrune = b.indexOf('find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf');
+  assert.ok(firstPrune >= 0 && firstPrune < gradlewAt, 'the Gradle home is not pruned before gradlew runs');
+  assert.ok(!/! -name wrapper/.test(b), 'the Gradle wrapper distribution is kept in a writable volume');
+  assert.ok(b.indexOf('find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf') >= 0 && b.indexOf('find /sdk -mindepth 1') < b.indexOf('sdkmanager'),
+    'the SDK is not wiped before sdkmanager installs it');
+  assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(b), 'the build container does not refuse uid 0');
   const meta = fs.readFileSync(path.join(ROOT, 'mobile/gradle/verification-metadata.xml'), 'utf8');
   assert.match(meta, /<verify-metadata>true<\/verify-metadata>/, 'verification-metadata.xml does not verify metadata');
   assert.ok((meta.match(/<sha256 value="[0-9a-f]{64}"/g) || []).length > 100, 'verification-metadata.xml holds almost no checksums');

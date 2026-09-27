@@ -1752,8 +1752,17 @@ checkAsync('PUT /api/user/me/sharing: truthiness to 1/0, a missing value is 400,
 // the SAME key constants the pins above assert, so a backend rename that would break the app
 // fails here, naming the Android field it breaks.
 console.log('the Android app (mobile/) against the v1 contract:');
-const { mobileContract } = require('./mobile-api');
+const { mobileContract, parseDataClass } = require('./mobile-api');
 const MOBILE = mobileContract();
+
+check('the Kotlin parse fails closed on the shapes a lazy regex got wrong', () => {
+  // A parameterised annotation ended the old lazy match early, and the dropped field went
+  // unnoticed because both counts were taken on the shortened body.
+  assert.throws(() => parseDataClass('data class Y(val a: String,\n  @Expose(serialize = false)\n  val b: String)', 'Y'), /annotation with arguments/);
+  // A multi-line default must not cut the class short either.
+  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = listOf(1,\n 2).toString(),\n val b: Int)', 'Y'), ['a', 'b']);
+  assert.throws(() => parseDataClass('data class Y(val a: String', 'Y'), /unbalanced/);
+});
 
 check('every Game field the app binds is a field a pinned response carries', () => {
   // One Kotlin class serves both library rows and search results (models.kt), so a field is

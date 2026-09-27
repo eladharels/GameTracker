@@ -92,7 +92,9 @@ class MainActivity : AppCompatActivity() {
     /** False (and on the way to the login screen) when there is no live session. */
     private fun ensureLiveSession(): Boolean {
         val session = Session.get(this)
-        if (session.token == null) { toLogin(sessionEnded = false); return false }
+        // A 401 while another activity was on top clears the token and sets `redirecting`, but
+        // the "ended" event is dropped (nothing collects it off-screen): still say why.
+        if (session.token == null) { toLogin(sessionEnded = Session.redirecting); return false }
         if (!session.hasLiveToken(skewSeconds = 0)) {
             session.endSession()
             toLogin(sessionEnded = true)

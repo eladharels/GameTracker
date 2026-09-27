@@ -37,17 +37,43 @@ function apiRoutes() {
   return routes;
 }
 
-// The constructor properties of `data class <name>(...)` in models.kt, in order.
-function dataClassFields(name) {
-  const text = read('models.kt');
-  if (REFUSED.test(text)) throw new Error(`models.kt uses ${REFUSED.exec(text)[0]}: extend mobile-api.js before relying on it`);
-  const m = new RegExp(`data class ${name}\\s*\\(([\\s\\S]*?)\\)\\s*(?::|\\{|$)`, 'm').exec(text);
-  if (!m) throw new Error(`data class ${name} not found in models.kt`);
-  const body = m[1].replace(/\/\/.*$/gm, '');
+// The constructor properties of `data class <name>(...)` in Kotlin source `text`, in order.
+// The parameter list ends at its BALANCED closing paren: a lazy match stopped at the first `)`
+// ending a line, so `@Expose(serialize = false)` or a multi-line default silently cut the
+// class short (Architect review, PR #6). Any annotation with arguments inside the list is
+// refused outright: it is how a name or a (de)serialisation rule gets changed.
+function parseDataClass(text, name) {
+  const head = new RegExp(`data class ${name}\\s*\\(`).exec(text);
+  if (!head) throw new Error(`data class ${name} not found`);
+  let depth = 1;
+  let i = head.index + head[0].length;
+  const start = i;
+  for (; i < text.length && depth > 0; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')') depth--;
+  }
+  if (depth !== 0) throw new Error(`data class ${name}: unbalanced parentheses`);
+  const body = text.slice(start, i - 1).replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  if (/@[\w.:]+\s*\(/.test(body)) throw new Error(`data class ${name} has an annotation with arguments: extend mobile-api.js before relying on it`);
   const declared = (body.match(/\b(val|var)\b/g) || []).length;
   const fields = [...body.matchAll(/\b(?:val|var)\s+(\w+)\s*:/g)].map((x) => x[1]);
   if (fields.length !== declared || fields.length === 0) throw new Error(`parsed ${fields.length} of ${declared} properties of ${name}`);
   return fields;
+}
+
+function dataClassFields(name) {
+  const text = read('models.kt');
+  if (REFUSED.test(text)) throw new Error(`models.kt uses ${REFUSED.exec(text)[0]}: extend mobile-api.js before relying on it`);
+  return parseDataClass(text, name);
+}
+
+// Gson's field NAMING can also be changed once for the whole client, far from the models: a
+// GsonBuilder with a naming policy handed to the converter renames every field on the wire.
+function assertPlainGson() {
+  const text = read('ApiClient.kt');
+  if (/GsonBuilder|FieldNamingPolicy|FieldNamingStrategy/.test(text) || !/GsonConverterFactory\.create\(\)/.test(text)) {
+    throw new Error('ApiClient.kt configures Gson itself: field names on the wire may differ from models.kt');
+  }
 }
 
 // The full picture, with the anchors that prove the parse saw the real classes.
@@ -56,6 +82,7 @@ function mobileContract() {
   if (game.length < 12 || !game.includes('game_id') || !game.includes('backlog_order')) {
     throw new Error(`Game parsed as [${game}]: the parse is broken`);
   }
+  assertPlainGson();
   return {
     routes: apiRoutes(),
     game,
@@ -66,4 +93,4 @@ function mobileContract() {
   };
 }
 
-module.exports = { mobileContract, apiRoutes, dataClassFields, SRC };
+module.exports = { mobileContract, apiRoutes, dataClassFields, parseDataClass, SRC };

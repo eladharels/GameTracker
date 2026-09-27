@@ -1112,7 +1112,7 @@ smoke-test  (needs: build-images + secret-scan + semgrep + frontend-quality)
        MCP:      POST http://127.0.0.1:3199/mcp → a real `initialize` handshake
        E2E:      a REAL PAT minted in the stack → v2 401/read/write, and MCP `whoami`
                  through to the backend (UP-7)
-       The six test/integration/ suites against the real Postgres
+       The seven test/integration/ suites against the real Postgres
        Teardown: if: always() — guaranteed cleanup
 
 deploy  (needs: ALL 8 upstream jobs)   [push to main ONLY — see the guard below]
@@ -1214,8 +1214,14 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 >   - every dependency (`gradle/verification-metadata.xml`, strict);
 >   - `android.builder.sdkDownload=false`.
 >
-> The SDK and Gradle caches are named volumes split between PRs and main. A volume over 4 GiB is
-> wiped, and the job refuses to build below 5 GiB free (UP-25). It is path-filtered to `mobile/**`,
+> The SDK and Gradle caches are named volumes split between PRs and main. That split prevents
+> ACCIDENTS, not attacks: a PR runs its own copy of `android.yml` and could name main's
+> volumes, so the same-repo gate is the boundary here too. Nothing EXECUTABLE is trusted from a
+> volume: the SDK is reinstalled every run, the Gradle distribution is re-downloaded and
+> re-checked, and the Gradle home is pruned to `caches/modules-2` BEFORE the build as well as
+> after. The prune runs first because a killed build never reaches the second one, and an
+> `init.d` script left in the Gradle home runs in the next build. A volume over 4 GiB is wiped,
+> and the job refuses to build below 5 GiB free (UP-25). It is path-filtered to `mobile/**`,
 > never in `deploy.needs`, and on one runner it can delay a deploy but never skip one.
 > `test/runtime.test.js` pins all of this, and it now holds EVERY workflow file to:
 >   - SHA-pinned actions and no fixed `/tmp`;
@@ -1223,8 +1229,14 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 >   - the same-repo gate on every PR-triggered job;
 >   - no `pull_request_target` or `workflow_run`.
 >
-> Residual risk: the SDK components `sdkmanager` installs are verified only against Google's
-> repository metadata. Any dependency change in `mobile/` must regenerate the verification
+> Residual risk:
+>   - The SDK components `sdkmanager` installs are verified only against Google's repository
+>     metadata.
+>   - **The build container is on Docker's default bridge network.** Build code (kapt, lint
+>     jars, unit tests) can reach every port this host publishes: the backend on `BACKEND_BIND`,
+>     the MCP port and the smoke stacks. It can also reach the LAN, including the directory
+>     server. The fix is a networked resolve phase followed by an `--offline` build under
+>     `--network none`; it is recorded in `mobile/ROADMAP.md`. Any dependency change in `mobile/` must regenerate the verification
 > metadata in the same PR.
 
 > **The smoke test speaks the protocol; it does not ping liveness.** The MCP step asserts
@@ -1260,7 +1272,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
-| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, any of the six `test/integration/` suites failing against the real Postgres, or the end-to-end check with a REAL library-scoped PAT minted in the stack (v2 401/read/write, MCP `whoami` through to the backend) failing (UP-7). Scratch files live in a per-run `mktemp -d` (`SMOKE_TMP`), never a fixed `/tmp` path on this production host |
+| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, any of the seven `test/integration/` suites failing against the real Postgres, or the end-to-end check with a REAL library-scoped PAT minted in the stack (v2 401/read/write, MCP `whoami` through to the backend) failing (UP-7). Scratch files live in a per-run `mktemp -d` (`SMOKE_TMP`), never a fixed `/tmp` path on this production host |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
 | `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice, stale search responses (FE-2), the library's crack checks, status rollback and card accessibility (FE-1/5/6), keyboard backlog reordering and whole-backlog positions (FE-23/24) |
 

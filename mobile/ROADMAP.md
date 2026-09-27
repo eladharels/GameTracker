@@ -55,7 +55,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 
 ## SEC — Security
 
-### [ ] MOB-1 ✔ Critical — Release builds log bearer tokens and the login password — *being fixed in PR #6*
+### [x] MOB-1 ✔ Critical — Release builds log bearer tokens and the login password — *fixed in PR #6*
 - **Where:** `app/src/main/java/com/example/gmaetrackermobile/ApiClient.kt:10-14`.
 - **Why:** `HttpLoggingInterceptor.Level.BODY` is installed unconditionally, in release as well
   as debug. Every request and response is written to logcat, including:
@@ -72,7 +72,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     because the login body is the password.
   - Add a JVM test that builds the release client and asserts it has no logging interceptor.
 
-### [ ] MOB-2 ✔ Critical — `MainActivity` is exported, so any app or `adb` can skip login and biometrics — *being fixed in PR #6*
+### [x] MOB-2 ✔ Critical — `MainActivity` is exported, so any app or `adb` can skip login and biometrics — *fixed in PR #6*
 - **Where:** `AndroidManifest.xml:29-33`, `MainActivity.kt:41-65`.
 - **Why:** `android:exported="true"` with no permission lets any installed app, or
   `adb shell am start -n …/.MainActivity`, open the main screen directly. `MainActivity`
@@ -84,7 +84,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - `MainActivity.onCreate` must itself refuse to render without a live session and route to
     `LoginActivity`.
 
-### [ ] MOB-3 ✔ High — Logout keeps the token when biometrics is on — *being fixed in PR #6*
+### [x] MOB-3 ✔ High — Logout keeps the token when biometrics is on — *fixed in PR #6*
 - **Where:** `MainActivity.kt:149-153`, `ProfileFragment.kt:304-308`.
 - **Why:** both logout paths remove `token` only when `fingerprint_enabled` is false. With
   biometrics on, "Log out" leaves a working bearer token on disk. The next fingerprint touch
@@ -96,7 +96,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     password again.
   - Clear the per-user local data at the same time (see MOB-7).
 
-### [ ] MOB-4 ✔ High — `allowBackup="true"` with empty rules backs up the token — *being fixed in PR #6*
+### [x] MOB-4 ✔ High — `allowBackup="true"` with empty rules backs up the token — *fixed in PR #6*
 - **Where:** `AndroidManifest.xml:11-13`, `res/xml/backup_rules.xml:8-13`,
   `res/xml/data_extraction_rules.xml:6-19`. Both rule files are the unedited templates.
 - **Why:** Auto Backup copies every `SharedPreferences` file to the user's cloud backup and to
@@ -110,7 +110,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Once MOB-6 lands, the token is bound to a Keystore key that never leaves the device, so a
     restored copy is useless anyway. The exclusion is still needed until then.
 
-### [ ] MOB-5 ✔ High — No 401 handling: after the 12-hour JWT expires everything fails silently — *being fixed in PR #6*
+### [x] MOB-5 ✔ High — No 401 handling: after the 12-hour JWT expires everything fails silently — *fixed in PR #6*
 - **Where:** every call site. Examples: `LibraryFragment.kt:450-475` (a non-2xx is simply not
   rendered), `HomeFragment.kt:101-115`, `InsightsFragment.kt:43-57`, `ProfileFragment.kt:78-101`
   (`// fail silently`), `SearchFragment.kt:298` (a 401 becomes "No games found").
@@ -383,8 +383,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Auth handling (MOB-5) has no single place to live.
   - `mobile/CLAUDE.md:231` already lists this as debt.
 - **Fix:**
-  - A `LibraryRepository` (single in-memory source, explicit refresh) and a `SessionStore`
-    (the only reader of the credential).
+  - A `LibraryRepository` (single in-memory source, explicit refresh).
+  - Finish `SessionStore` as the ONLY reader of the credential. It exists since PR #6
+    (MOB-3/MOB-5), but about 25 call sites still read
+    `getSharedPreferences("auth").getString("token")` themselves (Home, Library, Search,
+    Insights, Profile, GameDetails), with `"auth"`/`"token"` hard-coded outside
+    `SessionStore.PREFS`/`KEY_TOKEN`. Those raw reads are the debt; route them through
+    `Session.get(ctx).bearer()`.
   - One `ViewModel` per screen.
   - Show/hide fragments instead of replacing them, or use Navigation with saved state.
 
@@ -672,6 +677,26 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     `supportsRtl` is untested.
 - **Fix:** individually small. Group them into one UI polish PR after MOB-29 to MOB-31.
 
+### [ ] MOB-36 Low — Session and fingerprint polish left over from PR #6 (UI/UX review)
+- **Where and what:**
+  - `Session.ended` has no replay, so an expiry signalled while another activity is on top
+    is dropped. Since PR #6, `MainActivity.onResume` still shows the expiry notice (it reads
+    `Session.redirecting`). A future activity that calls the API must collect the flow or
+    re-check the session on resume (documented on `Session.ended`).
+  - The Sign In button stays enabled during "Checking session…" (`LoginActivity.verifyAndEnter`).
+    The token check is already race-safe (`clearIfCurrent`); disabling the button is polish.
+  - After cancelling the fingerprint prompt there is no way to retry it: `btnBiometric`
+    (`activity_login.xml`) is `gone` and never shown. Show it when `hasLiveToken()` is true.
+    Also treat `ERROR_NEGATIVE_BUTTON`/`ERROR_USER_CANCELED` as silent (see MOB-35).
+  - Mixed terms: "Sign In" on the button, "sign in again" in the notice, "login with
+    password" in the failure text. Settle on "sign in" and "fingerprint". The two toggle-off
+    messages also differ ("Fingerprint unlock off." vs "Fingerprint unlock off").
+  - The expiry notice is set in `onCreate`, before the view is attached, so the live region
+    may not announce it. Use `announceForAccessibility` after layout.
+  - When the username is prefilled, focus the password field.
+  - The offline notice is a Toast. The rest of the app uses `SnackbarHelper`.
+- **Fix:** one small PR, with MOB-35.
+
 ---
 
 ## Operational notes
@@ -691,8 +716,18 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   It is a separate workflow and never a dependency of `deploy`. With one runner, a mobile
   build can delay a deploy but never skip one. The public-repo same-repo-PR gate from the
   root pipeline applies here too.
+  - Nothing executable is trusted from a cache volume: the SDK is reinstalled every run, the
+    Gradle distribution is re-downloaded and re-checked, and the Gradle home is pruned to
+    the dependency cache BEFORE the build as well as after (CISO review, PR #6).
+  - The PR/main volume split prevents accidents, not attacks: a PR runs its own copy of the
+    workflow. The same-repo gate is the boundary.
   - **Residual risk:** the SDK components `sdkmanager` installs are verified only against
     Google's repository metadata.
+  - **Residual risk, open:** the build container is on Docker's default bridge, so build
+    code (kapt, lint jars, unit tests) can reach every port the host publishes and the LAN,
+    including the directory server. The fix is two phases: resolve dependencies and the SDK
+    with network, then run `--offline` test/lint/assemble under `--network none`. It needs
+    iterating on the runner, so it is a follow-up.
   - **Upgrades:** any dependency upgrade (MOB-21) must regenerate the verification metadata
     in the same PR.
 - **Visible behaviour change from MOB-3/MOB-5:** after PR #6, a session ends 12 hours after
@@ -714,4 +749,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 
 | ID | PR | Date | Note |
 |---|---|---|---|
-| | | | |
+| MOB-1 | #6 | 2026-09-27 | No logging interceptor in release; debug logs BASIC with `Authorization` redacted. `ApiClientLoggingTest` (MockWebServer) + static pins in `test/runtime.test.js` |
+| MOB-2 | #6 | 2026-09-27 | `MainActivity` `exported="false"`, and it re-checks for a live session in `onCreate`/`onResume`. Only the launcher is exported (pinned) |
+| MOB-3 | #6 | 2026-09-27 | Logout always removes the token and keeps the username and fingerprint setting (`SessionStore.endSession`, `SessionStoreTest`) |
+| MOB-4 | #6 | 2026-09-27 | `auth.xml` excluded from legacy backup, cloud backup and device transfer (pinned) |
+| MOB-5 | #6 | 2026-09-27 | `SessionExpiryInterceptor` ends the session only for a 401 on the CURRENT token. The fingerprint unlocks only a live token, then checks `GET /api/user/me`; offline is not a sign-out. Neutral expiry notice |

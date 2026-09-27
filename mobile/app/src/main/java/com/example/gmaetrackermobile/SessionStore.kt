@@ -9,14 +9,17 @@ import kotlinx.coroutines.flow.MutableSharedFlow
  */
 interface KeyValueStore {
     fun getString(key: String): String?
-    fun putString(key: String, value: String)
+    /** All of [values] in one write, so no reader sees some of them without the rest. */
+    fun putStrings(values: Map<String, String>)
     fun remove(key: String)
 }
 
 class SharedPrefsStore(context: Context) : KeyValueStore {
     private val prefs = context.getSharedPreferences(SessionStore.PREFS, Context.MODE_PRIVATE)
     override fun getString(key: String): String? = prefs.getString(key, null)
-    override fun putString(key: String, value: String) { prefs.edit().putString(key, value).apply() }
+    override fun putStrings(values: Map<String, String>) {
+        prefs.edit().apply { values.forEach { (k, v) -> putString(k, v) } }.apply()
+    }
     override fun remove(key: String) { prefs.edit().remove(key).apply() }
 }
 
@@ -44,14 +47,25 @@ class SessionStore(
 
     fun bearer(): String? = token?.let { "Bearer $it" }
 
+    /**
+     * Synchronized with [clearIfCurrent]: otherwise its check and its removal could straddle a
+     * save, and a 401 answering the OLD token would remove the NEW one. One write, so a reader
+     * never sees the new token with the old username.
+     */
+    @Synchronized
     fun save(token: String, username: String) {
-        kv.putString(KEY_TOKEN, token)
-        kv.putString(KEY_USERNAME, username)
+        kv.putStrings(mapOf(KEY_TOKEN to token, KEY_USERNAME to username))
     }
 
     /** Sign out: the token goes, the username and the biometric preference stay. */
+    @Synchronized
     fun endSession() = kv.remove(KEY_TOKEN)
 
+    /**
+     * [skewSeconds] defaults to a minute so the fingerprint is never offered for a token about
+     * to die mid-check (LoginActivity). MainActivity.onResume passes 0: there the question is
+     * only "has it ALREADY expired", and the server's 401 settles anything closer.
+     */
     fun hasLiveToken(skewSeconds: Long = CLOCK_SKEW_SECONDS): Boolean {
         val exp = token?.let { jwtExpiry(it) } ?: return false
         return exp > nowSeconds() + skewSeconds
@@ -121,6 +135,12 @@ object Session {
      * Emitted when a request found the session expired. The VISIBLE activity handles it:
      * starting an activity from OkHttp's thread is dropped by Android 10+'s background
      * activity-start rules, and ApiClient holds no Activity.
+     *
+     * No replay: an emit with nobody collecting is DROPPED, while [redirecting] stays true and
+     * mutes error snackbars. Today MainActivity collects it while STARTED and re-checks the
+     * session in onResume (showing the expiry notice when [redirecting] is set), and the only
+     * other activity, Settings, makes no API calls. A new activity that calls the API must
+     * collect this flow or re-check the session on resume.
      */
     val ended = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 

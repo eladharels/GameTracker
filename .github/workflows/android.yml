@@ -10,14 +10,29 @@
 #     noexec /tmp. It gets ONLY mobile/ mounted: no Docker socket, no $HOME, no .git, no
 #     secrets, no runner environment.
 #   - Its SDK and Gradle caches live in named volumes, split between pull requests and main
-#     (as the smoke stacks are), so a pull request's build cannot poison main's caches.
+#     (as the smoke stacks are). That split prevents ACCIDENTS, not attacks: on a pull
+#     request the PR's own copy of this file runs, and can name main's volumes. The same-repo
+#     gate below is the boundary, exactly as in docker-build-deploy.yml.
+#   - Nothing EXECUTABLE is trusted from a cache volume, because every later build can write
+#     to it. The SDK is wiped and reinstalled every run. The Gradle home keeps only the
+#     dependency cache (caches/modules-2), which strict verification re-checks. It is pruned
+#     BEFORE the build as well as after: a build killed by the timeout or a cancellation never
+#     reaches the second prune, and an init.d script or gradle.properties left in the Gradle
+#     home would run in the next build. The wrapper distribution is downloaded again every
+#     run, so distributionSha256Sum checks it every run.
 #   - Everything it downloads is pinned: the command-line tools zip (SHA-256, re-hashed and
-#     re-extracted every run, no "already installed" shortcut), the Gradle distribution
-#     (distributionSha256Sum in gradle-wrapper.properties), the wrapper jar (below), and
-#     every dependency (gradle/verification-metadata.xml, --dependency-verification strict).
+#     re-extracted every run), the Gradle distribution (distributionSha256Sum in
+#     gradle-wrapper.properties), the wrapper jar (below), and every dependency
+#     (gradle/verification-metadata.xml, --dependency-verification strict).
 #
-# Residual risk, recorded: the SDK components sdkmanager installs (platform, build-tools)
-# are verified only against Google's own repository metadata.
+# Residual risk, recorded:
+#   - The SDK components sdkmanager installs (platform, build-tools) are verified only against
+#     Google's own repository metadata.
+#   - The build container is on Docker's default bridge network, so the build code (kapt
+#     processors, lint jars, unit tests) can reach every port this host publishes: the backend
+#     on BACKEND_BIND, the MCP port, the smoke stacks, and the LAN, including the directory
+#     server. Splitting the build into a networked resolve phase and an --offline phase under
+#     --network none is recorded in mobile/ROADMAP.md (operational notes).
 #
 # Deliberately a SEPARATE workflow from docker-build-deploy.yml: path filters exist only at
 # workflow level, and this job must never gate, trigger or delay `deploy` by dependency.
@@ -134,6 +149,12 @@ jobs:
             -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS \
             -w /work \
             "${JDK_IMAGE}" bash -euo pipefail -c '
+              # Never the root uid: --user "$(id -u)" would otherwise build as root.
+              [ "$(id -u)" != 0 ] || { echo "::error::refusing to build as uid 0"; exit 1; }
+              # Before the build, not only after it: a killed build never reaches the prune at
+              # the end, and Gradle loads init.d/ and gradle.properties from its home on start.
+              find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf {} +
+              find /gradle/caches -mindepth 1 -maxdepth 1 ! -name modules-2 -exec rm -rf {} + 2>/dev/null || true
               mkdir -p /gradle/home /gradle/android-user /gradle/tmp
               # Build outputs never outlive the job, whatever happens below.
               trap "rm -rf /work/build /work/app/build /work/.gradle /work/.kotlin" EXIT
@@ -141,7 +162,10 @@ jobs:
               # Re-verified and re-extracted every run: a cache volume is writable by every
               # later build, so nothing in it is trusted as "already installed".
               echo "${CMDLINE_TOOLS_SHA256}  /dl/${CMDLINE_TOOLS_ZIP}" | sha256sum -c
-              rm -rf /sdk/cmdline-tools && mkdir -p /sdk/cmdline-tools/extract
+              # The WHOLE SDK, not only the tools: platform and build-tools binaries (aapt2, d8)
+              # execute, so they are reinstalled and re-verified by sdkmanager every run.
+              find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+              mkdir -p /sdk/cmdline-tools/extract
               (cd /sdk/cmdline-tools/extract && jar xf "/dl/${CMDLINE_TOOLS_ZIP}")
               mv /sdk/cmdline-tools/extract/cmdline-tools /sdk/cmdline-tools/latest
               rm -rf /sdk/cmdline-tools/extract
@@ -158,8 +182,8 @@ jobs:
               bash gradlew --no-daemon --dependency-verification strict \
                 testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease || status=$?
 
-              # Keep only what caching is for; the rest is regenerated.
-              find /gradle -mindepth 1 -maxdepth 1 ! -name caches ! -name wrapper -exec rm -rf {} +
+              # Keep only the dependency cache; the rest is regenerated.
+              find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf {} +
               find /gradle/caches -mindepth 1 -maxdepth 1 ! -name modules-2 -exec rm -rf {} + 2>/dev/null || true
               exit "${status}"
             '

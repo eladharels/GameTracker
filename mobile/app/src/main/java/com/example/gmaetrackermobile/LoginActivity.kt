@@ -177,7 +177,9 @@ class LoginActivity : AppCompatActivity() {
             when (code) {
                 null -> enterApp(offline = true)
                 401 -> {
-                    session.endSession()
+                    // Only if it is still the token that was checked: the user may have signed
+                    // in with the password while the check was in flight.
+                    session.clearIfCurrent(bearer)
                     Session.redirecting = false
                     notice(status, SESSION_EXPIRED_TEXT)
                 }

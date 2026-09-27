@@ -6,7 +6,7 @@ import java.util.Base64
 class MapStore : KeyValueStore {
     val map = mutableMapOf<String, String>()
     override fun getString(key: String): String? = map[key]
-    override fun putString(key: String, value: String) { map[key] = value }
+    override fun putStrings(values: Map<String, String>) { map.putAll(values) }
     override fun remove(key: String) { map.remove(key) }
 }
 

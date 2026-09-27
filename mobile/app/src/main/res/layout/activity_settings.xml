@@ -78,7 +78,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Biometric login"
+                android:text="Fingerprint unlock"
                 android:textSize="14.5sp"
                 android:textStyle="bold"
                 android:textColor="@color/gt_text_primary"
@@ -88,7 +88,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="Use your fingerprint to sign in faster"
+                android:text="Unlock the app while you're signed in"
                 android:textSize="12sp"
                 android:textColor="@color/gt_text_secondary"
                 tools:ignore="HardcodedText" />
@@ -99,7 +99,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="46dp"
                 android:layout_marginTop="14dp"
-                android:text="Enable biometrics"
+                android:text="Turn on fingerprint unlock"
                 android:textAllCaps="false"
                 android:textStyle="bold"
                 app:cornerRadius="12dp"
