@@ -1205,7 +1205,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 > **The Android job (`android.yml`) runs on this same production host, so Gradle never runs on
 > the host.** A Gradle build executes third-party code: plugins, `kapt` processors, and the
 > lint jars inside dependencies. So it runs in a throwaway `eclipse-temurin:17` container pinned
-> by digest, as the runner uid, with `--cap-drop ALL`, `no-new-privileges`, memory/CPU/PID
+> by digest, as a fixed non-root `BUILD_UID` (the self-hosted runner itself runs as root), with `--cap-drop ALL`, `no-new-privileges`, memory/CPU/PID
 > limits and a noexec `/tmp`, and with ONLY `mobile/` mounted (no Docker socket, `$HOME`, `.git`,
 > secrets or runner environment). Every download is pinned:
 >   - the command-line tools zip (SHA-256, re-verified and re-extracted every run);

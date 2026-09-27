@@ -742,6 +742,12 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Nothing executable is trusted from a cache volume: the SDK is reinstalled every run, the
     Gradle distribution is re-downloaded and re-checked, and the Gradle home is pruned to
     the dependency cache BEFORE the build as well as after (CISO review, PR #6).
+  - **The self-hosted runner runs as root.** Every CI step on the production host therefore runs
+    as root. Gradle does not: it runs as a fixed `BUILD_UID` (10001), and a CHOWN-only container
+    hands it the volumes and `mobile/` before the build and gives `mobile/` back afterwards.
+    The first builds ran as uid 0 (inside the capability-dropped container) because `--user`
+    took the runner's own uid; the in-container guard caught it. Running the runner service as
+    a dedicated non-root user (with docker group access) is an operator decision for the host.
   - The PR/main volume split prevents accidents, not attacks: a PR runs its own copy of the
     workflow. The same-repo gate is the boundary.
   - **Residual risk:** the SDK components `sdkmanager` installs are verified only against

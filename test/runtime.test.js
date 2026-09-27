@@ -388,6 +388,13 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   assert.ok(b.indexOf('find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf') >= 0 && b.indexOf('find /sdk -mindepth 1') < b.indexOf('sdkmanager'),
     'the SDK is not wiped before sdkmanager installs it');
   assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(b), 'the build container does not refuse uid 0');
+  // The runner is root, so its own uid is not a non-root uid: Gradle runs as a fixed BUILD_UID
+  // (PR #6's first run with the guard refused uid 0), and mobile/ is handed back afterwards.
+  assert.ok(/^[1-9]\d*$/.test(String(wf.env.BUILD_UID)), 'BUILD_UID is not a fixed non-root uid');
+  assert.ok(/--user "\$\{BUILD_UID\}:\$\{BUILD_UID\}"/.test(b) && !/--user "\$\(id -u\)/.test(runs),
+    'the build container does not run as BUILD_UID');
+  const cleanup = stepRun(wf.jobs.android.steps.find((st) => st.if === 'always()'));
+  assert.ok(/chown -R "\$\(id -u\):\$\(id -g\)" \/work/.test(cleanup), 'mobile/ is not handed back to the runner after the build');
   const meta = fs.readFileSync(path.join(ROOT, 'mobile/gradle/verification-metadata.xml'), 'utf8');
   assert.match(meta, /<verify-metadata>true<\/verify-metadata>/, 'verification-metadata.xml does not verify metadata');
   assert.ok((meta.match(/<sha256 value="[0-9a-f]{64}"/g) || []).length > 100, 'verification-metadata.xml holds almost no checksums');

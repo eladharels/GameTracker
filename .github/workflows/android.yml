@@ -5,8 +5,8 @@
 # configuration time, kapt annotation processors at compile time, and every lint.jar bundled
 # in a dependency during lint. So Gradle NEVER runs on the host itself:
 #
-#   - It runs in a throwaway container from a JDK image pinned BY DIGEST, as the runner's
-#     uid, with every capability dropped, no-new-privileges, memory/CPU/PID limits, and a
+#   - It runs in a throwaway container from a JDK image pinned BY DIGEST, as a fixed
+#     non-root uid (BUILD_UID: the runner itself runs as root, so its own uid is not one), with every capability dropped, no-new-privileges, memory/CPU/PID limits, and a
 #     noexec /tmp. It gets ONLY mobile/ mounted: no Docker socket, no $HOME, no .git, no
 #     secrets, no runner environment.
 #   - Its SDK and Gradle caches live in named volumes, split between pull requests and main
@@ -72,6 +72,9 @@ env:
   ANDROID_BUILD_TOOLS: 'build-tools;35.0.0'
   # One set of cache volumes per partition. Never shared between PRs and main.
   VOLUME_PARTITION: ${{ github.event_name == 'push' && 'main' || 'pr' }}
+  # The uid Gradle runs as. NOT the runner's: the self-hosted runner runs as root, and
+  # `--user "$(id -u)"` built as uid 0 until the in-container guard refused it (PR #6).
+  BUILD_UID: '10001'
   # Past this, a cache volume is wiped rather than trimmed (UP-25: this disk filled once).
   VOLUME_CAP_MB: '4096'
 
@@ -114,16 +117,21 @@ jobs:
           echo "ANDROID_DL=${DL}" >> "$GITHUB_ENV"
           curl -fsSL --retry 3 -o "${DL}/${CMDLINE_TOOLS_ZIP}" "https://dl.google.com/android/repository/${CMDLINE_TOOLS_ZIP}"
           echo "${CMDLINE_TOOLS_SHA256}  ${DL}/${CMDLINE_TOOLS_ZIP}" | sha256sum -c
+          # mktemp -d is 0700 and the runner is root: the build uid must be able to read it.
+          chmod 755 "${DL}" && chmod 644 "${DL}/${CMDLINE_TOOLS_ZIP}"
 
-      - name: Prepare the cache volumes
+      - name: Prepare the cache volumes and the source tree
         run: |
           for v in sdk gradle; do docker volume create "gametracker-android-${v}-${VOLUME_PARTITION}" >/dev/null; done
-          # A new volume is root-owned. Hand it to the build uid with CHOWN as the ONLY capability,
-          # and no network: this container does nothing but change two directories' owner.
+          # The volumes (root-owned when new, or holding files from builds that ran as root) and
+          # the checkout's mobile/ go to BUILD_UID, with CHOWN as the ONLY capability and no
+          # network: this container does nothing but change owners. The always() step at the
+          # end hands mobile/ back to the runner.
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
             -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
             -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
-            "${JDK_IMAGE}" chown "$(id -u):$(id -g)" /sdk /gradle
+            -v "${GITHUB_WORKSPACE}/mobile:/work" \
+            "${JDK_IMAGE}" chown -R "${BUILD_UID}:${BUILD_UID}" /sdk /gradle /work
 
       # A cancelled job kills the `docker run` CLIENT, not the container: the build kept running
       # on the production host and held the Gradle cache lock, so the next run timed out
@@ -136,7 +144,7 @@ jobs:
       - name: Build and test inside the container
         run: |
           docker run --rm --name "gametracker-android-build-${VOLUME_PARTITION}" \
-            --user "$(id -u):$(id -g)" \
+            --user "${BUILD_UID}:${BUILD_UID}" \
             --cap-drop ALL --security-opt no-new-privileges \
             --memory 4g --cpus 2 --pids-limit 1024 \
             --tmpfs /tmp:rw,noexec,nosuid,size=1g \
@@ -149,7 +157,7 @@ jobs:
             -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS \
             -w /work \
             "${JDK_IMAGE}" bash -euo pipefail -c '
-              # Never the root uid: --user "$(id -u)" would otherwise build as root.
+              # Never the root uid, whatever --user says (the runner itself is root).
               [ "$(id -u)" != 0 ] || { echo "::error::refusing to build as uid 0"; exit 1; }
               # Before the build, not only after it: a killed build never reaches the prune at
               # the end, and Gradle loads init.d/ and gradle.properties from its home on start.
@@ -193,6 +201,10 @@ jobs:
         run: |
           # First: never leave a build running on the host, even when this job was cancelled.
           docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
+          # Give mobile/ back to the runner, so the next checkout can clean and update it.
+          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
+            -v "${GITHUB_WORKSPACE}/mobile:/work" \
+            "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /work || true
           for v in sdk gradle; do
             name="gametracker-android-${v}-${VOLUME_PARTITION}"
             docker volume inspect "${name}" >/dev/null 2>&1 || continue
