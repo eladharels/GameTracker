@@ -267,6 +267,13 @@ production host. Every download is pinned, and dependencies are verified strictl
 **Adding or upgrading a dependency means regenerating that file in the same PR.** Otherwise the
 build fails verification.
 
+**Regenerate it with an EMPTY Gradle home**, for example
+`GRADLE_USER_HOME=$(mktemp -d) ./gradlew --write-verification-metadata sha256 testDebugUnitTest
+testReleaseUnitTest lintDebug assembleRelease`. A warm cache serves parent POMs and Gradle module
+files from its cached resolution metadata, so they are never fetched and never recorded. The first
+file (PR #6) missed three that way, and `main`'s first cold build refused them (PR #7). Review the
+diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not an update.
+
 ---
 
 ## Known Technical Debt

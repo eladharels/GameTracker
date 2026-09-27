@@ -122,10 +122,6 @@ jobs:
 
       - name: Prepare the cache volumes and the source tree
         run: |
-          # BOOTSTRAP (transitional, one run): a COLD Gradle home, so every artifact is fetched
-          # and recorded. The first metadata came from a warm cache and missed parent POMs and
-          # Gradle module files served from cached resolution metadata (main failed on them).
-          docker volume rm -f "gametracker-android-gradle-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
           for v in sdk gradle; do docker volume create "gametracker-android-${v}-${VOLUME_PARTITION}" >/dev/null; done
           # The volumes (root-owned when new, or holding files from builds that ran as root) and
           # the checkout's mobile/ go to BUILD_UID. CHOWN and DAC_READ_SEARCH are the ONLY
@@ -194,9 +190,8 @@ jobs:
               # and reviewed before it was committed: trust-on-first-use, recorded. A dependency
               # change regenerates it, locally, and the diff is reviewed like code.
               status=0
-              bash gradlew --no-daemon --write-verification-metadata sha256 \
+              bash gradlew --no-daemon --dependency-verification strict \
                 testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease || status=$?
-              echo "BOOTSTRAP-FILE gradle/verification-metadata.xml $(gzip -9c gradle/verification-metadata.xml | base64 -w0)"
 
               # Keep only the dependency cache; the rest is regenerated.
               find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf {} +
