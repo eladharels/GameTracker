@@ -39,6 +39,10 @@ android {
     buildFeatures {
         compose = true
     }
+    lint {
+        // Findings that predate CI are recorded here, so lint fails only on NEW ones.
+        baseline = file("lint-baseline.xml")
+    }
 }
 
 dependencies {

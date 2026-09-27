@@ -334,6 +334,49 @@ check('every PR-triggered job is gated to same-repo PRs; no pull_request_target 
   assert.ok(WORKFLOW_FILES.includes('docker-build-deploy.yml'), 'the deploy workflow was not found -- the scan is broken');
 });
 
+// android.yml builds third-party code (Gradle plugins, kapt processors, lint jars) on the
+// production host. The isolation and the pins are the whole control, so each is asserted.
+check('android.yml: path-filtered, containerised, pinned, and never a deploy dependency', () => {
+  const file = 'android.yml';
+  assert.ok(WORKFLOW_FILES.includes(file), 'android.yml is missing');
+  const wf = loadWorkflow(file);
+  const text = fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8');
+  const on = wf.on || wf[true];
+  for (const t of ['push', 'pull_request']) {
+    const paths = (on[t] && on[t].paths) || [];
+    assert.ok(paths.includes('mobile/**'), `android.yml ${t} is not filtered to mobile/**`);
+  }
+  assert.match(wf.env.JDK_IMAGE, /^[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}$/, 'the JDK image is not pinned by digest');
+  assert.match(wf.env.CMDLINE_TOOLS_SHA256, /^[0-9a-f]{64}$/, 'the command-line tools are not SHA-256 pinned');
+  const runs = Object.values(wf.jobs).flatMap((j) => (j.steps || []).map(stepRun)).join('\n');
+  // Gradle must never run on the host: every gradlew invocation is inside the docker run.
+  const build = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((st) => /gradlew/.test(st.run || ''));
+  assert.ok(build, 'no step runs gradlew');
+  const b = stepRun(build);
+  assert.ok(b.indexOf('docker run') >= 0 && b.indexOf('docker run') < b.indexOf('gradlew'), 'gradlew runs outside the container');
+  for (const flag of ['--cap-drop ALL', 'no-new-privileges', '--memory', '--pids-limit', '--user', '/tmp:rw,noexec']) {
+    assert.ok(b.includes(flag), `the build container lost ${flag}`);
+  }
+  assert.ok(/\$\{JDK_IMAGE\}/.test(b), 'the build container does not use the pinned JDK_IMAGE');
+  assert.ok(!/docker\.sock|--privileged|--network host|-v "?\$\{?HOME|GITHUB_WORKSPACE\}:/.test(runs),
+    'a container gets the Docker socket, privileges, the host network, $HOME or the whole workspace');
+  assert.ok(/GITHUB_WORKSPACE\}\/mobile:\/work/.test(b), 'the build container must mount only mobile/');
+  assert.ok(/VOLUME_PARTITION/.test(b) && /'main' \|\| 'pr'/.test(wf.env.VOLUME_PARTITION), 'cache volumes are not split between PRs and main');
+  // The wrapper jar pin must be the jar actually committed.
+  const jar = fs.readFileSync(path.join(ROOT, 'mobile/gradle/wrapper/gradle-wrapper.jar'));
+  const sha = require('crypto').createHash('sha256').update(jar).digest('hex');
+  assert.strictEqual(wf.env.GRADLE_WRAPPER_JAR_SHA256, sha, 'GRADLE_WRAPPER_JAR_SHA256 is not the committed wrapper jar');
+  assert.ok(/sha256sum -c/.test(runs) && /GRADLE_WRAPPER_JAR_SHA256/.test(runs), 'the wrapper jar is not verified');
+  const props = fs.readFileSync(path.join(ROOT, 'mobile/gradle/wrapper/gradle-wrapper.properties'), 'utf8');
+  assert.match(props, /^distributionSha256Sum=[0-9a-f]{64}$/m, 'the Gradle distribution is not SHA-256 pinned');
+  const gprops = fs.readFileSync(path.join(ROOT, 'mobile/gradle.properties'), 'utf8');
+  assert.match(gprops, /^android\.builder\.sdkDownload=false$/m, 'AGP may download SDK components on its own');
+  // Never a deploy dependency, and deploy never waits on it.
+  const deploy = loadWorkflow('docker-build-deploy.yml').jobs.deploy;
+  assert.ok(!JSON.stringify(deploy.needs).includes('android'), 'deploy depends on the Android job');
+  assert.ok(wf.jobs.android['timeout-minutes'] > 0, 'the Android job has no timeout: a hung Gradle would block the one runner');
+});
+
 // The backend image is `COPY . .`; the Android app has no business in it.
 check('.dockerignore keeps the Android app out of the backend image', () => {
   const lines = fs.readFileSync(path.join(ROOT, '.dockerignore'), 'utf8').split('\n').map((l) => l.trim());

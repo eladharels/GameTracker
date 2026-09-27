@@ -1,0 +1,179 @@
+# Build and test the Android app (mobile/) — GameTracker Mobile.
+#
+# THIS RUNS ON THE PRODUCTION HOST (the only runner is self-hosted; see CLAUDE.md "CI/CD
+# Security Pipeline"). A Gradle build executes code nobody here wrote: plugins at
+# configuration time, kapt annotation processors at compile time, and every lint.jar bundled
+# in a dependency during lint. So Gradle NEVER runs on the host itself:
+#
+#   - It runs in a throwaway container from a JDK image pinned BY DIGEST, as the runner's
+#     uid, with every capability dropped, no-new-privileges, memory/CPU/PID limits, and a
+#     noexec /tmp. It gets ONLY mobile/ mounted: no Docker socket, no $HOME, no .git, no
+#     secrets, no runner environment.
+#   - Its SDK and Gradle caches live in named volumes, split between pull requests and main
+#     (as the smoke stacks are), so a pull request's build cannot poison main's caches.
+#   - Everything it downloads is pinned: the command-line tools zip (SHA-256, re-hashed and
+#     re-extracted every run, no "already installed" shortcut), the Gradle distribution
+#     (distributionSha256Sum in gradle-wrapper.properties), the wrapper jar (below), and
+#     every dependency (gradle/verification-metadata.xml, --dependency-verification strict).
+#
+# Residual risk, recorded: the SDK components sdkmanager installs (platform, build-tools)
+# are verified only against Google's own repository metadata.
+#
+# Deliberately a SEPARATE workflow from docker-build-deploy.yml: path filters exist only at
+# workflow level, and this job must never gate, trigger or delay `deploy` by dependency.
+# There is one runner, so jobs still run one at a time — a mobile build can make a deploy
+# wait its turn, never skip it.
+name: Android — GameTracker Mobile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gametracker-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # eclipse-temurin:17-jdk-jammy, pinned by digest: a tag can be moved upstream.
+  JDK_IMAGE: eclipse-temurin:17-jdk-jammy@sha256:60fcdd4a85c94a23ef86d0d55867c6a8dbc4f7c3efc8286e259956c3ea4ef08c
+  # Published on developer.android.com/studio ("Command line tools only").
+  CMDLINE_TOOLS_ZIP: commandlinetools-linux-15859902_latest.zip
+  CMDLINE_TOOLS_SHA256: 4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583
+  # The committed mobile/gradle/wrapper/gradle-wrapper.jar, a genuine Gradle release
+  # (matches the published wrapper checksum). A changed jar fails the build until re-pinned.
+  GRADLE_WRAPPER_JAR_SHA256: e996d452d2645e70c01c11143ca2d3742734a28da2bf61f25c82bdc288c9e637
+  ANDROID_PLATFORM: 'platforms;android-36'
+  ANDROID_BUILD_TOOLS: 'build-tools;35.0.0'
+  # One set of cache volumes per partition. Never shared between PRs and main.
+  VOLUME_PARTITION: ${{ github.event_name == 'push' && 'main' || 'pr' }}
+  # Past this, a cache volume is wiped rather than trimmed (UP-25: this disk filled once).
+  VOLUME_CAP_MB: '4096'
+
+jobs:
+  android:
+    name: Build & test the Android app
+    # ── SAME-REPO GATE ─────────────────────────────────────────────────────────────────
+    # This repository is public and the runner is the production host. A fork's pull
+    # request must never run here: the gate below skips it, exactly as every job in
+    # docker-build-deploy.yml does. test/runtime.test.js enforces the gate on every job
+    # of every workflow with a pull_request trigger.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Report disk and enforce the free-space floor (UP-25)
+        run: |
+          ROOT_DIR="$(docker info --format '{{.DockerRootDir}}')"
+          echo "[android] Docker root: ${ROOT_DIR}"
+          df -h "${ROOT_DIR}"
+          FREE_KB="$(df -Pk "${ROOT_DIR}" | awk 'NR==2 {print $4}')"
+          if [ "${FREE_KB}" -lt 5242880 ]; then
+            echo "::error::Less than 5 GiB free under ${ROOT_DIR}. Refusing to build on the production host (ROADMAP UP-25)."
+            exit 1
+          fi
+
+      - name: Verify the Gradle wrapper jar
+        run: |
+          echo "${GRADLE_WRAPPER_JAR_SHA256}  mobile/gradle/wrapper/gradle-wrapper.jar" | sha256sum -c
+
+      - name: Fetch and verify the Android command-line tools
+        run: |
+          DL="$(mktemp -d "${RUNNER_TEMP}/android-dl.XXXXXXXX")"
+          echo "ANDROID_DL=${DL}" >> "$GITHUB_ENV"
+          curl -fsSL --retry 3 -o "${DL}/${CMDLINE_TOOLS_ZIP}" "https://dl.google.com/android/repository/${CMDLINE_TOOLS_ZIP}"
+          echo "${CMDLINE_TOOLS_SHA256}  ${DL}/${CMDLINE_TOOLS_ZIP}" | sha256sum -c
+
+      - name: Prepare the cache volumes
+        run: |
+          for v in sdk gradle; do docker volume create "gametracker-android-${v}-${VOLUME_PARTITION}" >/dev/null; done
+          # A new volume is root-owned. Hand it to the build uid with CHOWN as the ONLY capability,
+          # and no network: this container does nothing but change two directories' owner.
+          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
+            -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
+            -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
+            "${JDK_IMAGE}" chown "$(id -u):$(id -g)" /sdk /gradle
+
+      - name: Build and test inside the container
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --memory 4g --cpus 2 --pids-limit 1024 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+            -v "${GITHUB_WORKSPACE}/mobile:/work" \
+            -v "${ANDROID_DL}:/dl:ro" \
+            -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
+            -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
+            -e HOME=/gradle/home -e GRADLE_USER_HOME=/gradle -e ANDROID_HOME=/sdk \
+            -e ANDROID_USER_HOME=/gradle/android-user -e JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/gradle/tmp \
+            -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS \
+            -w /work \
+            "${JDK_IMAGE}" bash -euo pipefail -c '
+              mkdir -p /gradle/home /gradle/android-user /gradle/tmp
+              # Build outputs never outlive the job, whatever happens below.
+              trap "rm -rf /work/build /work/app/build /work/.gradle /work/.kotlin" EXIT
+
+              # Re-verified and re-extracted every run: a cache volume is writable by every
+              # later build, so nothing in it is trusted as "already installed".
+              echo "${CMDLINE_TOOLS_SHA256}  /dl/${CMDLINE_TOOLS_ZIP}" | sha256sum -c
+              rm -rf /sdk/cmdline-tools && mkdir -p /sdk/cmdline-tools/extract
+              (cd /sdk/cmdline-tools/extract && jar xf "/dl/${CMDLINE_TOOLS_ZIP}")
+              mv /sdk/cmdline-tools/extract/cmdline-tools /sdk/cmdline-tools/latest
+              rm -rf /sdk/cmdline-tools/extract
+              chmod +x /sdk/cmdline-tools/latest/bin/*
+              SDKM=/sdk/cmdline-tools/latest/bin/sdkmanager
+              (yes || true) | "${SDKM}" --sdk_root=/sdk --licenses >/dev/null
+              "${SDKM}" --sdk_root=/sdk "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
+
+              # BOOTSTRAP (this commit only): build the unmodified app once with no dependency
+              # verification yet, and print the generated verification metadata and lint
+              # baseline so they can be reviewed and committed. Trust-on-first-use, recorded.
+              # The next commit replaces this with --dependency-verification strict.
+              status=0
+              bash gradlew --no-daemon --continue --write-verification-metadata sha256 \
+                testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease || status=$?
+              for f in gradle/verification-metadata.xml app/lint-baseline.xml; do
+                if [ -f "$f" ]; then
+                  echo "BOOTSTRAP-FILE ${f} $(gzip -9c "$f" | base64 -w0)"
+                else
+                  echo "BOOTSTRAP-FILE ${f} MISSING"
+                fi
+              done
+
+              # Keep only what caching is for; the rest is regenerated.
+              find /gradle -mindepth 1 -maxdepth 1 ! -name caches ! -name wrapper -exec rm -rf {} +
+              find /gradle/caches -mindepth 1 -maxdepth 1 ! -name modules-2 -exec rm -rf {} + 2>/dev/null || true
+              exit "${status}"
+            '
+
+      - name: Report disk and cap the cache volumes (UP-25)
+        if: always()
+        run: |
+          for v in sdk gradle; do
+            name="gametracker-android-${v}-${VOLUME_PARTITION}"
+            docker volume inspect "${name}" >/dev/null 2>&1 || continue
+            MB="$(docker run --rm --network none --cap-drop ALL -v "${name}:/v:ro" "${JDK_IMAGE}" du -sm /v | cut -f1)"
+            echo "[android] ${name}: ${MB} MB"
+            if [ "${MB}" -gt "${VOLUME_CAP_MB}" ]; then
+              echo "[android] ${name} is over ${VOLUME_CAP_MB} MB: removing it"
+              docker volume rm "${name}" >/dev/null
+            fi
+          done
+          df -h "$(docker info --format '{{.DockerRootDir}}')"
