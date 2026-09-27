@@ -1239,7 +1239,10 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 >     `--network none`; it is MOB-37 in `mobile/ROADMAP.md`. Until then, `BACKEND_BIND=127.0.0.1`
 >     with `TRUST_PROXY=2` takes the backend port off the reachable set.
 >
-> Any dependency change in `mobile/` must regenerate the verification metadata in the same PR.
+> Any dependency change in `mobile/` must regenerate the verification metadata in the same PR,
+> **from an EMPTY Gradle home** (see `mobile/CLAUDE.md`). A warm cache never fetches parent POMs
+> or module files, so they go unrecorded and fail the next cold build, which happened on `main`
+> after PR #6.
 
 > **The smoke test speaks the protocol; it does not ping liveness.** The MCP step asserts
 > an `initialize` RESULT, not HTTP 200 — a JSON-RPC error is delivered with a 200, so a
