@@ -429,6 +429,63 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     'no always() step removes the build container after a cancelled or failed run');
 });
 
+// MOB-40: the release APK. ONE file, at ONE URL, signed where build code cannot reach the key.
+// Every property below fails silently: a second copy, a PR run that publishes, a key handed to
+// the Gradle container, or a URL that answers with the SPA's index.html all "work".
+check('android.yml publishes exactly one signed APK, from main only, served at /download/', () => {
+  const yaml = require('js-yaml');
+  const wf = loadWorkflow('android.yml');
+  const text = fs.readFileSync(path.join(WORKFLOW_DIR, 'android.yml'), 'utf8');
+  const { APK_PUBLISH_DIR: dir, APK_NAME: name } = wf.env;
+  assert.ok(/^\/home\/docker\/gametracker\/[\w-]+$/.test(dir) && name === 'gametracker.apk', 'APK_PUBLISH_DIR / APK_NAME changed');
+  const job = wf.jobs.android;
+  const steps = job.steps;
+  // The key is an ENVIRONMENT secret, and the environment is asked for only on a push to main.
+  assert.strictEqual(job.environment,
+    "${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'android-release' || '' }}",
+    'the android-release environment (the signing key) is requested outside a push to main');
+  const secretSteps = steps.filter((st) => /secrets\./.test(JSON.stringify(st)));
+  assert.strictEqual(secretSteps.length, 1, 'the signing secrets reach more than one step');
+  const pub = secretSteps[0];
+  assert.strictEqual(pub.if, "success() && github.event_name == 'push' && github.ref == 'refs/heads/main'",
+    'the APK can be signed or published by a pull request, or after a failed build');
+  const gradle = steps.find((st) => /gradlew/.test(st.run || ''));
+  assert.ok(steps.indexOf(pub) > steps.indexOf(gradle), 'the publish step runs before the build');
+  assert.ok(!/secrets\.|\/key/.test(JSON.stringify(gradle)), 'the Gradle container can see the signing key');
+  const r = stepRun(pub);
+  // Signing: fresh build-tools (not the build's writable SDK volume), in a network-less container.
+  assert.ok(!/gametracker-android-sdk-/.test(r), 'signing uses the SDK volume the build could have written');
+  const keyRun = /docker run([^\n]*(?:\\\n[^\n]*)*?)-v "\$\{SIGN\}\/key:\/key:ro"/.exec(r);
+  assert.ok(keyRun && /--network none/.test(keyRun[1]) && /--cap-drop ALL/.test(keyRun[1]), 'the container holding the key has a network or capabilities');
+  assert.strictEqual((r.match(/-v "\$\{SIGN\}\/key/g) || []).length, 1, 'the key is mounted into more than one container');
+  assert.ok(/--v4-signing-enabled false/.test(r), 'apksigner may write a second file (.idsig)');
+  assert.ok(/dump packagename/.test(r), 'the APK is signed without checking which app it is');
+  // Publishing: only the SIGNED file, renamed atomically over the one name, then everything else goes.
+  const mv = r.indexOf('mv -f -T "${INCOMING}" "${APK_PUBLISH_DIR}/${APK_NAME}"');
+  const prune = r.indexOf('find "${APK_PUBLISH_DIR}" -mindepth 1 -maxdepth 1 ! -name "${APK_NAME}" -exec rm -rf {} +');
+  assert.ok(mv >= 0 && prune > mv, 'the APK is not published as one atomically-replaced file');
+  assert.ok(/OUT="\$\{SIGN\}\/out\/signed\.apk"/.test(r) && !/unsigned\.apk"? "\$\{(INCOMING|APK_PUBLISH_DIR)/.test(r), 'something other than the signed APK is published');
+  assert.ok(!/upload-artifact|actions\/cache/.test(text), 'the APK is copied somewhere else as well (an artifact or a cache)');
+  const cleanup = stepRun(steps.find((st) => st.if === 'always()'));
+  assert.ok(/APK_OUT:-/.test(cleanup) && /ANDROID_SIGN:-/.test(cleanup), 'the unsigned APK or the signing directory outlives the job');
+  // Served: the production frontend mounts THAT directory read-only, the smoke stack mounts the
+  // same container path, and nginx serves exactly that one name there and 404s the rest.
+  const prod = yaml.load(fs.readFileSync(path.join(ROOT, 'docker-compose.yaml'), 'utf8')).services.frontend.volumes || [];
+  assert.deepStrictEqual(prod, [`${dir}:/usr/share/nginx/apk:ro`], 'the production frontend does not mount the APK directory read-only (and nothing else)');
+  const test = yaml.load(fs.readFileSync(path.join(ROOT, 'docker-compose.test.yml'), 'utf8')).services.frontend.volumes || [];
+  assert.ok(test.length === 1 && /\/apk:\/usr\/share\/nginx\/apk:ro$/.test(test[0]), 'the smoke stack does not mount the APK like production');
+  const nginx = fs.readFileSync(path.join(ROOT, 'frontend/nginx.conf'), 'utf8').replace(/^\s*#.*$/gm, '');
+  const loc = new RegExp(`location = /download/${name.replace('.', '\\.')} \\{([\\s\\S]*?)\\n  \\}`).exec(nginx);
+  assert.ok(loc, 'nginx has no exact location for the APK');
+  assert.ok(loc[1].includes(`alias /usr/share/nginx/apk/${name};`), 'nginx serves some other file at the APK URL');
+  for (const h of ['application/vnd.android.package-archive', 'attachment; filename=', 'nosniff', "default-src 'none'", 'X-Frame-Options']) {
+    assert.ok(loc[1].includes(h), `the APK response lost ${h}`);
+  }
+  assert.ok(/location \/download\/ \{\s*return 404;\s*\}/.test(nginx), 'other /download/ paths fall through to the SPA');
+  const smoke = loadWorkflow('docker-build-deploy.yml').jobs['smoke-test'].steps.map(stepRun).join('\n');
+  assert.ok(/\/download\/gametracker\.apk/.test(smoke), 'the smoke test does not fetch the APK URL');
+});
+
 // The Android app's critical security fixes (mobile/ROADMAP.md MOB-1, MOB-2, MOB-4), pinned
 // from source: these are properties of the manifest and the build, which no JVM unit test in
 // mobile/ can see, and they fail silently -- a re-exported activity or a dropped backup

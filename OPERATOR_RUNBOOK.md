@@ -195,3 +195,44 @@ with no settings file at all.
    sudo cp -p /home/docker/gametracker/data/config/settings.json /home/docker/gametracker/data/settings.json
    ```
 5. **After a week without trouble,** remove the old `data/settings.json`, and record UP-24 done.
+
+---
+
+## MOB-40: the Android release signing key
+
+`android.yml` publishes the app at `/download/gametracker.apk` only when a signing key is
+configured. Until then, every main build logs a warning and publishes nothing. This is a
+one-time setup and cannot be done from code, because the key must never be in the repo.
+
+1. **Create the key once**, on a trusted machine (not the production host), and **back it
+   up** offline. A lost key means no future APK can update an installed one.
+   ```bash
+   keytool -genkeypair -v -keystore gametracker-release.p12 -storetype PKCS12 \
+     -alias gametracker -keyalg RSA -keysize 4096 -validity 10000 \
+     -dname "CN=GameTracker"
+   base64 -w0 gametracker-release.p12 > gametracker-release.p12.b64
+   ```
+2. **GitHub → Settings → Environments → New environment `android-release`.**
+   - Deployment branches and tags: **Selected branches → `main`** only. This rule is what
+     keeps a pull request's copy of the workflow from reaching the key.
+   - Environment secrets:
+     - `ANDROID_KEYSTORE_BASE64`: the contents of the `.b64` file;
+     - `ANDROID_KEYSTORE_PASSWORD`;
+     - `ANDROID_KEY_ALIAS` (`gametracker` above);
+     - `ANDROID_KEY_PASSWORD`, only if it differs from the keystore password (for PKCS12 it
+       does not).
+   - Do **not** add them as repository secrets: a repository secret is readable by any
+     same-repo pull request's workflow.
+   - Delete the local `.b64` file.
+3. **Publish.** Re-run the latest "Android — GameTracker Mobile" run on `main`, or push any
+   change under `mobile/`. The job log prints the signer's SHA-256 certificate digest and the
+   published file's hash. Record the certificate digest here.
+4. **Check** that `https://gametracker.etech.ink/download/gametracker.apk` downloads. The file
+   lives at `/home/docker/gametracker/apk/gametracker.apk` on the host. That directory holds
+   that one file and nothing else, and CI deletes anything else it finds there.
+
+- **Installing:** phones need "Install unknown apps" allowed for the browser. An app
+  installed earlier from Android Studio or a debug build is signed with a different key, so
+  uninstall it once first. After that, each new download installs as an update.
+- **Signer certificate SHA-256:** _record it here after step 3._
+

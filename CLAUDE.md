@@ -40,6 +40,10 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Containerization**: Docker + docker-compose
 - **Backend port**: 3000
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
+- **Android APK** (MOB-40): `https://<host>/download/gametracker.apk`, public. Exactly one file,
+  `/home/docker/gametracker/apk/gametracker.apk`, written only by `android.yml` (atomic rename,
+  everything else in the directory deleted) and mounted READ-ONLY into the frontend. Signing
+  key setup: `OPERATOR_RUNBOOK.md`
 - **Persistent volumes**: `gametracker-pgdata` (named volume, Postgres data), settings.json, sent_notifications.json
   (**obsolete** since migration 006 moved the reminder log into Postgres; still mounted for one release so a
   rollback to the previous image finds it — remove the mount in the release after)
@@ -357,7 +361,11 @@ GameTracker/
 │                                   #   mobile/** only; NEVER a deploy dependency. Gradle runs
 │                                   #   ONLY in a digest-pinned, cap-dropped container (no socket,
 │                                   #   $HOME, .git or secrets), with every download pinned and
-│                                   #   strict dependency verification. See the CI section
+│                                   #   strict dependency verification. See the CI section.
+│                                   #   On a push to main it SIGNS the APK (key from the
+│                                   #   main-only `android-release` environment, never in the
+│                                   #   Gradle container) and publishes ONE file that nginx
+│                                   #   serves at /download/gametracker.apk (MOB-40)
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx                 # The app shell and routes only. Pages extracted from
@@ -1279,7 +1287,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | Vite build | `frontend-quality` | Build failure |
 | `npm test` | `frontend-quality` | Any failed assertion in `test/helpers.test.js`, `test/runtime.test.js`, `test/api-surface.test.js`, `test/api-contract.test.js` or `test/openapi.test.js` |
 | ESLint (backend) | `frontend-quality` | Any error from `eslint.config.mjs`. **`no-undef` is the one that earns its keep**: a refactor deleted two `const` declarations whose every reference sat inside a try/catch, and the DRM cache silently stopped working for a whole deploy cycle |
-| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, any of the seven `test/integration/` suites failing against the real Postgres, or the end-to-end check with a REAL library-scoped PAT minted in the stack (v2 401/read/write, MCP `whoami` through to the backend) failing (UP-7). Scratch files live in a per-run `mktemp -d` (`SMOKE_TMP`), never a fixed `/tmp` path on this production host |
+| Smoke test | `smoke-test` | Backend health ≠ 200, frontend ≠ 200, the MCP `initialize` handshake not returning a RESULT, an unauthenticated `/api/user/:u/stats` answering anything but 401, any of the seven `test/integration/` suites failing against the real Postgres, or the end-to-end check with a REAL library-scoped PAT minted in the stack (v2 401/read/write, MCP `whoami` through to the backend) failing (UP-7), or `/download/gametracker.apk` not served as that exact file with its download headers while other `/download/` paths are not 404 (MOB-40). Scratch files live in a per-run `mktemp -d` (`SMOKE_TMP`), never a fixed `/tmp` path on this production host |
 | `npm test` (MCP) | `frontend-quality` | Any failed assertion in `mcp/test/tools.test.js` — the tool inventory is pinned there like the route tiers are |
 | `npm test` (frontend) | `frontend-quality` | Any failed component test in `frontend/src/*.test.jsx` (Vitest + jsdom): the detail dialog's focus handling, the login page's errors and session notice, stale search responses (FE-2), the library's crack checks, status rollback and card accessibility (FE-1/5/6), keyboard backlog reordering and whole-backlog positions (FE-23/24) |
 
@@ -1288,7 +1296,7 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 | Component | Hardening |
 |---|---|
 | Backend | `no-new-privileges:true`, runs as `node` user (UID 1000) |
-| Frontend | `no-new-privileges:true`, `read_only: true`, tmpfs for `/tmp`, `/var/cache/nginx`, `/var/run`, runs as `nginx` user via `nginxinc/nginx-unprivileged:alpine` |
+| Frontend | `no-new-privileges:true`, `read_only: true`, tmpfs for `/tmp`, `/var/cache/nginx`, `/var/run`, runs as `nginx` user via `nginxinc/nginx-unprivileged:alpine`. Its ONE volume is the APK directory, read-only (MOB-40) |
 | MCP | `no-new-privileges:true`, `read_only: true`, tmpfs for `/tmp`, runs as `node` user. No volumes, no database, no secrets — it needs none of them |
 | Backend read_only | **Enabled.** SQLite's need for a writable `/app/` was the only blocker. Bind-mounted files (`settings.json`, `sent_notifications.json`) stay writable under `read_only`; the ephemeral CrackWatch and system-status caches live on a tmpfs at `/app/cache` via `CACHE_DIR` |
 | Database | `postgres-gametracker` (postgres:16-alpine). Port **not published**; backend gated on `condition: service_healthy`. Named volume `gametracker-pgdata` |

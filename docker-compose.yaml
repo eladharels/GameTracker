@@ -227,6 +227,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    volumes:
+      # MOB-40: the ONE published Android APK, served at /download/gametracker.apk.
+      # android.yml writes it (APK_PUBLISH_DIR); nginx only ever reads it. A directory
+      # mount, not a file mount, so the atomic rename of a new publish is seen at once.
+      # Missing until the first publish (Docker then creates it empty, and the URL is a 404).
+      - /home/docker/gametracker/apk:/usr/share/nginx/apk:ro
     security_opt:
       - no-new-privileges:true
     read_only: true

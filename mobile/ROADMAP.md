@@ -762,6 +762,40 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     (MOB-29, MOB-32).
 - **Source:** CISO and UI/UX reviews of PR #8.
 
+### [x] MOB-40 ✔ Medium — Distribute the app: one signed APK at one URL — *done in PR #9*
+- **Asked for:** "only one copy of the APK on each deploy, served by the server under a
+  specific URL."
+- **What exists now:**
+  - **URL:** `https://gametracker.etech.ink/download/gametracker.apk`. The frontend's nginx
+    serves it as a download (`application/vnd.android.package-archive`, `attachment`,
+    `no-cache`, a `default-src 'none'` CSP). Every other `/download/` path is a 404, never
+    the SPA with a 200. It is public on purpose: the APK holds no secret and is useless
+    without an account.
+  - **One copy:** on every push to `main` that builds the app, `android.yml` signs the
+    release APK and renames it over `/home/docker/gametracker/apk/gametracker.apk`
+    (atomic), then deletes anything else in that directory. No GitHub artifact is uploaded.
+    The unsigned APK and the signing directory are removed with the job. The directory is
+    mounted READ-ONLY into the frontend container, so a deploy serves exactly that one file.
+    A deploy without an app change keeps serving the same file.
+  - **Signing:** a stable release key from the `android-release` GitHub environment. The
+    environment is requested only on a push to `main`, and its branch rule admits `main`
+    alone. The key is never in the Gradle container. Signing runs in a network-less container
+    with build-tools installed fresh from the verified command-line tools, not from the SDK
+    volume build code can write. `aapt2` checks the package id first. With no key
+    configured, nothing is published (a warning) and the file already there stays. An
+    unsigned or debug-signed APK is never published. Setup: `OPERATOR_RUNBOOK.md`, "MOB-40".
+  - **Updates install in place:** `versionCode` is `android.yml`'s run number
+    (`-PgtVersionCode`), so each publish is higher than the last. A local build is still 1.
+  - Pinned by `test/runtime.test.js`, and fetched by the smoke test.
+- **Residual, open:**
+  - The APK is built by the same untrusted-build container as ever. Signing attests "CI built
+    this from `main`", not that the build was clean (MOB-37 and MOB-38 still apply).
+  - There is no link to the download in the web app or the README yet.
+  - Partly addresses MOB-20 (signing and versioning). R8 and the `com.example` id remain.
+    Changing the id later makes installed copies a different app.
+  - **Lose the key and no future APK updates an installed one.** Users would have to
+    uninstall, losing the device-only ratings and notes (MOB-11). Back it up (runbook).
+
 ---
 
 ## Operational notes
