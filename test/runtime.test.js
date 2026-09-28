@@ -429,6 +429,26 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     'no always() step removes the build container after a cancelled or failed run');
 });
 
+// A single-quoted script handed to a container (`bash ... -c '...'`) must END at its own
+// closing quote. An apostrophe in a comment inside it ("workflow's") closed it early on PR #9, and
+// the REST of the container script then ran on the HOST, as root, on the production host: it
+// reached `bash gradlew` and `find /gradle ... -exec rm -rf` there. Every such block's first
+// closing quote must stand alone on its line.
+check('no container script in a workflow is cut short by a quote inside it', () => {
+  let blocks = 0;
+  for (const f of WORKFLOW_FILES) {
+    const text = fs.readFileSync(path.join(WORKFLOW_DIR, f), 'utf8');
+    for (const m of text.matchAll(/ -c '\n/g)) {
+      blocks += 1;
+      const start = m.index + m[0].length;
+      const end = text.indexOf("'", start);
+      const line = text.slice(text.lastIndexOf('\n', end) + 1, text.indexOf('\n', end));
+      assert.ok(/^\s*'\s*$/.test(line), `${f}: a container script closes early at: ${line.trim()}`);
+    }
+  }
+  assert.ok(blocks >= 3, `found ${blocks} container scripts -- the scan is broken`);
+});
+
 // MOB-40: the release APK. ONE file, at ONE URL, signed where build code cannot reach the key.
 // Every property below fails silently: a second copy, a PR run that publishes, a key handed to
 // the Gradle container, or a URL that answers with the SPA's index.html all "work".
@@ -482,6 +502,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(loc[1].includes(h), `the APK response lost ${h}`);
   }
   assert.ok(/location \/download\/ \{\s*return 404;\s*\}/.test(nginx), 'other /download/ paths fall through to the SPA');
+  // The 404 before the first publish must not arrive as a file download (UI/UX review, PR #9).
+  assert.ok(!/Content-Disposition[^;\n]*;[^\n]*\balways;/.test(loc[1]), 'Content-Disposition is sent on the 404 too (`always`)');
   const smoke = loadWorkflow('docker-build-deploy.yml').jobs['smoke-test'].steps.map(stepRun).join('\n');
   assert.ok(/\/download\/gametracker\.apk/.test(smoke), 'the smoke test does not fetch the APK URL');
 });

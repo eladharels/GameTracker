@@ -231,8 +231,13 @@ one-time setup and cannot be done from code, because the key must never be in th
    lives at `/home/docker/gametracker/apk/gametracker.apk` on the host. That directory holds
    that one file and nothing else, and CI deletes anything else it finds there.
 
-- **Installing:** phones need "Install unknown apps" allowed for the browser. An app
-  installed earlier from Android Studio or a debug build is signed with a different key, so
-  uninstall it once first. After that, each new download installs as an update.
+- **Installing:** phones need "Install unknown apps" allowed for the browser. Play Protect may
+  warn about an unrecognised developer; choose "Install anyway". After the first install,
+  each new download installs as an update.
+- **Switching from an older copy** (installed from Android Studio or a debug build): it is
+  signed with a different key, so Android refuses the download with "App not installed" or
+  "package conflicts with an existing package". Uninstall the old copy once first. **This
+  deletes the ratings and notes stored on that phone** (MOB-11: they exist only on the
+  device). Tell users before they do it.
 - **Signer certificate SHA-256:** _record it here after step 3._
 

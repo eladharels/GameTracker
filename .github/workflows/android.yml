@@ -216,7 +216,8 @@ jobs:
               # change regenerates it, locally, and the diff is reviewed like code.
               status=0
               # gtVersionCode: every published APK is a higher versionCode than the last, so it
-              # installs as an update (MOB-40). This workflow's run number only ever grows.
+              # installs as an update (MOB-40). The run number of this workflow only ever grows
+              # (it restarts only if the workflow file is renamed: then add an offset here).
               bash gradlew --no-daemon --dependency-verification strict -PgtVersionCode="${GT_VERSION_CODE}" \
                 testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease || status=$?
               # The UNSIGNED APK leaves through /out before the trap deletes the build tree. It
