@@ -823,6 +823,10 @@ jobs:
           # throwaway Postgres container and the backend creates the schema.
           echo '{}' > "${SMOKE_DATA_DIR}/settings.json"
           echo '[]' > "${SMOKE_DATA_DIR}/sent_notifications.json"
+          # MOB-40: a stand-in for the published APK, served by the frontend's nginx.
+          mkdir "${SMOKE_DATA_DIR}/apk"
+          printf 'PK smoke-test stand-in, not an APK\n' > "${SMOKE_DATA_DIR}/apk/gametracker.apk"
+          chmod 755 "${SMOKE_DATA_DIR}/apk" && chmod 644 "${SMOKE_DATA_DIR}/apk/gametracker.apk"
           # mktemp -d already creates the directory 0700. Only ownership needs
           # changing, for the container's UID 1000 (node). Do NOT chmod after the
           # chown — under `set -e` that would fail the job whenever the runner's
@@ -959,6 +963,27 @@ jobs:
           }
           rm -f ${SMOKE_TMP}/smoke-404.json
           echo "[smoke] API 404 handling check PASSED"
+
+      # MOB-40: the APK is served at its ONE URL, as a download, with the file's own bytes,
+      # and nothing else under /download/ is (in particular not the SPA with a 200).
+      - name: Verify the Android APK download
+        run: |
+          set -euo pipefail
+          BASE="http://localhost:${{ env.FRONTEND_TEST_PORT }}"
+          HDRS="${SMOKE_TMP}/smoke-apk.headers"; BODY="${SMOKE_TMP}/smoke-apk.body"
+          STATUS=$(curl -s -D "${HDRS}" -o "${BODY}" -w "%{http_code}" "${BASE}/download/gametracker.apk")
+          [ "${STATUS}" -eq 200 ] || { echo "[smoke] ERROR: /download/gametracker.apk answered ${STATUS}"; exit 1; }
+          # Compared with the literal written above: the data dir is 0700 and owned by uid 1000.
+          printf 'PK smoke-test stand-in, not an APK\n' | cmp - "${BODY}" || { echo "[smoke] ERROR: served bytes differ from the published file"; exit 1; }
+          grep -qi '^content-type: application/vnd.android.package-archive' "${HDRS}" || { echo "[smoke] ERROR: wrong Content-Type"; cat "${HDRS}"; exit 1; }
+          grep -qi '^content-disposition: attachment; filename="gametracker.apk"' "${HDRS}" || { echo "[smoke] ERROR: not served as a download"; cat "${HDRS}"; exit 1; }
+          grep -qi '^x-content-type-options: nosniff' "${HDRS}" || { echo "[smoke] ERROR: nosniff missing"; exit 1; }
+          for p in /download/ /download/other.apk /download/.incoming.x; do
+            S=$(curl -o /dev/null -s -w "%{http_code}" "${BASE}${p}")
+            [ "${S}" -eq 404 ] || { echo "[smoke] ERROR: ${p} answered ${S}, expected 404"; exit 1; }
+          done
+          rm -f "${HDRS}" "${BODY}"
+          echo "[smoke] APK download check PASSED"
 
       # Status history, against the real Postgres, inside the real backend container.
       #

@@ -429,6 +429,97 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     'no always() step removes the build container after a cancelled or failed run');
 });
 
+// A single-quoted script handed to a container (`bash ... -c '...'`) must END at its own
+// closing quote. An apostrophe in a comment inside it ("workflow's") closed it early on PR #9, and
+// the REST of the container script then ran on the HOST, as root, on the production host: it
+// reached `bash gradlew` and `find /gradle ... -exec rm -rf` there. Every such block's first
+// closing quote must stand alone on its line.
+check('no container script in a workflow is cut short by a quote inside it', () => {
+  let blocks = 0;
+  for (const f of WORKFLOW_FILES) {
+    const text = fs.readFileSync(path.join(WORKFLOW_DIR, f), 'utf8');
+    for (const m of text.matchAll(/ -c '\n/g)) {
+      blocks += 1;
+      const start = m.index + m[0].length;
+      const end = text.indexOf("'", start);
+      const line = text.slice(text.lastIndexOf('\n', end) + 1, text.indexOf('\n', end));
+      assert.ok(/^\s*'(\s*\|\|[^'\n]*)?\s*$/.test(line), `${f}: a container script closes early at: ${line.trim()}`);
+    }
+  }
+  assert.ok(blocks >= 3, `found ${blocks} container scripts -- the scan is broken`);
+});
+
+// MOB-40: the release APK. ONE file, at ONE URL, signed where build code cannot reach the key.
+// Every property below fails silently: a second copy, a PR run that publishes, a key handed to
+// the Gradle container, or a URL that answers with the SPA's index.html all "work".
+check('android.yml publishes exactly one signed APK, from main only, served at /download/', () => {
+  const yaml = require('js-yaml');
+  const wf = loadWorkflow('android.yml');
+  const text = fs.readFileSync(path.join(WORKFLOW_DIR, 'android.yml'), 'utf8');
+  const { APK_PUBLISH_DIR: dir, APK_NAME: name } = wf.env;
+  assert.ok(/^\/home\/docker\/gametracker\/[\w-]+$/.test(dir) && name === 'gametracker.apk', 'APK_PUBLISH_DIR / APK_NAME changed');
+  const job = wf.jobs.android;
+  const steps = job.steps;
+  // The key is an ENVIRONMENT secret, and the environment is asked for only on a push to main.
+  assert.strictEqual(job.environment,
+    "${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'android-release' || '' }}",
+    'the android-release environment (the signing key) is requested outside a push to main');
+  const secretSteps = steps.filter((st) => /secrets\./.test(JSON.stringify(st)));
+  assert.strictEqual(secretSteps.length, 1, 'the signing secrets reach more than one step');
+  const pub = secretSteps[0];
+  assert.strictEqual(pub.if, "success() && github.event_name == 'push' && github.ref == 'refs/heads/main'",
+    'the APK can be signed or published by a pull request, or after a failed build');
+  const gradle = steps.find((st) => /gradlew/.test(st.run || ''));
+  assert.ok(steps.indexOf(pub) > steps.indexOf(gradle), 'the publish step runs before the build');
+  assert.ok(!/secrets\.|\/key/.test(JSON.stringify(gradle)), 'the Gradle container can see the signing key');
+  const r = stepRun(pub);
+  const cleanup = stepRun(steps.find((st) => st.if === 'always()'));
+  // Signing: fresh build-tools (not the build's writable SDK volume), in a network-less container.
+  assert.ok(!/gametracker-android-sdk-/.test(r), 'signing uses the SDK volume the build could have written');
+  const keyRun = /docker run([^\n]*(?:\\\n[^\n]*)*?)-v "\$\{SIGN\}\/key:\/key:ro"/.exec(r);
+  assert.ok(keyRun && /--network none/.test(keyRun[1]) && /--cap-drop ALL/.test(keyRun[1]), 'the container holding the key has a network or capabilities');
+  assert.strictEqual((r.match(/-v "\$\{SIGN\}\/key/g) || []).length, 1, 'the key is mounted into more than one container');
+  assert.ok(/--v4-signing-enabled false/.test(r), 'apksigner may write a second file (.idsig)');
+  // The container holding the key runs apksigner ONLY: the native parsers (aapt2, zipalign) read
+  // build output, so they run in a container without the key (CISO review, PR #9).
+  const keyScript = /-v "\$\{SIGN\}\/key:\/key:ro"[\s\S]*? -c '\n([\s\S]*?)\n\s*'/.exec(r);
+  assert.ok(keyScript && /apksigner" sign/.test(keyScript[1]), 'the signing container script was not found');
+  assert.ok(!/aapt2|zipalign|\/in\b|\/published/.test(keyScript[1]), 'a native parser, or the raw build output, is in the container that holds the key');
+  // And only the commit main points at now may publish (CISO review, PR #9).
+  const lsr = r.indexOf('git ls-remote'), mvAt = r.indexOf('mv -f -T');
+  assert.ok(lsr >= 0 && lsr < mvAt && /"\$\{HEAD_SHA\}" != "\$\{GITHUB_SHA\}"/.test(r), 'a re-run of an old commit can publish');
+  assert.ok(/dump packagename/.test(r), 'the APK is signed without checking which app it is');
+  // A re-run of an older main run must never replace a newer published APK (Architect review, PR #9).
+  assert.ok(/-v "\$\{APK_PUBLISH_DIR\}:\/published:ro"/.test(r) && /"\$\{NEW\}" -lt "\$\{OLD\}"/.test(r) && /exit 3/.test(r)
+    && /if \[ "\$\{rc\}" = 3 \]; then[\s\S]*?exit 0/.test(r), 'an older build can be published over a newer one');
+  assert.ok(/docker rm -f gametracker-android-sign\b/.test(cleanup), 'a cancelled job can leave the key-holding container running');
+  // Publishing: only the SIGNED file, renamed atomically over the one name, then everything else goes.
+  const mv = r.indexOf('mv -f -T "${INCOMING}" "${APK_PUBLISH_DIR}/${APK_NAME}"');
+  const prune = r.indexOf('find "${APK_PUBLISH_DIR}" -mindepth 1 -maxdepth 1 ! -name "${APK_NAME}" -exec rm -rf {} +');
+  assert.ok(mv >= 0 && prune > mv, 'the APK is not published as one atomically-replaced file');
+  assert.ok(/OUT="\$\{SIGN\}\/signed\/signed\.apk"/.test(r) && !/unsigned\.apk"? "\$\{(INCOMING|APK_PUBLISH_DIR)/.test(r), 'something other than the signed APK is published');
+  assert.ok(!/upload-artifact|actions\/cache/.test(text), 'the APK is copied somewhere else as well (an artifact or a cache)');
+  assert.ok(/APK_OUT:-/.test(cleanup) && /ANDROID_SIGN:-/.test(cleanup), 'the unsigned APK or the signing directory outlives the job');
+  // Served: the production frontend mounts THAT directory read-only, the smoke stack mounts the
+  // same container path, and nginx serves exactly that one name there and 404s the rest.
+  const prod = yaml.load(fs.readFileSync(path.join(ROOT, 'docker-compose.yaml'), 'utf8')).services.frontend.volumes || [];
+  assert.deepStrictEqual(prod, [`${dir}:/usr/share/nginx/apk:ro`], 'the production frontend does not mount the APK directory read-only (and nothing else)');
+  const test = yaml.load(fs.readFileSync(path.join(ROOT, 'docker-compose.test.yml'), 'utf8')).services.frontend.volumes || [];
+  assert.ok(test.length === 1 && /\/apk:\/usr\/share\/nginx\/apk:ro$/.test(test[0]), 'the smoke stack does not mount the APK like production');
+  const nginx = fs.readFileSync(path.join(ROOT, 'frontend/nginx.conf'), 'utf8').replace(/^\s*#.*$/gm, '');
+  const loc = new RegExp(`location = /download/${name.replace('.', '\\.')} \\{([\\s\\S]*?)\\n  \\}`).exec(nginx);
+  assert.ok(loc, 'nginx has no exact location for the APK');
+  assert.ok(loc[1].includes(`alias /usr/share/nginx/apk/${name};`), 'nginx serves some other file at the APK URL');
+  for (const h of ['application/vnd.android.package-archive', 'attachment; filename=', 'nosniff', "default-src 'none'", 'X-Frame-Options', 'Permissions-Policy']) {
+    assert.ok(loc[1].includes(h), `the APK response lost ${h}`);
+  }
+  assert.ok(/location \/download\/ \{\s*return 404;\s*\}/.test(nginx), 'other /download/ paths fall through to the SPA');
+  // The 404 before the first publish must not arrive as a file download (UI/UX review, PR #9).
+  assert.ok(!/Content-Disposition[^;\n]*;[^\n]*\balways;/.test(loc[1]), 'Content-Disposition is sent on the 404 too (`always`)');
+  const smoke = loadWorkflow('docker-build-deploy.yml').jobs['smoke-test'].steps.map(stepRun).join('\n');
+  assert.ok(/\/download\/gametracker\.apk/.test(smoke), 'the smoke test does not fetch the APK URL');
+});
+
 // The Android app's critical security fixes (mobile/ROADMAP.md MOB-1, MOB-2, MOB-4), pinned
 // from source: these are properties of the manifest and the build, which no JVM unit test in
 // mobile/ can see, and they fail silently -- a re-exported activity or a dropped backup

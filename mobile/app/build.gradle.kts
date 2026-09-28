@@ -14,8 +14,11 @@ android {
         applicationId = "com.example.gmaetrackermobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // CI passes -PgtVersionCode (android.yml's run number) for the build it publishes, so
+        // every published APK installs over the previous one as an UPDATE. A local build is 1.
+        val ciVersionCode = (project.findProperty("gtVersionCode") as String?)?.toIntOrNull()
+        versionCode = ciVersionCode ?: 1
+        versionName = if (ciVersionCode != null) "1.0.$ciVersionCode" else "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

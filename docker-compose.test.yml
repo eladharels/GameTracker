@@ -154,6 +154,9 @@ services:
     pull_policy: never
     ports:
       - "127.0.0.1:${FRONTEND_TEST_PORT:-8099}:8080"
+    volumes:
+      # Same mount as production (MOB-40); the smoke test puts a stand-in file here.
+      - ${SMOKE_DATA_DIR:-/tmp/gametracker-smoke-data}/apk:/usr/share/nginx/apk:ro
     security_opt:
       - no-new-privileges:true
     read_only: true

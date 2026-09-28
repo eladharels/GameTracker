@@ -271,7 +271,13 @@ and `assembleRelease`. It runs in a pinned container on the self-hosted runner, 
 production host. Every download is pinned, and dependencies are verified strictly against
 `gradle/verification-metadata.xml`.
 
-**Adding or upgrading a dependency means regenerating that file in the same PR.** Otherwise the
+**Distribution (MOB-40).** On a push to `main`, the job signs the release APK with the key in the
+`android-release` GitHub environment and publishes it as the ONE file served at
+`https://gametracker.etech.ink/download/gametracker.apk`. The key never enters the Gradle
+container. `versionCode` is the workflow run number, so each publish installs as an update.
+With no key configured, nothing is published. Setup: the root `OPERATOR_RUNBOOK.md`.
+
+**Adding or upgrading a dependency means regenerating `verification-metadata.xml` in the same PR.** Otherwise the
 build fails verification.
 
 **Regenerate it with an EMPTY Gradle home**, for example

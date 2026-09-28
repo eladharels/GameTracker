@@ -28,6 +28,11 @@
 # Residual risk, recorded:
 #   - The SDK components sdkmanager installs (platform, build-tools) are verified only against
 #     Google's own repository metadata.
+#   - A push to main PUBLISHES the release APK (MOB-40): one file, signed OUTSIDE the build
+#     container, served by the frontend's nginx at /download/gametracker.apk. See the last
+#     steps below for why the key never meets build code and why exactly one copy exists.
+#     It is NOT gated on docker-build-deploy.yml (the contract gate, Trivy, deploy): one
+#     runner cannot wait for a deploy that waits for it. Recorded in MOB-40.
 #   - The build container is on Docker's default bridge network, so the build code (kapt
 #     processors, lint jars, unit tests) can reach every port this host publishes: the backend
 #     on BACKEND_BIND, the MCP port, the smoke stacks, and the LAN, including the directory
@@ -77,6 +82,14 @@ env:
   BUILD_UID: '10001'
   # Past this, a cache volume is wiped rather than trimmed (UP-25: this disk filled once).
   VOLUME_CAP_MB: '4096'
+  # MOB-40: where the ONE published APK lives on the host. docker-compose.yaml mounts this
+  # directory READ-ONLY into the frontend container, and frontend/nginx.conf serves exactly
+  # this file name at /download/gametracker.apk. The three must agree (runtime.test.js).
+  APK_PUBLISH_DIR: /home/docker/gametracker/apk
+  APK_NAME: gametracker.apk
+  # What the APK must declare before it is signed: a build that produced some other app is
+  # not published under this name.
+  APK_PACKAGE: com.example.gmaetrackermobile
 
 jobs:
   android:
@@ -89,6 +102,12 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: self-hosted
     timeout-minutes: 30
+    # MOB-40: the release signing key lives ONLY in this environment's secrets, and the
+    # environment's deployment-branch rule admits main alone. A pull request that edits this
+    # file to ask for the environment is refused by GitHub before the job starts, so the key
+    # is not reachable from a PR's copy of this workflow (a repository secret would be).
+    # Everything else runs with no environment at all.
+    environment: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'android-release' || '' }}
 
     steps:
       - name: Checkout repository
@@ -130,11 +149,17 @@ jobs:
           # previous build as BUILD_UID leaves 0700 directories that root without it cannot
           # enter ("cannot read directory '/gradle/daemon/8.13'", PR #6). The always() step at the
           # end hands mobile/ back to the runner.
+          # The build hands its unsigned APK out through this private directory and nothing
+          # else. 755 so the (root, capability-less) signing container can read it back.
+          APK_OUT="$(mktemp -d "${RUNNER_TEMP}/android-apk.XXXXXXXX")"
+          chmod 755 "${APK_OUT}"
+          echo "APK_OUT=${APK_OUT}" >> "$GITHUB_ENV"
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
             -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
             -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
-            "${JDK_IMAGE}" chown -R "${BUILD_UID}:${BUILD_UID}" /sdk /gradle /work
+            -v "${APK_OUT}:/out" \
+            "${JDK_IMAGE}" chown -R "${BUILD_UID}:${BUILD_UID}" /sdk /gradle /work /out
 
       # A cancelled job kills the `docker run` CLIENT, not the container: the build kept running
       # on the production host and held the Gradle cache lock, so the next run timed out
@@ -153,8 +178,10 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=1g \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
             -v "${ANDROID_DL}:/dl:ro" \
+            -v "${APK_OUT}:/out" \
             -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
             -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
+            -e GT_VERSION_CODE="${GITHUB_RUN_NUMBER}" \
             -e HOME=/gradle/home -e GRADLE_USER_HOME=/gradle -e ANDROID_HOME=/sdk \
             -e ANDROID_USER_HOME=/gradle/android-user -e JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/gradle/tmp \
             -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS \
@@ -190,8 +217,16 @@ jobs:
               # and reviewed before it was committed: trust-on-first-use, recorded. A dependency
               # change regenerates it, locally, and the diff is reviewed like code.
               status=0
-              bash gradlew --no-daemon --dependency-verification strict \
+              # gtVersionCode: every published APK is a higher versionCode than the last, so it
+              # installs as an update (MOB-40). The run number of this workflow only ever grows
+              # (it restarts only if the workflow file is renamed: then add an offset here).
+              bash gradlew --no-daemon --dependency-verification strict -PgtVersionCode="${GT_VERSION_CODE}" \
                 testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease || status=$?
+              # The UNSIGNED APK leaves through /out before the trap deletes the build tree. It
+              # is input to the signing step, never trusted as more than that.
+              if [ "${status}" = 0 ]; then
+                install -m 0644 app/build/outputs/apk/release/app-release-unsigned.apk /out/unsigned.apk
+              fi
 
               # Keep only the dependency cache; the rest is regenerated.
               find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf {} +
@@ -199,11 +234,151 @@ jobs:
               exit "${status}"
             '
 
+      # ── MOB-40: sign and publish the ONE APK the server hands out ─────────────────────
+      # The key never meets build code. The build container above ran Gradle, plugins, kapt
+      # and lint jars, and it could have left anything in the SDK volume, so NOTHING from it
+      # signs: build-tools are installed afresh into a private directory by the verified
+      # command-line tools, in a container that holds no key, and the signing container that
+      # does hold the key has no network and runs only those tools and the pinned JDK. What
+      # the build produced is an input (an APK file) and is checked before it is signed.
+      #
+      # Exactly one copy: the signed APK is renamed over APK_NAME in APK_PUBLISH_DIR (atomic,
+      # so nginx never serves half a file), then everything else in that directory is
+      # deleted. No artifact is uploaded, and the build and signing directories are removed
+      # by the always() step below. Without a configured key nothing is published and the
+      # file already there stays: an UNSIGNED or debug-signed APK is never published (Android
+      # refuses the first, and a debug key changes every run, so an update would not install).
+      - name: Sign and publish the release APK (main only, MOB-40)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_B64}" ] || [ -z "${KEYSTORE_PASSWORD}" ] || [ -z "${KEY_ALIAS}" ]; then
+            echo "::warning::No release signing key in the android-release environment (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS). Nothing was published; /download/${APK_NAME} is unchanged."
+            exit 0
+          fi
+          : "${APK_PUBLISH_DIR:?}" "${APK_NAME:?}"
+          umask 077
+          SIGN="$(mktemp -d "${RUNNER_TEMP}/android-sign.XXXXXXXX")"
+          echo "ANDROID_SIGN=${SIGN}" >> "$GITHUB_ENV"
+          # The key is on disk only for the life of this step (and the always() step removes
+          # the directory again if this one is killed).
+          trap 'rm -rf "${SIGN}"' EXIT
+          mkdir "${SIGN}/key" "${SIGN}/sdk"
+          printf '%s' "${KEYSTORE_B64}" | base64 -d > "${SIGN}/key/release.jks"
+          printf '%s' "${KEYSTORE_PASSWORD}" > "${SIGN}/key/store.pass"
+          printf '%s' "${KEY_PASSWORD:-${KEYSTORE_PASSWORD}}" > "${SIGN}/key/key.pass"
+
+          # 1. Fresh build-tools, from the SHA-256-verified command-line tools. No key here.
+          docker run --rm --name gametracker-android-signtools --cap-drop ALL --security-opt no-new-privileges --memory 2g --pids-limit 512 \
+            -v "${ANDROID_DL}:/dl:ro" \
+            -v "${SIGN}/sdk:/sdk" \
+            -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_BUILD_TOOLS \
+            "${JDK_IMAGE}" bash -euo pipefail -c '
+              echo "${CMDLINE_TOOLS_SHA256}  /dl/${CMDLINE_TOOLS_ZIP}" | sha256sum -c
+              mkdir -p /sdk/cmdline-tools/extract
+              (cd /sdk/cmdline-tools/extract && jar xf "/dl/${CMDLINE_TOOLS_ZIP}")
+              mv /sdk/cmdline-tools/extract/cmdline-tools /sdk/cmdline-tools/latest
+              chmod +x /sdk/cmdline-tools/latest/bin/*
+              SDKM=/sdk/cmdline-tools/latest/bin/sdkmanager
+              (yes || true) | "${SDKM}" --sdk_root=/sdk --licenses >/dev/null
+              "${SDKM}" --sdk_root=/sdk "${ANDROID_BUILD_TOOLS}" >/dev/null
+            '
+
+          # The publish directory is checked BEFORE it is mounted anywhere.
+          [ ! -L "${APK_PUBLISH_DIR}" ] || { echo "::error::${APK_PUBLISH_DIR} is a symlink; refusing to publish"; exit 1; }
+          mkdir -p "${APK_PUBLISH_DIR}"
+          chmod 755 "${APK_PUBLISH_DIR}"
+          mkdir "${SIGN}/aligned" "${SIGN}/signed"
+
+          # 2. CHECK and ALIGN, with NO key. aapt2 and zipalign are native parsers and the APK
+          # came out of the untrusted build, so they never run where the key is (CISO review,
+          # PR #9): an exploit there could hide the keystore in the output, which is published.
+          # Exit 3 = a NEWER build is already published (Architect review, PR #9): a re-run of
+          # an older run keeps its old run number, and every updated phone would refuse it.
+          rc=0
+          docker run --rm --name gametracker-android-check --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
+            -v "${SIGN}/sdk:/sdk:ro" \
+            -v "${APK_OUT}:/in:ro" \
+            -v "${APK_PUBLISH_DIR}:/published:ro" \
+            -v "${SIGN}/aligned:/out" \
+            -e ANDROID_BUILD_TOOLS -e APK_PACKAGE -e APK_NAME \
+            "${JDK_IMAGE}" bash -euo pipefail -c '
+              BT="/sdk/build-tools/${ANDROID_BUILD_TOOLS#build-tools;}"
+              [ -f /in/unsigned.apk ] && [ ! -L /in/unsigned.apk ] || { echo "::error::the build produced no APK"; exit 1; }
+              PKG="$("${BT}/aapt2" dump packagename /in/unsigned.apk)"
+              [ "${PKG}" = "${APK_PACKAGE}" ] || { echo "::error::the APK is ${PKG}, not ${APK_PACKAGE}"; exit 1; }
+              vc() { "${BT}/aapt2" dump badging "$1" | head -n 1 | grep -o "versionCode=.[0-9]*" | tr -dc 0-9; }
+              NEW="$(vc /in/unsigned.apk)"
+              [ -n "${NEW}" ] || { echo "::error::the APK has no versionCode"; exit 1; }
+              if [ -f "/published/${APK_NAME}" ]; then
+                OLD="$(vc "/published/${APK_NAME}" || true)"
+                if [ -n "${OLD}" ] && [ "${NEW}" -lt "${OLD}" ]; then
+                  echo "versionCode ${NEW} is older than the published ${OLD}"
+                  exit 3
+                fi
+              fi
+              "${BT}/zipalign" -p -f 4 /in/unsigned.apk /out/aligned.apk
+            ' || rc=$?
+          if [ "${rc}" = 3 ]; then
+            echo "::warning::A newer APK is already published (this is a re-run of an older build). Nothing was published."
+            exit 0
+          fi
+          [ "${rc}" = 0 ] || exit "${rc}"
+
+          # 3. SIGN, and nothing else: only apksigner (Java) touches the file here, the key is
+          # mounted read-only, there is no network, and the output goes to a directory the
+          # checking container never saw. Named, so the always() step removes it if cancelled.
+          docker run --rm --name gametracker-android-sign --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
+            -v "${SIGN}/sdk:/sdk:ro" \
+            -v "${SIGN}/key:/key:ro" \
+            -v "${SIGN}/aligned:/aligned:ro" \
+            -v "${SIGN}/signed:/out" \
+            -e ANDROID_BUILD_TOOLS -e KEY_ALIAS \
+            "${JDK_IMAGE}" bash -euo pipefail -c '
+              BT="/sdk/build-tools/${ANDROID_BUILD_TOOLS#build-tools;}"
+              # No v4 signature: it is a SECOND file (.idsig), and only one file is published.
+              "${BT}/apksigner" sign --v4-signing-enabled false \
+                --ks /key/release.jks --ks-pass file:/key/store.pass \
+                --ks-key-alias "${KEY_ALIAS}" --key-pass file:/key/key.pass \
+                --out /out/signed.apk /aligned/aligned.apk
+              "${BT}/apksigner" verify --print-certs /out/signed.apk | grep -E "Signer #1 certificate (DN|SHA-256)"
+            '
+
+          # Only the CURRENT main commit publishes (CISO review, PR #9). A re-run keeps its old
+          # commit, and "newer versionCode" alone would not stop a re-run of the latest-numbered
+          # run after main has moved on. Fails closed: no answer, no publish.
+          HEAD_SHA="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1)"
+          if [ "${HEAD_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "::warning::main is now ${HEAD_SHA:-unknown}, not ${GITHUB_SHA}. Nothing was published."
+            exit 0
+          fi
+          # 4. Publish: one file, replaced atomically; anything else in the directory goes.
+          OUT="${SIGN}/signed/signed.apk"
+          [ -f "${OUT}" ] && [ ! -L "${OUT}" ] || { echo "::error::no signed APK"; exit 1; }
+          INCOMING="$(mktemp "${APK_PUBLISH_DIR}/.incoming.XXXXXXXX")"
+          install -m 0644 "${OUT}" "${INCOMING}"
+          mv -f -T "${INCOMING}" "${APK_PUBLISH_DIR}/${APK_NAME}"
+          find "${APK_PUBLISH_DIR}" -mindepth 1 -maxdepth 1 ! -name "${APK_NAME}" -exec rm -rf {} +
+          echo "[android] published $(ls -A "${APK_PUBLISH_DIR}") (versionCode ${GITHUB_RUN_NUMBER}):"
+          sha256sum "${APK_PUBLISH_DIR}/${APK_NAME}"
+
       - name: Report disk and cap the cache volumes (UP-25)
         if: always()
         run: |
           # First: never leave a build running on the host, even when this job was cancelled.
           docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
+          # Likewise the signing containers (the key is mounted into one of them).
+          docker rm -f gametracker-android-sign gametracker-android-check gametracker-android-signtools >/dev/null 2>&1 || true
+          # The unsigned APK and the signing directory (the key, if the step was killed) never
+          # outlive the job: the published file is the only copy (MOB-40).
+          for d in "${APK_OUT:-}" "${ANDROID_SIGN:-}"; do
+            if [ -n "${d}" ] && [ -d "${d}" ] && [ ! -L "${d}" ]; then rm -rf --one-file-system "${d}"; fi
+          done
           # Give mobile/ back to the runner, so the next checkout can clean and update it.
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
