@@ -443,7 +443,7 @@ check('no container script in a workflow is cut short by a quote inside it', () 
       const start = m.index + m[0].length;
       const end = text.indexOf("'", start);
       const line = text.slice(text.lastIndexOf('\n', end) + 1, text.indexOf('\n', end));
-      assert.ok(/^\s*'\s*$/.test(line), `${f}: a container script closes early at: ${line.trim()}`);
+      assert.ok(/^\s*'(\s*\|\|[^'\n]*)?\s*$/.test(line), `${f}: a container script closes early at: ${line.trim()}`);
     }
   }
   assert.ok(blocks >= 3, `found ${blocks} container scripts -- the scan is broken`);
@@ -473,20 +473,32 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   assert.ok(steps.indexOf(pub) > steps.indexOf(gradle), 'the publish step runs before the build');
   assert.ok(!/secrets\.|\/key/.test(JSON.stringify(gradle)), 'the Gradle container can see the signing key');
   const r = stepRun(pub);
+  const cleanup = stepRun(steps.find((st) => st.if === 'always()'));
   // Signing: fresh build-tools (not the build's writable SDK volume), in a network-less container.
   assert.ok(!/gametracker-android-sdk-/.test(r), 'signing uses the SDK volume the build could have written');
   const keyRun = /docker run([^\n]*(?:\\\n[^\n]*)*?)-v "\$\{SIGN\}\/key:\/key:ro"/.exec(r);
   assert.ok(keyRun && /--network none/.test(keyRun[1]) && /--cap-drop ALL/.test(keyRun[1]), 'the container holding the key has a network or capabilities');
   assert.strictEqual((r.match(/-v "\$\{SIGN\}\/key/g) || []).length, 1, 'the key is mounted into more than one container');
   assert.ok(/--v4-signing-enabled false/.test(r), 'apksigner may write a second file (.idsig)');
+  // The container holding the key runs apksigner ONLY: the native parsers (aapt2, zipalign) read
+  // build output, so they run in a container without the key (CISO review, PR #9).
+  const keyScript = /-v "\$\{SIGN\}\/key:\/key:ro"[\s\S]*? -c '\n([\s\S]*?)\n\s*'/.exec(r);
+  assert.ok(keyScript && /apksigner" sign/.test(keyScript[1]), 'the signing container script was not found');
+  assert.ok(!/aapt2|zipalign|\/in\b|\/published/.test(keyScript[1]), 'a native parser, or the raw build output, is in the container that holds the key');
+  // And only the commit main points at now may publish (CISO review, PR #9).
+  const lsr = r.indexOf('git ls-remote'), mvAt = r.indexOf('mv -f -T');
+  assert.ok(lsr >= 0 && lsr < mvAt && /"\$\{HEAD_SHA\}" != "\$\{GITHUB_SHA\}"/.test(r), 'a re-run of an old commit can publish');
   assert.ok(/dump packagename/.test(r), 'the APK is signed without checking which app it is');
+  // A re-run of an older main run must never replace a newer published APK (Architect review, PR #9).
+  assert.ok(/-v "\$\{APK_PUBLISH_DIR\}:\/published:ro"/.test(r) && /"\$\{NEW\}" -lt "\$\{OLD\}"/.test(r) && /exit 3/.test(r)
+    && /if \[ "\$\{rc\}" = 3 \]; then[\s\S]*?exit 0/.test(r), 'an older build can be published over a newer one');
+  assert.ok(/docker rm -f gametracker-android-sign\b/.test(cleanup), 'a cancelled job can leave the key-holding container running');
   // Publishing: only the SIGNED file, renamed atomically over the one name, then everything else goes.
   const mv = r.indexOf('mv -f -T "${INCOMING}" "${APK_PUBLISH_DIR}/${APK_NAME}"');
   const prune = r.indexOf('find "${APK_PUBLISH_DIR}" -mindepth 1 -maxdepth 1 ! -name "${APK_NAME}" -exec rm -rf {} +');
   assert.ok(mv >= 0 && prune > mv, 'the APK is not published as one atomically-replaced file');
-  assert.ok(/OUT="\$\{SIGN\}\/out\/signed\.apk"/.test(r) && !/unsigned\.apk"? "\$\{(INCOMING|APK_PUBLISH_DIR)/.test(r), 'something other than the signed APK is published');
+  assert.ok(/OUT="\$\{SIGN\}\/signed\/signed\.apk"/.test(r) && !/unsigned\.apk"? "\$\{(INCOMING|APK_PUBLISH_DIR)/.test(r), 'something other than the signed APK is published');
   assert.ok(!/upload-artifact|actions\/cache/.test(text), 'the APK is copied somewhere else as well (an artifact or a cache)');
-  const cleanup = stepRun(steps.find((st) => st.if === 'always()'));
   assert.ok(/APK_OUT:-/.test(cleanup) && /ANDROID_SIGN:-/.test(cleanup), 'the unsigned APK or the signing directory outlives the job');
   // Served: the production frontend mounts THAT directory read-only, the smoke stack mounts the
   // same container path, and nginx serves exactly that one name there and 404s the rest.
@@ -498,7 +510,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   const loc = new RegExp(`location = /download/${name.replace('.', '\\.')} \\{([\\s\\S]*?)\\n  \\}`).exec(nginx);
   assert.ok(loc, 'nginx has no exact location for the APK');
   assert.ok(loc[1].includes(`alias /usr/share/nginx/apk/${name};`), 'nginx serves some other file at the APK URL');
-  for (const h of ['application/vnd.android.package-archive', 'attachment; filename=', 'nosniff', "default-src 'none'", 'X-Frame-Options']) {
+  for (const h of ['application/vnd.android.package-archive', 'attachment; filename=', 'nosniff', "default-src 'none'", 'X-Frame-Options', 'Permissions-Policy']) {
     assert.ok(loc[1].includes(h), `the APK response lost ${h}`);
   }
   assert.ok(/location \/download\/ \{\s*return 404;\s*\}/.test(nginx), 'other /download/ paths fall through to the SPA');

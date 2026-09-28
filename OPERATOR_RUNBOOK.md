@@ -214,7 +214,11 @@ one-time setup and cannot be done from code, because the key must never be in th
    ```
 2. **GitHub → Settings → Environments → New environment `android-release`.**
    - Deployment branches and tags: **Selected branches → `main`** only. This rule is what
-     keeps a pull request's copy of the workflow from reaching the key.
+     keeps a pull request's copy of the workflow from reaching the key. Not "Protected
+     branches only": `main` is not protected, so that would admit nothing (or, once it is,
+     not what you expect).
+   - Do **not** add required reviewers: every Android build on `main` runs in this
+     environment and would then wait for an approval.
    - Environment secrets:
      - `ANDROID_KEYSTORE_BASE64`: the contents of the `.b64` file;
      - `ANDROID_KEYSTORE_PASSWORD`;
@@ -225,7 +229,8 @@ one-time setup and cannot be done from code, because the key must never be in th
      same-repo pull request's workflow.
    - Delete the local `.b64` file.
 3. **Publish.** Re-run the latest "Android — GameTracker Mobile" run on `main`, or push any
-   change under `mobile/`. The job log prints the signer's SHA-256 certificate digest and the
+   change under `mobile/`. Only a run whose commit is still `main`'s head publishes: an
+   older run re-run publishes nothing, so it can never put an older app at the URL. The job log prints the signer's SHA-256 certificate digest and the
    published file's hash. Record the certificate digest here.
 4. **Check** that `https://gametracker.etech.ink/download/gametracker.apk` downloads. The file
    lives at `/home/docker/gametracker/apk/gametracker.apk` on the host. That directory holds

@@ -779,18 +779,31 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     A deploy without an app change keeps serving the same file.
   - **Signing:** a stable release key from the `android-release` GitHub environment. The
     environment is requested only on a push to `main`, and its branch rule admits `main`
-    alone. The key is never in the Gradle container. Signing runs in a network-less container
-    with build-tools installed fresh from the verified command-line tools, not from the SDK
-    volume build code can write. `aapt2` checks the package id first. With no key
-    configured, nothing is published (a warning) and the file already there stays. An
-    unsigned or debug-signed APK is never published. Setup: `OPERATOR_RUNBOOK.md`, "MOB-40".
+    alone. The key is never in the Gradle container. build-tools are installed fresh from the
+    verified command-line tools, not from the SDK volume build code can write. The native
+    parsers (`aapt2` package and version check, `zipalign`) run in a network-less container
+    WITHOUT the key; the key container runs only `apksigner`, also without network (CISO
+    review). With no key configured, nothing is published (a warning) and the file already
+    there stays. An unsigned or debug-signed APK is never published. Setup:
+    `OPERATOR_RUNBOOK.md`, "MOB-40".
+  - **Never backwards:** a run publishes only if its commit is still `main`'s head
+    (`git ls-remote`) and its versionCode is not lower than the published one. A re-run of
+    an old run publishes nothing (CISO and Architect reviews).
   - **Updates install in place:** `versionCode` is `android.yml`'s run number
     (`-PgtVersionCode`), so each publish is higher than the last. A local build is still 1.
   - Pinned by `test/runtime.test.js`, and fetched by the smoke test.
 - **Residual, open:**
   - The APK is built by the same untrusted-build container as ever. Signing attests "CI built
     this from `main`", not that the build was clean (MOB-37 and MOB-38 still apply).
-  - There is no link to the download in the web app or the README yet.
+  - **Publishing is not gated on the main pipeline.** `android.yml` publishes on its own
+    success, even if the same push's backend tests (including the app-to-API contract gate),
+    Trivy or deploy fail. So the served APK can briefly expect a backend that is not the one
+    running. A real gate is not possible on one runner: the Android job would wait for a
+    deploy that cannot start until it finishes, and `workflow_run` is banned here. The
+    contract gate still runs on the pull request before merge. (Architect review.)
+  - There is no link to the download in the web app or the README yet. When one is added,
+    show the signer certificate's SHA-256 next to it: for a sideloaded app it is the only
+    thing a user can check the first install against (CISO note).
   - Partly addresses MOB-20 (signing and versioning). R8 and the `com.example` id remain.
     Changing the id later makes installed copies a different app.
   - **Lose the key and no future APK updates an installed one.** Users would have to

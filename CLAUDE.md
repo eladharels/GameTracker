@@ -42,8 +42,11 @@ GameTracker is a self-hosted, multi-user **game library management web applicati
 - **Frontend port**: 8080 (Docker), 5173 (Vite dev server)
 - **Android APK** (MOB-40): `https://<host>/download/gametracker.apk`, public. Exactly one file,
   `/home/docker/gametracker/apk/gametracker.apk`, written only by `android.yml` (atomic rename,
-  everything else in the directory deleted) and mounted READ-ONLY into the frontend. Signing
-  key setup: `OPERATOR_RUNBOOK.md`
+  everything else in the directory deleted) and mounted READ-ONLY into the frontend. Only the
+  commit at `main`'s head publishes, never a lower versionCode. The key container runs
+  `apksigner` alone; `aapt2`/`zipalign` parse build output in a container WITHOUT the key.
+  Not gated on this pipeline's checks (one runner; recorded in MOB-40). Signing key setup:
+  `OPERATOR_RUNBOOK.md`
 - **Persistent volumes**: `gametracker-pgdata` (named volume, Postgres data), settings.json, sent_notifications.json
   (**obsolete** since migration 006 moved the reminder log into Postgres; still mounted for one release so a
   rollback to the previous image finds it — remove the mount in the release after)
