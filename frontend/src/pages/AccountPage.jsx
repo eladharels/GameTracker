@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { FaBell, FaCheckCircle, FaExclamationCircle, FaRegCalendarAlt, FaSync, FaUser } from 'react-icons/fa'
 import { api, API_BASE } from '../api'
 import ApiTokensSection from '../ApiTokensSection'
+import MobileAppSection from '../MobileAppSection'
 
 // ── AccountPage (all users) ─────────────────────────────────────────────────
 const NOTIF_DAY_OPTIONS = [
@@ -189,6 +190,8 @@ export default function AccountPage({ user }) {
             {error.schedule && <span className="ent-test-error"><FaExclamationCircle /> {error.schedule}</span>}
           </div>
         </div>
+
+        <MobileAppSection />
 
         <ApiTokensSection canManageUsers={!!user?.can_manage_users} />
       </div>

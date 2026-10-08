@@ -7024,3 +7024,22 @@ button[aria-disabled="true"] {
   opacity: 0.6;
   cursor: progress;
 }
+
+/* My Account -> Android App (MOB-40). The download is a link styled as the primary button. */
+.mobile-app-body { display: flex; flex-direction: column; gap: 0.9rem; }
+.mobile-app-status {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0; color: var(--color-fg-muted); font-size: 0.9rem;
+}
+.mobile-app-status--error { color: #f87171; }
+.mobile-app-inline-link { color: var(--color-accent); }
+.mobile-app-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.mobile-app-download { text-decoration: none; min-height: 44px; }
+.mobile-app-download:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.mobile-app-meta { color: var(--color-fg-muted); font-size: 0.85rem; }
+.mobile-app-steps {
+  margin: 0; padding-left: 1.3rem; color: var(--color-fg-muted);
+  font-size: 0.88rem; line-height: 1.6;
+}
+.mobile-app-steps strong { color: var(--color-fg); }
+.mobile-app-note { margin: 0; color: var(--color-fg-muted); font-size: 0.82rem; line-height: 1.5; }

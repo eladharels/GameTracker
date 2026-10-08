@@ -801,9 +801,10 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     running. A real gate is not possible on one runner: the Android job would wait for a
     deploy that cannot start until it finishes, and `workflow_run` is banned here. The
     contract gate still runs on the pull request before merge. (Architect review.)
-  - There is no link to the download in the web app or the README yet. When one is added,
-    show the signer certificate's SHA-256 next to it: for a sideloaded app it is the only
-    thing a user can check the first install against (CISO note).
+  - The web app links to it from **My Account -> Android App** (`MobileAppSection.jsx`,
+    PR #10): the button appears only when the file exists, with install steps. Still open:
+    show the signer certificate's SHA-256 there once it is recorded (CISO note: for a
+    sideloaded app it is the only thing a user can check the first install against).
   - Partly addresses MOB-20 (signing and versioning). R8 and the `com.example` id remain.
     Changing the id later makes installed copies a different app.
   - **Lose the key and no future APK updates an installed one.** Users would have to
