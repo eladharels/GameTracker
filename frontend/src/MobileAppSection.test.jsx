@@ -17,6 +17,8 @@ it('offers the download, with its size and date, when the APK is published', asy
   expect(link.getAttribute('href')).toBe('/download/gametracker.apk')
   expect(link.hasAttribute('download')).toBe(true)
   expect(screen.getByText(/12\.5 MB/)).toBeTruthy()
+  // Only the short status line is announced, not the steps.
+  expect(screen.getByRole('status').textContent).toBe('The Android app is available.')
   // The fixed nginx path, never through API_BASE (/api/...): it is not an API call.
   expect(head).toHaveBeenCalledWith(APK_PATH)
   expect(APK_PATH).toBe('/download/gametracker.apk')
@@ -34,5 +36,8 @@ it('does not claim "not published" when the check itself failed', async () => {
   render(<MobileAppSection />)
   expect(await screen.findByText(/Couldn.t check whether the app is available/)).toBeTruthy()
   expect(screen.queryByText(/hasn.t been published/)).toBeNull()
-  expect(screen.getByRole('link', { name: /Try the download anyway/ }).getAttribute('href')).toBe(APK_PATH)
+  const fallback = screen.getByRole('link', { name: /Try the download anyway/ })
+  expect(fallback.getAttribute('href')).toBe(APK_PATH)
+  // Never `download` here: a 5xx page would be saved as gametracker.apk.
+  expect(fallback.hasAttribute('download')).toBe(false)
 })

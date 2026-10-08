@@ -61,28 +61,29 @@ export default function MobileAppSection() {
         </div>
       </div>
 
-      <div className="mobile-app-body" aria-live="polite">
-        {state === 'checking' && (
-          <p className="mobile-app-status"><FaSync className="ent-spin" aria-hidden="true" /> Checking for the app…</p>
-        )}
-
-        {state === 'missing' && (
-          <p className="mobile-app-status">
-            The Android app hasn&apos;t been published on this server yet. Check back later.
-          </p>
-        )}
+      <div className="mobile-app-body">
+        {/* The live region is this one short line only: wrapping the steps and the note in
+            it made a screen reader read all of them on every visit (UI/UX review, PR #10). */}
+        <p className={`mobile-app-status${state === 'error' ? ' mobile-app-status--error' : ''}`} role="status">
+          {state === 'checking' && <><FaSync className="ent-spin" aria-hidden="true" /> Checking for the app…</>}
+          {state === 'available' && 'The Android app is available.'}
+          {state === 'missing' && 'The Android app hasn\u2019t been published on this server yet. Check back later.'}
+          {state === 'error' && <><FaExclamationCircle aria-hidden="true" /> Couldn&apos;t check whether the app is available.</>}
+        </p>
 
         {state === 'error' && (
-          <p className="mobile-app-status mobile-app-status--error">
-            <FaExclamationCircle aria-hidden="true" /> Couldn&apos;t check whether the app is available.{' '}
-            <a className="mobile-app-inline-link" href={APK_PATH} download>Try the download anyway</a>
+          // No `download` here: this state covers 5xx and proxy errors, and `download` would
+          // save that error page as gametracker.apk. Opened normally, the browser shows the
+          // real response instead (UI/UX review, PR #10).
+          <p className="mobile-app-fallback">
+            <a className="mobile-app-inline-link" href={APK_PATH}>Try the download anyway</a>
           </p>
         )}
 
         {state === 'available' && (
           <>
             <div className="mobile-app-actions">
-              <a className="ent-save-btn ent-save-btn--dirty mobile-app-download" href={APK_PATH} download="gametracker.apk">
+              <a className="ent-save-btn mobile-app-download" href={APK_PATH} download="gametracker.apk">
                 <FaDownload aria-hidden="true" /> Download for Android
               </a>
               {details && <span className="mobile-app-meta">{details}</span>}
@@ -93,9 +94,9 @@ export default function MobileAppSection() {
               <li>If Play Protect warns about an unknown developer, choose <strong>Install anyway</strong>.</li>
             </ol>
             <p className="mobile-app-note">
-              New versions install over the old one; download again to update. If you have a
-              test build installed from somewhere else, Android refuses the update (&ldquo;App
-              not installed&rdquo;): uninstall it first, which deletes the ratings and notes
+              New versions install over the old one: download again to update. If a test build
+              from somewhere else is installed, Android refuses this one (&ldquo;App not
+              installed&rdquo;) until you uninstall it. Uninstalling deletes the ratings and notes
               stored on that phone.
             </p>
           </>

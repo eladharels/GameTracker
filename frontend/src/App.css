@@ -7031,10 +7031,20 @@ button[aria-disabled="true"] {
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
   margin: 0; color: var(--color-fg-muted); font-size: 0.9rem;
 }
-.mobile-app-status--error { color: #f87171; }
-.mobile-app-inline-link { color: var(--color-accent); }
+/* Error signals use --color-error-icon, never a red that an accent preset could match;
+   the sentence keeps the .ent-save-error text colour. */
+.mobile-app-status--error { color: #fca5a5; }
+.mobile-app-status--error svg { color: var(--color-error-icon); flex-shrink: 0; }
+.mobile-app-fallback { margin: 0; font-size: 0.9rem; }
+.mobile-app-inline-link { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; }
 .mobile-app-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-.mobile-app-download { text-decoration: none; min-height: 44px; }
+/* The primary action: the accent fill of the save button, without borrowing --dirty
+   ("unsaved changes"). */
+.mobile-app-download {
+  text-decoration: none; min-height: 44px;
+  background: var(--color-accent); border-color: var(--color-accent); color: #fff;
+}
+.mobile-app-download:hover { background: var(--color-accent-hover); }
 .mobile-app-download:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .mobile-app-meta { color: var(--color-fg-muted); font-size: 0.85rem; }
 .mobile-app-steps {
