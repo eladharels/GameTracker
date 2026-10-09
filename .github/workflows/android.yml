@@ -312,7 +312,10 @@ jobs:
               [ -f /in/unsigned.apk ] && [ ! -L /in/unsigned.apk ] || { echo "::error::the build produced no APK"; exit 1; }
               PKG="$("${BT}/aapt2" dump packagename /in/unsigned.apk)"
               [ "${PKG}" = "${APK_PACKAGE}" ] || { echo "::error::the APK is ${PKG}, not ${APK_PACKAGE}"; exit 1; }
-              vc() { "${BT}/aapt2" dump badging "$1" | head -n 1 | grep -o "versionCode=.[0-9]*" | tr -dc 0-9; }
+              # sed reads ALL of its input. `head -n 1` stopped reading after one line, aapt2
+              # died of SIGPIPE writing the rest, and pipefail made that exit 141: the first
+              # real publish on main failed exactly that way.
+              vc() { "${BT}/aapt2" dump badging "$1" | sed -n 1p | grep -o "versionCode=.[0-9]*" | tr -dc 0-9; }
               NEW="$(vc /in/unsigned.apk)"
               [ -n "${NEW}" ] || { echo "::error::the APK has no versionCode"; exit 1; }
               if [ -f "/published/${APK_NAME}" ]; then

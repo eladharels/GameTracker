@@ -489,6 +489,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   const lsr = r.indexOf('git ls-remote'), mvAt = r.indexOf('mv -f -T');
   assert.ok(lsr >= 0 && lsr < mvAt && /"\$\{HEAD_SHA\}" != "\$\{GITHUB_SHA\}"/.test(r), 'a re-run of an old commit can publish');
   assert.ok(/dump packagename/.test(r), 'the APK is signed without checking which app it is');
+  // `head` stops reading early, the writer dies of SIGPIPE, and under pipefail the whole step
+  // fails with 141. That broke the first real publish on main, after aapt2's badging output grew.
+  assert.ok(!/\|\s*head\b/.test(r), 'a pipeline in the publish step ends early with head (SIGPIPE under pipefail)');
   // A re-run of an older main run must never replace a newer published APK (Architect review, PR #9).
   assert.ok(/-v "\$\{APK_PUBLISH_DIR\}:\/published:ro"/.test(r) && /"\$\{NEW\}" -lt "\$\{OLD\}"/.test(r) && /exit 3/.test(r)
     && /if \[ "\$\{rc\}" = 3 \]; then[\s\S]*?exit 0/.test(r), 'an older build can be published over a newer one');
