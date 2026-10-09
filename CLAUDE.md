@@ -455,6 +455,10 @@ GameTracker/
 │   │   ├── ApiTokensSection.jsx    # My Account -> API Tokens. Mint/list/revoke, and the
 │   │   │                           #   password re-prompt (sudo mode); the plaintext is
 │   │   │                           #   shown ONCE and cannot be recovered
+│   │   ├── MobileAppSection.jsx    # My Account -> Android App (MOB-40): a HEAD on the fixed
+│   │   │                           #   /download/gametracker.apk decides between the download
+│   │   │                           #   button, "not published yet" (404) and "could not check";
+│   │   │                           #   never offers a download that would save a 404 page
 │   │   ├── main.jsx                # React entry point
 │   │   ├── index.css               # Reset + document-level defaults (App.css is the theme)
 │   │   ├── contexts/
