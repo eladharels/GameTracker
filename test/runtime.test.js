@@ -679,6 +679,140 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/pendingIds\(username\)/.test(lib), 'a reload no longer hides THIS user\'s removals still inside their undo window');
   });
 
+  // MOB-8: cleartext was allowed on API 24-27, and server-supplied cover URLs went to Glide
+  // unchecked. No pinning, on purpose (see the ROADMAP entry).
+  check('Android: no cleartext, user CAs in debug only, and every image URL is https-checked (MOB-8)', () => {
+    assert.ok(/android:networkSecurityConfig="@xml\/network_security_config"/.test(manifest),
+      'the manifest no longer applies network_security_config.xml');
+    const nsc = fs.readFileSync(path.join(APP, 'res/xml/network_security_config.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(/<base-config\s+cleartextTrafficPermitted="false"\s*>/.test(nsc), 'the base config permits cleartext');
+    assert.ok(!/cleartextTrafficPermitted="true"/.test(nsc), 'some domain is allowed cleartext');
+    const outsideDebug = nsc.replace(/<debug-overrides>[\s\S]*?<\/debug-overrides>/g, '');
+    assert.ok(!/src="user"/.test(outsideDebug), 'a release build trusts user-installed CAs');
+    assert.ok(!/<pin-set/.test(nsc), 'certificate pinning was added: see ROADMAP MOB-8 before doing that');
+    assert.ok(!/usesCleartextTraffic="true"/.test(manifest), 'the manifest re-enables cleartext');
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.join(d, e.name));
+      }
+    })(dir);
+    let loads = 0;
+    for (const f of files) {
+      const src = fs.readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/\.load\(([^)]*)\)/g)) {
+        loads++;
+        const arg = m[1].trim();
+        // The argument is either the check itself or a local assigned from it.
+        const viaLocal = /^\w+$/.test(arg) && new RegExp(`val ${arg}\\s*=\\s*SafeUrl\\.https\\(`).test(src);
+        assert.ok(/^SafeUrl\.https\(/.test(arg) || viaLocal,
+          `${path.relative(dir, f)} loads ${arg} without SafeUrl.https: a server-supplied URL reaches the network unchecked`);
+      }
+    }
+    assert.ok(loads >= 3, `found ${loads} Glide loads -- the scan is broken`);
+  });
+
+  // MOB-17: unscoped coroutines outlived their screen, and fragment-scoped ones updated
+  // views that had been destroyed while the fragment sat on the back stack.
+  check('Android: coroutines are scoped to what they touch (MOB-17)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const all = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) all.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of all) {
+      const src = code(f).replace(/\/\/.*$/gm, '');
+      // PendingRemovals is the one deliberate process-lifetime scope (MOB-12).
+      if (f !== 'PendingRemovals.kt') {
+        assert.ok(!/\bCoroutineScope\s*\(|\bGlobalScope\b/.test(src), `${f} launches an unscoped coroutine`);
+      }
+    }
+    for (const f of all.filter((x) => x.startsWith('fragments/'))) {
+      // Raw text: the marker IS a comment, and code() strips comments (and, with block
+      // comments, lines -- which would also make the reported line numbers wrong).
+      const lines = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        if (!/(?<![\w.])lifecycleScope\.launch/.test(line.replace(/\/\/.*$/, ''))) return;
+        const marked = lines.slice(Math.max(0, i - 3), i).some((l) => /\/\/ outlives the view:/.test(l));
+        assert.ok(marked, `${f}:${i + 1} uses the fragment's lifecycleScope: use viewLifecycleOwner.lifecycleScope, `
+          + 'or mark work that must outlive the view with "// outlives the view: <why>"');
+      });
+    }
+    const search = code('fragments/SearchFragment.kt');
+    assert.ok(/override fun onDestroyView\(\)\s*\{[^}]*searchHandler\.removeCallbacks\(searchRunnable\)/.test(search),
+      'SearchFragment no longer cancels the pending debounce in onDestroyView');
+  });
+
+  // MOB-9: the phone's 30-day library token. Every rule here is a condition of the CISO
+  // design review, so a change to one of them is a change to that review.
+  check('Android: the 30-day token is library-only, fixed-expiry, sealed or revoked, and revokes only itself (MOB-9)', () => {
+    const tok = code('MobileToken.kt');
+    assert.ok(/const val LIFETIME_DAYS = 30L\b/.test(tok), 'the token lifetime is no longer the reviewed 30 days');
+    assert.ok(/const val SCOPE = "library"/.test(tok) && /scopes = listOf\(SCOPE\)/.test(tok),
+      'the minted token asks for something other than exactly ["library"]');
+    assert.ok(/expiresAt = expiry\(nowMillis\)\.second/.test(tok), 'the mint body no longer carries the fixed expiry');
+    assert.ok(!/"admin"/.test(tok), 'MobileToken mentions the admin scope');
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const all = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) all.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of all) {
+      const src = code(f);
+      if (f !== 'MobileToken.kt' && f !== 'models.kt') {
+        assert.ok(!/\bCreateTokenRequest\s*\(/.test(src), `${f} builds a token request itself: only MobileToken.request may`);
+      }
+      if (f !== 'MobileTokenApi.kt') {
+        assert.ok(!/\.(createToken|revokeToken)\s*\(/.test(src), `${f} calls the token routes directly: only MobileTokenApi may`);
+      }
+      if (f !== 'LoginActivity.kt' && f !== 'SessionStore.kt') {
+        assert.ok(!/\badoptPat\s*\(/.test(src), `${f} adopts a token: only the password sign-in may`);
+      }
+      // Revocation presents a credential and an id. The id is always this phone's own:
+      // the session's current PAT, the one recorded for revocation, or the one just minted.
+      for (const m of src.matchAll(/MobileTokenApi\.revoke\(([^,]+),\s*([^,)]+)/g)) {
+        assert.ok(/^(id|old|minted\.id|it\.id)$/.test(m[2].trim()), `${f} revokes token ${m[2].trim()}: only this phone's own id`);
+      }
+    }
+    const signOut = code('SignOut.kt');
+    assert.ok(/val id = session\.patId/.test(signOut) && /val bearer = session\.bearer\(\)/.test(signOut)
+      && /MobileTokenApi\.revoke\(bearer, id, self = true\)/.test(signOut), 'sign-out no longer revokes the PAT with itself');
+    assert.ok((code('LoginActivity.kt').match(/self = true/g) || []).length === 0,
+      'a revoke presenting the JWT treats 401 as gone: only a token revoking ITSELF may');
+    // Turning fingerprint unlock off drops the sealed copy, so the sign-out after it must be
+    // impossible to cancel: a Cancel there left the token live and unsealed (CISO + UI/UX, PR #14).
+    assert.ok(/FingerprintUnlock\.disable\(activity\)\s*start\(activity, committed = true\)/.test(signOut),
+      'turning fingerprint unlock off no longer starts a COMMITTED sign-out');
+    assert.ok(/if \(inFlight && !committed\) return/.test(signOut), 'a committed sign-out can return silently');
+    assert.ok((signOut.match(/if \(committed\) dialog\.setCancelable\(false\) else dialog\.set(Neutral|Negative)Button\("Cancel", null\)/g) || []).length === 2,
+      'a dialog after a committed sign-out offers Cancel (or can be dismissed)');
+    assert.ok(!/\.set(Neutral|Negative)Button\("Cancel", null\)\s*\.show\(\)/.test(signOut.replace(/fun confirmFingerprintOff[\s\S]*?return true/, '')),
+      'a sign-out dialog shows an unconditional Cancel');
+    const login = code('LoginActivity.kt');
+    assert.ok(/session\.pendingRevokeId\(\)\?\.let \{ old ->[\s\S]*?MobileTokenApi\.revoke\("Bearer \$jwt", old\)/.test(login),
+      'a token an earlier sign-in left behind is no longer revoked with the fresh JWT');
+    assert.ok(/if \(wantsPat && earlierGone\)/.test(login), 'a new token is minted while an earlier one is still unrevoked: its id would be lost');
+    assert.ok(/\?\.also \{ session\.trackPatId\(it\.id\) \}/.test(login) && /withContext\(NonCancellable \+ Dispatchers\.IO\)/.test(login),
+      'a minted id is no longer recorded at once, in a step that cannot be cancelled');
+    assert.ok(/MobileTokenApi\.revoke\("Bearer \$jwt", minted\.id\)/.test(login),
+      'a token the prompt did not seal is no longer revoked (it must never stay unsealed)');
+    assert.ok(/FingerprintUnlock\.isOn\(this\) && FingerprintUnlock\.canUse\(this\)/.test(login),
+      'a token is minted without fingerprint unlock to seal it');
+    assert.ok(/etPassword\.text\.clear\(\)/.test(login), 'the password field is no longer cleared after sign-in');
+    const api = code('GameTrackerApi.kt');
+    assert.ok(!/@GET\("user\/me\/tokens"\)/.test(api), 'the app lists tokens');
+    const mintApi = code('MobileTokenApi.kt');
+    assert.ok(!/errorBody|\.message\(\)/.test(mintApi), 'MobileTokenApi reads the server\'s error text: the UI must say fixed things');
+  });
+
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {

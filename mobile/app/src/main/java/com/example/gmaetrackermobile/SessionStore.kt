@@ -27,7 +27,10 @@ class SharedPrefsStore(context: Context) : KeyValueStore {
 data class SealedToken(val ciphertext: String, val iv: String)
 
 /**
- * The signed-in session: the backend's 12-hour JWT and whose it is.
+ * The signed-in session: the credential, and whose it is. The credential is either the
+ * backend's 12-hour JWT, or (MOB-9) a 30-day library-scoped personal access token minted for
+ * this phone at a password sign-in while fingerprint unlock is on. A PAT carries no `exp` of its
+ * own, so its expiry is the one the app asked for when minting it.
  *
  * Rules (mobile/ROADMAP.md MOB-3, MOB-5, MOB-6):
  *  - The token is never written to disk in the clear. It lives in this process's memory.
@@ -48,8 +51,14 @@ class SessionStore(
     private val nowSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
 ) {
     @Volatile private var memToken: String? = null
+    /** A PAT's expiry (epoch seconds), as minted. Null for a JWT: its `exp` is in the token. */
+    @Volatile private var memExp: Long? = null
+    /** The server id of the PAT held now, for revoking it. Null for a JWT. */
+    @Volatile private var memPatId: Long? = null
 
     val token: String? get() = memToken
+    val patId: Long? get() = memPatId
+    val isPat: Boolean get() = memPatId != null
     val username: String? get() = kv.getString(KEY_USERNAME)
 
     fun bearer(): String? = token?.let { "Bearer $it" }
@@ -75,8 +84,62 @@ class SessionStore(
     @Synchronized
     fun save(token: String, username: String) {
         memToken = token
+        memExp = null
+        memPatId = null
         kv.putStrings(mapOf(KEY_USERNAME to username))
         dropSealed()
+    }
+
+    /**
+     * MOB-9: the PAT minted for this phone replaces the JWT it was minted with. Its id goes
+     * to disk in the clear (an id is not a credential), so that if the sealed copy is ever
+     * lost (a new fingerprint, a cancelled prompt) the next password sign-in can still find it
+     * and revoke it. Nothing else about it is written here: sealing it is the caller's next step.
+     */
+    @Synchronized
+    fun adoptPat(token: String, id: Long, expiresAtSeconds: Long) {
+        memToken = token
+        memExp = expiresAtSeconds
+        memPatId = id
+        kv.putStrings(mapOf(KEY_PAT_ID to id.toString()))
+        dropSealed()
+    }
+
+    /**
+     * Records a just-minted PAT's id before anything else happens to it, so a sign-in torn
+     * down between the mint and [adoptPat] still leaves it findable for revocation.
+     */
+    @Synchronized
+    fun trackPatId(id: Long) {
+        kv.putStrings(mapOf(KEY_PAT_ID to id.toString()))
+    }
+
+    /** A PAT this phone held and has not yet seen revoked: revoke it at the next sign-in. */
+    fun pendingRevokeId(): Long? = kv.getString(KEY_PAT_ID)?.toLongOrNull()
+
+    /** [id] is revoked (or was already gone): stop tracking it. */
+    @Synchronized
+    fun forgetPatId(id: Long) {
+        if (kv.getString(KEY_PAT_ID) == id.toString()) kv.remove(KEY_PAT_ID)
+    }
+
+    private fun currentExp(): Long? = memExp ?: memToken?.let { jwtExpiry(it) }
+
+    /**
+     * The AES-GCM additional data the current credential is sealed with: its kind, PAT id and
+     * expiry. They are stored beside the ciphertext in the clear, so binding them here is what
+     * stops one being swapped (a later expiry, another id) without failing the tag check.
+     */
+    fun sealContext(): ByteArray? {
+        val exp = currentExp() ?: return null
+        return aad(if (memPatId != null) KIND_PAT else KIND_JWT, memPatId, exp)
+    }
+
+    /** The additional data the STORED copy was sealed with; null for a pre-MOB-9 copy (none). */
+    fun sealedContext(): ByteArray? {
+        val kind = kv.getString(KEY_SEALED_KIND) ?: return null
+        val exp = kv.getString(KEY_SEALED_EXP)?.toLongOrNull() ?: return null
+        return aad(kind, kv.getString(KEY_SEALED_PAT_ID)?.toLongOrNull(), exp)
     }
 
     /**
@@ -88,8 +151,15 @@ class SessionStore(
     @Synchronized
     fun storeSealed(sealed: SealedToken, forToken: String): Boolean {
         if (forToken != memToken) return false
-        val exp = jwtExpiry(forToken) ?: return false
-        kv.putStrings(mapOf(KEY_SEALED to sealed.ciphertext, KEY_SEALED_IV to sealed.iv, KEY_SEALED_EXP to exp.toString()))
+        val exp = currentExp() ?: return false
+        val id = memPatId
+        kv.putStrings(buildMap {
+            put(KEY_SEALED, sealed.ciphertext)
+            put(KEY_SEALED_IV, sealed.iv)
+            put(KEY_SEALED_EXP, exp.toString())
+            put(KEY_SEALED_KIND, if (id != null) KIND_PAT else KIND_JWT)
+            if (id != null) put(KEY_SEALED_PAT_ID, id.toString())
+        })
         return true
     }
 
@@ -113,10 +183,23 @@ class SessionStore(
      */
     @Synchronized
     fun unseal(token: String): Boolean {
+        val stored = kv.getString(KEY_SEALED_EXP)?.toLongOrNull() ?: return false
+        if (stored <= nowSeconds()) return false
+        if (kv.getString(KEY_SEALED_KIND) == KIND_PAT) {
+            // Its expiry and id are what the GCM tag was checked against (sealedContext).
+            if (!token.startsWith(PAT_PREFIX)) return false
+            val id = kv.getString(KEY_SEALED_PAT_ID)?.toLongOrNull() ?: return false
+            memToken = token
+            memExp = stored
+            memPatId = id
+            return true
+        }
+        if (token.startsWith(PAT_PREFIX)) return false   // a PAT never unseals as a JWT
         val exp = jwtExpiry(token) ?: return false
-        if (kv.getString(KEY_SEALED_EXP) != exp.toString()) return false
-        if (exp <= nowSeconds()) return false
+        if (exp != stored) return false
         memToken = token
+        memExp = null
+        memPatId = null
         return true
     }
 
@@ -126,12 +209,19 @@ class SessionStore(
         kv.remove(KEY_SEALED)
         kv.remove(KEY_SEALED_IV)
         kv.remove(KEY_SEALED_EXP)
+        kv.remove(KEY_SEALED_KIND)
+        kv.remove(KEY_SEALED_PAT_ID)
     }
 
-    /** Sign out: the token and its sealed copy go; the username and the biometric preference stay. */
+    /**
+     * Sign out: the token and its sealed copy go; the username and the biometric preference
+     * stay. A PAT's id stays too, until its revocation is confirmed ([forgetPatId]).
+     */
     @Synchronized
     fun endSession() {
         memToken = null
+        memExp = null
+        memPatId = null
         dropSealed()
         kv.remove(KEY_LEGACY_TOKEN)
     }
@@ -142,7 +232,8 @@ class SessionStore(
      * question is only "has it ALREADY expired", and the server's 401 settles anything closer.
      */
     fun hasLiveToken(skewSeconds: Long = CLOCK_SKEW_SECONDS): Boolean {
-        val exp = token?.let { jwtExpiry(it) } ?: return false
+        if (token == null) return false
+        val exp = currentExp() ?: return false
         return exp > nowSeconds() + skewSeconds
     }
 
@@ -167,6 +258,16 @@ class SessionStore(
         const val KEY_SEALED = "token_sealed_v1"
         const val KEY_SEALED_IV = "token_sealed_iv_v1"
         const val KEY_SEALED_EXP = "token_sealed_exp_v1"
+        const val KEY_SEALED_KIND = "token_sealed_kind_v1"
+        const val KEY_SEALED_PAT_ID = "token_sealed_pat_id_v1"
+        /** The PAT this phone holds or held, until its revocation is confirmed (MOB-9). */
+        const val KEY_PAT_ID = "pat_id_v1"
+        const val KIND_JWT = "jwt"
+        const val KIND_PAT = "pat"
+        const val PAT_PREFIX = "gt_pat_"
+
+        private fun aad(kind: String, patId: Long?, exp: Long): ByteArray =
+            "gametracker-session-v2|$kind|${patId ?: ""}|$exp".toByteArray(Charsets.UTF_8)
         const val CLOCK_SKEW_SECONDS = 60L
 
         private const val B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"

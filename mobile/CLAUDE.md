@@ -34,7 +34,7 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 ## Architecture
 
 ### Pattern
-**Single Activity + Multiple Fragments** with bottom navigation. `MainActivity` hosts all fragments and manages navigation. Legacy activity files (`GameDetailsActivity.kt`, `GameSearchActivity.kt`, `MyLibraryActivity.kt`) still exist but have been superseded by the fragment-based architecture.
+**Single Activity + Multiple Fragments** with bottom navigation. `MainActivity` hosts all fragments and manages navigation. The legacy activities (`GameDetailsActivity`, `GameSearchActivity`, `MyLibraryActivity`) were never in the manifest and were deleted with MOB-17.
 
 ### Project Structure
 ```
@@ -51,6 +51,8 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   ├── FingerprintUnlock.kt          # The ONE place fingerprint unlock is turned on/off/used,
 │   │   │   │                                 #   and CryptoPrompt: the only BiometricPrompt, always
 │   │   │   │                                 #   with a CryptoObject (MOB-6)
+│   │   │   ├── MobileToken.kt                # The phone's 30-day library token: name, expiry, request
+│   │   │   ├── MobileTokenApi.kt             #   and its mint/revoke calls, the only ones (MOB-9)
 │   │   │   ├── SessionExpiryInterceptor.kt   # A 401 for the CURRENT token ends the session (MOB-5)
 │   │   │   ├── GameTrackerApp.kt             # Application: initialises ApiClient
 │   │   │   ├── GameTrackerApi.kt             # Retrofit API interface (all endpoints)
@@ -77,10 +79,8 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   │   ├── LibraryFragment.kt        # User library management
 │   │   │   │   ├── ProfileFragment.kt        # User profile + stats
 │   │   │   │   └── GameDetailsFragment.kt    # Game detail bottom sheet / view
-│   │   │   ├── [Legacy activities]
-│   │   │   │   ├── GameDetailsActivity.kt
-│   │   │   │   ├── GameSearchActivity.kt
-│   │   │   │   └── MyLibraryActivity.kt
+│   │   │   ├── SafeUrl.kt                    # https-only gate for every server-supplied image URL
+│   │   │   │                                 #   (MOB-8; twin of the web's safeUrl.js)
 │   │   │   └── ui/theme/
 │   │   │       ├── Color.kt
 │   │   │       ├── Theme.kt
@@ -124,6 +124,8 @@ mobile/                                       # inside the GameTracker repo (was
 | PUT | `/user/{username}/games/{gameId}/backlog-order` | Move game in backlog |
 | POST | `/user/{username}/games/{gameId}/refresh-metadata` | Refresh game info |
 | GET | `/user/me` | After fingerprint unlock: does the stored session still work? (MOB-5) |
+| POST | `/user/me/tokens` | Mint this phone's 30-day library token at a password sign-in (MOB-9) |
+| DELETE | `/user/me/tokens/{tokenId}` | Revoke it, by its own id only (sign-out, or the next sign-in) |
 
 > **This table is enforced.** The app is the v1 client the backend's freeze protects, and it
 > lives in the same repo. `test/api-surface.test.js` fails if a route in `GameTrackerApi.kt` is
@@ -188,7 +190,11 @@ MainActivity  (single activity host)
    (cancelling it turns fingerprint unlock off, with a toast saying where to turn it back on)
 5. Navigate to `MainActivity`. It is **not exported** (MOB-2); it checks for a live session in
    `onCreate`/`onResume` and sends the user to login without one.
-6. The JWT lasts **12 hours**. A 401 answering the CURRENT token ends the session
+6. **MOB-9:** with fingerprint unlock on, the JWT is swapped for this phone's **30-day library
+   token** (`MobileToken`), sealed by the same prompt. If the prompt doesn't seal it, it is
+   revoked and the JWT stays. If the mint fails, the JWT stays and a toast says so. Sign-out
+   revokes it. Turning fingerprint unlock off signs out, after a confirmation.
+7. The JWT lasts **12 hours**. A 401 answering the CURRENT token ends the session
    (`SessionExpiryInterceptor`), and the visible activity shows login with a neutral
    "Your session expired" notice. Not on a network failure: offline is not signed out.
 
@@ -235,8 +241,10 @@ MainActivity  (single activity host)
   copy in SharedPreferences
 - **Per-account local data**: `UserData` (MOB-7). Never a device-wide key: the next account
   on the phone must not see it. Device-wide prefs (`app_prefs`) hold only display settings
-- **Network calls**: a mix of `lifecycleScope`, fragment `lifecycleScope` and unscoped
-  `CoroutineScope(Dispatchers.IO)`. The last two are wrong (MOB-17)
+- **Network calls** (MOB-17): `lifecycleScope` in activities; `viewLifecycleOwner.lifecycleScope`
+  in fragments for anything that touches a view. The fragment's own `lifecycleScope` only for
+  work that must outlive the view, marked `// outlives the view: <why>`. No `CoroutineScope(...)`
+  except `PendingRemovals`' process scope. All pinned in `test/runtime.test.js`
 - **State reload**: Fragments reload from API on resume / lifecycle events (no persistent cache)
 
 ---
@@ -324,7 +332,6 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 
 ## Known Technical Debt
 
-- Legacy activity files (`GameDetailsActivity`, `GameSearchActivity`, `MyLibraryActivity`) still in the codebase — superseded by fragments but not yet removed
 - Package name typo in namespace: `com.example.gmaetrackermobile` (should be `gametracker`) — do not change without a coordinated rename refactor
 - App name string has typo: `GmaeTrackerMobile` — cosmetic, low priority
 - No ViewModel/LiveData — state reloads on every fragment resume (network-heavy)

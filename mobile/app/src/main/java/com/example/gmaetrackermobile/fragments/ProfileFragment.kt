@@ -25,7 +25,6 @@ import com.example.gmaetrackermobile.SnackbarHelper
 import com.example.gmaetrackermobile.ThemeManager
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.switchmaterial.SwitchMaterial
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,7 +80,9 @@ class ProfileFragment : Fragment() {
     }
 
     private fun loadLibraryStats() {
-        CoroutineScope(Dispatchers.IO).launch {
+        // The view's scope (MOB-17): this was an unscoped CoroutineScope that called
+        // requireContext() on an IO thread after the fragment could have detached.
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
                 val token = Session.get(requireContext()).token ?: return@launch
@@ -193,6 +194,8 @@ class ProfileFragment : Fragment() {
     private fun onToggled(isChecked: Boolean) {
         val ctx = context ?: return
         if (!isChecked) {
+            // Holding this phone's 30-day token (MOB-9), off means signed out: ask first.
+            if (SignOut.confirmFingerprintOff(requireActivity()) { showBiometric(true) }) return
             FingerprintUnlock.disable(ctx)
             showSnackbar("Fingerprint unlock off", SnackbarHelper.Type.DEFAULT)
             return
@@ -248,7 +251,7 @@ class ProfileFragment : Fragment() {
                 }
             } else {
                 updateCalendarUi(false, btnSync, tvStatus)
-                lifecycleScope.launch {
+                viewLifecycleOwner.lifecycleScope.launch {
                     val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
                     if (!isAdded) return@launch
                     if (left == 0) showSnackbar("Calendar sync off — all events removed")
@@ -270,7 +273,7 @@ class ProfileFragment : Fragment() {
                     tvStatus.text = "Syncing to: ${selected.displayName}"
                     btnSync.isEnabled = false
                     btnSync.text = "Syncing…"
-                    lifecycleScope.launch {
+                    viewLifecycleOwner.lifecycleScope.launch {
                         val synced = syncAllLibraryGames(ctx)
                         btnSync.isEnabled = true
                         btnSync.text = "Sync Games to Calendar"
@@ -334,9 +337,11 @@ class ProfileFragment : Fragment() {
             )
             .setPositiveButton("Remove data") { _, _ ->
                 val appCtx = ctx.applicationContext
+                // outlives the view: the removal must finish even if the user leaves (MOB-17);
+                // the UI updates below are guarded.
                 lifecycleScope.launch {
                     val left = withContext(Dispatchers.IO) { UserData.removeFromPhone(appCtx) }
-                    if (!isAdded) return@launch
+                    if (!isAdded || view == null) return@launch
                     view?.let { setupCalendarOption(it) }
                     if (left == 0) {
                         showSnackbar("Notes, ratings and search history removed from this phone", SnackbarHelper.Type.SUCCESS)

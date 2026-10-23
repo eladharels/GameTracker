@@ -26,6 +26,8 @@ class SettingsActivity : AppCompatActivity() {
 
         btnBiometric.setOnClickListener {
             if (FingerprintUnlock.isOn(this)) {
+                // Holding this phone's 30-day token (MOB-9), off means signed out: ask first.
+                if (SignOut.confirmFingerprintOff(this) { updateButton() }) return@setOnClickListener
                 FingerprintUnlock.disable(this)
                 Toast.makeText(this, "Fingerprint unlock off.", Toast.LENGTH_SHORT).show()
                 updateButton()
