@@ -679,6 +679,30 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/pendingIds\(username\)/.test(lib), 'a reload no longer hides THIS user\'s removals still inside their undo window');
   });
 
+  // fragments/ is a subpackage: a class from the app's root package needs an import there.
+  // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
+  check('Android: fragments import every root-package class they use', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const roots = new Set();
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.kt'))) {
+      for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/^(?:(?:data|sealed|abstract|open|enum|private|internal)\s+)*(?:class|object|interface)\s+([A-Z]\w*)/gm)) {
+        if (!/^\s*private\b/.test(m[0])) roots.add(m[1]);
+      }
+    }
+    assert.ok(roots.has('UserData') && roots.has('Session'), `root-package scan found ${roots.size} classes -- it is broken`);
+    for (const f of fs.readdirSync(path.join(dir, 'fragments')).filter((n) => n.endsWith('.kt'))) {
+      const src = fs.readFileSync(path.join(dir, 'fragments', f), 'utf8');
+      const body = src.replace(/^import .*$/gm, '').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/"(?:[^"\\]|\\.)*"/g, '""');
+      const declared = new Set([...body.matchAll(/\b(?:class|object|interface)\s+([A-Z]\w*)/g)].map((m) => m[1]));
+      for (const name of roots) {
+        if (declared.has(name) || !new RegExp(`(?<![\\w.])${name}\\b`).test(body)) continue;
+        const imported = new RegExp(`^import com\\.example\\.gmaetrackermobile\\.(${name}|\\*)$`, 'm').test(src);
+        const qualified = new RegExp(`com\\.example\\.gmaetrackermobile\\.${name}\\b`).test(body);
+        assert.ok(imported || qualified, `fragments/${f} uses ${name} without importing com.example.gmaetrackermobile.${name}`);
+      }
+    }
+  });
+
   // MOB-7: notes, ratings, search history and the calendar map were device-wide, so the next
   // account on a phone saw them, and its sync deleted the first account's calendar events.
   check('Android: per-user local data lives only in UserData, and the calendar map is never backed up (MOB-7)', () => {

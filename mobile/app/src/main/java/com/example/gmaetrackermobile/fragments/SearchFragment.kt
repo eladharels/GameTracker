@@ -30,6 +30,7 @@ import android.widget.TextView
 import com.google.android.material.chip.Chip
 import org.json.JSONArray
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.UserData
 
 class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchEditText: EditText
