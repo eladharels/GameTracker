@@ -446,5 +446,16 @@
             android:textSize="14sp"
             android:textColor="@color/gt_text_secondary"
             tools:ignore="HardcodedText" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:paddingHorizontal="16dp"
+            android:gravity="center"
+            android:text="Your notes, ratings and search history stay on this phone after you sign out, for when you sign in again."
+            android:textSize="12sp"
+            android:textColor="@color/gt_text_muted"
+            tools:ignore="HardcodedText" />
     </LinearLayout>
 </ScrollView>

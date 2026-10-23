@@ -57,6 +57,20 @@ class UserDataTest {
         assertEquals(9L, bob.calendarId())
     }
 
+    @Test fun eventsThatCouldNotBeDeletedStayFindableAfterTheRestIsRemoved() {
+        // Review, PR #13: removing the map while its events were still in the calendar left
+        // them visible to anyone holding the phone, with nothing able to find them again.
+        val s = MapLocalStore()
+        val jane = account("jane", s)
+        jane.setNote("igdb_1", "mine"); jane.setCalendarId(7); jane.setCalendarSyncEnabled(true); jane.setEventMapJson("""{"igdb_1":101}""")
+        jane.clear(keepCalendar = true)
+        assertEquals("", jane.note("igdb_1"))
+        assertTrue(s.map.isEmpty())
+        assertFalse("sync is off either way", jane.calendarSyncEnabled())
+        assertEquals(7L, jane.calendarId())
+        assertEquals("""{"igdb_1":101}""", jane.eventMapJson())
+    }
+
     @Test fun clearingARatingOrNoteRemovesItAndRatingsStayInRange() {
         val s = MapLocalStore()
         val jane = account("jane", s)

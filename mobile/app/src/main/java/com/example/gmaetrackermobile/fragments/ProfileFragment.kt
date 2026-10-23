@@ -247,9 +247,13 @@ class ProfileFragment : Fragment() {
                     showSnackbar("Calendar sync on — press Sync to link your games", SnackbarHelper.Type.SUCCESS)
                 }
             } else {
-                lifecycleScope.launch(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
                 updateCalendarUi(false, btnSync, tvStatus)
-                showSnackbar("Calendar sync off — all events removed")
+                lifecycleScope.launch {
+                    val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
+                    if (!isAdded) return@launch
+                    if (left == 0) showSnackbar("Calendar sync off — all events removed")
+                    else showSnackbar("Calendar sync off. $left ${if (left == 1) "event" else "events"} couldn't be removed: allow calendar access and turn sync on and off again.", SnackbarHelper.Type.ERROR)
+                }
             }
         }
 
@@ -325,13 +329,21 @@ class ProfileFragment : Fragment() {
                     "will be gone for good. Release dates GameTracker added to your calendar are removed too. " +
                     "Your library on the server is not affected."
             )
-            .setPositiveButton("Remove") { _, _ ->
+            .setPositiveButton("Remove data") { _, _ ->
                 val appCtx = ctx.applicationContext
                 lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { UserData.removeFromPhone(appCtx) }
+                    val left = withContext(Dispatchers.IO) { UserData.removeFromPhone(appCtx) }
                     if (!isAdded) return@launch
                     view?.let { setupCalendarOption(it) }
-                    showSnackbar("Removed from this phone", SnackbarHelper.Type.SUCCESS)
+                    if (left == 0) {
+                        showSnackbar("Notes, ratings and search history removed from this phone", SnackbarHelper.Type.SUCCESS)
+                    } else {
+                        showSnackbar(
+                            "Notes, ratings and search history removed. $left calendar " +
+                                "${if (left == 1) "date is" else "dates are"} still there: allow calendar access and try again.",
+                            SnackbarHelper.Type.ERROR,
+                        )
+                    }
                 }
             }
             .setNegativeButton("Cancel", null)

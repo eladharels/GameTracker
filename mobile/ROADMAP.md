@@ -192,9 +192,17 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     runs, which is the account that wrote it on the phones this shipped to.
   - Pinned: `UserDataTest` (isolation, removal, migration), and `test/runtime.test.js` (no
     per-user key outside `UserData`, both sign-outs through `SignOut`, `calendar.xml` excluded).
-- **Residual:** a backup restored to a phone where ANOTHER account signs in first keeps the
-  backed-up accounts' notes in their own files, unreachable until that account signs in. That
-  is the intended isolation.
+  - Removing calendar events never reports success it did not have: an event leaves the map
+    only once its delete went through, and with access revoked the ids are kept and the user is
+    told (CISO + Architect review).
+- **Residual:**
+  - The pre-MOB-7 data goes to the account whose username is stored when the update first runs
+    (the last to sign in). On a shared phone that may not be the account that wrote it. It was
+    visible to every account already, so nothing new is revealed.
+  - On a shared phone, every account's notes go into the device owner's backup; restored, they
+    stay in their own files, reachable only when that account signs in.
+  - Signing out because the session EXPIRED does not ask about the calendar: the data is kept,
+    as with any sign-out, and the next sign-out asks.
 
 ### [ ] MOB-8 Low — Certificate pinning: decision recorded; add a network security config instead
 - **Where:** `ApiClient.kt:13-15` (default `OkHttpClient`); there is no

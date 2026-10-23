@@ -14,7 +14,10 @@ interface LocalStore {
 }
 
 class PrefsStore(private val prefs: SharedPreferences) : LocalStore {
-    override fun get(key: String): String? = prefs.all[key]?.toString()
+    // getString, not `all`: `all` copies the whole file on every call, once per card bound.
+    // A legacy non-string value (only ever read through all() by the migration) falls back.
+    override fun get(key: String): String? =
+        try { prefs.getString(key, null) } catch (e: ClassCastException) { prefs.all[key]?.toString() }
     override fun put(key: String, value: String) { prefs.edit().putString(key, value).apply() }
     override fun remove(keys: Collection<String>) {
         if (keys.isEmpty()) return
@@ -71,10 +74,14 @@ class UserData(private val store: LocalStore, private val calendar: LocalStore, 
     fun eventMapJson(): String? = calendar.get(cal(EVENT_MAP))
     fun setEventMapJson(json: String) = calendar.put(cal(EVENT_MAP), json)
 
-    /** Everything this account keeps on the phone, and nothing another account keeps. */
-    fun clear() {
+    /**
+     * Everything this account keeps on the phone, and nothing another account keeps. With
+     * [keepCalendar], the calendar id and event map stay: events that could not be deleted
+     * must stay findable, or nothing could ever remove them.
+     */
+    fun clear(keepCalendar: Boolean = false) {
         store.clear()
-        calendar.remove(listOf(CALENDAR_ID, CALENDAR_SYNC, EVENT_MAP).map(::cal))
+        calendar.remove(if (keepCalendar) listOf(cal(CALENDAR_SYNC)) else listOf(CALENDAR_ID, CALENDAR_SYNC, EVENT_MAP).map(::cal))
     }
 
     companion object {
@@ -102,8 +109,10 @@ class UserData(private val store: LocalStore, private val calendar: LocalStore, 
 
         /**
          * Moves the device-wide data from before MOB-7 into [target], once: it is deleted from
-         * the old files as it moves, so a second call finds nothing. It belonged to whoever was
-         * signed in, which on the phones this shipped to is the account signing in now.
+         * the old files as it moves, so a second call finds nothing. [target] is the account
+         * whose username is stored when the update first runs: the last one to sign in, which
+         * on a single-user phone is the one that wrote it. On a shared phone it may not be;
+         * that data was visible to every account already, so this reveals nothing new.
          * Where both old note stores hold a note, app_prefs wins: it is the one the app read.
          */
         fun migrateLegacy(
@@ -160,14 +169,16 @@ class UserData(private val store: LocalStore, private val calendar: LocalStore, 
 
         /**
          * Deletes the signed-in account's data from this phone, and the calendar events it
-         * added (their ids are in that data, so after this nothing could find them again).
-         * Blocking: call it off the main thread.
+         * added. Returns how many of those events are STILL in the calendar (no calendar
+         * access, a provider error): their ids are kept, so the user can allow access and try
+         * again, and the caller must say so. Blocking: call it off the main thread.
          */
-        fun removeFromPhone(context: Context) {
-            val username = Session.get(context).username ?: return
-            CalendarHelper.deleteAllEvents(context)
-            current(context)?.clear()
+        fun removeFromPhone(context: Context): Int {
+            val username = Session.get(context).username ?: return 0
+            val left = CalendarHelper.deleteAllEvents(context)
+            current(context)?.clear(keepCalendar = left > 0)
             context.applicationContext.deleteSharedPreferences(fileName(username))
+            return left
         }
     }
 }

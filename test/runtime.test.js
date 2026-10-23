@@ -546,7 +546,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   });
   check('Android: the session token is excluded from every backup path (MOB-4)', () => {
     const exclude = /<exclude\s+domain="sharedpref"\s+path="auth\.xml"\s*\/>/;
-    const backup = fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8');
+    // Comments stripped: an exclude inside <!-- --> excludes nothing (CISO review, PR #13).
+    const backup = fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     assert.ok(exclude.test(backup), 'backup_rules.xml (Android 11 and older) does not exclude auth.xml');
     const extraction = fs.readFileSync(path.join(APP, 'res/xml/data_extraction_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     for (const section of ['cloud-backup', 'device-transfer']) {
@@ -701,7 +702,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/btnLogout\)\.setOnClickListener \{ SignOut\.start\(requireActivity\(\)\) \}/.test(code('fragments/ProfileFragment.kt')),
       'Profile\'s sign-out bypasses SignOut');
     const calExclude = /<exclude\s+domain="sharedpref"\s+path="calendar\.xml"\s*\/>/;
-    assert.ok(calExclude.test(fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8')),
+    const noComments = (f) => fs.readFileSync(path.join(APP, f), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(calExclude.test(noComments('res/xml/backup_rules.xml')),
       'backup_rules.xml backs up the calendar map: its event ids belong to this phone');
     const extraction = fs.readFileSync(path.join(APP, 'res/xml/data_extraction_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     for (const section of ['cloud-backup', 'device-transfer']) {

@@ -71,35 +71,45 @@ object CalendarHelper {
     fun eventCount(context: Context): Int = loadEventMap(context).size
 
     /**
-     * Deletes every calendar event we have stored and clears the event map.
+     * Deletes every calendar event we have stored. Returns how many are STILL in the calendar:
+     * an event is dropped from the map only once its delete went through (0 rows = already
+     * gone, also fine). It used to empty the map whatever happened, so with calendar access
+     * revoked the events stayed visible and nothing could find them again, while sign-out and
+     * "Remove my data" said they were removed (CISO + Architect review, PR #13).
      * Does NOT clear the stored calendar ID — use [disableSync] for a full tear-down.
      */
-    fun deleteAllEvents(context: Context) {
-        try {
-            val map = loadEventMap(context)
-            map.values.forEach { eventId ->
-                try {
-                    context.contentResolver.delete(
-                        ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
-                        null, null
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not delete event $eventId", e)
-                }
+    fun deleteAllEvents(context: Context): Int {
+        val map = loadEventMap(context)
+        if (map.isEmpty()) return 0
+        if (!hasCalendarPermissions(context)) return map.size
+        val left = map.filterValues { eventId ->
+            try {
+                context.contentResolver.delete(
+                    ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+                    null, null
+                )
+                false
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not delete event $eventId", e)
+                true
             }
-            saveEventMap(context, emptyMap())
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete all calendar events", e)
         }
+        saveEventMap(context, left)
+        return left.size
     }
 
-    /** Full tear-down: deletes all events, clears the event map, calendar ID, and sync flag. */
-    fun disableSync(context: Context) {
-        deleteAllEvents(context)
+    /**
+     * Full tear-down: deletes all events and turns sync off. Returns how many events are still
+     * in the calendar; while any are, the calendar id and their map are kept so a later try
+     * can still remove them.
+     */
+    fun disableSync(context: Context): Int {
+        val left = deleteAllEvents(context)
         UserData.current(context)?.apply {
-            setCalendarId(null)
+            if (left == 0) setCalendarId(null)
             setCalendarSyncEnabled(false)
         }
+        return left
     }
 
     fun addGameEvent(context: Context, gameId: String, gameName: String, releaseDate: String): Long? {
