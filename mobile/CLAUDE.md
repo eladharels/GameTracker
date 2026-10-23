@@ -34,7 +34,7 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 ## Architecture
 
 ### Pattern
-**Single Activity + Multiple Fragments** with bottom navigation. `MainActivity` hosts all fragments and manages navigation. Legacy activity files (`GameDetailsActivity.kt`, `GameSearchActivity.kt`, `MyLibraryActivity.kt`) still exist but have been superseded by the fragment-based architecture.
+**Single Activity + Multiple Fragments** with bottom navigation. `MainActivity` hosts all fragments and manages navigation. The legacy activities (`GameDetailsActivity`, `GameSearchActivity`, `MyLibraryActivity`) were never in the manifest and were deleted with MOB-17.
 
 ### Project Structure
 ```
@@ -77,10 +77,8 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   │   ├── LibraryFragment.kt        # User library management
 │   │   │   │   ├── ProfileFragment.kt        # User profile + stats
 │   │   │   │   └── GameDetailsFragment.kt    # Game detail bottom sheet / view
-│   │   │   ├── [Legacy activities]
-│   │   │   │   ├── GameDetailsActivity.kt
-│   │   │   │   ├── GameSearchActivity.kt
-│   │   │   │   └── MyLibraryActivity.kt
+│   │   │   ├── SafeUrl.kt                    # https-only gate for every server-supplied image URL
+│   │   │   │                                 #   (MOB-8; twin of the web's safeUrl.js)
 │   │   │   └── ui/theme/
 │   │   │       ├── Color.kt
 │   │   │       ├── Theme.kt
@@ -235,8 +233,10 @@ MainActivity  (single activity host)
   copy in SharedPreferences
 - **Per-account local data**: `UserData` (MOB-7). Never a device-wide key: the next account
   on the phone must not see it. Device-wide prefs (`app_prefs`) hold only display settings
-- **Network calls**: a mix of `lifecycleScope`, fragment `lifecycleScope` and unscoped
-  `CoroutineScope(Dispatchers.IO)`. The last two are wrong (MOB-17)
+- **Network calls** (MOB-17): `lifecycleScope` in activities; `viewLifecycleOwner.lifecycleScope`
+  in fragments for anything that touches a view. The fragment's own `lifecycleScope` only for
+  work that must outlive the view, marked `// outlives the view: <why>`. No `CoroutineScope(...)`
+  except `PendingRemovals`' process scope. All pinned in `test/runtime.test.js`
 - **State reload**: Fragments reload from API on resume / lifecycle events (no persistent cache)
 
 ---
@@ -324,7 +324,6 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 
 ## Known Technical Debt
 
-- Legacy activity files (`GameDetailsActivity`, `GameSearchActivity`, `MyLibraryActivity`) still in the codebase — superseded by fragments but not yet removed
 - Package name typo in namespace: `com.example.gmaetrackermobile` (should be `gametracker`) — do not change without a coordinated rename refactor
 - App name string has typo: `GmaeTrackerMobile` — cosmetic, low priority
 - No ViewModel/LiveData — state reloads on every fragment resume (network-heavy)

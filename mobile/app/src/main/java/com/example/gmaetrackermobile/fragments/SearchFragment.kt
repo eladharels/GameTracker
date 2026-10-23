@@ -143,6 +143,13 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         }
     }
 
+    override fun onDestroyView() {
+        // MOB-17: a pending debounce would otherwise call performSearch() against a view
+        // that no longer exists (the fragment survives on the back stack, its view does not).
+        searchHandler.removeCallbacks(searchRunnable)
+        super.onDestroyView()
+    }
+
     // ── Search history ────────────────────────────────────────────────────────
 
     private fun loadHistory(): List<String> {
@@ -265,7 +272,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         searchHistoryScroll.visibility = View.GONE
         view?.findViewById<View>(R.id.tvRecentLabel)?.visibility = View.GONE
 
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val games = searchAllGames(query)
                 // Refresh the badges' copy of the library; on failure keep the last one.
@@ -330,7 +337,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
     private fun addGameToLibrary(game: Game) {
         if (!isAdded) return
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
                 val token = Session.get(requireContext()).token ?: return@launch
@@ -410,11 +417,13 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 val calendars = CalendarHelper.getAvailableCalendars(ctx)
                 CalendarHelper.showCalendarPickerDialog(ctx, calendars) { selected ->
                     CalendarHelper.storeCalendarId(ctx, selected.id)
+                    // outlives the view: the calendar write must finish even if the user leaves (MOB-17)
                     lifecycleScope.launch(Dispatchers.IO) {
                         CalendarHelper.addGameEvent(ctx, gameId, game.displayName, releaseDate)
                     }
                 }
             } else {
+                // outlives the view: the calendar write must finish even if the user leaves (MOB-17)
                 lifecycleScope.launch(Dispatchers.IO) {
                     CalendarHelper.addGameEvent(ctx, gameId, game.displayName, releaseDate)
                 }

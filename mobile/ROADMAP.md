@@ -377,7 +377,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - For non-library games show a single "Add to library" action.
   - Give Remove the same undo (or a confirmation) as the list.
 
-### [ ] MOB-17 Medium — Coroutine scopes: unscoped `CoroutineScope(Dispatchers.IO)` and fragment-scoped work on views
+### [x] MOB-17 ✔ Medium — Coroutine scopes: unscoped `CoroutineScope(Dispatchers.IO)` and fragment-scoped work on views — *fixed in PR #14*
+- **Fixed:**
+  - `ProfileFragment`'s unscoped stats load and every view-touching fragment coroutine run
+    on `viewLifecycleOwner.lifecycleScope`.
+  - Work that must finish after the view goes (calendar writes, "Remove my data") stays on
+    the fragment's scope, marked `// outlives the view:`, and guards its UI updates.
+  - `SearchFragment.onDestroyView` cancels the pending debounce.
+  - The three legacy activities, never in the manifest and holding the remaining unscoped
+    coroutines, are deleted with their four layouts.
+  - Pinned in `test/runtime.test.js` (each rule mutation-checked).
 - **Where:**
   - `LoginActivity.kt:99` and `ProfileFragment.kt:79`: unscoped `CoroutineScope(Dispatchers.IO)`.
   - Fragment `lifecycleScope` doing view work: `GameDetailsFragment.kt:234,277,311`;

@@ -711,7 +711,41 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
           `${path.relative(dir, f)} loads ${arg} without SafeUrl.https: a server-supplied URL reaches the network unchecked`);
       }
     }
-    assert.ok(loads >= 4, `found ${loads} Glide loads -- the scan is broken`);
+    assert.ok(loads >= 3, `found ${loads} Glide loads -- the scan is broken`);
+  });
+
+  // MOB-17: unscoped coroutines outlived their screen, and fragment-scoped ones updated
+  // views that had been destroyed while the fragment sat on the back stack.
+  check('Android: coroutines are scoped to what they touch (MOB-17)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const all = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) all.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of all) {
+      const src = code(f).replace(/\/\/.*$/gm, '');
+      // PendingRemovals is the one deliberate process-lifetime scope (MOB-12).
+      if (f !== 'PendingRemovals.kt') {
+        assert.ok(!/\bCoroutineScope\s*\(|\bGlobalScope\b/.test(src), `${f} launches an unscoped coroutine`);
+      }
+    }
+    for (const f of all.filter((x) => x.startsWith('fragments/'))) {
+      // Raw text: the marker IS a comment, and code() strips comments (and, with block
+      // comments, lines -- which would also make the reported line numbers wrong).
+      const lines = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        if (!/(?<![\w.])lifecycleScope\.launch/.test(line.replace(/\/\/.*$/, ''))) return;
+        const marked = lines.slice(Math.max(0, i - 3), i).some((l) => /\/\/ outlives the view:/.test(l));
+        assert.ok(marked, `${f}:${i + 1} uses the fragment's lifecycleScope: use viewLifecycleOwner.lifecycleScope, `
+          + 'or mark work that must outlive the view with "// outlives the view: <why>"');
+      });
+    }
+    const search = code('fragments/SearchFragment.kt');
+    assert.ok(/override fun onDestroyView\(\)\s*\{[^}]*searchHandler\.removeCallbacks\(searchRunnable\)/.test(search),
+      'SearchFragment no longer cancels the pending debounce in onDestroyView');
   });
 
   // fragments/ is a subpackage: a class from the app's root package needs an import there.

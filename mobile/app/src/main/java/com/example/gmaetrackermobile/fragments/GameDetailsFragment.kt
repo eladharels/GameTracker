@@ -229,7 +229,7 @@ class GameDetailsFragment : Fragment() {
     private fun updateGameStatus(newStatus: String) {
         if (newStatus == currentStatus) return
         val game = currentGame ?: return
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
                 val token = Session.get(requireContext()).token ?: run {
@@ -269,7 +269,7 @@ class GameDetailsFragment : Fragment() {
         val game = currentGame ?: return
         btnRefreshMetadata.isEnabled = false
         btnRefreshMetadata.text = "…"
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
                 val token = Session.get(requireContext()).token ?: run { restoreRefreshButton(); return@launch }
@@ -303,7 +303,7 @@ class GameDetailsFragment : Fragment() {
 
     private fun removeGameFromLibrary() {
         val game = currentGame ?: return
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
                 val token = Session.get(requireContext()).token ?: run {
