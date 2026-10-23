@@ -64,9 +64,9 @@ object TokenVault {
         } catch (e: KeyPermanentlyInvalidatedException) {
             deleteKey()
             CipherResult.Invalidated
-        } catch (e: IllegalArgumentException) {
-            CipherResult.Invalidated   // the stored IV is not base64: treat the copy as unusable
         } catch (e: Exception) {
+            // Includes an IV that is not base64 or the wrong length: not "fingerprints changed",
+            // but the copy cannot be opened either. The caller drops it (CISO review, PR #12).
             CipherResult.Unavailable(e)
         }
     }

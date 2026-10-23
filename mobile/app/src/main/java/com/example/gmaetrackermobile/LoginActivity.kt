@@ -1,12 +1,11 @@
 package com.example.gmaetrackermobile
 
-import android.content.Context
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -20,6 +19,7 @@ import androidx.lifecycle.lifecycleScope
 class LoginActivity : AppCompatActivity() {
     // Created in onCreate: a BiometricPrompt must exist before the activity is resumed.
     private lateinit var cryptoPrompt: CryptoPrompt
+    private lateinit var btnFingerprint: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,8 +32,11 @@ class LoginActivity : AppCompatActivity() {
         val etPassword = findViewById<EditText>(R.id.etPassword)
         val btnLogin = findViewById<Button>(R.id.btnLogin)
         val tvLoginStatus = findViewById<TextView>(R.id.tvLoginStatus)
+        // After a dismissed prompt: a way back to the fingerprint without restarting the app.
+        btnFingerprint = findViewById(R.id.btnBiometric)
+        btnFingerprint.text = "Unlock with fingerprint"
+        btnFingerprint.setOnClickListener { unlockWithFingerprint(tvLoginStatus) }
 
-        val prefs = getSharedPreferences("auth", Context.MODE_PRIVATE)
         val session = Session.get(this)
         cryptoPrompt = CryptoPrompt.forActivity(this)
         Session.redirecting = false
@@ -53,12 +56,12 @@ class LoginActivity : AppCompatActivity() {
         // had already touched the sensor.
         if (!sessionEnded && FingerprintUnlock.isOn(this) && FingerprintUnlock.canUse(this)) {
             if (session.hasSealedLiveSession()) {
-                FingerprintUnlock.unlock(this, cryptoPrompt) { result -> afterUnlock(result, tvLoginStatus) }
+                unlockWithFingerprint(tvLoginStatus)
             } else if (session.hasLiveToken()) {
                 // Updated from a version that kept the token in the clear: it was moved into
                 // memory (SessionStore.migrateLegacyToken). Seal it now, once. This prompt is
                 // the way in, so cancelling it must not let the old token through.
-                FingerprintUnlock.enable(this, cryptoPrompt) { result ->
+                FingerprintUnlock.enable(this, cryptoPrompt, FingerprintUnlock.KEEP_ON_PROMPT) { result ->
                     if (result == FingerprintUnlock.Result.Done) {
                         verifyAndEnter(tvLoginStatus)
                     } else {
@@ -89,7 +92,8 @@ class LoginActivity : AppCompatActivity() {
             // Normalize username to lowercase to prevent case sensitivity issues
             val normalizedUsername = username.lowercase()
 
-            CoroutineScope(Dispatchers.IO).launch {
+            // Tied to this screen: a result arriving after it is gone is dropped, not acted on.
+            lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     val response = ApiClient.api.login(LoginRequest(normalizedUsername, password))
                     withContext(Dispatchers.Main) {
@@ -100,7 +104,7 @@ class LoginActivity : AppCompatActivity() {
                         if (response.isSuccessful && response.body() != null) {
                             val token = response.body()!!.token
                             // If username or password changed, disable biometrics
-                            val oldUsername = prefs.getString("username", null)
+                            val oldUsername = session.username
                             if (oldUsername != null && oldUsername != normalizedUsername) {
                                 FingerprintUnlock.disable(this@LoginActivity)
                             }
@@ -132,11 +136,20 @@ class LoginActivity : AppCompatActivity() {
 
     private var errorColor: Int = 0
 
+    private fun unlockWithFingerprint(status: TextView) {
+        btnFingerprint.visibility = View.GONE
+        FingerprintUnlock.unlock(this, cryptoPrompt) { result -> afterUnlock(result, status) }
+    }
+
     private fun afterUnlock(result: FingerprintUnlock.Result, status: TextView) {
         when (result) {
             FingerprintUnlock.Result.Done -> verifyAndEnter(status)
             FingerprintUnlock.Result.KeyInvalidated -> notice(status, FingerprintUnlock.KEY_CHANGED_TEXT)
-            is FingerprintUnlock.Result.Cancelled -> notice(status, "Sign in with your password, or close and reopen the app to use your fingerprint.")
+            is FingerprintUnlock.Result.Cancelled -> {
+                // A lockout or sensor fault is the system's to explain; only a dismissal is ours.
+                notice(status, if (result.byUser) "Sign in with your password, or use your fingerprint." else result.message.toString())
+                if (Session.get(this).hasSealedLiveSession()) btnFingerprint.visibility = View.VISIBLE
+            }
             is FingerprintUnlock.Result.Unavailable -> notice(status, result.message)
         }
     }
@@ -147,7 +160,7 @@ class LoginActivity : AppCompatActivity() {
      * a flag that says "on" with nothing sealed would quietly ask for the password next time.
      */
     private fun sealThen(next: () -> Unit) {
-        FingerprintUnlock.enable(this, cryptoPrompt) { result ->
+        FingerprintUnlock.enable(this, cryptoPrompt, FingerprintUnlock.KEEP_ON_PROMPT) { result ->
             if (result != FingerprintUnlock.Result.Done) {
                 Toast.makeText(this, "Fingerprint unlock is off. Turn it on again in Profile.", Toast.LENGTH_LONG).show()
             }

@@ -15,7 +15,7 @@ import javax.crypto.Cipher
  */
 class CryptoPrompt private constructor(build: (BiometricPrompt.AuthenticationCallback) -> BiometricPrompt) {
     private var onSuccess: ((Cipher) -> Unit)? = null
-    private var onFailure: ((CharSequence) -> Unit)? = null
+    private var onFailure: ((Int, CharSequence) -> Unit)? = null
 
     private val prompt: BiometricPrompt = build(object : BiometricPrompt.AuthenticationCallback() {
         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
@@ -24,18 +24,18 @@ class CryptoPrompt private constructor(build: (BiometricPrompt.AuthenticationCal
             clear()
             // No cipher means the prompt was not bound to the key: never treat it as unlocked.
             val cipher = result.cryptoObject?.cipher
-            if (cipher != null) ok?.invoke(cipher) else fail?.invoke("Fingerprint check failed.")
+            if (cipher != null) ok?.invoke(cipher) else fail?.invoke(NO_CIPHER, "Fingerprint unlock didn't work. Try again.")
         }
 
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
             val fail = onFailure
             clear()
-            fail?.invoke(errString)
+            fail?.invoke(errorCode, errString)
         }
         // onAuthenticationFailed (a finger not recognised): the prompt stays up and says so.
     })
 
-    fun authenticate(info: BiometricPrompt.PromptInfo, cipher: Cipher, onSuccess: (Cipher) -> Unit, onFailure: (CharSequence) -> Unit) {
+    fun authenticate(info: BiometricPrompt.PromptInfo, cipher: Cipher, onSuccess: (Cipher) -> Unit, onFailure: (Int, CharSequence) -> Unit) {
         this.onSuccess = onSuccess
         this.onFailure = onFailure
         prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
@@ -47,17 +47,20 @@ class CryptoPrompt private constructor(build: (BiometricPrompt.AuthenticationCal
     }
 
     companion object {
+        /** Our own code for "succeeded without a cipher": never a BiometricPrompt code. */
+        const val NO_CIPHER = -1
+
         fun forActivity(activity: FragmentActivity) =
             CryptoPrompt { BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), it) }
 
         fun forFragment(fragment: Fragment) =
             CryptoPrompt { BiometricPrompt(fragment, ContextCompat.getMainExecutor(fragment.requireContext()), it) }
 
-        fun info(title: String, subtitle: String): BiometricPrompt.PromptInfo =
+        fun info(title: String, subtitle: String, negative: String = "Use password"): BiometricPrompt.PromptInfo =
             BiometricPrompt.PromptInfo.Builder()
                 .setTitle(title)
                 .setSubtitle(subtitle)
-                .setNegativeButtonText("Use password")
+                .setNegativeButtonText(negative)
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                 .build()
     }
@@ -80,13 +83,32 @@ object FingerprintUnlock {
 
     sealed class Result {
         object Done : Result()
-        /** The user cancelled or the prompt failed; [message] is the system's reason. */
-        class Cancelled(val message: CharSequence) : Result()
+        /**
+         * The prompt ended without a fingerprint. [byUser] when the user dismissed it (cancel,
+         * the negative button, or the app leaving the screen); otherwise [message] is the
+         * system's reason ("Too many attempts", a sensor fault), which the UI must show as is:
+         * retrying a lockout just fails again.
+         */
+        class Cancelled(val errorCode: Int, val message: CharSequence) : Result() {
+            val byUser: Boolean get() = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON || errorCode == BiometricPrompt.ERROR_CANCELED
+        }
         /** Not possible right now (no session, no biometric, Keystore refused). */
         class Unavailable(val message: String) : Result()
         /** The key is gone (fingerprints changed): unlock was turned off. */
         object KeyInvalidated : Result()
     }
+
+    /** Turning it on, from Profile or Settings. */
+    val TURN_ON_PROMPT: BiometricPrompt.PromptInfo
+        get() = CryptoPrompt.info("Turn on fingerprint unlock", "Confirm your fingerprint", negative = "Cancel")
+
+    /**
+     * Re-sealing after a password sign-in, or once after the update that moved the token out of
+     * the clear: it is ALREADY on, so the prompt must not say "turn on" (UI/UX review, PR #12).
+     */
+    val KEEP_ON_PROMPT: BiometricPrompt.PromptInfo
+        get() = CryptoPrompt.info("Keep fingerprint unlock on", "Confirm your fingerprint so you can unlock next time", negative = "Not now")
 
     fun isOn(context: Context): Boolean =
         context.getSharedPreferences(SessionStore.PREFS, Context.MODE_PRIVATE).getBoolean(PREF_ENABLED, false)
@@ -110,7 +132,12 @@ object FingerprintUnlock {
      * session in memory: you can only turn it on while signed in. Anything but [Result.Done]
      * leaves it off.
      */
-    fun enable(context: Context, prompt: CryptoPrompt, done: (Result) -> Unit) {
+    fun enable(
+        context: Context,
+        prompt: CryptoPrompt,
+        info: BiometricPrompt.PromptInfo = TURN_ON_PROMPT,
+        done: (Result) -> Unit,
+    ) {
         val session = Session.get(context)
         val token = session.token
         if (token == null || !session.hasLiveToken(skewSeconds = 0)) {
@@ -123,7 +150,7 @@ object FingerprintUnlock {
         }
         when (val c = TokenVault.encryptCipher()) {
             is TokenVault.CipherResult.Ready -> prompt.authenticate(
-                CryptoPrompt.info("Turn on fingerprint unlock", "Confirm your fingerprint"),
+                info,
                 c.cipher,
                 onSuccess = { cipher ->
                     val stored = try {
@@ -139,9 +166,9 @@ object FingerprintUnlock {
                         done(Result.Unavailable("Couldn't turn on fingerprint unlock. Try again."))
                     }
                 },
-                onFailure = { message ->
+                onFailure = { code, message ->
                     disable(context)
-                    done(Result.Cancelled(message))
+                    done(Result.Cancelled(code, message))
                 },
             )
             else -> {
@@ -177,14 +204,18 @@ object FingerprintUnlock {
                         done(Result.Unavailable("Your saved session couldn't be opened. Sign in with your password."))
                     }
                 },
-                onFailure = { message -> done(Result.Cancelled(message)) },
+                onFailure = { code, message -> done(Result.Cancelled(code, message)) },
             )
             TokenVault.CipherResult.Invalidated -> {
                 disable(context)
                 done(Result.KeyInvalidated)
             }
-            is TokenVault.CipherResult.Unavailable ->
+            is TokenVault.CipherResult.Unavailable -> {
+                // Unusable now, so unusable on every launch: drop it rather than fail each time.
+                // The flag stays on, so the next password sign-in seals a fresh copy.
+                session.dropSealed()
                 done(Result.Unavailable("Fingerprint unlock isn't available right now. Sign in with your password."))
+            }
         }
     }
 }

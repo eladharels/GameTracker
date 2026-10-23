@@ -55,6 +55,8 @@ class ProfileFragment : Fragment() {
         super.onResume()
         // Redraw dots so the correct one shows the selection ring
         view?.let { setupColorPickerDots(it) }
+        // It may have been changed in Settings while this screen was in the back stack.
+        context?.let { showBiometric(FingerprintUnlock.isOn(it)) }
     }
 
     // ── Profile info ──────────────────────────────────────────────────────────
@@ -199,7 +201,8 @@ class ProfileFragment : Fragment() {
                     showSnackbar(FingerprintUnlock.ENABLED_TEXT, SnackbarHelper.Type.SUCCESS)
                 is FingerprintUnlock.Result.Cancelled -> {
                     showBiometric(false)
-                    showSnackbar("Fingerprint unlock not turned on.", SnackbarHelper.Type.DEFAULT)
+                    if (result.byUser) showSnackbar("Fingerprint unlock not turned on.", SnackbarHelper.Type.DEFAULT)
+                    else showSnackbar(result.message.toString(), SnackbarHelper.Type.ERROR)
                 }
                 is FingerprintUnlock.Result.Unavailable -> {
                     showBiometric(false)

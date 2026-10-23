@@ -33,7 +33,8 @@ class SettingsActivity : AppCompatActivity() {
                 FingerprintUnlock.enable(this, cryptoPrompt) { result ->
                     val text = when (result) {
                         FingerprintUnlock.Result.Done -> FingerprintUnlock.ENABLED_TEXT
-                        is FingerprintUnlock.Result.Cancelled -> "Fingerprint unlock not turned on."
+                        is FingerprintUnlock.Result.Cancelled ->
+                            if (result.byUser) "Fingerprint unlock not turned on." else result.message.toString()
                         is FingerprintUnlock.Result.Unavailable -> result.message
                         FingerprintUnlock.Result.KeyInvalidated -> FingerprintUnlock.KEY_CHANGED_TEXT
                     }

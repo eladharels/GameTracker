@@ -258,7 +258,7 @@
                     android:layout_height="20dp"
                     android:src="@drawable/ic_fingerprint"
                     android:tint="?attr/colorPrimary"
-                    android:contentDescription="Biometric" />
+                    android:contentDescription="@null" />
             </LinearLayout>
 
             <LinearLayout
@@ -280,7 +280,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="Unlock the app while you're signed in"
+                    android:text="Stay signed in when the app restarts. Your fingerprint unlocks it."
                     android:textSize="12sp"
                     android:textColor="@color/gt_text_secondary"
                     tools:ignore="HardcodedText" />
@@ -289,7 +289,9 @@
             <com.google.android.material.switchmaterial.SwitchMaterial
                 android:id="@+id/switchBiometric"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
+                android:layout_height="wrap_content"
+                android:contentDescription="Fingerprint unlock"
+                tools:ignore="HardcodedText" />
         </LinearLayout>
 
         <!-- Calendar sync -->
