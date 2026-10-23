@@ -198,7 +198,7 @@ class LoginActivity : AppCompatActivity() {
                 wantsPat -> {
                     Toast.makeText(
                         this@LoginActivity,
-                        "Couldn't set up the 30-day sign-in, so fingerprint unlock will last 12 hours this time.",
+                        "Couldn't set up the 30-day sign-in. This time you'll need your password again after 12 hours.",
                         Toast.LENGTH_LONG,
                     ).show()
                     sealThen { enterApp(offline = false) }

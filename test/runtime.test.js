@@ -785,6 +785,15 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     const signOut = code('SignOut.kt');
     assert.ok(/val id = session\.patId/.test(signOut) && /val bearer = session\.bearer\(\)/.test(signOut)
       && /MobileTokenApi\.revoke\(bearer, id\)/.test(signOut), 'sign-out no longer revokes the PAT with itself');
+    // Turning fingerprint unlock off drops the sealed copy, so the sign-out after it must be
+    // impossible to cancel: a Cancel there left the token live and unsealed (CISO + UI/UX, PR #14).
+    assert.ok(/FingerprintUnlock\.disable\(activity\)\s*start\(activity, committed = true\)/.test(signOut),
+      'turning fingerprint unlock off no longer starts a COMMITTED sign-out');
+    assert.ok(/if \(inFlight && !committed\) return/.test(signOut), 'a committed sign-out can return silently');
+    assert.ok((signOut.match(/if \(committed\) dialog\.setCancelable\(false\) else dialog\.set(Neutral|Negative)Button\("Cancel", null\)/g) || []).length === 2,
+      'a dialog after a committed sign-out offers Cancel (or can be dismissed)');
+    assert.ok(!/\.set(Neutral|Negative)Button\("Cancel", null\)\s*\.show\(\)/.test(signOut.replace(/fun confirmFingerprintOff[\s\S]*?return true/, '')),
+      'a sign-out dialog shows an unconditional Cancel');
     const login = code('LoginActivity.kt');
     assert.ok(/session\.pendingRevokeId\(\)\?\.let \{ old ->[\s\S]*?MobileTokenApi\.revoke\("Bearer \$jwt", old\)/.test(login),
       'a token an earlier sign-in left behind is no longer revoked with the fresh JWT');

@@ -22,21 +22,28 @@ object SignOut {
     /** A double tap must not open two dialogs. Main thread only. */
     private var inFlight = false
 
-    fun start(activity: FragmentActivity) {
-        if (inFlight) return
+    /**
+     * [committed]: the user has ALREADY agreed to be signed out (turning fingerprint unlock
+     * off, MOB-9), so no later dialog may offer a way to stay signed in: the calendar question
+     * has no Cancel, and neither does "still in your calendar" (UI/UX review, PR #14).
+     */
+    fun start(activity: FragmentActivity, committed: Boolean = false) {
+        // A committed sign-out never returns silently: fingerprint unlock is already off, and
+        // the 30-day token must not stay live in memory, unsealed (CISO review, PR #14).
+        if (inFlight && !committed) return
         inFlight = true
         // invokeOnCompletion, not finally: a scope already cancelled never runs the body, and
         // a flag left set would disable sign-out until the process restarts (Architect review).
-        activity.lifecycleScope.launch { ask(activity) }.invokeOnCompletion { inFlight = false }
+        activity.lifecycleScope.launch { ask(activity, committed) }.invokeOnCompletion { inFlight = false }
     }
 
-    private suspend fun ask(activity: FragmentActivity) {
+    private suspend fun ask(activity: FragmentActivity, committed: Boolean) {
         val events = withContext(Dispatchers.IO) { CalendarHelper.eventCount(activity) }
         if (events == 0) {
             finish(activity)
             return
         }
-        MaterialAlertDialogBuilder(activity)
+        val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle("Remove release dates from your calendar?")
             .setMessage(
                 "GameTracker added $events release ${if (events == 1) "date" else "dates"} to your phone's calendar. " +
@@ -45,26 +52,26 @@ object SignOut {
             .setPositiveButton("Remove and sign out") { _, _ ->
                 activity.lifecycleScope.launch {
                     val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(activity) }
-                    if (left == 0) finish(activity) else couldNotRemove(activity, left)
+                    if (left == 0) finish(activity) else couldNotRemove(activity, left, committed)
                 }
             }
             .setNegativeButton("Keep and sign out") { _, _ -> finish(activity) }
-            .setNeutralButton("Cancel", null)
-            .show()
+        if (committed) dialog.setCancelable(false) else dialog.setNeutralButton("Cancel", null)
+        dialog.show()
     }
 
     /** Never "removed" when they are still there: that is what the question was about. */
-    private fun couldNotRemove(activity: FragmentActivity, left: Int) {
-        MaterialAlertDialogBuilder(activity)
+    private fun couldNotRemove(activity: FragmentActivity, left: Int, committed: Boolean) {
+        val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle("Some release dates are still in your calendar")
             .setMessage(
                 "GameTracker couldn't remove $left ${if (left == 1) "release date" else "release dates"}. " +
                     "Allow calendar access for GameTracker in the phone's settings and try again. " +
                     "If you sign out now, you can remove them the next time you sign in."
             )
-            .setPositiveButton("Sign out anyway") { _, _ -> finish(activity) }
-            .setNegativeButton("Cancel", null)
-            .show()
+            .setPositiveButton(if (committed) "Sign out" else "Sign out anyway") { _, _ -> finish(activity) }
+        if (committed) dialog.setCancelable(false) else dialog.setNegativeButton("Cancel", null)
+        dialog.show()
     }
 
     /**
@@ -83,7 +90,7 @@ object SignOut {
             )
             .setPositiveButton("Turn off and sign out") { _, _ ->
                 FingerprintUnlock.disable(activity)
-                start(activity)
+                start(activity, committed = true)
             }
             .setNegativeButton("Cancel") { _, _ -> onCancel() }
             .setOnCancelListener { onCancel() }
