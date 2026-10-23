@@ -58,8 +58,8 @@ if (username.trim().isEmpty() || password.trim().isEmpty()) {
 ## Additional Security Considerations
 
 1. **Network Security**: Ensure the app uses HTTPS for all API communications
-2. **Token Storage**: Tokens are stored securely in SharedPreferences
-3. **Biometric Authentication**: App supports secure biometric login
+2. **Token Storage**: Held in memory, or sealed by a biometric-bound Android Keystore key when fingerprint unlock is on (MOB-6). Before MOB-6 this line claimed "stored securely in SharedPreferences": it was plaintext.
+3. **Biometric Authentication**: The fingerprint decrypts the session through a `CryptoObject` (MOB-6); it is no longer a UI gate.
 4. **Input Validation**: All user inputs are properly validated
 
 ## Impact

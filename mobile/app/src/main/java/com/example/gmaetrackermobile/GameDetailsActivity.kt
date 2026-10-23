@@ -59,7 +59,7 @@ class GameDetailsActivity : AppCompatActivity() {
                 override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, position: Int, id: Long) {
                     val newStatus = statuses[position]
                     if (!newStatus.equals(status, ignoreCase = true)) {
-                        val token = getSharedPreferences("auth", Context.MODE_PRIVATE).getString("token", null)
+                        val token = Session.get(this@GameDetailsActivity).token
                         if (token != null) {
                             CoroutineScope(Dispatchers.IO).launch {
                                 try {

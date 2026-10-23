@@ -607,6 +607,54 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(!/\bfun (hours|genre|progress)\s*\(/.test(code('GameExtras.kt')), 'GameExtras still offers an invented statistic');
   });
 
+  // MOB-6: the token was plaintext in SharedPreferences and the fingerprint only gated a
+  // startActivity call. Each of these, broken, still "works" for every user.
+  check('Android: the session token is never stored in the clear, and the fingerprint decrypts it (MOB-6)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    assert.ok(files.length > 20, `found ${files.length} Kotlin files -- the scan is broken`);
+    for (const f of files) {
+      const src = code(f);
+      // The old key may be read only by SessionStore, and only to delete it.
+      if (f !== 'SessionStore.kt') {
+        assert.ok(!/(get|put)String\(\s*"token"/.test(src), `${f} reads or writes the plaintext "token" preference`);
+        assert.ok(!/KEY_LEGACY_TOKEN/.test(src), `${f} touches the legacy plaintext token`);
+      }
+      // A prompt without a CryptoObject decides nothing. Only CryptoPrompt may create one.
+      if (f !== 'FingerprintUnlock.kt') {
+        assert.ok(!/\bBiometricPrompt\s*\(|import androidx\.biometric\.BiometricPrompt\b/.test(src),
+          `${f} builds its own BiometricPrompt instead of using CryptoPrompt`);
+      }
+      assert.ok(!/EncryptedSharedPreferences|security\.crypto/.test(src), `${f} uses EncryptedSharedPreferences (deprecated, not biometric-bound)`);
+    }
+    const store = code('SessionStore.kt');
+    const save = store.slice(store.indexOf('fun save('), store.indexOf('fun storeSealed('));
+    assert.ok(save.length > 0 && !/KEY_LEGACY_TOKEN|\btoken\s+to\b/.test(save.replace('KEY_USERNAME to username', '')),
+      'SessionStore.save writes the token to the preferences');
+    const fu = code('FingerprintUnlock.kt');
+    const calls = [...fu.matchAll(/\bprompt\.authenticate\(([^\n]*)/g)].map((m) => m[1]);
+    assert.ok(calls.some((c) => /^info, BiometricPrompt\.CryptoObject\(cipher\)\)/.test(c)),
+      'CryptoPrompt no longer passes a CryptoObject to BiometricPrompt.authenticate');
+    assert.ok(/result\.cryptoObject\?\.cipher/.test(fu), 'a successful prompt is accepted without its cipher');
+    const vault = code('TokenVault.kt');
+    for (const [re, why] of [
+      [/setUserAuthenticationRequired\(true\)/, 'the key does not require user authentication'],
+      [/setInvalidatedByBiometricEnrollment\(true\)/, 'a newly enrolled fingerprint would not invalidate the key'],
+      [/setUserAuthenticationParameters\(0,\s*KeyProperties\.AUTH_BIOMETRIC_STRONG\)/, 'the key is not per-use, strong-biometric only'],
+      [/setUserAuthenticationValidityDurationSeconds\(-1\)/, 'below API 30 the key is not per-use'],
+      [/BLOCK_MODE_GCM/, 'the key is not AES-GCM'],
+      [/KeyPermanentlyInvalidatedException/, 'an invalidated key is not handled'],
+    ]) assert.ok(re.test(vault), `TokenVault: ${why}`);
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
+    assert.ok(!/security-crypto/.test(gradle), 'the app depends on androidx.security:security-crypto');
+  });
+
   check('Android: a removal is never sent from a snackbar callback (MOB-12)', () => {
     const lib = code('fragments/LibraryFragment.kt');
     assert.ok(!/onDismissed/.test(lib), 'LibraryFragment sends the removal from Snackbar.onDismissed again: it outlives the view');

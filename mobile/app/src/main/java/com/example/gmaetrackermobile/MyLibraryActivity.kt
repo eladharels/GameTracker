@@ -46,7 +46,7 @@ class MyLibraryActivity : AppCompatActivity() {
             },
             onDelete = { game ->
                 val prefs = getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null)
+                val token = Session.get(this@MyLibraryActivity).token
                 val username = prefs.getString("username", null)
                 if (token == null || username == null) return@GameAdapter
                 CoroutineScope(Dispatchers.IO).launch {
@@ -121,7 +121,7 @@ class MyLibraryActivity : AppCompatActivity() {
 
     private fun loadLibrary() {
         progressBar.visibility = View.VISIBLE
-        val token = getSharedPreferences("auth", Context.MODE_PRIVATE).getString("token", null)
+        val token = Session.get(this@MyLibraryActivity).token
         val username = getSharedPreferences("auth", Context.MODE_PRIVATE).getString("username", null)
         if (token == null || username == null) {
             Snackbar.make(findViewById(android.R.id.content), "Not logged in", Snackbar.LENGTH_SHORT)

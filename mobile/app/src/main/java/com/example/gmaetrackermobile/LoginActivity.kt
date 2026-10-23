@@ -13,14 +13,13 @@ import kotlinx.coroutines.withContext
 import android.content.Intent
 import com.example.gmaetrackermobile.MainActivity
 import com.example.gmaetrackermobile.ThemeManager
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 
 class LoginActivity : AppCompatActivity() {
-    private lateinit var biometricPrompt: BiometricPrompt
-    private lateinit var promptInfo: BiometricPrompt.PromptInfo
+    // Created in onCreate: a BiometricPrompt must exist before the activity is resumed.
+    private lateinit var cryptoPrompt: CryptoPrompt
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +35,7 @@ class LoginActivity : AppCompatActivity() {
 
         val prefs = getSharedPreferences("auth", Context.MODE_PRIVATE)
         val session = Session.get(this)
+        cryptoPrompt = CryptoPrompt.forActivity(this)
         Session.redirecting = false
         errorColor = tvLoginStatus.currentTextColor
 
@@ -47,42 +47,26 @@ class LoginActivity : AppCompatActivity() {
         val sessionEnded = intent.getBooleanExtra(EXTRA_SESSION_ENDED, false)
         if (sessionEnded) notice(tvLoginStatus, SESSION_EXPIRED_TEXT)
 
-        val biometricManager = BiometricManager.from(this)
-        val canAuthenticate = biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-        val fingerprintEnabled = prefs.getBoolean("fingerprint_enabled", false)
-
-        // Setup BiometricPrompt
-        val executor = ContextCompat.getMainExecutor(this)
-        biometricPrompt = BiometricPrompt(this, executor,
-            object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    super.onAuthenticationSucceeded(result)
-                    // The fingerprint unlocks a LIVE session; the server still has the last word.
-                    verifyAndEnter(tvLoginStatus)
+        // MOB-6: the fingerprint DECRYPTS the session (TokenVault); it is no longer a UI gate.
+        // Offered only for a LIVE sealed session: it cannot bring back an expired or
+        // signed-out one, and prompting anyway would end in "no saved login" after the user
+        // had already touched the sensor.
+        if (!sessionEnded && FingerprintUnlock.isOn(this) && FingerprintUnlock.canUse(this)) {
+            if (session.hasSealedLiveSession()) {
+                FingerprintUnlock.unlock(this, cryptoPrompt) { result -> afterUnlock(result, tvLoginStatus) }
+            } else if (session.hasLiveToken()) {
+                // Updated from a version that kept the token in the clear: it was moved into
+                // memory (SessionStore.migrateLegacyToken). Seal it now, once. This prompt is
+                // the way in, so cancelling it must not let the old token through.
+                FingerprintUnlock.enable(this, cryptoPrompt) { result ->
+                    if (result == FingerprintUnlock.Result.Done) {
+                        verifyAndEnter(tvLoginStatus)
+                    } else {
+                        session.endSession()
+                        notice(tvLoginStatus, "Sign in with your password to continue.")
+                    }
                 }
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    super.onAuthenticationError(errorCode, errString)
-                    // Show login form if authentication is cancelled or fails
-                    showError(tvLoginStatus, "Authentication error: $errString")
-                }
-                override fun onAuthenticationFailed() {
-                    super.onAuthenticationFailed()
-                    showError(tvLoginStatus, "Authentication failed. Try again or login with password.")
-                }
-            })
-
-        promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock GameTracker")
-            .setSubtitle("Use your fingerprint to continue your session")
-            .setNegativeButtonText("Cancel")
-            .build()
-
-        // Prompt only when there is a LIVE session to unlock (MOB-5). Signing out ends the
-        // session, and a fingerprint cannot bring back an expired one: prompting anyway would
-        // end in "no saved login" after the user had already touched the sensor.
-        if (!sessionEnded && fingerprintEnabled && canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS &&
-            session.hasLiveToken()) {
-            biometricPrompt.authenticate(promptInfo)
+            }
         }
 
         btnLogin.setOnClickListener {
@@ -118,13 +102,17 @@ class LoginActivity : AppCompatActivity() {
                             // If username or password changed, disable biometrics
                             val oldUsername = prefs.getString("username", null)
                             if (oldUsername != null && oldUsername != normalizedUsername) {
-                                prefs.edit().putBoolean("fingerprint_enabled", false).apply()
+                                FingerprintUnlock.disable(this@LoginActivity)
                             }
                             session.save(token, normalizedUsername)
                             tvLoginStatus.text = "Login successful!"
-                            // Navigate to main screen
-                            startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                            finish()
+                            // A new token: with fingerprint unlock on, seal it (one prompt)
+                            // so the next start can unlock it. Then go in either way.
+                            if (FingerprintUnlock.isOn(this@LoginActivity)) {
+                                sealThen { enterApp(offline = false) }
+                            } else {
+                                enterApp(offline = false)
+                            }
                         } else {
                             val errorBody = response.errorBody()?.string() ?: response.message()
                             tvLoginStatus.text = "Login failed: $errorBody"
@@ -144,13 +132,31 @@ class LoginActivity : AppCompatActivity() {
 
     private var errorColor: Int = 0
 
-    private fun notice(status: TextView, text: String) {
-        status.setTextColor(ContextCompat.getColor(this, R.color.gt_text_secondary))
-        status.text = text
+    private fun afterUnlock(result: FingerprintUnlock.Result, status: TextView) {
+        when (result) {
+            FingerprintUnlock.Result.Done -> verifyAndEnter(status)
+            FingerprintUnlock.Result.KeyInvalidated -> notice(status, FingerprintUnlock.KEY_CHANGED_TEXT)
+            is FingerprintUnlock.Result.Cancelled -> notice(status, "Sign in with your password, or close and reopen the app to use your fingerprint.")
+            is FingerprintUnlock.Result.Unavailable -> notice(status, result.message)
+        }
     }
 
-    private fun showError(status: TextView, text: String) {
-        status.setTextColor(errorColor)
+    /**
+     * Seals the session just made behind the fingerprint. If that does not happen (cancelled,
+     * or not possible), fingerprint unlock is OFF and the user is told where to turn it on:
+     * a flag that says "on" with nothing sealed would quietly ask for the password next time.
+     */
+    private fun sealThen(next: () -> Unit) {
+        FingerprintUnlock.enable(this, cryptoPrompt) { result ->
+            if (result != FingerprintUnlock.Result.Done) {
+                Toast.makeText(this, "Fingerprint unlock is off. Turn it on again in Profile.", Toast.LENGTH_LONG).show()
+            }
+            next()
+        }
+    }
+
+    private fun notice(status: TextView, text: String) {
+        status.setTextColor(ContextCompat.getColor(this, R.color.gt_text_secondary))
         status.text = text
     }
 

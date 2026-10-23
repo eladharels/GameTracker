@@ -12,8 +12,8 @@ import android.widget.TextView
 import androidx.lifecycle.lifecycleScope
 import com.example.gmaetrackermobile.Game
 import com.google.android.material.button.MaterialButton
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
+import com.example.gmaetrackermobile.CryptoPrompt
+import com.example.gmaetrackermobile.FingerprintUnlock
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.example.gmaetrackermobile.ApiClient
@@ -29,12 +29,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.gmaetrackermobile.Session
 
 class ProfileFragment : Fragment() {
 
     private lateinit var switchBiometric: SwitchMaterial
-    private lateinit var biometricPrompt: BiometricPrompt
-    private lateinit var promptInfo: BiometricPrompt.PromptInfo
+    private lateinit var cryptoPrompt: CryptoPrompt
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
@@ -79,7 +79,7 @@ class ProfileFragment : Fragment() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: return@launch
+                val token = Session.get(requireContext()).token ?: return@launch
                 val username = prefs.getString("username", null) ?: return@launch
                 val response = ApiClient.api.getLibrary("Bearer $token", username)
                 withContext(Dispatchers.Main) {
@@ -166,47 +166,49 @@ class ProfileFragment : Fragment() {
 
     private fun setupBiometricToggle(view: View) {
         switchBiometric = view.findViewById(R.id.switchBiometric)
-        val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-        val biometricManager = BiometricManager.from(requireContext())
-        val canAuth = biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        val ctx = requireContext()
+        // MOB-6: turning it on SEALS the session token with a fingerprint-bound Keystore key
+        // (FingerprintUnlock), so the prompt here is the real thing, not a confirmation.
+        cryptoPrompt = CryptoPrompt.forFragment(this)
 
-        switchBiometric.isChecked = prefs.getBoolean("fingerprint_enabled", false)
-        switchBiometric.isEnabled = canAuth == BiometricManager.BIOMETRIC_SUCCESS ||
-                prefs.getBoolean("fingerprint_enabled", false)
+        fun show(on: Boolean) {
+            // Without the listener: setting isChecked from code must not count as a tap.
+            switchBiometric.setOnCheckedChangeListener(null)
+            switchBiometric.isChecked = on
+            switchBiometric.setOnCheckedChangeListener { _, isChecked -> onToggled(isChecked) }
+        }
+        showBiometric = ::show
 
-        val executor = ContextCompat.getMainExecutor(requireContext())
-        biometricPrompt = BiometricPrompt(this, executor,
-            object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    super.onAuthenticationSucceeded(result)
-                    prefs.edit().putBoolean("fingerprint_enabled", true).apply()
-                    switchBiometric.isChecked = true
-                    showSnackbar("Fingerprint unlock on (while signed in)", SnackbarHelper.Type.SUCCESS)
+        show(FingerprintUnlock.isOn(ctx))
+        switchBiometric.isEnabled = FingerprintUnlock.canUse(ctx) || FingerprintUnlock.isOn(ctx)
+    }
+
+    private var showBiometric: (Boolean) -> Unit = {}
+
+    private fun onToggled(isChecked: Boolean) {
+        val ctx = context ?: return
+        if (!isChecked) {
+            FingerprintUnlock.disable(ctx)
+            showSnackbar("Fingerprint unlock off", SnackbarHelper.Type.DEFAULT)
+            return
+        }
+        FingerprintUnlock.enable(ctx, cryptoPrompt) { result ->
+            if (!isAdded) return@enable
+            when (result) {
+                FingerprintUnlock.Result.Done ->
+                    showSnackbar(FingerprintUnlock.ENABLED_TEXT, SnackbarHelper.Type.SUCCESS)
+                is FingerprintUnlock.Result.Cancelled -> {
+                    showBiometric(false)
+                    showSnackbar("Fingerprint unlock not turned on.", SnackbarHelper.Type.DEFAULT)
                 }
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    super.onAuthenticationError(errorCode, errString)
-                    switchBiometric.isChecked = false
-                    showSnackbar("Authentication error: $errString", SnackbarHelper.Type.ERROR)
+                is FingerprintUnlock.Result.Unavailable -> {
+                    showBiometric(false)
+                    showSnackbar(result.message, SnackbarHelper.Type.ERROR)
                 }
-                override fun onAuthenticationFailed() {
-                    super.onAuthenticationFailed()
-                    switchBiometric.isChecked = false
-                    showSnackbar("Authentication failed. Try again.", SnackbarHelper.Type.ERROR)
+                FingerprintUnlock.Result.KeyInvalidated -> {
+                    showBiometric(false)
+                    showSnackbar(FingerprintUnlock.KEY_CHANGED_TEXT, SnackbarHelper.Type.ERROR)
                 }
-            })
-
-        promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock with fingerprint")
-            .setSubtitle("Unlock the app with your fingerprint while you are signed in")
-            .setNegativeButtonText("Cancel")
-            .build()
-
-        switchBiometric.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked) {
-                biometricPrompt.authenticate(promptInfo)
-            } else {
-                prefs.edit().putBoolean("fingerprint_enabled", false).apply()
-                showSnackbar("Fingerprint unlock off", SnackbarHelper.Type.DEFAULT)
             }
         }
     }
@@ -273,7 +275,7 @@ class ProfileFragment : Fragment() {
     private suspend fun syncAllLibraryGames(ctx: Context): Int = withContext(Dispatchers.IO) {
         try {
             val prefs = ctx.getSharedPreferences("auth", Context.MODE_PRIVATE)
-            val token = prefs.getString("token", null) ?: return@withContext 0
+            val token = Session.get(ctx).token ?: return@withContext 0
             val username = prefs.getString("username", null) ?: return@withContext 0
             val response = ApiClient.api.getLibrary("Bearer $token", username)
             if (!response.isSuccessful) return@withContext 0

@@ -29,6 +29,7 @@ import com.google.android.material.chip.ChipGroup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.gmaetrackermobile.Session
 
 class GameDetailsFragment : Fragment() {
 
@@ -235,7 +236,7 @@ class GameDetailsFragment : Fragment() {
         lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: run {
+                val token = Session.get(requireContext()).token ?: run {
                     showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val username = prefs.getString("username", null) ?: run {
@@ -275,7 +276,7 @@ class GameDetailsFragment : Fragment() {
         lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: run { restoreRefreshButton(); return@launch }
+                val token = Session.get(requireContext()).token ?: run { restoreRefreshButton(); return@launch }
                 val username = prefs.getString("username", null) ?: run { restoreRefreshButton(); return@launch }
                 val gameId = game.game_id ?: game.id ?: run { restoreRefreshButton(); return@launch }
                 val response = withContext(Dispatchers.IO) {
@@ -309,7 +310,7 @@ class GameDetailsFragment : Fragment() {
         lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: run {
+                val token = Session.get(requireContext()).token ?: run {
                     showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val username = prefs.getString("username", null) ?: run {

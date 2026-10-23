@@ -72,7 +72,7 @@ class GameSearchActivity : AppCompatActivity() {
             .setTextColor(ContextCompat.getColor(this, R.color.white))
             .show()
         progressBar.visibility = View.VISIBLE
-        val token = getSharedPreferences("auth", Context.MODE_PRIVATE).getString("token", null)
+        val token = Session.get(this@GameSearchActivity).token
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val response = if (token != null) {
@@ -100,7 +100,7 @@ class GameSearchActivity : AppCompatActivity() {
 
     private fun addToLibrary(game: Game) {
         val prefs = getSharedPreferences("auth", Context.MODE_PRIVATE)
-        val token = prefs.getString("token", null)
+        val token = Session.get(this@GameSearchActivity).token
         val username = prefs.getString("username", null)
         if (token == null || username == null) {
             Toast.makeText(this, "Not logged in", Toast.LENGTH_SHORT).show()

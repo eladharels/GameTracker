@@ -20,6 +20,7 @@ import com.example.gmaetrackermobile.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.gmaetrackermobile.Session
 
 class InsightsFragment : Fragment() {
 
@@ -44,7 +45,7 @@ class InsightsFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: return@launch
+                val token = Session.get(requireContext()).token ?: return@launch
                 val username = prefs.getString("username", null) ?: return@launch
                 val response = withContext(Dispatchers.IO) {
                     ApiClient.api.getLibrary("Bearer $token", username)
