@@ -252,7 +252,10 @@ class ProfileFragment : Fragment() {
                     val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
                     if (!isAdded) return@launch
                     if (left == 0) showSnackbar("Calendar sync off — all events removed")
-                    else showSnackbar("Calendar sync off. $left ${if (left == 1) "event" else "events"} couldn't be removed: allow calendar access and turn sync on and off again.", SnackbarHelper.Type.ERROR)
+                    else showSnackbar(
+                        "Calendar sync off, but $left ${if (left == 1) "event" else "events"} couldn't be removed. Allow calendar access, then try again.",
+                        SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
+                    )
                 }
             }
         }
@@ -339,9 +342,8 @@ class ProfileFragment : Fragment() {
                         showSnackbar("Notes, ratings and search history removed from this phone", SnackbarHelper.Type.SUCCESS)
                     } else {
                         showSnackbar(
-                            "Notes, ratings and search history removed. $left calendar " +
-                                "${if (left == 1) "date is" else "dates are"} still there: allow calendar access and try again.",
-                            SnackbarHelper.Type.ERROR,
+                            "Data removed, but $left calendar ${if (left == 1) "date" else "dates"} couldn't be. Allow calendar access, then try again.",
+                            SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
                         )
                     }
                 }
@@ -350,7 +352,7 @@ class ProfileFragment : Fragment() {
             .show()
     }
 
-    private fun showSnackbar(message: String, type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT) {
-        SnackbarHelper.show(this, message, type)
+    private fun showSnackbar(message: String, type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT, duration: Int = Snackbar.LENGTH_SHORT) {
+        SnackbarHelper.show(this, message, type, duration)
     }
 }

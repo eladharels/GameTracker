@@ -24,9 +24,9 @@ object SignOut {
     fun start(activity: FragmentActivity) {
         if (inFlight) return
         inFlight = true
-        activity.lifecycleScope.launch {
-            try { ask(activity) } finally { inFlight = false }
-        }
+        // invokeOnCompletion, not finally: a scope already cancelled never runs the body, and
+        // a flag left set would disable sign-out until the process restarts (Architect review).
+        activity.lifecycleScope.launch { ask(activity) }.invokeOnCompletion { inFlight = false }
     }
 
     private suspend fun ask(activity: FragmentActivity) {
@@ -58,7 +58,8 @@ object SignOut {
             .setTitle("Some release dates are still in your calendar")
             .setMessage(
                 "GameTracker couldn't remove $left ${if (left == 1) "release date" else "release dates"}. " +
-                    "Allow calendar access for GameTracker in the phone's settings, then sign in and sign out again to remove them."
+                    "Allow calendar access for GameTracker in the phone's settings and try again. " +
+                    "If you sign out now, you can remove them the next time you sign in."
             )
             .setPositiveButton("Sign out anyway") { _, _ -> finish(activity) }
             .setNegativeButton("Cancel", null)

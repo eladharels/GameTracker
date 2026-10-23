@@ -455,7 +455,7 @@
             android:gravity="center"
             android:text="Your notes, ratings and search history stay on this phone after you sign out, for when you sign in again."
             android:textSize="12sp"
-            android:textColor="@color/gt_text_muted"
+            android:textColor="@color/gt_text_secondary"
             tools:ignore="HardcodedText" />
     </LinearLayout>
 </ScrollView>
