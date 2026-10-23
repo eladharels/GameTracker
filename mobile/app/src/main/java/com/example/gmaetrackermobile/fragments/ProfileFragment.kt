@@ -30,6 +30,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.SignOut
+import com.example.gmaetrackermobile.UserData
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 class ProfileFragment : Fragment() {
 
@@ -244,9 +247,16 @@ class ProfileFragment : Fragment() {
                     showSnackbar("Calendar sync on — press Sync to link your games", SnackbarHelper.Type.SUCCESS)
                 }
             } else {
-                lifecycleScope.launch(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
                 updateCalendarUi(false, btnSync, tvStatus)
-                showSnackbar("Calendar sync off — all events removed")
+                lifecycleScope.launch {
+                    val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
+                    if (!isAdded) return@launch
+                    if (left == 0) showSnackbar("Calendar sync off — all events removed")
+                    else showSnackbar(
+                        "Calendar sync off, but $left ${if (left == 1) "event" else "events"} couldn't be removed. Allow calendar access, then try again.",
+                        SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
+                    )
+                }
             }
         }
 
@@ -305,19 +315,44 @@ class ProfileFragment : Fragment() {
     // ── Logout ────────────────────────────────────────────────────────────────
 
     private fun setupLogout(view: View) {
-        view.findViewById<Button>(R.id.btnLogout).setOnClickListener { logout() }
+        view.findViewById<Button>(R.id.btnLogout).setOnClickListener { SignOut.start(requireActivity()) }
+        view.findViewById<Button>(R.id.btnRemoveLocalData).setOnClickListener { confirmRemoveLocalData() }
     }
 
-    private fun logout() {
-        // ALWAYS ends the session (MOB-3); the username and the fingerprint setting stay.
-        com.example.gmaetrackermobile.Session.get(requireContext()).endSession()
-        val intent = Intent(requireContext(), LoginActivity::class.java)
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        startActivity(intent)
-        requireActivity().finish()
+    /**
+     * MOB-7: notes, ratings and search history are kept per account and survive sign-out
+     * (they exist nowhere else). This is the way to take them off a phone.
+     */
+    private fun confirmRemoveLocalData() {
+        val ctx = requireContext()
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle("Remove your data from this phone?")
+            .setMessage(
+                "Your notes, star ratings and search history are stored only on this phone, so they " +
+                    "will be gone for good. Release dates GameTracker added to your calendar are removed too. " +
+                    "Your library on the server is not affected."
+            )
+            .setPositiveButton("Remove data") { _, _ ->
+                val appCtx = ctx.applicationContext
+                lifecycleScope.launch {
+                    val left = withContext(Dispatchers.IO) { UserData.removeFromPhone(appCtx) }
+                    if (!isAdded) return@launch
+                    view?.let { setupCalendarOption(it) }
+                    if (left == 0) {
+                        showSnackbar("Notes, ratings and search history removed from this phone", SnackbarHelper.Type.SUCCESS)
+                    } else {
+                        showSnackbar(
+                            "Data removed, but $left calendar ${if (left == 1) "date" else "dates"} couldn't be. Allow calendar access, then try again.",
+                            SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
+                        )
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
-    private fun showSnackbar(message: String, type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT) {
-        SnackbarHelper.show(this, message, type)
+    private fun showSnackbar(message: String, type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT, duration: Int = Snackbar.LENGTH_SHORT) {
+        SnackbarHelper.show(this, message, type, duration)
     }
 }

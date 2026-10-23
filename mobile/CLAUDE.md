@@ -63,6 +63,12 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   │                                 #   scope, never from a view callback (MOB-12)
 │   │   │   ├── GameExtras.kt                 # Rating + note, stored on THIS DEVICE only. Nothing
 │   │   │   │                                 #   may be derived from a hash of the id (MOB-11)
+│   │   │   ├── UserData.kt                   # ONE account's on-phone data (MOB-7): notes, ratings,
+│   │   │   │                                 #   search history; calendar settings in calendar.xml
+│   │   │   │                                 #   (never backed up). Kept at sign-out (owner's call);
+│   │   │   │                                 #   Profile -> "Remove my data from this phone" deletes it
+│   │   │   ├── SignOut.kt                    # The ONE sign-out: ends the session, asks whether to
+│   │   │   │                                 #   remove the account's calendar events
 │   │   │   ├── LoginActivity.kt              # Entry point — auth screen
 │   │   │   ├── MainActivity.kt               # Main container — hosts all fragments
 │   │   │   ├── SettingsActivity.kt           # App settings screen
@@ -227,6 +233,8 @@ MainActivity  (single activity host)
 - **No ViewModel/LiveData** — fragment-level mutable lists + coroutines
 - **Auth state**: the token in memory (`SessionStore`); username, biometric flag and the sealed
   copy in SharedPreferences
+- **Per-account local data**: `UserData` (MOB-7). Never a device-wide key: the next account
+  on the phone must not see it. Device-wide prefs (`app_prefs`) hold only display settings
 - **Network calls**: a mix of `lifecycleScope`, fragment `lifecycleScope` and unscoped
   `CoroutineScope(Dispatchers.IO)`. The last two are wrong (MOB-17)
 - **State reload**: Fragments reload from API on resume / lifecycle events (no persistent cache)

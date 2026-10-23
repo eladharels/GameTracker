@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android 12+. On these versions allowBackup does NOT govern device-to-device transfer, so
      the <device-transfer> exclude is the one that keeps the session token on this phone.
-     Both sections exclude the "auth" preferences (MOB-4). -->
+     Both sections exclude the "auth" preferences (MOB-4) and the calendar event map (MOB-7:
+     its ids belong to THIS phone's calendar). -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="auth.xml" />
+        <exclude domain="sharedpref" path="calendar.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="auth.xml" />
+        <exclude domain="sharedpref" path="calendar.xml" />
     </device-transfer>
 </data-extraction-rules>

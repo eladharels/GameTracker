@@ -546,7 +546,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   });
   check('Android: the session token is excluded from every backup path (MOB-4)', () => {
     const exclude = /<exclude\s+domain="sharedpref"\s+path="auth\.xml"\s*\/>/;
-    const backup = fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8');
+    // Comments stripped: an exclude inside <!-- --> excludes nothing (CISO review, PR #13).
+    const backup = fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     assert.ok(exclude.test(backup), 'backup_rules.xml (Android 11 and older) does not exclude auth.xml');
     const extraction = fs.readFileSync(path.join(APP, 'res/xml/data_extraction_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     for (const section of ['cloud-backup', 'device-transfer']) {
@@ -676,6 +677,64 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/PendingRemovals\.app\.schedule\(/.test(lib) && /PendingRemovals\.app\.undo\(/.test(lib),
       'the library removal does not go through PendingRemovals');
     assert.ok(/pendingIds\(username\)/.test(lib), 'a reload no longer hides THIS user\'s removals still inside their undo window');
+  });
+
+  // fragments/ is a subpackage: a class from the app's root package needs an import there.
+  // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
+  check('Android: fragments import every root-package class they use', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const roots = new Set();
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.kt'))) {
+      for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/^(?:(?:data|sealed|abstract|open|enum|private|internal)\s+)*(?:class|object|interface)\s+([A-Z]\w*)/gm)) {
+        if (!/^\s*private\b/.test(m[0])) roots.add(m[1]);
+      }
+    }
+    assert.ok(roots.has('UserData') && roots.has('Session'), `root-package scan found ${roots.size} classes -- it is broken`);
+    for (const f of fs.readdirSync(path.join(dir, 'fragments')).filter((n) => n.endsWith('.kt'))) {
+      const src = fs.readFileSync(path.join(dir, 'fragments', f), 'utf8');
+      const body = src.replace(/^import .*$/gm, '').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/"(?:[^"\\]|\\.)*"/g, '""');
+      const declared = new Set([...body.matchAll(/\b(?:class|object|interface)\s+([A-Z]\w*)/g)].map((m) => m[1]));
+      for (const name of roots) {
+        if (declared.has(name) || !new RegExp(`(?<![\\w.])${name}\\b`).test(body)) continue;
+        const imported = new RegExp(`^import com\\.example\\.gmaetrackermobile\\.(${name}|\\*)$`, 'm').test(src);
+        const qualified = new RegExp(`com\\.example\\.gmaetrackermobile\\.${name}\\b`).test(body);
+        assert.ok(imported || qualified, `fragments/${f} uses ${name} without importing com.example.gmaetrackermobile.${name}`);
+      }
+    }
+  });
+
+  // MOB-7: notes, ratings, search history and the calendar map were device-wide, so the next
+  // account on a phone saw them, and its sync deleted the first account's calendar events.
+  check('Android: per-user local data lives only in UserData, and the calendar map is never backed up (MOB-7)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    assert.ok(files.length > 20, `found ${files.length} Kotlin files -- the scan is broken`);
+    for (const f of files.filter((x) => x !== 'UserData.kt')) {
+      const src = code(f).replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      assert.ok(!/"(game_extras|calendar_events|calendar)"/.test(src), `${f} opens a per-user store directly instead of through UserData`);
+      assert.ok(!/"search_history"|"(note|rating)_/.test(src), `${f} reads or writes notes, ratings or search history outside UserData`);
+      assert.ok(!/"(calendar_id|calendar_sync_enabled|event_map)"/.test(src), `${f} keeps calendar settings outside UserData`);
+    }
+    // Both sign-out buttons go through SignOut, which asks about the calendar (owner's decision).
+    assert.ok(/private fun logout\(\) = SignOut\.start\(this\)/.test(code('MainActivity.kt')), 'the menu sign-out bypasses SignOut');
+    assert.ok(/btnLogout\)\.setOnClickListener \{ SignOut\.start\(requireActivity\(\)\) \}/.test(code('fragments/ProfileFragment.kt')),
+      'Profile\'s sign-out bypasses SignOut');
+    const calExclude = /<exclude\s+domain="sharedpref"\s+path="calendar\.xml"\s*\/>/;
+    const noComments = (f) => fs.readFileSync(path.join(APP, f), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(calExclude.test(noComments('res/xml/backup_rules.xml')),
+      'backup_rules.xml backs up the calendar map: its event ids belong to this phone');
+    const extraction = fs.readFileSync(path.join(APP, 'res/xml/data_extraction_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    for (const section of ['cloud-backup', 'device-transfer']) {
+      const m = new RegExp(`<${section}>([\\s\\S]*?)</${section}>`).exec(extraction);
+      assert.ok(m && calExclude.test(m[1]), `data_extraction_rules.xml <${section}> does not exclude calendar.xml`);
+    }
+    assert.ok(/CALENDAR_FILE = "calendar"/.test(code('UserData.kt')), 'UserData.CALENDAR_FILE is not the file the backup rules exclude');
   });
 }
 

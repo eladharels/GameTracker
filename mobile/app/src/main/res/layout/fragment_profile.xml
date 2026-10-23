@@ -433,5 +433,29 @@
             app:strokeWidth="1dp"
             app:cornerRadius="15dp"
             tools:ignore="HardcodedText" />
+
+        <!-- MOB-7: per-account data survives sign-out; this removes it from the phone -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRemoveLocalData"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:text="Remove my data from this phone"
+            android:textAllCaps="false"
+            android:textSize="14sp"
+            android:textColor="@color/gt_text_secondary"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:paddingHorizontal="16dp"
+            android:gravity="center"
+            android:text="Your notes, ratings and search history stay on this phone after you sign out, for when you sign in again."
+            android:textSize="12sp"
+            android:textColor="@color/gt_text_secondary"
+            tools:ignore="HardcodedText" />
     </LinearLayout>
 </ScrollView>

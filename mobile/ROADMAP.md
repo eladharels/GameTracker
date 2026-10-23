@@ -174,26 +174,35 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Behaviour note:** any finger enrolled on the device unlocks the app. That is inherent to
   Android biometrics and should be stated where the toggle is.
 
-### [ ] MOB-7 Medium — Local per-user data outlives logout, and notes are stored under two keys
-- **Where:**
-  - Notes: `GameDetailsFragment.kt:210-227` writes `app_prefs/note_<sanitised id>`, while
-    `GameExtras.kt:83-90` reads and writes `game_extras/note_<raw id>`. `GameExtras.note()` is
-    never called.
-  - Ratings: `GameExtras.kt:71-81`.
-  - Search history: `SearchFragment.kt:140-174`.
-  - Calendar settings and event map: `CalendarHelper.kt:18-22`. These are kept in the **`auth`**
-    preferences file, next to the credential.
-  - Logout: `MainActivity.kt:149-159`.
-- **Why:** none of this is keyed by user, and logout clears none of it. On a shared device the
-  next account sees the previous user's notes, star ratings and search history. Calendar
-  events for the previous user's games stay in the calendar, and the new user's sync calls
-  `deleteAllEvents` on them. Two note stores also mean a future sync or migration reads the
-  wrong one.
-- **Fix:**
-  - One store for notes and ratings, keyed by username.
-  - Move the calendar settings out of `auth`.
-  - On logout or user switch, clear the per-user stores and offer to remove the calendar
-    events.
+### [x] MOB-7 ✔ Medium — Local per-user data outlives logout, and notes are stored under two keys — *fixed in PR #13*
+- **Fixed** (`UserData.kt`, `SignOut.kt`):
+  - Notes, star ratings and search history are in ONE store per account: a preferences file
+    named from a hash of the username. The next account on the phone sees none of it, and the
+    owner gets it back on signing in again. The second, never-read note store is gone.
+  - **Owner's decision:** signing out keeps it, because notes exist nowhere else. Profile ->
+    "Remove my data from this phone" deletes it, together with the account's calendar events.
+  - The calendar settings and event map moved out of `auth`, into `calendar.xml` under
+    per-account keys. Another account's sync can no longer delete them. `calendar.xml` is
+    excluded from backup and device transfer: its event ids belong to this phone's calendar, and
+    a restored map made a sync on the new phone delete whatever events had those ids there (a bug
+    that predates this item). Notes and ratings are still backed up, as before.
+  - **Owner's decision:** signing out asks whether to remove the account's calendar events,
+    when it has any. Both sign-out buttons go through `SignOut`.
+  - The data from before this change moves once to the account signed in when the update first
+    runs, which is the account that wrote it on the phones this shipped to.
+  - Pinned: `UserDataTest` (isolation, removal, migration), and `test/runtime.test.js` (no
+    per-user key outside `UserData`, both sign-outs through `SignOut`, `calendar.xml` excluded).
+  - Removing calendar events never reports success it did not have: an event leaves the map
+    only once its delete went through, and with access revoked the ids are kept and the user is
+    told (CISO + Architect review).
+- **Residual:**
+  - The pre-MOB-7 data goes to the account whose username is stored when the update first runs
+    (the last to sign in). On a shared phone that may not be the account that wrote it. It was
+    visible to every account already, so nothing new is revealed.
+  - On a shared phone, every account's notes go into the device owner's backup; restored, they
+    stay in their own files, reachable only when that account signs in.
+  - Signing out because the session EXPIRED does not ask about the calendar: the data is kept,
+    as with any sign-out, and the next sign-out asks.
 
 ### [ ] MOB-8 Low — Certificate pinning: decision recorded; add a network security config instead
 - **Where:** `ApiClient.kt:13-15` (default `OkHttpClient`); there is no

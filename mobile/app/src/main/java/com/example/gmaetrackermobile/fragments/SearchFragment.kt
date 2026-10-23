@@ -30,6 +30,7 @@ import android.widget.TextView
 import com.google.android.material.chip.Chip
 import org.json.JSONArray
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.UserData
 
 class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchEditText: EditText
@@ -145,8 +146,8 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     // ── Search history ────────────────────────────────────────────────────────
 
     private fun loadHistory(): List<String> {
-        val prefs = requireContext().getSharedPreferences("app_prefs", MODE_PRIVATE)
-        val json = prefs.getString("search_history", "[]") ?: "[]"
+        // Per account (MOB-7): the next person on this phone does not see these searches.
+        val json = UserData.current(requireContext())?.searchHistoryJson() ?: "[]"
         return try {
             val arr = JSONArray(json)
             (0 until arr.length()).map { arr.getString(it) }
@@ -161,22 +162,19 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         existing.add(0, query)
         val trimmed = existing.take(5)
         val json = JSONArray(trimmed).toString()
-        requireContext().getSharedPreferences("app_prefs", MODE_PRIVATE)
-            .edit().putString("search_history", json).apply()
+        UserData.current(requireContext())?.setSearchHistoryJson(json)
     }
 
     private fun removeHistoryEntry(query: String) {
         val existing = loadHistory().toMutableList()
         existing.removeAll { it.equals(query, ignoreCase = true) }
         val json = JSONArray(existing).toString()
-        requireContext().getSharedPreferences("app_prefs", MODE_PRIVATE)
-            .edit().putString("search_history", json).apply()
+        UserData.current(requireContext())?.setSearchHistoryJson(json)
         renderHistoryChips()
     }
 
     private fun clearAllHistory() {
-        requireContext().getSharedPreferences("app_prefs", MODE_PRIVATE)
-            .edit().putString("search_history", "[]").apply()
+        UserData.current(requireContext())?.setSearchHistoryJson("[]")
         renderHistoryChips()
     }
 

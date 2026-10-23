@@ -209,22 +209,16 @@ class GameDetailsFragment : Fragment() {
 
     // ── Personal Notes ───────────────────────────────────────────────────────
 
-    private fun noteKey(gameId: String): String {
-        val safe = gameId.replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
-        return "note_$safe"
-    }
-
+    // One store, per account (MOB-7): this used to write app_prefs while GameExtras read
+    // game_extras, so the two never agreed.
     private fun loadNoteForCurrentGame() {
-        val gameId = currentGame?.game_id ?: currentGame?.id ?: return
-        val prefs = requireContext().getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        etGameNotes.setText(prefs.getString(noteKey(gameId), ""))
+        val game = currentGame ?: return
+        etGameNotes.setText(GameExtras.note(requireContext(), game))
     }
 
     private fun saveNoteForCurrentGame() {
-        val gameId = currentGame?.game_id ?: currentGame?.id ?: return
-        val note = etGameNotes.text.toString()
-        val prefs = requireContext().getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString(noteKey(gameId), note).apply()
+        val game = currentGame ?: return
+        GameExtras.setNote(requireContext(), game, etGameNotes.text.toString())
         showSnackbar("Note saved", SnackbarHelper.Type.SUCCESS)
     }
 
