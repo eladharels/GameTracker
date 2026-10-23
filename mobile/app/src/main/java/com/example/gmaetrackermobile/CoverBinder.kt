@@ -13,8 +13,8 @@ import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
 object CoverBinder {
     fun bind(cover: ImageView, letter: TextView?, game: Game) {
         letter?.text = game.displayName.trim().firstOrNull()?.uppercase() ?: "?"
-        val url = game.cover
-        if (!url.isNullOrBlank()) {
+        val url = SafeUrl.https(game.cover)   // https only (MOB-8)
+        if (url != null) {
             cover.visibility = ImageView.VISIBLE
             Glide.with(cover)
                 .load(url)

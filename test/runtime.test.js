@@ -679,6 +679,41 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/pendingIds\(username\)/.test(lib), 'a reload no longer hides THIS user\'s removals still inside their undo window');
   });
 
+  // MOB-8: cleartext was allowed on API 24-27, and server-supplied cover URLs went to Glide
+  // unchecked. No pinning, on purpose (see the ROADMAP entry).
+  check('Android: no cleartext, user CAs in debug only, and every image URL is https-checked (MOB-8)', () => {
+    assert.ok(/android:networkSecurityConfig="@xml\/network_security_config"/.test(manifest),
+      'the manifest no longer applies network_security_config.xml');
+    const nsc = fs.readFileSync(path.join(APP, 'res/xml/network_security_config.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(/<base-config\s+cleartextTrafficPermitted="false"\s*>/.test(nsc), 'the base config permits cleartext');
+    assert.ok(!/cleartextTrafficPermitted="true"/.test(nsc), 'some domain is allowed cleartext');
+    const outsideDebug = nsc.replace(/<debug-overrides>[\s\S]*?<\/debug-overrides>/g, '');
+    assert.ok(!/src="user"/.test(outsideDebug), 'a release build trusts user-installed CAs');
+    assert.ok(!/<pin-set/.test(nsc), 'certificate pinning was added: see ROADMAP MOB-8 before doing that');
+    assert.ok(!/usesCleartextTraffic="true"/.test(manifest), 'the manifest re-enables cleartext');
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.join(d, e.name));
+      }
+    })(dir);
+    let loads = 0;
+    for (const f of files) {
+      const src = fs.readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/\.load\(([^)]*)\)/g)) {
+        loads++;
+        const arg = m[1].trim();
+        // The argument is either the check itself or a local assigned from it.
+        const viaLocal = /^\w+$/.test(arg) && new RegExp(`val ${arg}\\s*=\\s*SafeUrl\\.https\\(`).test(src);
+        assert.ok(/^SafeUrl\.https\(/.test(arg) || viaLocal,
+          `${path.relative(dir, f)} loads ${arg} without SafeUrl.https: a server-supplied URL reaches the network unchecked`);
+      }
+    }
+    assert.ok(loads >= 4, `found ${loads} Glide loads -- the scan is broken`);
+  });
+
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {

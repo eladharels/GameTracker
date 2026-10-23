@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MOB-8. No cleartext on ANY Android version: on API 24-27 it was allowed by default, and
+     cover images (third-party URLs from the server) could go out over plain http.
+     Release trusts the system CAs only. A user-installed CA, which is how an interception
+     proxy gets in, is trusted ONLY in a debuggable build (<debug-overrides>).
+     No certificate pinning, on purpose (ROADMAP MOB-8): the server's certificates rotate
+     every 60-90 days and a stale pin would brick every installed copy. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

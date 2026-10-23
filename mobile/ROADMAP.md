@@ -204,7 +204,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Signing out because the session EXPIRED does not ask about the calendar: the data is kept,
     as with any sign-out, and the next sign-out asks.
 
-### [ ] MOB-8 Low — Certificate pinning: decision recorded; add a network security config instead
+### [x] MOB-8 ✔ Low — Certificate pinning: decision recorded; add a network security config instead — *fixed in PR #14*
+- **Fixed:** `res/xml/network_security_config.xml` refuses cleartext on every API level, and
+  release builds trust the system CAs only; user CAs are trusted in debuggable builds only
+  (`<debug-overrides>`). Every Glide load goes through `SafeUrl.https`, the app's twin of
+  `safeUrl.js`: `https` with a host, or protocol-relative read as https, and nothing else.
+  Pinned in `SafeUrlTest` and `test/runtime.test.js`, which also fails if a `<pin-set>` is
+  added without revisiting the decision below.
 - **Where:** `ApiClient.kt:13-15` (default `OkHttpClient`); there is no
   `android:networkSecurityConfig`. `minSdk = 24` (`build.gradle.kts:15`).
 - **Why:**

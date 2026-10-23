@@ -20,6 +20,7 @@ import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
 import com.example.gmaetrackermobile.ApiClient
 import com.example.gmaetrackermobile.CalendarHelper
 import com.example.gmaetrackermobile.Game
+import com.example.gmaetrackermobile.SafeUrl
 import com.example.gmaetrackermobile.GameExtras
 import com.example.gmaetrackermobile.GameUpdateRequest
 import com.example.gmaetrackermobile.R
@@ -119,9 +120,10 @@ class GameDetailsFragment : Fragment() {
         val price = game.last_price
         tvPrice.text = if (!price.isNullOrBlank()) price else "TBA"
 
-        if (!game.cover.isNullOrBlank()) {
+        val coverUrl = SafeUrl.https(game.cover)   // https only (MOB-8)
+        if (coverUrl != null) {
             Glide.with(this)
-                .load(game.cover)
+                .load(coverUrl)
                 .transition(DrawableTransitionOptions.withCrossFade(250))
                 .into(ivGameCover)
         }

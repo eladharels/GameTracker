@@ -30,7 +30,7 @@ class GameDetailsActivity : AppCompatActivity() {
         val spinnerStatus = findViewById<Spinner>(R.id.spinnerStatus)
 
         val title = intent.getStringExtra("title") ?: "Unknown Title"
-        val coverUrl = intent.getStringExtra("coverUrl")
+        val coverUrl = SafeUrl.https(intent.getStringExtra("coverUrl"))   // https only (MOB-8)
         val releaseDate = intent.getStringExtra("releaseDate") ?: ""
         tvTitle.text = title
         tvReleaseDate.text = "Release Date: $releaseDate"

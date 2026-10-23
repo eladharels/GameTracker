@@ -126,9 +126,10 @@ class GameAdapter(
             }
 
             // Cover with fade-in
-            if (!game.cover.isNullOrBlank()) {
+            val coverUrl = SafeUrl.https(game.cover)   // https only (MOB-8)
+            if (coverUrl != null) {
                 Glide.with(itemView)
-                    .load(game.cover)
+                    .load(coverUrl)
                     .transition(DrawableTransitionOptions.withCrossFade(200))
                     .placeholder(R.drawable.rounded_image_bg)
                     .into(ivCover)
