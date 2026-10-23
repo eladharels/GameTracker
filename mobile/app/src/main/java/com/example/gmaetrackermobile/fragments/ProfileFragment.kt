@@ -197,8 +197,10 @@ class ProfileFragment : Fragment() {
         FingerprintUnlock.enable(ctx, cryptoPrompt) { result ->
             if (!isAdded) return@enable
             when (result) {
-                FingerprintUnlock.Result.Done ->
+                FingerprintUnlock.Result.Done -> {
+                    showBiometric(true)   // onResume may have redrawn it off while the prompt was up
                     showSnackbar(FingerprintUnlock.ENABLED_TEXT, SnackbarHelper.Type.SUCCESS)
+                }
                 is FingerprintUnlock.Result.Cancelled -> {
                     showBiometric(false)
                     if (result.byUser) showSnackbar("Fingerprint unlock not turned on.", SnackbarHelper.Type.DEFAULT)

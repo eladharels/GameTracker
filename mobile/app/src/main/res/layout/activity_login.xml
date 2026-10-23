@@ -150,7 +150,7 @@
             android:layout_width="match_parent"
             android:layout_height="50dp"
             android:layout_marginTop="10dp"
-            android:text="Use Biometrics"
+            android:text="Unlock with fingerprint"
             android:textSize="14sp"
             android:textColor="@color/gt_text_secondary"
             app:icon="@drawable/ic_fingerprint"

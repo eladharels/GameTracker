@@ -92,6 +92,9 @@ object FingerprintUnlock {
         class Cancelled(val errorCode: Int, val message: CharSequence) : Result() {
             val byUser: Boolean get() = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
                 errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON || errorCode == BiometricPrompt.ERROR_CANCELED
+
+            /** Worth offering the prompt again: not after a permanent lockout or a sensor fault. */
+            val retryable: Boolean get() = byUser || errorCode == BiometricPrompt.ERROR_LOCKOUT
         }
         /** Not possible right now (no session, no biometric, Keystore refused). */
         class Unavailable(val message: String) : Result()

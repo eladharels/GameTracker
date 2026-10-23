@@ -148,7 +148,7 @@ class LoginActivity : AppCompatActivity() {
             is FingerprintUnlock.Result.Cancelled -> {
                 // A lockout or sensor fault is the system's to explain; only a dismissal is ours.
                 notice(status, if (result.byUser) "Sign in with your password, or use your fingerprint." else result.message.toString())
-                if (Session.get(this).hasSealedLiveSession()) btnFingerprint.visibility = View.VISIBLE
+                if (result.retryable && Session.get(this).hasSealedLiveSession()) btnFingerprint.visibility = View.VISIBLE
             }
             is FingerprintUnlock.Result.Unavailable -> notice(status, result.message)
         }
