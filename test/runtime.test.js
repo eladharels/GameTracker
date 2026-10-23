@@ -677,6 +677,39 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'the library removal does not go through PendingRemovals');
     assert.ok(/pendingIds\(username\)/.test(lib), 'a reload no longer hides THIS user\'s removals still inside their undo window');
   });
+
+  // MOB-7: notes, ratings, search history and the calendar map were device-wide, so the next
+  // account on a phone saw them, and its sync deleted the first account's calendar events.
+  check('Android: per-user local data lives only in UserData, and the calendar map is never backed up (MOB-7)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    assert.ok(files.length > 20, `found ${files.length} Kotlin files -- the scan is broken`);
+    for (const f of files.filter((x) => x !== 'UserData.kt')) {
+      const src = code(f).replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      assert.ok(!/"(game_extras|calendar_events|calendar)"/.test(src), `${f} opens a per-user store directly instead of through UserData`);
+      assert.ok(!/"search_history"|"(note|rating)_/.test(src), `${f} reads or writes notes, ratings or search history outside UserData`);
+      assert.ok(!/"(calendar_id|calendar_sync_enabled|event_map)"/.test(src), `${f} keeps calendar settings outside UserData`);
+    }
+    // Both sign-out buttons go through SignOut, which asks about the calendar (owner's decision).
+    assert.ok(/private fun logout\(\) = SignOut\.start\(this\)/.test(code('MainActivity.kt')), 'the menu sign-out bypasses SignOut');
+    assert.ok(/btnLogout\)\.setOnClickListener \{ SignOut\.start\(requireActivity\(\)\) \}/.test(code('fragments/ProfileFragment.kt')),
+      'Profile\'s sign-out bypasses SignOut');
+    const calExclude = /<exclude\s+domain="sharedpref"\s+path="calendar\.xml"\s*\/>/;
+    assert.ok(calExclude.test(fs.readFileSync(path.join(APP, 'res/xml/backup_rules.xml'), 'utf8')),
+      'backup_rules.xml backs up the calendar map: its event ids belong to this phone');
+    const extraction = fs.readFileSync(path.join(APP, 'res/xml/data_extraction_rules.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    for (const section of ['cloud-backup', 'device-transfer']) {
+      const m = new RegExp(`<${section}>([\\s\\S]*?)</${section}>`).exec(extraction);
+      assert.ok(m && calExclude.test(m[1]), `data_extraction_rules.xml <${section}> does not exclude calendar.xml`);
+    }
+    assert.ok(/CALENDAR_FILE = "calendar"/.test(code('UserData.kt')), 'UserData.CALENDAR_FILE is not the file the backup rules exclude');
+  });
 }
 
 // The backend image is `COPY . .`; the Android app has no business in it.

@@ -194,12 +194,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Sign out: ALWAYS ends the session (MOB-3). It used to keep the token whenever
-     *  fingerprint unlock was on, so "log out" left a working credential on the phone. */
-    private fun logout() {
-        Session.get(this).endSession()
-        toLogin(sessionEnded = false)
-    }
+    /** Sign out: ALWAYS ends the session (MOB-3); see [SignOut]. */
+    private fun logout() = SignOut.start(this)
 
     fun refreshCurrentFragment() {
         val current = supportFragmentManager.findFragmentById(R.id.fragment_container)

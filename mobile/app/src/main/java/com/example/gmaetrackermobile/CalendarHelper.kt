@@ -15,11 +15,9 @@ data class CalendarInfo(val id: Long, val displayName: String, val accountName: 
 object CalendarHelper {
 
     private const val TAG = "CalendarHelper"
-    private const val PREFS_AUTH = "auth"
-    private const val KEY_CALENDAR_ID = "calendar_id"
-    private const val KEY_SYNC_ENABLED = "calendar_sync_enabled"
-    private const val PREFS_EVENTS = "calendar_events"
-    private const val KEY_EVENT_MAP = "event_map"
+    // The settings and the event map are the signed-in account's (UserData, MOB-7). They used
+    // to be device-wide, in the `auth` file next to the credential, and a second account's
+    // sync deleted the first account's events.
 
     fun hasCalendarPermissions(context: Context): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) ==
@@ -57,25 +55,20 @@ object CalendarHelper {
         }
     }
 
-    fun getStoredCalendarId(context: Context): Long? {
-        val id = context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-            .getLong(KEY_CALENDAR_ID, -1L)
-        return if (id == -1L) null else id
-    }
+    fun getStoredCalendarId(context: Context): Long? = UserData.current(context)?.calendarId()
 
     fun storeCalendarId(context: Context, calendarId: Long) {
-        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-            .edit().putLong(KEY_CALENDAR_ID, calendarId).apply()
+        UserData.current(context)?.setCalendarId(calendarId)
     }
 
-    fun isSyncEnabled(context: Context): Boolean =
-        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-            .getBoolean(KEY_SYNC_ENABLED, false)
+    fun isSyncEnabled(context: Context): Boolean = UserData.current(context)?.calendarSyncEnabled() ?: false
 
     fun setSyncEnabled(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_SYNC_ENABLED, enabled).apply()
+        UserData.current(context)?.setCalendarSyncEnabled(enabled)
     }
+
+    /** How many events this account added to the calendar: asked about at sign-out. */
+    fun eventCount(context: Context): Int = loadEventMap(context).size
 
     /**
      * Deletes every calendar event we have stored and clears the event map.
@@ -103,11 +96,10 @@ object CalendarHelper {
     /** Full tear-down: deletes all events, clears the event map, calendar ID, and sync flag. */
     fun disableSync(context: Context) {
         deleteAllEvents(context)
-        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-            .edit()
-            .remove(KEY_CALENDAR_ID)
-            .putBoolean(KEY_SYNC_ENABLED, false)
-            .apply()
+        UserData.current(context)?.apply {
+            setCalendarId(null)
+            setCalendarSyncEnabled(false)
+        }
     }
 
     fun addGameEvent(context: Context, gameId: String, gameName: String, releaseDate: String): Long? {
@@ -201,8 +193,7 @@ object CalendarHelper {
     }
 
     private fun loadEventMap(context: Context): MutableMap<String, Long> {
-        val json = context.getSharedPreferences(PREFS_EVENTS, Context.MODE_PRIVATE)
-            .getString(KEY_EVENT_MAP, null) ?: return mutableMapOf()
+        val json = UserData.current(context)?.eventMapJson() ?: return mutableMapOf()
         return try {
             val obj = JSONObject(json)
             val map = mutableMapOf<String, Long>()
@@ -216,7 +207,6 @@ object CalendarHelper {
     private fun saveEventMap(context: Context, map: Map<String, Long>) {
         val obj = JSONObject()
         map.forEach { (key, value) -> obj.put(key, value) }
-        context.getSharedPreferences(PREFS_EVENTS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_EVENT_MAP, obj.toString()).apply()
+        UserData.current(context)?.setEventMapJson(obj.toString())
     }
 }

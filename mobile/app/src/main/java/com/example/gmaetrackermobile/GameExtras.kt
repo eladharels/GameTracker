@@ -17,10 +17,6 @@ import android.content.Context
  */
 object GameExtras {
 
-    private const val PREFS = "game_extras"
-
-    private fun keyOf(game: Game): String = game.game_id ?: game.id ?: game.displayName
-
     /** Release year parsed from the release date, or null. */
     fun year(game: Game): String? {
         val r = game.release
@@ -31,25 +27,18 @@ object GameExtras {
     /** Card subtitle: the release year, the one descriptive fact the library row carries. */
     fun subtitle(game: Game): String = year(game) ?: "Release date unknown"
 
-    // ── User-editable rating + note (this device only) ───────────────────────
+    // ── User-editable rating + note (this device only, per account: MOB-7) ───
 
     /** The rating the user set on this device (1..5), or 0 when they never set one. */
-    fun rating(ctx: Context, game: Game): Int =
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getInt("rating_${keyOf(game)}", 0)
-            .coerceIn(0, 5)
+    fun rating(ctx: Context, game: Game): Int = UserData.current(ctx)?.rating(UserData.gameKey(game)) ?: 0
 
     fun setRating(ctx: Context, game: Game, rating: Int) {
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putInt("rating_${keyOf(game)}", rating).apply()
+        UserData.current(ctx)?.setRating(UserData.gameKey(game), rating)
     }
 
-    fun note(ctx: Context, game: Game): String =
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString("note_${keyOf(game)}", "") ?: ""
+    fun note(ctx: Context, game: Game): String = UserData.current(ctx)?.note(UserData.gameKey(game)) ?: ""
 
     fun setNote(ctx: Context, game: Game, note: String) {
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString("note_${keyOf(game)}", note).apply()
+        UserData.current(ctx)?.setNote(UserData.gameKey(game), note)
     }
 }

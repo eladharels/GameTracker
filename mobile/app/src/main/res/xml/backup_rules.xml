@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android 11 and older (Auto Backup). The session token lives in the "auth" preferences and
-     must never leave the device in a backup (MOB-4). Everything else (theme, accent, notes)
-     is still backed up. -->
+     must never leave the device in a backup (MOB-4). The calendar event map is excluded too
+     (MOB-7): its ids belong to THIS phone's calendar, and restored elsewhere a sync would
+     delete whatever events have those ids there. Everything else (theme, accent, and each
+     account's notes and ratings) is still backed up. -->
 <full-backup-content>
     <exclude domain="sharedpref" path="auth.xml" />
+    <exclude domain="sharedpref" path="calendar.xml" />
 </full-backup-content>
