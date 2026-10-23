@@ -619,8 +619,10 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       }
     })(dir);
     assert.ok(files.length > 20, `found ${files.length} Kotlin files -- the scan is broken`);
+    let encryptInits = 0;
     for (const f of files) {
       const src = code(f);
+      encryptInits += (src.match(/\bENCRYPT_MODE\b/g) || []).length;
       // The old key may be read only by SessionStore, and only to delete it.
       if (f !== 'SessionStore.kt') {
         assert.ok(!/(get|put)String\(\s*"token"/.test(src), `${f} reads or writes the plaintext "token" preference`);
@@ -654,7 +656,13 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     // The nosemgrep on gcm-detection rests on this: every seal gets a Keystore-generated IV.
     const initEncrypt = vault.match(/private fun initEncrypt\(\)[\s\S]*?\n {4}\}/);
     assert.ok(initEncrypt, 'TokenVault.initEncrypt not found');
-    assert.ok(!/ParameterSpec|IvParameterSpec|SecureRandom/.test(initEncrypt[0]),
+    // ONE encrypt path in the whole app, and it is exactly the reviewed two-argument init:
+    // a third argument (any ParameterSpec, AlgorithmParameters, a variable) would be our IV.
+    assert.strictEqual(encryptInits, 1,
+      `ENCRYPT_MODE appears ${encryptInits} times in the app: every encrypt path must be TokenVault.initEncrypt`);
+    assert.ok(/\n\s*cipher\.init\(Cipher\.ENCRYPT_MODE, existingKey\(\) \?: generateKey\(strongBox = Build\.VERSION\.SDK_INT >= 28\)\)\n/.test(initEncrypt[0]),
+      'TokenVault.initEncrypt is not the reviewed `cipher.init(ENCRYPT_MODE, key)`: GCM IV uniqueness may no longer be the Keystore\'s');
+    assert.ok(!/ParameterSpec|SecureRandom/.test(initEncrypt[0]),
       'TokenVault.initEncrypt supplies its own IV: GCM IV uniqueness is no longer the Keystore\'s');
     assert.ok(!/setRandomizedEncryptionRequired/.test(vault),
       'TokenVault changes randomized encryption: the Keystore would then accept a reused IV');
