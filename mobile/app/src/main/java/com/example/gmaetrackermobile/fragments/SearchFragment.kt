@@ -263,7 +263,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     }
 
     private fun performSearch() {
-        if (!isAdded) return
+        if (!isAdded || view == null) return   // viewLifecycleOwner below needs the view (MOB-17)
         val query = searchEditText.text.toString().trim()
         if (query.isEmpty()) return
 

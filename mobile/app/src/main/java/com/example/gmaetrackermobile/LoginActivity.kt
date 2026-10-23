@@ -8,6 +8,7 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.content.Intent
@@ -98,10 +99,16 @@ class LoginActivity : AppCompatActivity() {
                 try {
                     val response = ApiClient.api.login(LoginRequest(normalizedUsername, password))
                     withContext(Dispatchers.Main) {
-                        // Re-enable button
-                        btnLogin.isEnabled = true
-                        btnLogin.text = "Login"
-                        
+                        // Re-enabled only on failure: a success stays disabled until the token
+                        // step is done and the app opens, so a second tap cannot start a
+                        // second sign-in mid-mint (Architect review, PR #14).
+                        if (!(response.isSuccessful && response.body() != null)) {
+                            btnLogin.isEnabled = true
+                            btnLogin.text = "Login"
+                        } else {
+                            btnLogin.text = "Signing in…"
+                        }
+
                         if (response.isSuccessful && response.body() != null) {
                             val jwt = response.body()!!.token
                             // If username or password changed, disable biometrics
@@ -167,15 +174,24 @@ class LoginActivity : AppCompatActivity() {
         val wantsPat = FingerprintUnlock.isOn(this) && FingerprintUnlock.canUse(this)
         val now = System.currentTimeMillis()
         lifecycleScope.launch {
-            val minted = withContext(Dispatchers.IO) {
-                session.pendingRevokeId()?.let { old ->
-                    if (MobileTokenApi.revoke("Bearer $jwt", old)) session.forgetPatId(old)
-                }
-                if (wantsPat) MobileTokenApi.mint("Bearer $jwt", MobileToken.request(password, Build.MODEL, now)) else null
+            // NonCancellable: once the server may have minted, the id must be recorded even if
+            // this screen is torn down meanwhile, or the token is an orphan nothing can find.
+            val minted = withContext(NonCancellable + Dispatchers.IO) {
+                // While an earlier token's revocation is unconfirmed, do not mint: its id is the
+                // one recorded, and a new token would overwrite it (Architect review, PR #14).
+                val earlierGone = session.pendingRevokeId()?.let { old ->
+                    MobileTokenApi.revoke("Bearer $jwt", old).also { gone -> if (gone) session.forgetPatId(old) }
+                } ?: true
+                if (wantsPat && earlierGone) {
+                    MobileTokenApi.mint("Bearer $jwt", MobileToken.request(password, Build.MODEL, now))
+                        ?.also { session.trackPatId(it.id) }
+                } else null
             }
             if (session.token != jwt) {
                 // Another sign-in replaced this one while the mint was in flight.
-                minted?.let { withContext(Dispatchers.IO) { MobileTokenApi.revoke("Bearer $jwt", it.id) } }
+                minted?.let {
+                    if (withContext(Dispatchers.IO) { MobileTokenApi.revoke("Bearer $jwt", it.id) }) session.forgetPatId(it.id)
+                }
                 return@launch
             }
             when {

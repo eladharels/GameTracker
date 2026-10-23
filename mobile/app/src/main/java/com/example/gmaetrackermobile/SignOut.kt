@@ -114,7 +114,7 @@ object SignOut {
             return
         }
         activity.lifecycleScope.launch {
-            val gone = withContext(Dispatchers.IO) { MobileTokenApi.revoke(bearer, id) }
+            val gone = withContext(Dispatchers.IO) { MobileTokenApi.revoke(bearer, id, self = true) }
             if (gone) {
                 session.forgetPatId(id)
             } else {

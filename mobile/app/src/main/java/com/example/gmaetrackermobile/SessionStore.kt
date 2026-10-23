@@ -105,6 +105,15 @@ class SessionStore(
         dropSealed()
     }
 
+    /**
+     * Records a just-minted PAT's id before anything else happens to it, so a sign-in torn
+     * down between the mint and [adoptPat] still leaves it findable for revocation.
+     */
+    @Synchronized
+    fun trackPatId(id: Long) {
+        kv.putStrings(mapOf(KEY_PAT_ID to id.toString()))
+    }
+
     /** A PAT this phone held and has not yet seen revoked: revoke it at the next sign-in. */
     fun pendingRevokeId(): Long? = kv.getString(KEY_PAT_ID)?.toLongOrNull()
 

@@ -22,11 +22,12 @@ object MobileTokenApi {
 
     /**
      * Revokes token [id], presenting [bearer]. True when it is gone: revoked now, or already
-     * (404, which is also what a token the server no longer knows answers).
+     * (404, which is also what a token the server no longer knows answers). With [self] (the
+     * token revoking itself) a 401 is gone too: the credential being revoked is already dead.
      */
-    suspend fun revoke(bearer: String, id: Long): Boolean = try {
+    suspend fun revoke(bearer: String, id: Long, self: Boolean = false): Boolean = try {
         val code = ApiClient.api.revokeToken(bearer, id).code()
-        code in 200..299 || code == 404
+        code in 200..299 || code == 404 || (self && code == 401)
     } catch (e: Exception) {
         Log.w(TAG, "revoke failed: ${e.javaClass.simpleName}")
         false

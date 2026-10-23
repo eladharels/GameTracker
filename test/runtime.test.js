@@ -778,13 +778,15 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       }
       // Revocation presents a credential and an id. The id is always this phone's own:
       // the session's current PAT, the one recorded for revocation, or the one just minted.
-      for (const m of src.matchAll(/MobileTokenApi\.revoke\(([^,]+),\s*([^)]+)\)/g)) {
+      for (const m of src.matchAll(/MobileTokenApi\.revoke\(([^,]+),\s*([^,)]+)/g)) {
         assert.ok(/^(id|old|minted\.id|it\.id)$/.test(m[2].trim()), `${f} revokes token ${m[2].trim()}: only this phone's own id`);
       }
     }
     const signOut = code('SignOut.kt');
     assert.ok(/val id = session\.patId/.test(signOut) && /val bearer = session\.bearer\(\)/.test(signOut)
-      && /MobileTokenApi\.revoke\(bearer, id\)/.test(signOut), 'sign-out no longer revokes the PAT with itself');
+      && /MobileTokenApi\.revoke\(bearer, id, self = true\)/.test(signOut), 'sign-out no longer revokes the PAT with itself');
+    assert.ok((code('LoginActivity.kt').match(/self = true/g) || []).length === 0,
+      'a revoke presenting the JWT treats 401 as gone: only a token revoking ITSELF may');
     // Turning fingerprint unlock off drops the sealed copy, so the sign-out after it must be
     // impossible to cancel: a Cancel there left the token live and unsealed (CISO + UI/UX, PR #14).
     assert.ok(/FingerprintUnlock\.disable\(activity\)\s*start\(activity, committed = true\)/.test(signOut),
@@ -797,6 +799,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     const login = code('LoginActivity.kt');
     assert.ok(/session\.pendingRevokeId\(\)\?\.let \{ old ->[\s\S]*?MobileTokenApi\.revoke\("Bearer \$jwt", old\)/.test(login),
       'a token an earlier sign-in left behind is no longer revoked with the fresh JWT');
+    assert.ok(/if \(wantsPat && earlierGone\)/.test(login), 'a new token is minted while an earlier one is still unrevoked: its id would be lost');
+    assert.ok(/\?\.also \{ session\.trackPatId\(it\.id\) \}/.test(login) && /withContext\(NonCancellable \+ Dispatchers\.IO\)/.test(login),
+      'a minted id is no longer recorded at once, in a step that cannot be cancelled');
     assert.ok(/MobileTokenApi\.revoke\("Bearer \$jwt", minted\.id\)/.test(login),
       'a token the prompt did not seal is no longer revoked (it must never stay unsealed)');
     assert.ok(/FingerprintUnlock\.isOn\(this\) && FingerprintUnlock\.canUse\(this\)/.test(login),
