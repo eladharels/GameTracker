@@ -43,7 +43,14 @@ mobile/                                       # inside the GameTracker repo (was
 │   ├── src/main/
 │   │   ├── java/com/example/gmaetrackermobile/
 │   │   │   ├── ApiClient.kt                  # Retrofit singleton; buildClient(BuildConfig.DEBUG)
-│   │   │   ├── SessionStore.kt               # The session: token, username, JWT exp, "ended" signal
+│   │   │   ├── SessionStore.kt               # The session: token (IN MEMORY only), its sealed copy,
+│   │   │   │                                 #   username, JWT exp, "ended" signal (MOB-6)
+│   │   │   ├── TokenVault.kt                 # The Keystore key that seals the token: AES-256-GCM,
+│   │   │   │                                 #   strong biometric per use, invalidated by a new
+│   │   │   │                                 #   fingerprint (MOB-6)
+│   │   │   ├── FingerprintUnlock.kt          # The ONE place fingerprint unlock is turned on/off/used,
+│   │   │   │                                 #   and CryptoPrompt: the only BiometricPrompt, always
+│   │   │   │                                 #   with a CryptoObject (MOB-6)
 │   │   │   ├── SessionExpiryInterceptor.kt   # A 401 for the CURRENT token ends the session (MOB-5)
 │   │   │   ├── GameTrackerApp.kt             # Application: initialises ApiClient
 │   │   │   ├── GameTrackerApi.kt             # Retrofit API interface (all endpoints)
@@ -95,7 +102,8 @@ mobile/                                       # inside the GameTracker repo (was
 
 - **Base URL**: `https://gametracker.etech.ink/api/`
 - **Protocol**: HTTPS
-- **Auth**: Bearer Token in `Authorization` header (stored in SharedPreferences)
+- **Auth**: Bearer Token in `Authorization` header (held in memory; sealed by the Keystore when
+  fingerprint unlock is on, MOB-6)
 - **Data format**: JSON (Gson)
 
 ### API Endpoints Used by the App
@@ -169,30 +177,46 @@ MainActivity  (single activity host)
 1. User enters username + password in `LoginActivity`
 2. Client validates non-empty, trims whitespace, lowercases username
 3. `POST /auth/login` with `LoginRequest`
-4. On success: token + username saved through `SessionStore` (`"auth"` prefs)
+4. On success: the token is held IN MEMORY by `SessionStore`; only the username goes to the
+   `"auth"` prefs. With fingerprint unlock on, one fingerprint prompt seals the new token
+   (cancelling it turns fingerprint unlock off, with a toast saying where to turn it back on)
 5. Navigate to `MainActivity`. It is **not exported** (MOB-2); it checks for a live session in
    `onCreate`/`onResume` and sends the user to login without one.
 6. The JWT lasts **12 hours**. A 401 answering the CURRENT token ends the session
    (`SessionExpiryInterceptor`), and the visible activity shows login with a neutral
    "Your session expired" notice. Not on a network failure: offline is not signed out.
 
-### Biometric (Fingerprint) Login
-- Uses `AndroidX BiometricPrompt`
-- Device capability checked via `BiometricManager.BIOMETRIC_STRONG`
-- Toggle in `ProfileFragment` saves `fingerprint_enabled` flag to SharedPreferences
-- On `LoginActivity` load: prompt ONLY if biometrics are enabled AND the stored token is still
-  live (its JWT `exp`, decoded locally with 60 s skew). The fingerprint unlocks a live session;
-  it cannot revive an expired or signed-out one.
-- On success: "Checking session…", then `GET /user/me`. 401 means expired (sign in again). A
-  network failure lets the user in with an offline notice.
-- It is a **UI gate, not a security boundary**: the token is plaintext and no `CryptoObject` is
-  used. MOB-6 records the Keystore-bound fix.
+### Biometric (Fingerprint) Login (MOB-6: the fingerprint decrypts the session)
+- `TokenVault` holds an AES-256-GCM key in the Android Keystore (StrongBox where available):
+  `setUserAuthenticationRequired(true)`, per-use STRONG biometric (`setUserAuthenticationParameters(0,
+  AUTH_BIOMETRIC_STRONG)`, `-1` validity below API 30), `setInvalidatedByBiometricEnrollment(true)`.
+- Turning it on (Profile switch, Settings button, or after a password sign-in) runs a
+  `BiometricPrompt` with an ENCRYPT `CryptoObject` and stores only the ciphertext, IV and the
+  token's `exp` (`token_sealed_*_v1` in `"auth"` prefs).
+- On `LoginActivity` load: prompt ONLY if fingerprint unlock is on AND a sealed copy exists
+  whose `exp` is still live (60 s skew). The prompt's authorised cipher DECRYPTS the token;
+  nothing else can. Then "Checking session…", `GET /user/me`: 401 means expired, a network
+  failure lets the user in with an offline notice.
+- A newly enrolled fingerprint invalidates the key: the sealed copy is dropped, unlock turns
+  off, and the login screen says to sign in with the password and turn it on again.
+- Any fingerprint enrolled on the phone unlocks the app (inherent to Android biometrics); the
+  confirmation text says so.
+- `CryptoPrompt` (in `FingerprintUnlock.kt`) is the only `BiometricPrompt` in the app, and it
+  always passes a `CryptoObject`. `test/runtime.test.js` pins that, the key's parameters, and
+  that nothing outside `SessionStore` touches the old plaintext `"token"` key.
+- No `EncryptedSharedPreferences`: deprecated, and not bound to the biometric.
 
 ### Token Storage
-- SharedPreferences key: `"token"` (in `"auth"` prefs)
-- Sent as `Authorization: Bearer <token>` on all authenticated requests
-- **Always** cleared on logout (MOB-3), which keeps the username (to prefill) and the
-  fingerprint setting.
+- **Never on disk in the clear.** In memory for the life of the process; with fingerprint
+  unlock on, a SEALED copy (above). With it off, nothing survives the process: after Android
+  kills the app, the password is needed again.
+- Sent as `Authorization: Bearer <token>` on all authenticated requests. Screens read it from
+  `Session.get(context).token`, never from preferences.
+- Updating from a version that stored `"token"` in the clear: `SessionStore.migrateLegacyToken`
+  deletes it from disk on first start and keeps it in memory. With fingerprint unlock on, the
+  first prompt seals it, and cancelling that prompt ends the session.
+- **Always** cleared on logout and on a 401 (MOB-3, MOB-5), including the sealed copy. The
+  username (to prefill) and the fingerprint setting stay.
 - **Never backed up**: `auth.xml` is excluded from Auto Backup and from both Android 12+
   sections, including device-to-device transfer (MOB-4).
 
@@ -201,7 +225,8 @@ MainActivity  (single activity host)
 ## State Management
 
 - **No ViewModel/LiveData** — fragment-level mutable lists + coroutines
-- **Auth state**: SharedPreferences (token, username, biometric flag)
+- **Auth state**: the token in memory (`SessionStore`); username, biometric flag and the sealed
+  copy in SharedPreferences
 - **Network calls**: a mix of `lifecycleScope`, fragment `lifecycleScope` and unscoped
   `CoroutineScope(Dispatchers.IO)`. The last two are wrong (MOB-17)
 - **State reload**: Fragments reload from API on resume / lifecycle events (no persistent cache)
@@ -256,8 +281,8 @@ MainActivity  (single activity host)
 - Login button disabled during active request (prevents rapid submissions)
 - Username normalized to lowercase before sending
 - HTTPS enforced via hardcoded base URL
-- Token stored in app's private SharedPreferences, in PLAINTEXT and excluded from backups.
-  Keystore binding is MOB-6.
+- The token is never stored in the clear: in memory, or sealed by a biometric-bound Keystore key
+  (MOB-6). The preferences file is also excluded from backups (MOB-4).
 - Release builds do not log HTTP at all; debug logs only the request line and status (MOB-1)
 - Only the launcher activity is exported (MOB-2; pinned by the root `test/runtime.test.js`)
 

@@ -35,6 +35,7 @@ import kotlinx.coroutines.withContext
 import android.widget.ImageView
 import java.text.SimpleDateFormat
 import java.util.Locale
+import com.example.gmaetrackermobile.Session
 
 class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var recyclerView: RecyclerView
@@ -254,7 +255,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: return@launch
+                val token = Session.get(requireContext()).token ?: return@launch
                 val username = prefs.getString("username", null) ?: return@launch
                 withContext(Dispatchers.IO) {
                     repeat(steps) {
@@ -357,7 +358,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: return@launch
+                val token = Session.get(requireContext()).token ?: return@launch
                 val username = prefs.getString("username", null) ?: return@launch
                 val id = game.game_id ?: game.id ?: return@launch
 
@@ -453,7 +454,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: run {
+                val token = Session.get(requireContext()).token ?: run {
                     swipeRefreshLayout.isRefreshing = false; return@launch
                 }
                 val username = prefs.getString("username", null) ?: run {

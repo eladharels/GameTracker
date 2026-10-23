@@ -127,7 +127,28 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     an expired token as no token.
   - A 403 is not a 401 and must not sign the user out.
 
-### [ ] MOB-6 High — Token stored in plaintext; biometric is a UI gate with no `CryptoObject`
+### [x] MOB-6 ✔ High — Token stored in plaintext; biometric is a UI gate with no `CryptoObject` — *fixed in PR #12*
+- **Fixed:**
+  - The token is held in memory only. With fingerprint unlock on, a copy is SEALED by
+    `TokenVault`: AES-256-GCM in the Android Keystore (StrongBox where available), per-use
+    strong biometric, invalidated by a newly enrolled fingerprint. Only the ciphertext, IV
+    and `exp` are in preferences.
+  - `CryptoPrompt` is the app's only `BiometricPrompt` and always passes a `CryptoObject`.
+    The prompt's authorised cipher is what decrypts the token.
+  - `KeyPermanentlyInvalidatedException`: the sealed copy is dropped, unlock turns off, and
+    the login screen says why.
+  - Upgrade: the old plaintext `"token"` is deleted from disk on first start and kept in
+    memory; with fingerprint unlock on, the first prompt seals it, and cancelling ends the
+    session.
+  - Pinned: `SessionStoreTest` (10 tests: nothing in the clear, sealed copy only for the
+    current token, unseal only the sealed session while live, migration) and
+    `test/runtime.test.js` (no plaintext `"token"` outside SessionStore, no prompt without a
+    CryptoObject, the key's parameters, no security-crypto).
+- **Behaviour change:** with fingerprint unlock OFF nothing survives the process, so after
+  Android kills the app the password is needed again (before, the plaintext token restored
+  the session).
+- **Residual:** an attacker with code execution in the app's process can still read the
+  token from memory while the app runs. Root can also do that. Out of scope for storage.
 - **Where:** `LoginActivity.kt:114-118` (the token goes into `SharedPreferences("auth")` in the
   clear), `LoginActivity.kt:43-57` and `:69-78` (`BiometricPrompt.authenticate(promptInfo)`
   with no `CryptoObject`), `ProfileFragment.kt:178-211`, `SettingsActivity.kt:41-81`.
@@ -136,8 +157,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     `startActivity` call. Anything that can read or bypass the app's code path gets the
     token: MOB-2 is one example, a backup is another (MOB-4), and on a rooted or debuggable
     build the preferences file itself.
-  - `mobile/CLAUDE.md:222` and `SECURITY_FIXES.md:61` describe this as secure storage.
-    It isn't.
+  - `mobile/CLAUDE.md` and `SECURITY_FIXES.md:61` described this as secure storage.
+    It wasn't.
 - **Fix:**
   - Generate an AES-256-GCM key in the Android Keystore with
     `setUserAuthenticationRequired(true)` and

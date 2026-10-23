@@ -29,6 +29,7 @@ import android.widget.HorizontalScrollView
 import android.widget.TextView
 import com.google.android.material.chip.Chip
 import org.json.JSONArray
+import com.example.gmaetrackermobile.Session
 
 class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchEditText: EditText
@@ -301,8 +302,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private suspend fun searchAllGames(query: String): List<Game> {
         if (!isAdded) return emptyList()
         return try {
-            val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
-            val token = prefs.getString("token", null) ?: return emptyList()
+            val token = Session.get(requireContext()).token ?: return emptyList()
             val response = com.example.gmaetrackermobile.ApiClient.api.searchGames(query, "Bearer $token")
             if (response.isSuccessful) response.body() ?: emptyList() else emptyList()
         } catch (e: Exception) {
@@ -318,7 +318,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         if (!isAdded) return null
         return try {
             val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
-            val token = prefs.getString("token", null) ?: return null
+            val token = Session.get(requireContext()).token ?: return null
             val username = prefs.getString("username", null) ?: return null
             val response = withContext(Dispatchers.IO) {
                 com.example.gmaetrackermobile.ApiClient.api.getLibrary("Bearer $token", username)
@@ -335,7 +335,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         lifecycleScope.launch {
             try {
                 val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
-                val token = prefs.getString("token", null) ?: return@launch
+                val token = Session.get(requireContext()).token ?: return@launch
                 val username = prefs.getString("username", null) ?: return@launch
 
                 // MOB-10: v1's add OVERWRITES the stored status, so "Add" on a game marked

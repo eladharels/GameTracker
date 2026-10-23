@@ -23,48 +23,123 @@ class SharedPrefsStore(context: Context) : KeyValueStore {
     override fun remove(key: String) { prefs.edit().remove(key).apply() }
 }
 
+/** A token encrypted by [TokenVault]: base64 ciphertext and IV. Neither is a secret. */
+data class SealedToken(val ciphertext: String, val iv: String)
+
 /**
  * The signed-in session: the backend's 12-hour JWT and whose it is.
  *
- * Rules (mobile/ROADMAP.md MOB-3, MOB-5):
- *  - Ending a session removes the TOKEN only. The username stays, so the login form can be
- *    prefilled and a different user signing in still turns biometrics off for the old one.
+ * Rules (mobile/ROADMAP.md MOB-3, MOB-5, MOB-6):
+ *  - The token is never written to disk in the clear. It lives in this process's memory.
+ *    With fingerprint unlock on, a copy is kept SEALED: encrypted by a Keystore key that
+ *    only a successful BiometricPrompt can use (TokenVault). Without it, nothing survives
+ *    the process: a cold start asks for the password.
+ *  - Ending a session removes the token and its sealed copy. The username stays, so the
+ *    login form can be prefilled and a different user signing in still turns biometrics off
+ *    for the old one.
  *  - A token is "live" only while its own `exp` is in the future (with clock skew). The
  *    fingerprint unlocks a live session; it never resurrects an expired one.
- *  - A 401 ends the session only when it answered the token that is stored NOW. A late 401
- *    from a request sent with an older token must not sign out a fresh login, and the login
- *    request itself carries no Authorization header at all.
- *
- * NOT a security boundary: the token is plaintext in SharedPreferences and the fingerprint
- * is a UI gate (MOB-6 records the Keystore-bound fix).
+ *  - A 401 ends the session only when it answered the token held NOW. A late 401 from a
+ *    request sent with an older token must not sign out a fresh login, and the login request
+ *    itself carries no Authorization header at all.
  */
 class SessionStore(
     private val kv: KeyValueStore,
     private val nowSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
 ) {
-    val token: String? get() = kv.getString(KEY_TOKEN)
+    @Volatile private var memToken: String? = null
+
+    val token: String? get() = memToken
     val username: String? get() = kv.getString(KEY_USERNAME)
 
     fun bearer(): String? = token?.let { "Bearer $it" }
 
     /**
-     * Synchronized with [clearIfCurrent]: otherwise its check and its removal could straddle a
-     * save, and a 401 answering the OLD token would remove the NEW one. One write, so a reader
-     * never sees the new token with the old username.
+     * Before MOB-6 the token was stored in the clear under [KEY_LEGACY_TOKEN]. It is deleted
+     * from disk here, once, and kept in memory, so an update does not sign anyone out of the
+     * running session. Returns whether there was one.
+     */
+    @Synchronized
+    fun migrateLegacyToken(): Boolean {
+        val legacy = kv.getString(KEY_LEGACY_TOKEN) ?: return false
+        kv.remove(KEY_LEGACY_TOKEN)
+        if (memToken == null) memToken = legacy
+        return true
+    }
+
+    /**
+     * A fresh sign-in. Synchronized with [clearIfCurrent]: otherwise its check and its removal
+     * could straddle a save, and a 401 answering the OLD token would remove the NEW one. Any
+     * sealed copy belongs to the previous token, so it goes.
      */
     @Synchronized
     fun save(token: String, username: String) {
-        kv.putStrings(mapOf(KEY_TOKEN to token, KEY_USERNAME to username))
+        memToken = token
+        kv.putStrings(mapOf(KEY_USERNAME to username))
+        dropSealed()
     }
 
-    /** Sign out: the token goes, the username and the biometric preference stay. */
+    /**
+     * Stores [sealed] as the persistent copy of [forToken], only if that is still the token
+     * held now (a sign-in could have replaced it while the prompt was up). Its `exp` is kept
+     * beside it in the clear, so the login screen can decide whether to offer the fingerprint
+     * without decrypting anything.
+     */
     @Synchronized
-    fun endSession() = kv.remove(KEY_TOKEN)
+    fun storeSealed(sealed: SealedToken, forToken: String): Boolean {
+        if (forToken != memToken) return false
+        val exp = jwtExpiry(forToken) ?: return false
+        kv.putStrings(mapOf(KEY_SEALED to sealed.ciphertext, KEY_SEALED_IV to sealed.iv, KEY_SEALED_EXP to exp.toString()))
+        return true
+    }
+
+    fun sealed(): SealedToken? {
+        val ct = kv.getString(KEY_SEALED) ?: return null
+        val iv = kv.getString(KEY_SEALED_IV) ?: return null
+        return SealedToken(ct, iv)
+    }
+
+    /** A sealed copy exists and the token inside it is still live: worth a fingerprint. */
+    fun hasSealedLiveSession(skewSeconds: Long = CLOCK_SKEW_SECONDS): Boolean {
+        if (sealed() == null) return false
+        val exp = kv.getString(KEY_SEALED_EXP)?.toLongOrNull() ?: return false
+        return exp > nowSeconds() + skewSeconds
+    }
 
     /**
-     * [skewSeconds] defaults to a minute so the fingerprint is never offered for a token about
-     * to die mid-check (LoginActivity). MainActivity.onResume passes 0: there the question is
-     * only "has it ALREADY expired", and the server's 401 settles anything closer.
+     * The token a successful fingerprint decrypted. Refused unless it is the token the sealed
+     * copy was stored for (its `exp` matches) and still live, so a corrupted or swapped blob
+     * cannot become the session.
+     */
+    @Synchronized
+    fun unseal(token: String): Boolean {
+        val exp = jwtExpiry(token) ?: return false
+        if (kv.getString(KEY_SEALED_EXP) != exp.toString()) return false
+        if (exp <= nowSeconds()) return false
+        memToken = token
+        return true
+    }
+
+    /** Fingerprint unlock turned off, or its key is gone: no persistent copy any more. */
+    @Synchronized
+    fun dropSealed() {
+        kv.remove(KEY_SEALED)
+        kv.remove(KEY_SEALED_IV)
+        kv.remove(KEY_SEALED_EXP)
+    }
+
+    /** Sign out: the token and its sealed copy go; the username and the biometric preference stay. */
+    @Synchronized
+    fun endSession() {
+        memToken = null
+        dropSealed()
+        kv.remove(KEY_LEGACY_TOKEN)
+    }
+
+    /**
+     * Whether the token held IN MEMORY is live. [skewSeconds] defaults to a minute so a token
+     * about to die is not used to start anything; MainActivity.onResume passes 0, where the
+     * question is only "has it ALREADY expired", and the server's 401 settles anything closer.
      */
     fun hasLiveToken(skewSeconds: Long = CLOCK_SKEW_SECONDS): Boolean {
         val exp = token?.let { jwtExpiry(it) } ?: return false
@@ -72,7 +147,7 @@ class SessionStore(
     }
 
     /**
-     * Ends the session if [authorization] is exactly the stored bearer, and says whether it
+     * Ends the session if [authorization] is exactly the current bearer, and says whether it
      * did. Synchronized, and the first caller removes the token, so a burst of 401s from one
      * expired session ends it exactly once.
      */
@@ -86,8 +161,12 @@ class SessionStore(
 
     companion object {
         const val PREFS = "auth"
-        const val KEY_TOKEN = "token"
+        /** Where the token was kept IN THE CLEAR before MOB-6. Only ever read to delete it. */
+        const val KEY_LEGACY_TOKEN = "token"
         const val KEY_USERNAME = "username"
+        const val KEY_SEALED = "token_sealed_v1"
+        const val KEY_SEALED_IV = "token_sealed_iv_v1"
+        const val KEY_SEALED_EXP = "token_sealed_exp_v1"
         const val CLOCK_SKEW_SECONDS = 60L
 
         private const val B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -128,7 +207,8 @@ object Session {
 
     fun get(context: Context): SessionStore =
         store ?: synchronized(this) {
-            store ?: SessionStore(SharedPrefsStore(context.applicationContext)).also { store = it }
+            store ?: SessionStore(SharedPrefsStore(context.applicationContext))
+                .also { it.migrateLegacyToken(); store = it }
         }
 
     /**
