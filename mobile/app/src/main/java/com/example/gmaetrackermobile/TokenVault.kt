@@ -58,7 +58,11 @@ object TokenVault {
             ?: return CipherResult.Invalidated
         return try {
             val iv = Base64.decode(sealed.iv, Base64.NO_WRAP)
+            // Decrypting needs the IV the seal was made with; IV REUSE is an encrypt-side
+            // property, and initEncrypt never supplies one (see there; pinned in runtime.test.js).
+            // nosemgrep: kotlin.lang.security.gcm-detection.gcm-detection
             val cipher = Cipher.getInstance(TRANSFORMATION)
+            // nosemgrep: kotlin.lang.security.gcm-detection.gcm-detection
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
             CipherResult.Ready(cipher)
         } catch (e: KeyPermanentlyInvalidatedException) {
@@ -88,7 +92,14 @@ object TokenVault {
         try { keyStore().deleteEntry(ALIAS) } catch (e: Exception) { /* nothing to delete */ }
     }
 
+    /**
+     * No IV is passed: the Keystore generates a fresh random one for every seal (randomized
+     * encryption is on by default, and the Keystore REFUSES a caller-chosen IV while it is), so
+     * a key+IV pair is never reused. runtime.test.js fails if this ever supplies its own IV or
+     * turns randomized encryption off.
+     */
     private fun initEncrypt(): Cipher {
+        // nosemgrep: kotlin.lang.security.gcm-detection.gcm-detection
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, existingKey() ?: generateKey(strongBox = Build.VERSION.SDK_INT >= 28))
         return cipher

@@ -651,6 +651,13 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       [/BLOCK_MODE_GCM/, 'the key is not AES-GCM'],
       [/KeyPermanentlyInvalidatedException/, 'an invalidated key is not handled'],
     ]) assert.ok(re.test(vault), `TokenVault: ${why}`);
+    // The nosemgrep on gcm-detection rests on this: every seal gets a Keystore-generated IV.
+    const initEncrypt = vault.match(/private fun initEncrypt\(\)[\s\S]*?\n {4}\}/);
+    assert.ok(initEncrypt, 'TokenVault.initEncrypt not found');
+    assert.ok(!/ParameterSpec|IvParameterSpec|SecureRandom/.test(initEncrypt[0]),
+      'TokenVault.initEncrypt supplies its own IV: GCM IV uniqueness is no longer the Keystore\'s');
+    assert.ok(!/setRandomizedEncryptionRequired/.test(vault),
+      'TokenVault changes randomized encryption: the Keystore would then accept a reused IV');
     const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
     assert.ok(!/security-crypto/.test(gradle), 'the app depends on androidx.security:security-crypto');
   });
