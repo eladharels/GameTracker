@@ -75,8 +75,13 @@ object TokenVault {
         }
     }
 
-    /** Seals [token] with a cipher the prompt has just authorised. */
-    fun seal(authorised: Cipher, token: String): SealedToken {
+    /**
+     * Seals [token] with a cipher the prompt has just authorised. [context] (the session's
+     * kind, PAT id and expiry, MOB-9) is authenticated with it, so the values stored beside
+     * the ciphertext cannot be changed without [open] failing.
+     */
+    fun seal(authorised: Cipher, token: String, context: ByteArray?): SealedToken {
+        context?.let { authorised.updateAAD(it) }
         val ciphertext = authorised.doFinal(token.toByteArray(Charsets.UTF_8))
         return SealedToken(
             ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
@@ -84,9 +89,11 @@ object TokenVault {
         )
     }
 
-    /** Opens [sealed] with a cipher the prompt has just authorised. Throws if it was tampered with. */
-    fun open(authorised: Cipher, sealed: SealedToken): String =
-        String(authorised.doFinal(Base64.decode(sealed.ciphertext, Base64.NO_WRAP)), Charsets.UTF_8)
+    /** Opens [sealed] with a cipher the prompt has just authorised. Throws if it, or [context], was tampered with. */
+    fun open(authorised: Cipher, sealed: SealedToken, context: ByteArray?): String {
+        context?.let { authorised.updateAAD(it) }
+        return String(authorised.doFinal(Base64.decode(sealed.ciphertext, Base64.NO_WRAP)), Charsets.UTF_8)
+    }
 
     fun deleteKey() {
         try { keyStore().deleteEntry(ALIAS) } catch (e: Exception) { /* nothing to delete */ }

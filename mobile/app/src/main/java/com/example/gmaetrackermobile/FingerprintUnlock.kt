@@ -143,7 +143,9 @@ object FingerprintUnlock {
     ) {
         val session = Session.get(context)
         val token = session.token
-        if (token == null || !session.hasLiveToken(skewSeconds = 0)) {
+        // Read together with the token: the sealed copy is bound to THIS credential's metadata.
+        val sealContext = session.sealContext()
+        if (token == null || sealContext == null || !session.hasLiveToken(skewSeconds = 0)) {
             done(Result.Unavailable("Sign in again to turn on fingerprint unlock."))
             return
         }
@@ -157,7 +159,7 @@ object FingerprintUnlock {
                 c.cipher,
                 onSuccess = { cipher ->
                     val stored = try {
-                        session.storeSealed(TokenVault.seal(cipher, token), forToken = token)
+                        session.storeSealed(TokenVault.seal(cipher, token, sealContext), forToken = token)
                     } catch (e: Exception) {
                         false
                     }
@@ -198,7 +200,7 @@ object FingerprintUnlock {
                 CryptoPrompt.info("Unlock GameTracker", "Use your fingerprint to continue your session"),
                 c.cipher,
                 onSuccess = { cipher ->
-                    val token = try { TokenVault.open(cipher, sealed) } catch (e: Exception) { null }
+                    val token = try { TokenVault.open(cipher, sealed, session.sealedContext()) } catch (e: Exception) { null }
                     if (token != null && session.unseal(token)) {
                         done(Result.Done)
                     } else {

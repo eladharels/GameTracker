@@ -51,6 +51,8 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   ├── FingerprintUnlock.kt          # The ONE place fingerprint unlock is turned on/off/used,
 │   │   │   │                                 #   and CryptoPrompt: the only BiometricPrompt, always
 │   │   │   │                                 #   with a CryptoObject (MOB-6)
+│   │   │   ├── MobileToken.kt                # The phone's 30-day library token: name, expiry, request
+│   │   │   ├── MobileTokenApi.kt             #   and its mint/revoke calls, the only ones (MOB-9)
 │   │   │   ├── SessionExpiryInterceptor.kt   # A 401 for the CURRENT token ends the session (MOB-5)
 │   │   │   ├── GameTrackerApp.kt             # Application: initialises ApiClient
 │   │   │   ├── GameTrackerApi.kt             # Retrofit API interface (all endpoints)
@@ -122,6 +124,8 @@ mobile/                                       # inside the GameTracker repo (was
 | PUT | `/user/{username}/games/{gameId}/backlog-order` | Move game in backlog |
 | POST | `/user/{username}/games/{gameId}/refresh-metadata` | Refresh game info |
 | GET | `/user/me` | After fingerprint unlock: does the stored session still work? (MOB-5) |
+| POST | `/user/me/tokens` | Mint this phone's 30-day library token at a password sign-in (MOB-9) |
+| DELETE | `/user/me/tokens/{tokenId}` | Revoke it, by its own id only (sign-out, or the next sign-in) |
 
 > **This table is enforced.** The app is the v1 client the backend's freeze protects, and it
 > lives in the same repo. `test/api-surface.test.js` fails if a route in `GameTrackerApi.kt` is
@@ -186,7 +190,11 @@ MainActivity  (single activity host)
    (cancelling it turns fingerprint unlock off, with a toast saying where to turn it back on)
 5. Navigate to `MainActivity`. It is **not exported** (MOB-2); it checks for a live session in
    `onCreate`/`onResume` and sends the user to login without one.
-6. The JWT lasts **12 hours**. A 401 answering the CURRENT token ends the session
+6. **MOB-9:** with fingerprint unlock on, the JWT is swapped for this phone's **30-day library
+   token** (`MobileToken`), sealed by the same prompt. If the prompt doesn't seal it, it is
+   revoked and the JWT stays. If the mint fails, the JWT stays and a toast says so. Sign-out
+   revokes it. Turning fingerprint unlock off signs out, after a confirmation.
+7. The JWT lasts **12 hours**. A 401 answering the CURRENT token ends the session
    (`SessionExpiryInterceptor`), and the visible activity shows login with a neutral
    "Your session expired" notice. Not on a network failure: offline is not signed out.
 

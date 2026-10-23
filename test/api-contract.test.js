@@ -53,7 +53,7 @@ const assertKeys = (actual, expected, what) =>
 
 // The published key sets, as NAMED constants shared with the Android gate at the end of this
 // file and with test/integration/library-shape.test.js, so the three cannot drift apart.
-const { LIBRARY_ROW_KEYS, SEARCH_ITEM_KEYS, LOGIN_TOKEN_KEYS } = require('./v1-shapes');
+const { LIBRARY_ROW_KEYS, SEARCH_ITEM_KEYS, LOGIN_TOKEN_KEYS, MINTED_TOKEN_KEYS } = require('./v1-shapes');
 
 console.log('library row (GET /api/user/:username/games):');
 
@@ -1777,6 +1777,44 @@ check('every Game field the app binds is a field a pinned response carries', () 
 check('the app\'s LoginResponse is exactly the pinned {token}', () => {
   assert.deepStrictEqual([...MOBILE.loginResponse].sort(), [...LOGIN_TOKEN_KEYS].sort());
   assert.deepStrictEqual(MOBILE.loginRequest, ['username', 'password'], 'LoginRequest changed shape');
+});
+
+checkAsync('MOB-9: the app\'s CreateTokenRequest reaches the mint as sent, and CreatedToken reads only what it returns', async () => {
+  // The service's REAL return, with only the database stubbed (services/auth.js calls
+  // db.promises through the module, so this is interceptable).
+  const authService = require('../services/auth');
+  const realGet = db.promises.get;
+  const realRun = db.promises.run;
+  db.promises.get = async () => ({ id: 7, can_manage_users: 0 });
+  db.promises.run = async () => ({ lastID: 11, changes: 1 });
+  let minted;
+  try {
+    minted = await authService.createToken({
+      userId: 7, name: 'Android app · Pixel · 2027-01-15 08:00:00', scopes: ['library'],
+      expiresAt: new Date(Date.now() + 30 * 86400e3).toISOString(), grantedScopes: ['library'],
+    });
+  } finally {
+    db.promises.get = realGet;
+    db.promises.run = realRun;
+  }
+  assertKeys(minted, MINTED_TOKEN_KEYS, 'POST /api/user/me/tokens 201');
+  const unread = MOBILE.createdToken.filter((f) => !MINTED_TOKEN_KEYS.includes(f));
+  assert.deepStrictEqual(unread, [], `the app's CreatedToken reads fields the mint never returns: ${unread}`);
+  assert.ok(minted.token.startsWith('gt_pat_'), 'the app refuses anything else as its token');
+
+  // The app's request body, by its own field names, through the real adapter.
+  assert.deepStrictEqual([...MOBILE.createTokenRequest].sort(), ['expiresAt', 'name', 'password', 'scopes'],
+    'CreateTokenRequest changed shape');
+  const future = new Date(Date.now() + 30 * 86400e3).toISOString();
+  const values = { password: 'pw', name: 'Android app · Pixel · 2027-01-15 08:00:00', scopes: ['library'], expiresAt: future };
+  const body = Object.fromEntries(MOBILE.createTokenRequest.map((f) => [f, values[f]]));
+  let got;
+  const { res } = await callMintToken(body, { create: (args) => { got = args; return { ...minted, name: args.name, scopes: args.scopes, expiresAt: args.expiresAt }; } });
+  assert.strictEqual(res.statusCode, 201);
+  assert.strictEqual(got.name, values.name, 'the name did not reach the service');
+  assert.deepStrictEqual(got.scopes, ['library'], 'the scopes did not reach the service');
+  assert.strictEqual(got.expiresAt, future, 'the expiry did not reach the service: the token would never expire');
+  assert.deepStrictEqual(got.grantedScopes, ['library'], 'a non-admin session may only ever grant library');
 });
 
 // Tiny route harness for the pins below: the handler off the live router, with the user

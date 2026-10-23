@@ -1,5 +1,6 @@
 package com.example.gmaetrackermobile
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -137,5 +138,99 @@ class SessionStoreTest {
         assertNull(s.token)
         assertNull("a 401 must also end the sealed copy", s.sealed())
         assertFalse("a second 401 from the same session", s.clearIfCurrent("Bearer $token"))
+    }
+
+    // ── MOB-9: this phone's 30-day token ─────────────────────────────────────────
+
+    private val pat = "gt_pat_abcdefghijklmnopqrstuvwxyz0123456789"
+
+    @Test fun aPatIsLiveOnTheExpiryItWasMintedWithAndItsIdIsKeptForRevocation() {
+        val kv = MapStore()
+        val s = store(kv)
+        s.save(jwtWithExp(now + 3600), "jane")
+        s.adoptPat(pat, 42, now + 30 * 86400)
+        assertEquals(pat, s.token)
+        assertTrue(s.isPat)
+        assertEquals(42L, s.patId)
+        assertTrue("a PAT has no exp of its own: its minted expiry decides", s.hasLiveToken())
+        assertTrue("the PAT reached the preferences: ${kv.map}", kv.map.values.none { it.contains(pat) })
+        assertEquals(42L, s.pendingRevokeId())
+        s.endSession()
+        assertNull(s.token)
+        assertFalse(s.isPat)
+        assertEquals("the id outlives the session until its revocation is confirmed", 42L, s.pendingRevokeId())
+        s.forgetPatId(7)
+        assertEquals("only that id is forgotten", 42L, s.pendingRevokeId())
+        s.forgetPatId(42)
+        assertNull(s.pendingRevokeId())
+    }
+
+    @Test fun anExpiredPatIsNotLive() {
+        val s = store()
+        s.adoptPat(pat, 1, now + 30)
+        assertFalse("inside the skew", s.hasLiveToken())
+        s.adoptPat(pat, 1, now - 1)
+        assertFalse(s.hasLiveToken(skewSeconds = 0))
+    }
+
+    @Test fun aSealedPatComesBackWithItsIdAndExpiryAndOnlyAsAPat() {
+        val kv = MapStore()
+        val exp = now + 30 * 86400
+        store(kv).apply { save(jwtWithExp(now + 3600), "jane"); adoptPat(pat, 42, exp); assertTrue(storeSealed(sealedBlob, pat)) }
+        assertTrue(store(kv).hasSealedLiveSession())
+
+        val cold = store(kv)
+        assertFalse("a JWT never unseals a PAT copy", cold.unseal(jwtWithExp(exp)))
+        assertFalse("nor anything that is not a PAT", cold.unseal("not-a-pat"))
+        assertTrue(cold.unseal(pat))
+        assertEquals(pat, cold.token)
+        assertEquals(42L, cold.patId)
+        assertTrue(cold.hasLiveToken())
+    }
+
+    @Test fun aPatNeverUnsealsAsAJwtSession() {
+        val kv = MapStore()
+        val jwt = jwtWithExp(now + 3600)
+        store(kv).apply { save(jwt, "jane"); storeSealed(sealedBlob, jwt) }
+        assertFalse(store(kv).unseal(pat))
+        assertTrue(store(kv).unseal(jwt))
+    }
+
+    @Test fun theSealContextBindsKindIdAndExpirySoNoneCanBeSwapped() {
+        val kv = MapStore()
+        val s = store(kv)
+        val exp = now + 30 * 86400
+        s.save(jwtWithExp(now + 3600), "jane"); s.adoptPat(pat, 42, exp)
+        val sealedWith = s.sealContext()!!
+        s.storeSealed(sealedBlob, pat)
+        assertArrayEquals("what was sealed is what the stored copy is opened with", sealedWith, s.sealedContext())
+        kv.map[SessionStore.KEY_SEALED_EXP] = (exp + 86400).toString()
+        assertFalse("a later expiry written beside the blob changes the additional data", sealedWith.contentEquals(s.sealedContext()!!))
+        kv.map[SessionStore.KEY_SEALED_EXP] = exp.toString()
+        kv.map[SessionStore.KEY_SEALED_PAT_ID] = "43"
+        assertFalse("so does another id", sealedWith.contentEquals(s.sealedContext()!!))
+
+        val jwtKv = MapStore()
+        val j = store(jwtKv)
+        val jwt = jwtWithExp(now + 3600)
+        j.save(jwt, "jane")
+        j.storeSealed(sealedBlob, jwt)
+        assertFalse("a JWT copy is bound as a JWT", j.sealedContext()!!.contentEquals(sealedWith))
+
+        val legacy = MapStore()
+        legacy.map[SessionStore.KEY_SEALED] = "c"; legacy.map[SessionStore.KEY_SEALED_IV] = "i"; legacy.map[SessionStore.KEY_SEALED_EXP] = "9"
+        assertNull("a copy sealed before MOB-9 was sealed with no additional data", store(legacy).sealedContext())
+    }
+
+    @Test fun aNewPasswordSignInDropsThePatButKeepsItsIdForRevocation() {
+        val kv = MapStore()
+        val s = store(kv)
+        s.adoptPat(pat, 42, now + 86400)
+        s.storeSealed(sealedBlob, pat)
+        s.save(jwtWithExp(now + 3600), "jane")
+        assertFalse(s.isPat)
+        assertNull(s.sealed())
+        assertNull(kv.map[SessionStore.KEY_SEALED_PAT_ID])
+        assertEquals(42L, s.pendingRevokeId())
     }
 }

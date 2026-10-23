@@ -748,6 +748,57 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'SearchFragment no longer cancels the pending debounce in onDestroyView');
   });
 
+  // MOB-9: the phone's 30-day library token. Every rule here is a condition of the CISO
+  // design review, so a change to one of them is a change to that review.
+  check('Android: the 30-day token is library-only, fixed-expiry, sealed or revoked, and revokes only itself (MOB-9)', () => {
+    const tok = code('MobileToken.kt');
+    assert.ok(/const val LIFETIME_DAYS = 30L\b/.test(tok), 'the token lifetime is no longer the reviewed 30 days');
+    assert.ok(/const val SCOPE = "library"/.test(tok) && /scopes = listOf\(SCOPE\)/.test(tok),
+      'the minted token asks for something other than exactly ["library"]');
+    assert.ok(/expiresAt = expiry\(nowMillis\)\.second/.test(tok), 'the mint body no longer carries the fixed expiry');
+    assert.ok(!/"admin"/.test(tok), 'MobileToken mentions the admin scope');
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const all = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) all.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of all) {
+      const src = code(f);
+      if (f !== 'MobileToken.kt' && f !== 'models.kt') {
+        assert.ok(!/\bCreateTokenRequest\s*\(/.test(src), `${f} builds a token request itself: only MobileToken.request may`);
+      }
+      if (f !== 'MobileTokenApi.kt') {
+        assert.ok(!/\.(createToken|revokeToken)\s*\(/.test(src), `${f} calls the token routes directly: only MobileTokenApi may`);
+      }
+      if (f !== 'LoginActivity.kt' && f !== 'SessionStore.kt') {
+        assert.ok(!/\badoptPat\s*\(/.test(src), `${f} adopts a token: only the password sign-in may`);
+      }
+      // Revocation presents a credential and an id. The id is always this phone's own:
+      // the session's current PAT, the one recorded for revocation, or the one just minted.
+      for (const m of src.matchAll(/MobileTokenApi\.revoke\(([^,]+),\s*([^)]+)\)/g)) {
+        assert.ok(/^(id|old|minted\.id|it\.id)$/.test(m[2].trim()), `${f} revokes token ${m[2].trim()}: only this phone's own id`);
+      }
+    }
+    const signOut = code('SignOut.kt');
+    assert.ok(/val id = session\.patId/.test(signOut) && /val bearer = session\.bearer\(\)/.test(signOut)
+      && /MobileTokenApi\.revoke\(bearer, id\)/.test(signOut), 'sign-out no longer revokes the PAT with itself');
+    const login = code('LoginActivity.kt');
+    assert.ok(/session\.pendingRevokeId\(\)\?\.let \{ old ->[\s\S]*?MobileTokenApi\.revoke\("Bearer \$jwt", old\)/.test(login),
+      'a token an earlier sign-in left behind is no longer revoked with the fresh JWT');
+    assert.ok(/MobileTokenApi\.revoke\("Bearer \$jwt", minted\.id\)/.test(login),
+      'a token the prompt did not seal is no longer revoked (it must never stay unsealed)');
+    assert.ok(/FingerprintUnlock\.isOn\(this\) && FingerprintUnlock\.canUse\(this\)/.test(login),
+      'a token is minted without fingerprint unlock to seal it');
+    assert.ok(/etPassword\.text\.clear\(\)/.test(login), 'the password field is no longer cleared after sign-in');
+    const api = code('GameTrackerApi.kt');
+    assert.ok(!/@GET\("user\/me\/tokens"\)/.test(api), 'the app lists tokens');
+    const mintApi = code('MobileTokenApi.kt');
+    assert.ok(!/errorBody|\.message\(\)/.test(mintApi), 'MobileTokenApi reads the server\'s error text: the UI must say fixed things');
+  });
+
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {

@@ -11,6 +11,14 @@ interface GameTrackerApi {
     @GET("user/me")
     suspend fun getMe(@Header("Authorization") token: String): Response<Unit>
 
+    // MOB-9: this phone's long-lived credential (MobileToken). Minted with the fresh JWT and
+    // the password (the server's sudo mode); revoked by its own id. The app never lists tokens.
+    @POST("user/me/tokens")
+    suspend fun createToken(@Header("Authorization") token: String, @Body body: CreateTokenRequest): Response<CreatedToken>
+
+    @DELETE("user/me/tokens/{tokenId}")
+    suspend fun revokeToken(@Header("Authorization") token: String, @Path("tokenId") tokenId: Long): Response<Unit>
+
     @GET("games/search")
     suspend fun searchGames(
         @Query("q") query: String,

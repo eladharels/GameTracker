@@ -719,5 +719,37 @@ check('every route in mobile/.../GameTrackerApi.kt is live, at an app-reachable 
   }
 });
 
+// MOB-9: after a password sign-in with fingerprint unlock on, the app's credential is a
+// LIBRARY-scoped personal access token, not a session JWT. On v1 authRequired lets such a
+// token through to every route without a .requiredPermission guard and refuses it (403) on
+// the rest, so every route the app calls with it must carry none. The set is pinned whole: a
+// new call in GameTrackerApi.kt is a reviewed change here, not a surprise 403 on a phone.
+const ANDROID_ROUTES = [
+  'POST /api/auth/login',
+  'GET /api/user/me',
+  'POST /api/user/me/tokens',
+  'DELETE /api/user/me/tokens/:tokenId',
+  'GET /api/games/search',
+  'GET /api/user/:username/games',
+  'POST /api/user/:username/games',
+  'DELETE /api/user/:username/games/:gameId',
+  'PUT /api/user/:username/games/:gameId/backlog-order',
+  'POST /api/user/:username/games/:gameId/refresh-metadata',
+];
+check('the app calls exactly the pinned routes, each reachable with a library-scoped token (MOB-9)', () => {
+  const { apiRoutes } = require('./mobile-api');
+  assert.deepStrictEqual(apiRoutes().map((r) => r.key).sort(), [...ANDROID_ROUTES].sort(),
+    'GameTrackerApi.kt calls a different set of routes than the pin: review each against a library token, then update it');
+  const byKey = new Map(routes.map((r) => [r.key, r]));
+  for (const key of ANDROID_ROUTES) {
+    const live = byKey.get(key);
+    assert.ok(!key.startsWith('/api/v2') && !key.includes(' /api/v2/'), `${key}: the app is a v1 client`);
+    assert.deepStrictEqual(live.perms, [], `${key} is admin-gated (${live.permTaggers}): a library-scoped token gets 403 there`);
+    assert.ok(!['browser-session', 'self-only'].includes(tierOf(live)), `${key} is '${tierOf(live)}': not reachable with a token`);
+  }
+  // The app never LISTS tokens and never revokes one by any id but its own (CISO condition 5).
+  assert.ok(!ANDROID_ROUTES.includes('GET /api/user/me/tokens'), 'the app lists tokens');
+});
+
 console.log(`\n${n} assertions passed.  ${routes.length} routes, tiers: ` +
   JSON.stringify(routes.reduce((acc, r) => { const t = tierOf(r); acc[t] = (acc[t] || 0) + 1; return acc; }, {})));

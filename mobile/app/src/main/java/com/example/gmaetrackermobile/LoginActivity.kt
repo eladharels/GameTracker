@@ -1,5 +1,6 @@
 package com.example.gmaetrackermobile
 
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
@@ -102,21 +103,18 @@ class LoginActivity : AppCompatActivity() {
                         btnLogin.text = "Login"
                         
                         if (response.isSuccessful && response.body() != null) {
-                            val token = response.body()!!.token
+                            val jwt = response.body()!!.token
                             // If username or password changed, disable biometrics
                             val oldUsername = session.username
                             if (oldUsername != null && oldUsername != normalizedUsername) {
                                 FingerprintUnlock.disable(this@LoginActivity)
                             }
-                            session.save(token, normalizedUsername)
+                            session.save(jwt, normalizedUsername)
+                            // The password lives on only in this call's local, for the token
+                            // mint below; never in a field or saved state (MOB-9).
+                            etPassword.text.clear()
                             tvLoginStatus.text = "Login successful!"
-                            // A new token: with fingerprint unlock on, seal it (one prompt)
-                            // so the next start can unlock it. Then go in either way.
-                            if (FingerprintUnlock.isOn(this@LoginActivity)) {
-                                sealThen { enterApp(offline = false) }
-                            } else {
-                                enterApp(offline = false)
-                            }
+                            afterPasswordSignIn(jwt, normalizedUsername, password)
                         } else {
                             val errorBody = response.errorBody()?.string() ?: response.message()
                             tvLoginStatus.text = "Login failed: $errorBody"
@@ -151,6 +149,63 @@ class LoginActivity : AppCompatActivity() {
                 if (result.retryable && Session.get(this).hasSealedLiveSession()) btnFingerprint.visibility = View.VISIBLE
             }
             is FingerprintUnlock.Result.Unavailable -> notice(status, result.message)
+        }
+    }
+
+    /**
+     * MOB-9, after a password sign-in. With fingerprint unlock on, the 12-hour JWT is swapped
+     * for this phone's 30-day library token (MobileToken), sealed at once. Rules from the CISO
+     * design review:
+     *  - a token an earlier sign-in here left behind is revoked first, with the fresh JWT;
+     *  - the new token is never kept unsealed: if the prompt does not seal it, it is revoked
+     *    with the JWT, and the JWT is the session again;
+     *  - a failed mint is not retried, and the 12-hour session carries on;
+     *  - with fingerprint unlock off, no token is minted: it would not survive the process.
+     */
+    private fun afterPasswordSignIn(jwt: String, username: String, password: String) {
+        val session = Session.get(this)
+        val wantsPat = FingerprintUnlock.isOn(this) && FingerprintUnlock.canUse(this)
+        val now = System.currentTimeMillis()
+        lifecycleScope.launch {
+            val minted = withContext(Dispatchers.IO) {
+                session.pendingRevokeId()?.let { old ->
+                    if (MobileTokenApi.revoke("Bearer $jwt", old)) session.forgetPatId(old)
+                }
+                if (wantsPat) MobileTokenApi.mint("Bearer $jwt", MobileToken.request(password, Build.MODEL, now)) else null
+            }
+            if (session.token != jwt) {
+                // Another sign-in replaced this one while the mint was in flight.
+                minted?.let { withContext(Dispatchers.IO) { MobileTokenApi.revoke("Bearer $jwt", it.id) } }
+                return@launch
+            }
+            when {
+                minted != null -> {
+                    session.adoptPat(minted.token, minted.id, MobileToken.expiry(now).first)
+                    FingerprintUnlock.enable(this@LoginActivity, cryptoPrompt, FingerprintUnlock.KEEP_ON_PROMPT) { result ->
+                        if (result == FingerprintUnlock.Result.Done) {
+                            enterApp(offline = false)
+                            return@enable
+                        }
+                        session.save(jwt, username)
+                        lifecycleScope.launch {
+                            val gone = withContext(Dispatchers.IO) { MobileTokenApi.revoke("Bearer $jwt", minted.id) }
+                            if (gone) session.forgetPatId(minted.id)
+                            Toast.makeText(this@LoginActivity, "Fingerprint unlock is off. Turn it on again in Profile.", Toast.LENGTH_LONG).show()
+                            enterApp(offline = false)
+                        }
+                    }
+                }
+                wantsPat -> {
+                    Toast.makeText(
+                        this@LoginActivity,
+                        "Couldn't set up the 30-day sign-in, so fingerprint unlock will last 12 hours this time.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    sealThen { enterApp(offline = false) }
+                }
+                FingerprintUnlock.isOn(this@LoginActivity) -> sealThen { enterApp(offline = false) }
+                else -> enterApp(offline = false)
+            }
         }
     }
 

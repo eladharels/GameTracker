@@ -15,5 +15,7 @@ const LIBRARY_ROW_KEYS = Object.freeze([
 const LIBRARY_ROW_WIRE_KEYS = Object.freeze([...LIBRARY_ROW_KEYS, 'added_at']);
 const SEARCH_ITEM_KEYS = Object.freeze(['id', 'name', 'releaseDate', 'coverUrl', 'source', 'steamAppId']);
 const LOGIN_TOKEN_KEYS = Object.freeze(['token']);
+// POST /api/user/me/tokens 201. The Android app reads it since MOB-9; the SPA's tokens page too.
+const MINTED_TOKEN_KEYS = Object.freeze(['id', 'token', 'hint', 'name', 'scopes', 'expiresAt']);
 
-module.exports = { LIBRARY_ROW_KEYS, LIBRARY_ROW_WIRE_KEYS, SEARCH_ITEM_KEYS, LOGIN_TOKEN_KEYS };
+module.exports = { LIBRARY_ROW_KEYS, LIBRARY_ROW_WIRE_KEYS, SEARCH_ITEM_KEYS, LOGIN_TOKEN_KEYS, MINTED_TOKEN_KEYS };

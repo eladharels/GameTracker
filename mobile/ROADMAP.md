@@ -229,22 +229,44 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Revisit pinning (with a backup pin and an expiry) only if the app is ever distributed
     publicly.
 
-### [ ] MOB-9 Low — A longer-lived, revocable mobile credential (follow-up to MOB-5)
-- **Where:** the app uses the 12-hour session JWT (`LoginActivity.kt:101-118`).
-- **Why:** once MOB-5 lands, users must type their password after every 12-hour expiry. The
-  backend already has the right primitive:
-  - library-scoped personal access tokens (`services/auth.js`), SHA-256 hashed at rest;
-  - revocable by the owner and by an admin (`GET/DELETE /api/v2/users/:id/tokens`);
-  - listed in My Account.
-
-  Such a token, stored as MOB-6 describes and unlocked by the fingerprint, would give
-  convenience without a long-lived JWT, which cannot be revoked.
-- **Fix:** design first (CISO), for example: mint a `library` PAT on first login with a
-  device label, after a password re-prompt (sudo mode). This needs more than a token swap:
-  - the PAT is refused by `/api/v2` scope rules for anything but library routes;
-  - on v1, `authRequired` narrows it (see root CLAUDE.md, SEC-12).
-
-  Verify every route the app calls, and pin the list in `test/api-surface.test.js`.
+### [x] MOB-9 ✔ Low — A longer-lived, revocable mobile credential (follow-up to MOB-5) — *fixed in PR #14*
+- **Design:** CISO-reviewed before any code. Approved with 11 conditions, all implemented and
+  pinned.
+- **What happens:**
+  - At a PASSWORD sign-in with fingerprint unlock on, the app mints a personal access token
+    (`MobileToken`):
+    - scope `library` only;
+    - a fixed 30-day expiry, never renewed;
+    - named "Android app · <model> · <time>", at most 60 characters with the timestamp whole.
+  - The token replaces the 12h JWT and is sealed at once by the MOB-6 key. The sealed copy's
+    kind, token id and expiry are bound into the AES-GCM AAD.
+  - If the prompt does not seal it, it is revoked with the JWT, and the JWT is the session
+    again. It is never kept unsealed.
+  - A failed mint is not retried. The 12h session carries on, and a toast says so.
+  - With fingerprint unlock off, nothing is minted.
+- **Revocation:**
+  - Sign-out revokes the token, presenting the token itself and only its own id.
+  - Its id is kept in the clear, so a token whose sealed copy was lost (a new fingerprint, a
+    failed sign-out) is revoked by the next password sign-in, using the fresh JWT.
+  - Turning fingerprint unlock off asks for confirmation, then revokes and signs out.
+  - The app never lists tokens.
+- **Pins:**
+  - `SessionStoreTest`, `MobileTokenTest`.
+  - `test/api-surface.test.js` (`ANDROID_ROUTES`: every call reachable with a library token).
+  - `test/api-contract.test.js` (the request reaches the real mint as sent; the response
+    fields the app reads are pinned).
+  - `test/runtime.test.js` (scope, lifetime, who may mint, adopt and revoke what).
+- **Residual risks (CISO):**
+  - A password change does not sign the phone out: revoke it in My Account.
+  - Losing `ldap.requiredGroup` leaves it working for up to 30 days, unless an admin revokes it.
+  - A stolen unlocked phone keeps access for up to 30 days instead of 12 hours.
+  - A library token can list and revoke the owner's other tokens on v1.
+  - A user switch on one phone leaves the previous account's token unrevoked until it
+    expires: the new account cannot revoke it (404), and it shows in that owner's My Account.
+- **Follow-ups (backend, not blocking):**
+  - A PAT may revoke only itself, and minting or listing needs a session. This changes a
+    frozen v1 route's status, so it needs owner sign-off and a contract pin.
+  - Optionally revoke a user's PATs when their password changes.
 
 ---
 

@@ -9,6 +9,13 @@ data class LoginRequest(val username: String, val password: String)
 // Data class for login response
 data class LoginResponse(val token: String)
 
+// MOB-9: POST /api/user/me/tokens. scopes is always ["library"] and expiresAt never null
+// (MobileToken builds it; test/runtime.test.js pins both).
+data class CreateTokenRequest(val password: String, val name: String, val scopes: List<String>, val expiresAt: String)
+
+// Its 201 answer, the fields the app reads. The plaintext token is in this response only.
+data class CreatedToken(val id: Long, val token: String, val expiresAt: String?)
+
 // Data class for a game
 @Parcelize
 data class Game(

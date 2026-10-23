@@ -837,6 +837,16 @@ The `resolveApiKey(envName)` helper checks `settings.json → apikeys` first, th
   to mean deleting the account and its library. The bulk delete answers 200 with a COUNT
   rather than 204: zero revoked is a success, and a 204 could not tell "revoked seven"
   from "revoked none", which is v1's `{success:true}` defect wearing a new status code.
+  **The Android app holds one (MOB-9).** At a password sign-in with fingerprint unlock on, it
+  mints a `library` token named "Android app · <model> · <time>", fixed 30-day expiry. The
+  token is sealed by the biometric-bound key at once, or revoked. Sign-out revokes it. Its
+  calls are pinned in `test/api-surface.test.js` (`ANDROID_ROUTES`: none may be admin-gated).
+  Residual risks, recorded by the CISO design review:
+  - A password change, local or in the directory, does NOT sign the phone out. Revoke the
+    token in My Account.
+  - Losing `ldap.requiredGroup` leaves it working for up to 30 days, unless an admin revokes it.
+  - A library-scoped token can list and revoke its owner's OTHER tokens on v1. The app never
+    does either; a backend fix (a PAT may revoke only itself) is a follow-up.
 - **Browser session cookie (SEC-14, phase 1: server).** The SPA opts in at login with
   `{"session": "cookie"}`. The answer is then `{session: {...}}` plus
   `Set-Cookie: __Host-gt_session=<the same 12h JWT>; Path=/; HttpOnly; Secure; SameSite=Strict`,
