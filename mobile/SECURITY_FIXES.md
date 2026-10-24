@@ -1,3 +1,5 @@
+> **Historical — do not use as a specification** (ROADMAP MOB-26). The fix described here was a client-side empty-field check. It is not a security control: the server decides every login, and the claims below that tokens are "stored securely in SharedPreferences" and that this "eliminates the credential bypass vulnerability" were never true. Token storage is now in-memory plus a biometric-sealed copy (MOB-6); see `CLAUDE.md` → Authentication.
+
 # Security Fixes - GameTracker Mobile App
 
 ## Critical Security Issue Fixed

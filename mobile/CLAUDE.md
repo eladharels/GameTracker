@@ -11,10 +11,11 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 - **Language**: Kotlin
 - **Platform**: Android (Native)
 - **Minimum SDK**: API 24 (Android 7.0 Nougat)
-- **Target / Compile SDK**: API 36 (Android 15)
+- **Target / Compile SDK**: API 36 (Android 16)
 - **JVM Target**: Java 11
 - **Build System**: Gradle with Kotlin DSL (`build.gradle.kts`)
-- **UI Framework**: Jetpack Compose (enabled) + XML layouts (Fragment-based architecture)
+- **UI Framework**: XML layouts and Fragments. No Compose: the theme files are deleted (MOB-22) and the
+  plugin and dependencies go with MOB-21
 
 ### Key Libraries
 | Library | Version | Purpose |
@@ -74,21 +75,31 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   ├── LoginActivity.kt              # Entry point — auth screen
 │   │   │   ├── MainActivity.kt               # Main container — hosts all fragments
 │   │   │   ├── SettingsActivity.kt           # App settings screen
+│   │   │   ├── GameStatus.kt                 # The five statuses, the four a user may PICK, and
+│   │   │   │                                 #   what the server says it stored (MOB-13)
+│   │   │   ├── BacklogOrder.kt               # The backlog's order, positions and the one
+│   │   │   │                                 #   whole-order request (MOB-14)
+│   │   │   ├── SearchResults.kt              # Found / empty / failed-and-why (MOB-15)
+│   │   │   ├── LibraryAdd.kt                 # THE add: fresh library, match, then post (MOB-10/16)
+│   │   │   ├── LibraryCache.kt               # The one library copy's rules (MOB-19, JVM-tested)
+│   │   │   ├── LibraryRepository.kt          #   and its wiring to the API: the only getLibrary
+│   │   │   ├── LibraryWriteInterceptor.kt    # Every non-GET drops the copy (MOB-19)
+│   │   │   ├── HomeAdapters.kt, CoverBinder.kt, DonutView.kt, ThemeManager.kt, SnackbarHelper.kt,
+│   │   │   │   CalendarHelper.kt             # Home lists, covers, the Insights donut, accent
+│   │   │   │                                 #   presets, snackbars, calendar sync
 │   │   │   ├── fragments/
-│   │   │   │   ├── SearchFragment.kt         # Game search UI
+│   │   │   │   ├── HomeFragment.kt           # Greeting, now playing, up next, shortcuts
+│   │   │   │   ├── SearchFragment.kt         # "Discover": catalog search
 │   │   │   │   ├── LibraryFragment.kt        # User library management
-│   │   │   │   ├── ProfileFragment.kt        # User profile + stats
-│   │   │   │   └── GameDetailsFragment.kt    # Game detail bottom sheet / view
-│   │   │   ├── SafeUrl.kt                    # https-only gate for every server-supplied image URL
-│   │   │   │                                 #   (MOB-8; twin of the web's safeUrl.js)
-│   │   │   └── ui/theme/
-│   │   │       ├── Color.kt
-│   │   │       ├── Theme.kt
-│   │   │       └── Type.kt
+│   │   │   │   ├── InsightsFragment.kt       # Counts and completion, from the library
+│   │   │   │   ├── ProfileFragment.kt        # User profile + stats + settings
+│   │   │   │   └── GameDetailsFragment.kt    # Game details, opened over the tab (MOB-19)
+│   │   │   └── SafeUrl.kt                    # https-only gate for every server-supplied image URL
+│   │   │                                     #   (MOB-8; twin of the web's safeUrl.js)
 │   │   ├── res/
 │   │   │   ├── layout/                       # XML layouts for all screens
 │   │   │   ├── values/                       # Colors, strings, themes
-│   │   │   ├── menu/                         # Navigation and action bar menus
+│   │   │   ├── menu/                         # The bottom navigation (the toolbar menu is gone, MOB-22)
 │   │   │   ├── drawable/                     # Icons and drawables
 │   │   │   └── anim/                         # Slide transition animations
 │   │   └── AndroidManifest.xml
@@ -148,7 +159,7 @@ LoginActivity  (LAUNCHER — entry point)
 MainActivity  (single activity host)
     ├── Bottom Navigation (5 tabs):
     │   ├── Home            → HomeFragment
-    │   ├── Search          → SearchFragment
+    │   ├── Discover        → SearchFragment
     │   ├── Library         → LibraryFragment
     │   ├── Insights        → InsightsFragment
     │   └── Profile         → ProfileFragment
@@ -176,9 +187,10 @@ MainActivity  (single activity host)
     └── GameDetailsFragment  (pushed onto back stack)
         ├── Cover image (Glide)
         ├── Title, release date, price
-        ├── Status spinner
-        ├── Update status / Refresh metadata buttons
-        └── Remove from library button
+        ├── Status chips (Wishlist, Backlog, Playing, Done; Unreleased is shown, never picked)
+        ├── Rating and notes (this phone only), Refresh metadata
+        ├── Remove from library (asks first)
+        └── For a game NOT in the library: only "Add to library" (MOB-16)
 ```
 
 ---
@@ -187,7 +199,7 @@ MainActivity  (single activity host)
 
 ### Login Flow
 1. User enters username + password in `LoginActivity`
-2. Client validates non-empty, trims whitespace, lowercases username
+2. Client checks both fields are non-empty and lowercases the username (whitespace: MOB-34)
 3. `POST /auth/login` with `LoginRequest`
 4. On success: the token is held IN MEMORY by `SessionStore`; only the username goes to the
    `"auth"` prefs. With fingerprint unlock on, one fingerprint prompt seals the new token
@@ -263,34 +275,22 @@ MainActivity  (single activity host)
   in fragments for anything that touches a view. The fragment's own `lifecycleScope` only for
   work that must outlive the view, marked `// outlives the view: <why>`. No `CoroutineScope(...)`
   except `PendingRemovals`' process scope. All pinned in `test/runtime.test.js`
-- **State reload**: Fragments reload from API on resume / lifecycle events (no persistent cache)
+- **State reload**: tabs re-read the shared library copy when shown (MOB-19); nothing is cached on disk
 
 ---
 
 ## Design System
 
 ### Color Palette
-> **Stale:** the values below are what this file used to claim. The code uses `#111218`
-> backgrounds and a `#5B8DEF` default accent, with 5 accent presets (`ThemeManager`). See
-> MOB-26 and MOB-33 in `mobile/ROADMAP.md` before trusting this table.
-
-| Role | Hex | Usage |
-|---|---|---|
-| Primary Background | `#181A20` | Screen backgrounds |
-| Card/Surface | `#23262F` | Game cards, bottom sheets |
-| Accent Blue | `#22B8F6` | Buttons, active states, status "Playing" |
-| Text Primary | `#F5F6FA` | Main text |
-| Text Secondary | `#A0A3B1` | Subtitles, metadata |
-| Status Wishlist | `#6B7280` | Gray |
-| Status Playing | `#22B8F6` | Blue |
-| Status Done | `#22C55E` | Green |
-| Status Backlog | `#F97316` | Orange |
-| Status Unreleased | `#8B5CF6` | Purple |
+`res/values/colors.xml` is the source; this is a summary of it, not a second copy. Screens are
+`gt_surface_1` `#111218`, cards `gt_surface_2`/`gt_card`, body text `gt_text_primary` `#F0F1F8`,
+secondary text `gt_text_secondary` `#8890A8`. The accent is a runtime preset (`ThemeManager`), not
+a fixed colour. Status colours are `gt_status_*`. Contrast rules: MOB-29 in `mobile/ROADMAP.md`.
 
 ### UI Patterns
 - Material Design 3 components throughout
 - Dark-first theme
-- Snackbar for user feedback (not dialogs)
+- Snackbar for feedback; a dialog only to confirm something that cannot be undone (Remove, sign-out)
 - Loading progress indicators on async operations
 - Empty state messages with guidance
 - Slide animations (200ms) on fragment transitions (`slide_in_right`, `slide_out_left`)
@@ -416,7 +416,7 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 **Invocation**: Launch the UI/UX agent to review any UI changes.
 
 **Scope of review**:
-- Consistency with the dark theme color palette (`#181A20`, `#22B8F6` accent, status colors)
+- Consistency with the dark theme palette in `res/values/colors.xml` (accent presets in `ThemeManager`)
 - Material Design 3 component usage and guidelines compliance
 - Touch target sizes (minimum 48dp for interactive elements)
 - Accessibility: content descriptions, TalkBack support, sufficient color contrast

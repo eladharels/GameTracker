@@ -631,7 +631,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - It writes `mobile/api-contract.json`, which is committed.
   - The backend gate reads that JSON. A CI step fails if regenerating it changes it.
 
-### [ ] MOB-26 Medium — Documentation contradicts the code
+### [x] MOB-26 Medium — Documentation contradicts the code
 - **Where and what:**
   - `mobile/CLAUDE.md`:
     - `:14` says API 36 is "Android 15"; it is Android 16.
@@ -663,6 +663,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Mark `SECURITY_FIXES.md` and `UI_UX_IMPROVEMENTS.md` as historical, the way the root
     repo does.
   - Update the root `CLAUDE.md` pointer.
+
+- **Done (PR #15):** `mobile/CLAUDE.md` corrected from the code: Android 16, logging in debug
+  only (true since MOB-1), the five tabs (Discover is the search tab), status chips, the login
+  checks as they are, the token (MOB-3/6), coroutine scopes (MOB-17), the file tree (the new
+  helpers, no Compose theme), and the palette summarised FROM `colors.xml` instead of a stale
+  copy. `SECURITY_FIXES.md` and `UI_UX_IMPROVEMENTS.md` carry a "historical" banner naming what
+  is false. The root `CLAUDE.md` already points at `mobile/`.
 
 ---
 
