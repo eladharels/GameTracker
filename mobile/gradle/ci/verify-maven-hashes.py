@@ -9,6 +9,7 @@ Exit 1 when any artifact's hash differs from the file, or the artifact is in no 
 """
 import concurrent.futures
 import hashlib
+import json
 import sys
 import time
 import urllib.error
@@ -43,13 +44,41 @@ def sha256_of(url):
     raise RuntimeError(f"could not fetch {url}")
 
 
+def fetch_text(url):
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            return r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
+def published_name(repo, base, name, version, file):
+    """A Gradle Module Metadata variant file is RECORDED by its `name` (lifecycle-runtime-release.aar)
+    but PUBLISHED at its `url` (lifecycle-runtime-android-2.9.1.aar): read the .module, as Gradle does."""
+    module = fetch_text(f"{repo}/{base}/{name}-{version}.module")
+    if module is None:
+        return None
+    for variant in json.loads(module).get("variants", []):
+        for f in variant.get("files", []):
+            if f.get("name") == file and f.get("url") and f["url"] != file:
+                return f["url"]
+    return None
+
+
 def check(item):
     group, name, version, file, want = item
-    path = f"{group.replace('.', '/')}/{name}/{version}/{file}"
+    base = f"{group.replace('.', '/')}/{name}/{version}"
     for repo in REPOS:
-        got = sha256_of(f"{repo}/{path}")
+        got = sha256_of(f"{repo}/{base}/{file}")
         if got is None:
-            continue
+            url = published_name(repo, base, name, version, file)
+            if url is None:
+                continue
+            got = sha256_of(f"{repo}/{base}/{url}")
+            if got is None:
+                continue
         return (item, repo, got == want, got)
     return (item, None, False, None)
 
