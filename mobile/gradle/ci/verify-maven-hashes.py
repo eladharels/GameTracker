@@ -24,10 +24,18 @@ REPOS = [
 NS = {"v": "https://schema.gradle.org/dependency-verification"}
 
 
+def https_only(url):
+    # Every URL is one of REPOS plus a path from the metadata: never another scheme.
+    if not url.startswith(tuple(f"{r}/" for r in REPOS)):
+        raise ValueError(f"refusing a URL outside the pinned repositories: {url}")
+    return url
+
+
 def sha256_of(url):
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(url, timeout=60) as r:
+            # https to a pinned repository only (https_only); the content is hashed, never run.
+            with urllib.request.urlopen(https_only(url), timeout=60) as r:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
                 h = hashlib.sha256()
                 for chunk in iter(lambda: r.read(1 << 16), b""):
                     h.update(chunk)
@@ -46,7 +54,7 @@ def sha256_of(url):
 
 def fetch_text(url):
     try:
-        with urllib.request.urlopen(url, timeout=60) as r:
+        with urllib.request.urlopen(https_only(url), timeout=60) as r:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             return r.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -84,7 +92,14 @@ def check(item):
 
 
 def main(metadata):
-    root = ET.parse(metadata).getroot()
+    # No DTD at all, so no external entity and no entity expansion (XXE, "billion laughs"):
+    # the verification metadata never has one. Checked before the standard parser sees it.
+    with open(metadata, encoding="utf-8") as fh:
+        text = fh.read()
+    if "<!DOCTYPE" in text or "<!ENTITY" in text:
+        print(f"{metadata} declares a DTD or an entity: refusing to parse it")
+        return 1
+    root = ET.fromstring(text)  # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse
     items = []
     for comp in root.findall("v:components/v:component", NS):
         for art in comp.findall("v:artifact", NS):

@@ -886,10 +886,12 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'sign-in failures are not mapped by status (a lockout would read as a wrong password)');
   });
 
-  check('no compiled Python bytecode is tracked (an unreviewable binary; PR #15 review)', () => {
-    const tracked = require('child_process').execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' }).split('\n');
-    const pyc = tracked.filter((f) => /(^|\/)__pycache__\/|\.pyc$/.test(f));
-    assert.deepStrictEqual(pyc, [], `tracked bytecode: ${pyc}`);
+  // A local py_compile once put a .pyc in a commit, through `git add -A` (PR #15 review). git
+  // itself cannot be asked here (the runner refuses the checkout as "dubious ownership"), so
+  // the ignore rules that stop it are what is pinned.
+  check('Python bytecode is git-ignored (an unreviewable binary; PR #15 review)', () => {
+    const ignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim());
+    assert.ok(ignore.includes('__pycache__/') && ignore.includes('*.pyc'), '.gitignore no longer ignores Python bytecode');
   });
 
   // MOB-21: versions in one catalog, no Compose and no kapt, and Dependabot watching mobile/ --
