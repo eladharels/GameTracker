@@ -332,7 +332,7 @@ class SearchFragment : Fragment() {
     }
 
     private suspend fun searchAllGames(query: String): SearchResult {
-        val token = session.token ?: return SearchResult.Failed(SearchResult.Reason.SIGNED_OUT)
+        val token = Session.get(requireContext()).token ?: return SearchResult.Failed(SearchResult.Reason.SIGNED_OUT)
         return try {
             val response = withContext(Dispatchers.IO) {
                 ink.etech.gametracker.ApiClient.api.searchGames(query, "Bearer $token")
