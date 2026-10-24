@@ -198,6 +198,75 @@ with no settings file at all.
 
 ---
 
+## MOB-38: run the CI runner as a non-root user
+
+The self-hosted runner is the production host, and it runs every job as root. Since the
+MOB-38 change no workflow step needs root any more:
+- gitleaks and trivy are cached in the runner user's own `~/.cache/gametracker-tools`,
+  re-checksummed every run, and run by path;
+- the smoke stack's data directory changes owner through a throwaway container;
+- `test/runtime.test.js` fails if `sudo` comes back in any workflow.
+
+What is left is on the host. Do it in a quiet window. A run that starts mid-way fails, and
+re-running it is safe.
+
+**Know what this buys.** Membership of the `docker` group is still root-equivalent on this
+host: anyone who can run `docker run -v /:/host` owns it. So this stops ACCIDENTS (a step
+writing where it should not, a tool installed over a system binary), not a determined
+attacker. The durable fixes are in the root `CLAUDE.md`: GitHub-hosted runners for pull
+requests, or a private repository.
+
+1. **Check a green run on `main` first**, still as root, so a later failure is the switch and
+   not the code.
+2. **Create the user**, with Docker access and no sudo rights:
+   ```bash
+   sudo useradd --create-home --shell /bin/bash gha-runner
+   sudo usermod -aG docker gha-runner
+   ```
+3. **Stop the service and hand the runner directory over.** The directory below is where
+   this host's runner lives (`/srv/actions-runner`, per the job logs).
+   ```bash
+   cd /srv/actions-runner
+   sudo ./svc.sh stop
+   sudo ./svc.sh uninstall
+   sudo chown -R gha-runner:gha-runner /srv/actions-runner
+   ```
+4. **The one host path a job writes to** outside its workspace: the published APK directory
+   (MOB-40). Give it to the runner and keep it world-readable, because nginx reads it
+   read-only:
+   ```bash
+   sudo chown gha-runner:gha-runner /home/docker/gametracker/apk
+   sudo chmod 755 /home/docker/gametracker/apk
+   sudo chown gha-runner:gha-runner /home/docker/gametracker/apk/gametracker.apk 2>/dev/null || true
+   ```
+   Nothing else needs to change. Deploy only runs `docker compose`: the daemon reads the
+   bind mounts in `/home/docker/gametracker/data`, the runner does not. The data directory
+   stays owned by `1000:1000` (see "Post-Deploy Requirement" in `CLAUDE.md`).
+5. **Install the service as that user and start it:**
+   ```bash
+   sudo ./svc.sh install gha-runner
+   sudo ./svc.sh start
+   ps -o user= -p "$(pgrep -f Runner.Listener)"     # must print gha-runner
+   ```
+6. **Verify:** re-run the latest `main` workflow and the Android one, from GitHub ->
+   Actions -> Re-run all jobs. Then check four things:
+   - every job is green;
+   - the Android job's "Sign and publish" step logs `[android] published`;
+   - `/download/gametracker.apk` still downloads;
+   - `ls -l /home/docker/gametracker/apk` shows `gha-runner`.
+7. **Optional clean-up**, once a week of runs is green:
+   - Delete the old root-installed `/usr/local/bin/gitleaks` and `/usr/local/bin/trivy`.
+     Nothing uses them now: the jobs put their own verified copies first on PATH.
+   - Delete root's caches: `/root/.cache/gametracker-semgrep`, `/root/.cache/trivy`.
+
+**Rollback:** `sudo ./svc.sh stop && sudo ./svc.sh uninstall`, then
+`sudo chown -R root:root /srv/actions-runner`, then `sudo ./svc.sh install` (no user means
+root) and `sudo ./svc.sh start`.
+
+Record the date under MOB-38 in `mobile/ROADMAP.md` when done.
+
+---
+
 ## MOB-40: the Android release signing key
 
 `android.yml` publishes the app at `/download/gametracker.apk` only when a signing key is

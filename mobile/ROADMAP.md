@@ -788,6 +788,11 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Source:** CISO review of PR #6.
 
 ### [ ] MOB-38 High — The self-hosted runner (the production host) runs every CI job as root
+- **Code side done (PR #15):** no workflow step needs root any more. gitleaks and trivy are
+  cached in the runner user's home and re-checksummed on every run. The smoke data directory
+  changes owner through a throwaway container. `test/runtime.test.js` fails on any `sudo`.
+  **Left: the host switch**, in `OPERATOR_RUNBOOK.md` ("MOB-38"). Tick this item once that
+  is done.
 - **Where:** the runner service on the production host. It is not in this repository.
 - **What:** every CI step runs as uid 0 beside the live stack. That covers `npm ci`, the image
   builds, Trivy, the smoke stacks, deploy and the Android job's host-side steps. PR #6 found

@@ -274,7 +274,7 @@ const WORKFLOW_FILES = fs.readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.tes
 const loadWorkflow = (f) => require('js-yaml').load(fs.readFileSync(path.join(WORKFLOW_DIR, f), 'utf8'));
 const stepRun = (st) => (st.run || '').replace(/^\s*#.*$/gm, '');
 
-check('CI installs tools from a private dir, checksum-verified before sudo install', () => {
+check('CI installs tools from a private dir, checksum-verified every run, and never uses sudo (MOB-38)', () => {
   let installs = 0;
   for (const file of WORKFLOW_FILES) {
     const wf = loadWorkflow(file);
@@ -297,16 +297,23 @@ check('CI installs tools from a private dir, checksum-verified before sudo insta
           for (const m of run.matchAll(/^\s*(\w+)="([0-9a-f]{64})"/gm)) pinned[m[1]] = m[2];
           assert.ok(/^[0-9a-f]{64}$/.test(pinned[fed[1]] || ''), `${where}: ${fed[1]} is not a pinned 64-hex SHA-256`);
         }
-        if (/sudo install\b/.test(run)) {
+        // MOB-38: the runner is to run as a non-root user (OPERATOR_RUNBOOK.md), so no step
+        // may need root: tools are cached in the runner's home and run by path, and the
+        // smoke stack's files change owner through Docker.
+        assert.ok(!/(^|[\s;&|(])sudo\s/m.test(run), `${where} uses sudo: the runner must not need root (MOB-38)`);
+        if (/>> "\$GITHUB_PATH"/.test(run) && /\btar -x/.test(run)) {
           installs++;
-          const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
-          assert.ok(check >= 0 && check < untar && untar < inst,
-            `${where} installs as root without checking a pinned SHA-256 first`);
+          // The cache is writable by every later job, so the pinned hash is re-checked on
+          // EVERY run, on the line that extracts it: not only when it was downloaded.
+          const lines = run.split('\n');
+          const at = lines.findIndex((l) => /\btar -x/.test(l));
+          assert.ok(at > 0 && /echo "\$\{\w+_SHA256\}\s+\$\{TARBALL\}" \| sha256sum -c -/.test(lines[at - 1]),
+            `${where} extracts its cached tool without re-checking the pinned SHA-256 on the line before`);
         }
       }
     }
   }
-  assert.ok(installs >= 4, `found ${installs} root installs — expected gitleaks and three trivy`);
+  assert.ok(installs >= 4, `found ${installs} cached tool installs — expected gitleaks and three trivy`);
 });
 
 // This repository is public and every job runs on the production host. A job reachable from

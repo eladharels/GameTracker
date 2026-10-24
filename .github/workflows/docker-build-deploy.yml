@@ -128,17 +128,19 @@ jobs:
           set -euo pipefail
           GITLEAKS_VERSION="8.21.2"
           GITLEAKS_SHA256="5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
-          # Reinstall unless the pinned version is already on PATH, so a stubbed
-          # binary cannot silently disable the secret scan on a persistent runner.
-          # The SHA-256 below protects the DOWNLOAD. A binary already installed at the pinned
-          # version is not re-hashed; /usr/local/bin is root-owned, and the version check
-          # after this block still fails closed on anything else.
-          if [ "$(gitleaks version 2>/dev/null)" != "${GITLEAKS_VERSION}" ]; then
+          # MOB-38: no root. The tarball is cached in the runner user's own home and
+          # its PINNED SHA-256 is re-checked on EVERY run before it is extracted, into
+          # this job's private temp dir. A cache the runner can write is not trusted:
+          # it was the root-owned /usr/local/bin that made skipping the re-hash safe,
+          # and that needed `sudo install`.
+          TOOLS="${HOME}/.cache/gametracker-tools"
+          TARBALL="${TOOLS}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          mkdir -p "${TOOLS}"
+          if ! echo "${GITLEAKS_SHA256}  ${TARBALL}" | sha256sum -c --status 2>/dev/null; then
             echo "[gitleaks] Downloading pinned v${GITLEAKS_VERSION}..."
             # A private mktemp -d, never a fixed /tmp path: this runner is the production
-            # host and the file is installed as ROOT, so a pre-planted /tmp/gitleaks
-            # symlink or binary would be what `sudo install` copies (review of UP-7).
-            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gitleaks-dl.XXXXXXXX")"
+            # host, so a pre-planted /tmp file must never be what gets cached (UP-7).
+            DL="$(mktemp -d "${RUNNER_TEMP}/gitleaks-dl.XXXXXXXX")"
             trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
@@ -148,9 +150,14 @@ jobs:
             # with. Taken from the release's checksums.txt AND recomputed from a download.
             # Bump it with the version, deliberately.
             echo "${GITLEAKS_SHA256}  $DL/gitleaks.tar.gz" | sha256sum -c -
-            tar -xzf "$DL/gitleaks.tar.gz" -C "$DL" gitleaks
-            sudo install -m 0755 "$DL/gitleaks" /usr/local/bin/gitleaks
+            mv -f "$DL/gitleaks.tar.gz" "${TARBALL}"
           fi
+          BIN="$(mktemp -d "${RUNNER_TEMP}/gitleaks-bin.XXXXXXXX")"
+          echo "${GITLEAKS_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "${TARBALL}" -C "${BIN}" gitleaks
+          # Ahead of anything already on PATH, including an old root-installed copy.
+          echo "${BIN}" >> "$GITHUB_PATH"
+          export PATH="${BIN}:${PATH}"
           gitleaks version
           gitleaks version | grep -q "${GITLEAKS_VERSION}"
 
@@ -560,18 +567,26 @@ jobs:
           TRIVY_SHA256: "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9"
         run: |
           set -euo pipefail
-          if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
-            echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
-            # Private temp dir + PINNED SHA-256 before a root install — see the Gitleaks step.
-            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/trivy-dl.XXXXXXXX")"
+          # MOB-38: no root -- cached in the runner user's home, the PINNED SHA-256
+          # re-checked every run before extraction (see the Gitleaks step).
+          TOOLS="${HOME}/.cache/gametracker-tools"
+          TARBALL="${TOOLS}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          mkdir -p "${TOOLS}"
+          if ! echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c --status 2>/dev/null; then
+            echo "[trivy] Downloading pinned v${TRIVY_VERSION}..."
+            DL="$(mktemp -d "${RUNNER_TEMP}/trivy-dl.XXXXXXXX")"
             trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
               -o "$DL/trivy.tar.gz"
             echo "${TRIVY_SHA256}  $DL/trivy.tar.gz" | sha256sum -c -
-            tar -xzf "$DL/trivy.tar.gz" -C "$DL" trivy
-            sudo install -m 0755 "$DL/trivy" /usr/local/bin/trivy
+            mv -f "$DL/trivy.tar.gz" "${TARBALL}"
           fi
+          BIN="$(mktemp -d "${RUNNER_TEMP}/trivy-bin.XXXXXXXX")"
+          echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "${TARBALL}" -C "${BIN}" trivy
+          echo "${BIN}" >> "$GITHUB_PATH"
+          export PATH="${BIN}:${PATH}"
           # Fail closed if the binary on PATH is not the pinned version.
           trivy --version
           trivy --version | head -1 | grep -q "${TRIVY_VERSION}"
@@ -632,18 +647,26 @@ jobs:
           TRIVY_SHA256: "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9"
         run: |
           set -euo pipefail
-          if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
-            echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
-            # Private temp dir + PINNED SHA-256 before a root install — see the Gitleaks step.
-            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/trivy-dl.XXXXXXXX")"
+          # MOB-38: no root -- cached in the runner user's home, the PINNED SHA-256
+          # re-checked every run before extraction (see the Gitleaks step).
+          TOOLS="${HOME}/.cache/gametracker-tools"
+          TARBALL="${TOOLS}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          mkdir -p "${TOOLS}"
+          if ! echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c --status 2>/dev/null; then
+            echo "[trivy] Downloading pinned v${TRIVY_VERSION}..."
+            DL="$(mktemp -d "${RUNNER_TEMP}/trivy-dl.XXXXXXXX")"
             trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
               -o "$DL/trivy.tar.gz"
             echo "${TRIVY_SHA256}  $DL/trivy.tar.gz" | sha256sum -c -
-            tar -xzf "$DL/trivy.tar.gz" -C "$DL" trivy
-            sudo install -m 0755 "$DL/trivy" /usr/local/bin/trivy
+            mv -f "$DL/trivy.tar.gz" "${TARBALL}"
           fi
+          BIN="$(mktemp -d "${RUNNER_TEMP}/trivy-bin.XXXXXXXX")"
+          echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "${TARBALL}" -C "${BIN}" trivy
+          echo "${BIN}" >> "$GITHUB_PATH"
+          export PATH="${BIN}:${PATH}"
           # Fail closed if the binary on PATH is not the pinned version.
           trivy --version
           trivy --version | head -1 | grep -q "${TRIVY_VERSION}"
@@ -712,18 +735,26 @@ jobs:
           TRIVY_SHA256: "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9"
         run: |
           set -euo pipefail
-          if [ "$(trivy --version 2>/dev/null | head -1 | awk '{print $2}')" != "${TRIVY_VERSION}" ]; then
-            echo "[trivy] Installing pinned v${TRIVY_VERSION}..."
-            # Private temp dir + PINNED SHA-256 before a root install — see the Gitleaks step.
-            DL="$(mktemp -d "${RUNNER_TEMP:-/tmp}/trivy-dl.XXXXXXXX")"
+          # MOB-38: no root -- cached in the runner user's home, the PINNED SHA-256
+          # re-checked every run before extraction (see the Gitleaks step).
+          TOOLS="${HOME}/.cache/gametracker-tools"
+          TARBALL="${TOOLS}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          mkdir -p "${TOOLS}"
+          if ! echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c --status 2>/dev/null; then
+            echo "[trivy] Downloading pinned v${TRIVY_VERSION}..."
+            DL="$(mktemp -d "${RUNNER_TEMP}/trivy-dl.XXXXXXXX")"
             trap 'rm -rf "$DL"' EXIT
             curl -sSfL --proto '=https' --tlsv1.2 \
               "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
               -o "$DL/trivy.tar.gz"
             echo "${TRIVY_SHA256}  $DL/trivy.tar.gz" | sha256sum -c -
-            tar -xzf "$DL/trivy.tar.gz" -C "$DL" trivy
-            sudo install -m 0755 "$DL/trivy" /usr/local/bin/trivy
+            mv -f "$DL/trivy.tar.gz" "${TARBALL}"
           fi
+          BIN="$(mktemp -d "${RUNNER_TEMP}/trivy-bin.XXXXXXXX")"
+          echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "${TARBALL}" -C "${BIN}" trivy
+          echo "${BIN}" >> "$GITHUB_PATH"
+          export PATH="${BIN}:${PATH}"
           # Fail closed if the binary on PATH is not the pinned version.
           trivy --version
           trivy --version | head -1 | grep -q "${TRIVY_VERSION}"
@@ -831,7 +862,10 @@ jobs:
           # changing, for the container's UID 1000 (node). Do NOT chmod after the
           # chown — under `set -e` that would fail the job whenever the runner's
           # own UID is not 1000.
-          sudo chown -R 1000:1000 "${SMOKE_DATA_DIR}"
+          # MOB-38: through Docker, not sudo, so the runner needs no root. The image is
+          # the backend this run built; only CHOWN, no network.
+          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
+            --user 0 --entrypoint chown -v "${SMOKE_DATA_DIR}:/d" "${TEST_BACKEND_IMAGE}" -R 1000:1000 /d
           echo "[smoke] Test data dir: ${SMOKE_DATA_DIR}"
 
       # A stack a cancelled or crashed run left behind would hold THIS partition's ports.
@@ -1266,7 +1300,12 @@ jobs:
             down --volumes --remove-orphans || true
           # Refuse to delete anything that isn't the mktemp -d directory we created.
           if [ -n "${SMOKE_DATA_DIR:-}" ] && [ -d "${SMOKE_DATA_DIR}" ] && [ ! -L "${SMOKE_DATA_DIR}" ]; then
-            sudo rm -rf --one-file-system "${SMOKE_DATA_DIR}"
+            # Its files belong to the container's UID 1000: hand them back to the runner
+            # through Docker first (MOB-38: no sudo), then delete as the runner.
+            docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH \
+              --security-opt no-new-privileges --user 0 --entrypoint chown \
+              -v "${SMOKE_DATA_DIR}:/d" "${TEST_BACKEND_IMAGE}" -R "$(id -u):$(id -g)" /d || true
+            rm -rf --one-file-system "${SMOKE_DATA_DIR}"
           fi
           if [ -n "${SMOKE_TMP:-}" ] && [ -d "${SMOKE_TMP}" ] && [ ! -L "${SMOKE_TMP}" ]; then
             rm -rf --one-file-system "${SMOKE_TMP}"
