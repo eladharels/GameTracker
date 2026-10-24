@@ -120,7 +120,7 @@ class ProfileFragment : Fragment() {
     private fun setupColorPickerDots(view: View) {
         val presetIds = listOf(
             R.id.colorPreset0, R.id.colorPreset1, R.id.colorPreset2,
-            R.id.colorPreset3, R.id.colorPreset4
+            R.id.colorPreset3, R.id.colorPreset4, R.id.colorPreset5
         )
         val currentAccent = ThemeManager.getAccent(requireContext())
         val density = resources.displayMetrics.density
@@ -134,7 +134,7 @@ class ProfileFragment : Fragment() {
             val presetColor = ThemeManager.PRESETS[i]
             val isSelected = presetColor == currentAccent
 
-            dot.background = if (isSelected) {
+            val circle: android.graphics.drawable.Drawable = if (isSelected) {
                 // Professional "gap ring" style (used by Instagram, Google Photos, iOS):
                 //   Layer 0 — white outer ring (full dot size)
                 //   Layer 1 — dark gap ring matching the card background (2 dp inset)
@@ -163,6 +163,11 @@ class ProfileFragment : Fragment() {
                     shape = GradientDrawable.OVAL
                     setColor(presetColor)
                 }
+            }
+            // A 40dp circle centred in the cell, which is the 48dp-tall touch target (MOB-33).
+            dot.background = android.graphics.drawable.LayerDrawable(arrayOf(circle)).apply {
+                setLayerSize(0, dp(40f), dp(40f))
+                setLayerGravity(0, android.view.Gravity.CENTER)
             }
 
             // MOB-30: a focusable View with no label read as "unlabelled" to TalkBack.

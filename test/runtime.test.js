@@ -694,6 +694,38 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-33: the app had five accents (Blue default) where the web has six (Violet default), and
+  // three presets WERE status colours. Now both lists are the web's, read from its source.
+  check('Android: the web\'s accent presets and status palette, with readable text on each (MOB-29, MOB-33)', () => {
+    const app = fs.readFileSync(path.join(ROOT, 'frontend/src/App.jsx'), 'utf8');
+    const web = [...app.slice(app.indexOf('const ACCENT_PRESETS'), app.indexOf(']', app.indexOf('const ACCENT_PRESETS')))
+      .matchAll(/name: '(\w+)',\s*value: '#([0-9a-f]{6})'/g)].map((m) => ({ name: m[1], hex: m[2].toUpperCase() }));
+    assert.ok(web.length === 6, `found ${web.length} web presets -- the parse is broken`);
+    const tm = code('ThemeManager.kt');
+    const hexes = [...tm.slice(tm.indexOf('val PRESETS')).matchAll(/0xFF([0-9A-F]{6})\.toInt\(\)/g)].slice(0, 6).map((m) => m[1]);
+    assert.deepStrictEqual(hexes, web.map((w) => w.hex), 'ThemeManager.PRESETS are not the web\'s presets, in its order');
+    const names = /PRESET_NAMES = arrayOf\(([^)]*)\)/.exec(tm)[1].match(/"(\w+)"/g).map((n) => n.replace(/"/g, ''));
+    assert.deepStrictEqual(names, web.map((w) => w.name), 'PRESET_NAMES are not the web\'s names');
+    const lum = (h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      .reduce((a, c, i) => a + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const themes = fs.readFileSync(path.join(APP, 'res/values/themes.xml'), 'utf8');
+    for (const { name, hex } of web) {
+      const m = new RegExp(`ThemeOverlay\\.GameTracker\\.${name}"[\\s\\S]*?colorPrimary">#([0-9A-F]{6})<[\\s\\S]*?colorOnPrimary">#([0-9A-F]{6})<`).exec(themes);
+      assert.ok(m && m[1] === hex, `no ThemeOverlay.GameTracker.${name} with colorPrimary #${hex}`);
+      assert.ok(ratio(m[2], hex) >= 4.5, `colorOnPrimary on ${name} is ${ratio(m[2], hex).toFixed(2)}:1`);
+    }
+    const css = fs.readFileSync(path.join(ROOT, 'frontend/src/App.css'), 'utf8');
+    const colors = fs.readFileSync(path.join(APP, 'res/values/colors.xml'), 'utf8');
+    for (const st of ['wishlist', 'playing', 'done', 'backlog', 'unreleased']) {
+      const w = new RegExp(`--color-status-${st}:\\s*#([0-9a-f]{6})`).exec(css)[1].toUpperCase();
+      const a = new RegExp(`name="gt_status_${st}">#([0-9A-F]{6})<`).exec(colors)[1];
+      assert.strictEqual(a, w, `gt_status_${st} is not the web's --color-status-${st}`);
+      assert.ok(!web.some((p) => p.hex === a), `gt_status_${st} is an accent preset: a control would look like a status`);
+    }
+  });
+
   // MOB-32: 40dp targets and 9-10sp text. Floor of 12sp everywhere; the named controls 48dp.
   check('Android: no text under 12sp, and the small controls are 48dp (MOB-32)', () => {
     const dir = path.join(APP, 'res/layout');

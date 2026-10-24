@@ -28,7 +28,7 @@ class DonutView @JvmOverloads constructor(
     }
     private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.parseColor("#22C55E")
+        color = Color.parseColor("#C084FC")   // gt_status_done (MOB-33)
         strokeWidth = 13f * density
         strokeCap = Paint.Cap.ROUND
     }

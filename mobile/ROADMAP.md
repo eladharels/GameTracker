@@ -732,7 +732,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   now shows the real `versionName`. Notification channels live in My Account on the web,
   which this app does not reach.
 
-### [~] MOB-29 Medium — Text contrast fails WCAG AA across the app
+### [x] MOB-29 Medium — Text contrast fails WCAG AA across the app
 - **Where and ratios (computed, WCAG 2.x):**
   - `gt_text_muted #4A5068` (`colors.xml:52`): **2.35:1** on the screen `#111218`, **2.18:1**
     on cards `#181A22`. It is used for real content, not decoration:
@@ -765,8 +765,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     use `gt_on_status` `#0C0D11`, >= 4.5:1 on all five status colours.
   - Error snackbar text is `#FF6B6B` (4.64:1 on its background).
   - `test/runtime.test.js` computes the ratios FROM `colors.xml`.
-  - **`colorOnPrimary` per accent preset goes with MOB-33**, which replaces the presets with
-    the web's six: computing it for presets about to be deleted would be wasted.
+  - `colorOnPrimary` per preset: done with MOB-33 (dark ink wins on all six; computed in
+    the test).
 
 ### [x] MOB-30 Medium — Screen-reader semantics: labels on decoration, none on controls, drag-only reorder
 - **Where:**
@@ -828,7 +828,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   button, the Search button and the Details buttons are 48dp. Every text size is at least
   12sp, the Insights donut included (now in sp, so it follows the font scale). Pinned.
 
-### [ ] MOB-33 Low — Accent palette differs from the web app, and one preset matches a status colour
+### [x] MOB-33 Low — Accent palette differs from the web app, and one preset matches a status colour
 - **Where:** `ThemeManager.kt:31-40`, `themes.xml:40-73`, `colors.xml:33`.
 - **Why:**
   - The web ships six presets: Violet `#8b5cf6` (the default), Blue, Emerald, Amber, Rose
@@ -842,6 +842,14 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Adopt the web's six presets, names and default.
   - Move the status colours off the preset hues, or render status with a shape or icon as
     well as colour.
+
+- **Done (PR #15):** the web's six presets, names, order and Violet default
+  (`ThemeManager`, `themes.xml`), and the web's status palette (`--color-status-*`): light
+  tints, none equal to a preset, and every status badge also carries its label (the owner's
+  choice: distinct shades plus a label). The brand drawables moved from the old blue to
+  violet. Six 48dp-tall picker cells with a centred 40dp circle. `test/runtime.test.js` reads
+  both lists from the web's source and computes `colorOnPrimary` contrast per preset. A
+  colour saved by the old picker falls back to Violet.
 
 ### [ ] MOB-34 Low — Login input handling
 - **Where:** `LoginActivity.kt:81-97`.

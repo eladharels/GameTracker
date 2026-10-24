@@ -285,8 +285,8 @@ MainActivity  (single activity host)
 ### Color Palette
 `res/values/colors.xml` is the source; this is a summary of it, not a second copy. Screens are
 `gt_surface_1` `#111218`, cards `gt_surface_2`/`gt_card`, body text `gt_text_primary` `#F0F1F8`,
-secondary text `gt_text_secondary` `#8890A8`. The accent is a runtime preset (`ThemeManager`), not
-a fixed colour. Status colours are `gt_status_*`. Contrast rules: MOB-29 in `mobile/ROADMAP.md`.
+secondary text `gt_text_secondary` `#8890A8`. The accent is one of the web's six presets (`ThemeManager`, Violet default), not
+a fixed colour. Status colours are `gt_status_*`, the web's `--color-status-*` (MOB-33). Contrast rules: MOB-29 in `mobile/ROADMAP.md`.
 
 ### UI Patterns
 - Material Design 3 components throughout

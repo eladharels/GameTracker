@@ -17,6 +17,7 @@ import ink.etech.gametracker.DonutView
 import ink.etech.gametracker.Game
 import ink.etech.gametracker.GameExtras
 import ink.etech.gametracker.R
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -87,10 +88,10 @@ class InsightsFragment : Fragment() {
         // Status breakdown bars
         val statusContainer = v.findViewById<LinearLayout>(R.id.statusBars)
         statusContainer.removeAllViews()
-        addBar(statusContainer, "Playing", playing, total, Color.parseColor("#22B8F6"))
-        addBar(statusContainer, "Backlog", backlog, total, Color.parseColor("#F97316"))
-        addBar(statusContainer, "Completed", done, total, Color.parseColor("#22C55E"))
-        addBar(statusContainer, "Wishlist", wishlist, total, Color.parseColor("#8890A8"))
+        addBar(statusContainer, "Playing", playing, total, ContextCompat.getColor(requireContext(), R.color.gt_status_playing))
+        addBar(statusContainer, "Backlog", backlog, total, ContextCompat.getColor(requireContext(), R.color.gt_status_backlog))
+        addBar(statusContainer, "Completed", done, total, ContextCompat.getColor(requireContext(), R.color.gt_status_done))
+        addBar(statusContainer, "Wishlist", wishlist, total, ContextCompat.getColor(requireContext(), R.color.gt_status_wishlist))
 
         // Release years (was "Top genres", drawn from random labels: MOB-11). The year is
         // the one descriptive fact every library row carries; undated games are left out

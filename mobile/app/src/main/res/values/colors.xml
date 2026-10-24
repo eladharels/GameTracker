@@ -22,15 +22,17 @@
     <color name="gt_divider">#0FFFFFFF</color>
     <color name="gt_card_bg">#181A22</color>
     <color name="gt_card_elevated">#1F2130</color>
-    <color name="gt_accent_dim">#3A5FA0</color>
+    <color name="gt_accent_dim">#5B3BB0</color>
     <color name="gt_surface_subtle">#1AFFFFFF</color>
 
     <!-- Status colors -->
-    <color name="gt_status_wishlist">#8890A8</color>
-    <color name="gt_status_playing">#22B8F6</color>
-    <color name="gt_status_done">#22C55E</color>
-    <color name="gt_status_backlog">#F97316</color>
-    <color name="gt_status_unreleased">#8B5CF6</color>
+    <!-- MOB-33: the web's status palette (App.css --color-status-*): light tints, each a
+         distinct shade from the accent presets, and every badge also carries its label. -->
+    <color name="gt_status_wishlist">#38BDF8</color>
+    <color name="gt_status_playing">#34D399</color>
+    <color name="gt_status_done">#C084FC</color>
+    <color name="gt_status_backlog">#FBBF24</color>
+    <color name="gt_status_unreleased">#94A3B8</color>
 
     <!-- New Design Token Surface Scale -->
     <color name="gt_surface_0">#0C0D11</color>
@@ -44,8 +46,8 @@
     <color name="gt_border_strong">#1AFFFFFF</color>
 
     <!-- New Design Token Accent -->
-    <color name="gt_accent">#5B8DEF</color>
-    <color name="gt_accent_glow">#335B8DEF</color>
+    <color name="gt_accent">#8B5CF6</color>
+    <color name="gt_accent_glow">#338B5CF6</color>
 
     <!-- New Design Token Text -->
     <color name="gt_text_primary">#F0F1F8</color>

@@ -67,8 +67,9 @@ class GameDetailsFragment : Fragment() {
         // Never Unreleased: the server decides that from the date (MOB-13).
         private val STATUS_OPTIONS = GameStatus.PICKABLE
         private val STATUS_COLORS = mapOf(
-            "wishlist" to "#8890A8", "backlog" to "#F97316",
-            "playing" to "#22B8F6", "done" to "#22C55E"
+            // = colors.xml gt_status_* (MOB-33, the web's palette)
+            "wishlist" to "#38BDF8", "backlog" to "#FBBF24",
+            "playing" to "#34D399", "done" to "#C084FC", "unreleased" to "#94A3B8"
         )
 
         /**

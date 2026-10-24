@@ -79,7 +79,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
                     android:background="@drawable/pill_soft_bg"
-                    android:backgroundTint="#2422C55E"
+                    android:backgroundTint="#24C084FC"
                     android:paddingHorizontal="11dp"
                     android:paddingVertical="6dp"
                     android:textColor="@color/gt_status_done"

@@ -6,7 +6,7 @@ import android.content.Context
  * Manages the app's accent colour theme using proper Android theme overlays.
  *
  * ## How it works
- * Each of the 5 presets maps to a `ThemeOverlay.GameTracker.*` style defined in themes.xml.
+ * Each of the 6 presets maps to a `ThemeOverlay.GameTracker.*` style defined in themes.xml.
  * The overlay is applied in every Activity's `onCreate()` after `super.onCreate()` but
  * before `setContentView()` — AppCompat is initialised first, then the overlay is
  * overlaid on top before any views are inflated:
@@ -27,17 +27,22 @@ import android.content.Context
  */
 object ThemeManager {
 
-    /** 5 accent presets — matches the new design prototype's swatch row. */
+    /**
+     * The web's six presets, in its order and with its names (MOB-33, frontend/src/App.jsx
+     * ACCENT_PRESETS). Violet is the default. A colour stored by the old five-preset picker
+     * matches none of these and falls back to Violet.
+     */
     val PRESETS = intArrayOf(
-        0xFF5B8DEF.toInt(),   // 0  Blue  (default)
-        0xFF8B5CF6.toInt(),   // 1  Purple
-        0xFF22C55E.toInt(),   // 2  Green
-        0xFFF97316.toInt(),   // 3  Orange
-        0xFFEC4899.toInt()    // 4  Pink
+        0xFF8B5CF6.toInt(),   // 0  Violet (default)
+        0xFF3B82F6.toInt(),   // 1  Blue
+        0xFF10B981.toInt(),   // 2  Emerald
+        0xFFF59E0B.toInt(),   // 3  Amber
+        0xFFF43F5E.toInt(),   // 4  Rose
+        0xFF06B6D4.toInt(),   // 5  Cyan
     )
 
-    /** Human-readable names shown in the Profile colour picker. */
-    val PRESET_NAMES = arrayOf("Blue", "Purple", "Green", "Orange", "Pink")
+    /** Shown to TalkBack on each colour dot (MOB-30). */
+    val PRESET_NAMES = arrayOf("Violet", "Blue", "Emerald", "Amber", "Rose", "Cyan")
 
     private const val PREFS     = "app_prefs"
     private const val KEY_ACCENT = "accent_color"
@@ -72,10 +77,11 @@ object ThemeManager {
      *   setContentView(R.layout.activity_...)
      */
     fun getThemeResId(context: Context): Int = when (getAccent(context)) {
-        PRESETS[1] -> R.style.ThemeOverlay_GameTracker_Purple
-        PRESETS[2] -> R.style.ThemeOverlay_GameTracker_Green
-        PRESETS[3] -> R.style.ThemeOverlay_GameTracker_Orange
-        PRESETS[4] -> R.style.ThemeOverlay_GameTracker_Pink
-        else       -> R.style.ThemeOverlay_GameTracker_Sky   // PRESETS[0] + any unknown value
+        PRESETS[1] -> R.style.ThemeOverlay_GameTracker_Blue
+        PRESETS[2] -> R.style.ThemeOverlay_GameTracker_Emerald
+        PRESETS[3] -> R.style.ThemeOverlay_GameTracker_Amber
+        PRESETS[4] -> R.style.ThemeOverlay_GameTracker_Rose
+        PRESETS[5] -> R.style.ThemeOverlay_GameTracker_Cyan
+        else       -> R.style.ThemeOverlay_GameTracker_Violet   // PRESETS[0] + any unknown value
     }
 }
