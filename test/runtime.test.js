@@ -335,7 +335,8 @@ check('privileged helper containers run a digest-pinned image, never a PR-built 
         const run = stepRun(st).replace(/\\\n\s*/g, ' ');
         for (const cmd of run.split('\n').filter((l) => /\bdocker run\b/.test(l))) {
           const privileged = /--cap-add|--user 0\b|--privileged/.test(cmd);
-          const binds = /-v "\$\{[A-Z_]+\}[^"]*:\//.test(cmd);
+          // Any -v/--volume/--mount whose source is a host path or a variable (CISO re-review).
+          const binds = /(?:-v|--volume)[ =]"?(?:\$\{?\w+|\/|\$PWD|\.)[^:" ]*:\//.test(cmd) || /--mount\b/.test(cmd);
           if (!privileged && !binds) continue;
           const where = `${file} / ${jobName} / "${st.name}"`;
           assert.ok(!/--privileged/.test(cmd), `${where} runs a --privileged container`);
@@ -350,6 +351,9 @@ check('privileged helper containers run a digest-pinned image, never a PR-built 
     }
   }
   assert.ok(helpers >= 4, `found ${helpers} privileged helper containers -- expected the smoke chown and android's`);
+  // One trusted image, written in two files: they must not drift apart on a bump.
+  const helper = loadWorkflow('docker-build-deploy.yml').jobs['smoke-test'].env.HELPER_IMAGE;
+  assert.strictEqual(helper, loadWorkflow('android.yml').env.JDK_IMAGE, 'HELPER_IMAGE and android.yml JDK_IMAGE differ');
 });
 
 // This repository is public and every job runs on the production host. A job reachable from
@@ -765,7 +769,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     let loads = 0;
     for (const f of files) {
       const src = fs.readFileSync(f, 'utf8');
-      for (const m of src.matchAll(/\.load\(([^)]*)\)/g)) {
+      // Glide's .load(url). LibraryRepository.load(context) is not a URL (MOB-19).
+      for (const m of src.matchAll(/(?<!LibraryRepository)\.load\(([^)]*)\)/g)) {
         loads++;
         const arg = m[1].trim();
         // The argument is either the check itself or a local assigned from it.

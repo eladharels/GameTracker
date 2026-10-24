@@ -278,7 +278,7 @@ jobs:
           # read or write them once the runner is not root. It also leaves nothing root-owned
           # for the runner's rm -rf. sdkmanager gets a HOME inside /sdk: an arbitrary uid has none.
           # 1. Fresh build-tools, from the SHA-256-verified command-line tools. No key here.
-          docker run --rm --name gametracker-android-signtools --user "$(id -u):$(id -g)" -e HOME=/sdk/.home -e ANDROID_USER_HOME=/sdk/.home/android --cap-drop ALL --security-opt no-new-privileges --memory 2g --pids-limit 512 \
+          docker run --rm --name gametracker-android-signtools --user "$(id -u):$(id -g)" -e HOME=/sdk/.home -e ANDROID_USER_HOME=/sdk/.home/android -e JAVA_TOOL_OPTIONS=-Duser.home=/sdk/.home --cap-drop ALL --security-opt no-new-privileges --memory 2g --pids-limit 512 \
             -v "${ANDROID_DL}:/dl:ro" \
             -v "${SIGN}/sdk:/sdk" \
             -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_BUILD_TOOLS \
@@ -383,10 +383,23 @@ jobs:
           docker rm -f gametracker-android-sign gametracker-android-check gametracker-android-signtools >/dev/null 2>&1 || true
           # The unsigned APK and the signing directory (the key, if the step was killed) never
           # outlive the job: the published file is the only copy (MOB-40).
+          # APK_OUT is written by the build as BUILD_UID: emptied AS that uid, with no
+          # capability, so a non-root runner can then remove it (MOB-38, Architect review).
+          if [ -n "${APK_OUT:-}" ] && [ -d "${APK_OUT}" ] && [ ! -L "${APK_OUT}" ]; then
+            docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+              --user "${BUILD_UID}:${BUILD_UID}" -v "${APK_OUT}:/out" "${JDK_IMAGE}" \
+              find /out -mindepth 1 -delete || true
+          fi
+          # Not fatal here: the hand-back below must still run. A leftover is reported.
           for d in "${APK_OUT:-}" "${ANDROID_SIGN:-}"; do
-            if [ -n "${d}" ] && [ -d "${d}" ] && [ ! -L "${d}" ]; then rm -rf --one-file-system "${d}"; fi
+            if [ -n "${d}" ] && [ -d "${d}" ] && [ ! -L "${d}" ]; then
+              rm -rf --one-file-system "${d}" || echo "::warning::could not remove ${d}"
+            fi
           done
           # Give mobile/ back to the runner, so the next checkout can clean and update it.
+          # DAC_READ_SEARCH here and in the prep/du helpers is acceptable where the smoke
+          # helpers refuse it: the image is pinned and runs only chown/du, so no attacker code
+          # runs in the container to call open_by_handle_at (CISO re-review, PR #15).
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
             "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /work \
