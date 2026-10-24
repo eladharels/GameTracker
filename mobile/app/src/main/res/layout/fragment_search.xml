@@ -197,11 +197,14 @@
         android:padding="32dp"
         android:visibility="gone">
 
+        <!-- Empty OR failed, with the reason (MOB-15): SearchResults.state sets both texts. -->
         <TextView
+            android:id="@+id/tvSearchStateTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:textStyle="bold"
             android:text="No matches"
+            android:accessibilityLiveRegion="polite"
             android:textAlignment="center"
             android:textColor="@color/gt_text_primary"
             android:textSize="17sp"
@@ -209,12 +212,24 @@
             tools:ignore="HardcodedText" />
 
         <TextView
+            android:id="@+id/tvSearchStateBody"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Try a different title, series, or genre keyword."
             android:textAlignment="center"
             android:textColor="@color/gt_text_secondary"
             android:textSize="14sp"
+            tools:ignore="HardcodedText" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSearchRetry"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginTop="16dp"
+            android:text="Try again"
+            android:textAllCaps="false"
+            android:visibility="gone"
             tools:ignore="HardcodedText" />
     </LinearLayout>
 </LinearLayout>

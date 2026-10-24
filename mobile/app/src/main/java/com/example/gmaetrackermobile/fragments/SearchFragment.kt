@@ -32,12 +32,17 @@ import org.json.JSONArray
 import com.example.gmaetrackermobile.Session
 import com.example.gmaetrackermobile.UserData
 import com.example.gmaetrackermobile.GameStatus
+import com.example.gmaetrackermobile.SearchResult
+import com.example.gmaetrackermobile.SearchResults
 
 class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchEditText: EditText
     private lateinit var searchButton: Button
     private lateinit var recyclerView: RecyclerView
     private lateinit var errorState: View
+    private lateinit var tvStateTitle: TextView
+    private lateinit var tvStateBody: TextView
+    private lateinit var btnRetry: Button
     private lateinit var searchResultsHeader: TextView
     private lateinit var welcomeMessage: View
     private lateinit var gameAdapter: GameAdapter
@@ -45,6 +50,9 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchHistoryChipContainer: LinearLayout
 
     private var currentQuery = ""
+    // The search in flight. A new one cancels it, and an answer for any query but the current
+    // one is dropped: a slow earlier search used to land after a later one and win (MOB-15).
+    private var searchJob: kotlinx.coroutines.Job? = null
 
     // The library as last fetched, for the "In library" badges (MOB-10). Only for DISPLAY:
     // an add re-checks against a fresh copy, because this one can be stale.
@@ -111,6 +119,10 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             ?: throw IllegalStateException("RecyclerView not found")
         errorState = view.findViewById(R.id.errorState)
             ?: throw IllegalStateException("Error State View not found")
+        tvStateTitle = view.findViewById(R.id.tvSearchStateTitle)
+        tvStateBody = view.findViewById(R.id.tvSearchStateBody)
+        btnRetry = view.findViewById(R.id.btnSearchRetry)
+        btnRetry.setOnClickListener { performSearch() }
         searchResultsHeader = view.findViewById(R.id.tvSearchResultsHeader)
             ?: throw IllegalStateException("Search Results Header not found")
         welcomeMessage = view.findViewById(R.id.welcomeMessage)
@@ -254,6 +266,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     }
 
     private fun clearSearch() {
+        searchJob?.cancel()
         currentQuery = ""
         searchResultsHeader.visibility = View.GONE
         errorState.visibility = View.GONE
@@ -273,47 +286,50 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         searchHistoryScroll.visibility = View.GONE
         view?.findViewById<View>(R.id.tvRecentLabel)?.visibility = View.GONE
 
-        viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val games = searchAllGames(query)
-                // Refresh the badges' copy of the library; on failure keep the last one.
-                fetchLibrary()?.let { library = it }
-                withContext(Dispatchers.Main) {
-                    if (!isAdded) return@withContext
-                    gameAdapter.submitList(games)
-                    gameAdapter.notifyDataSetChanged()
-                    if (games.isEmpty()) {
-                        searchResultsHeader.visibility = View.VISIBLE
-                        searchResultsHeader.text = "No games found for '$query'"
-                        errorState.visibility = View.VISIBLE
-                        recyclerView.visibility = View.GONE
-                    } else {
-                        searchResultsHeader.visibility = View.VISIBLE
-                        searchResultsHeader.text = "Found ${games.size} game(s) for '$query'"
-                        errorState.visibility = View.GONE
-                        recyclerView.visibility = View.VISIBLE
-                        // Save to history after a successful non-empty result
-                        saveHistory(query)
-                    }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    if (!isAdded) return@withContext
-                    showError("Search error: ${e.message}")
-                }
-            }
+        searchJob?.cancel()
+        searchJob = viewLifecycleOwner.lifecycleScope.launch {
+            val result = searchAllGames(query)
+            // Refresh the badges' copy of the library; on failure keep the last one.
+            if (result is SearchResult.Found) fetchLibrary()?.let { library = it }
+            if (!isAdded || view == null || query != currentQuery) return@launch   // superseded
+            showResult(result, query)
         }
     }
 
-    private suspend fun searchAllGames(query: String): List<Game> {
-        if (!isAdded) return emptyList()
+    /** Found, empty, or WHY it failed: never a failure dressed as "no games" (MOB-15). */
+    private fun showResult(result: SearchResult, query: String) {
+        val games = (result as? SearchResult.Found)?.games ?: emptyList()
+        gameAdapter.submitList(games)
+        gameAdapter.notifyDataSetChanged()
+        searchResultsHeader.visibility = View.VISIBLE
+        searchResultsHeader.text = SearchResults.header(result, query) +
+            (SearchResults.degradedNote(result)?.let { "\n$it" } ?: "")
+        val state = SearchResults.state(result)
+        if (state == null) {
+            errorState.visibility = View.GONE
+            recyclerView.visibility = View.VISIBLE
+            saveHistory(query)
+            return
+        }
+        tvStateTitle.text = state.first
+        tvStateBody.text = state.second
+        btnRetry.visibility = if (SearchResults.canRetry(result)) View.VISIBLE else View.GONE
+        errorState.visibility = View.VISIBLE
+        recyclerView.visibility = View.GONE
+    }
+
+    private suspend fun searchAllGames(query: String): SearchResult {
+        val token = Session.get(requireContext()).token ?: return SearchResult.Failed(SearchResult.Reason.SIGNED_OUT)
         return try {
-            val token = Session.get(requireContext()).token ?: return emptyList()
-            val response = com.example.gmaetrackermobile.ApiClient.api.searchGames(query, "Bearer $token")
-            if (response.isSuccessful) response.body() ?: emptyList() else emptyList()
+            val response = withContext(Dispatchers.IO) {
+                com.example.gmaetrackermobile.ApiClient.api.searchGames(query, "Bearer $token")
+            }
+            SearchResults.of(response.code(), response.body(), response.headers()[SearchResults.DEGRADED_HEADER])
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e   // superseded by a newer search: not a failure
         } catch (e: Exception) {
-            android.util.Log.e("SearchFragment", "Error searching: ${e.message}", e)
-            emptyList()
+            android.util.Log.e("SearchFragment", "Search failed: ${e.javaClass.simpleName}")
+            SearchResults.of(e)
         }
     }
 

@@ -383,7 +383,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Show the list position everywhere.
   - On failure, reload and say so.
 
-### [ ] MOB-15 Medium — Search: a failure reads as "No games found", and stale responses win
+### [x] MOB-15 ✔ Medium — Search: a failure reads as "No games found", and stale responses win — *fixed in PR #15*
+- **Fixed:**
+  - `SearchResults` classifies every search as found, empty, or failed with a reason:
+    offline, signed out, rate limited, or server.
+  - Each reason has its own fixed message and a Try again button (not when signed out).
+  - The server's `X-Catalog-Degraded` header is shown as "results may be incomplete", so a
+    provider outage is never presented as an exhaustive answer.
+  - A new search cancels the one in flight, and an answer for any query but the current one
+    is dropped.
+  - Pinned in `SearchResultsTest` and `test/runtime.test.js`.
 - **Where:** `SearchFragment.kt:292-303` (every non-2xx and every exception becomes
   `emptyList()`), `:263-289` (the `catch` is therefore unreachable), `:44-45` and `:229-241`
   (debounce with no cancellation of the previous request).

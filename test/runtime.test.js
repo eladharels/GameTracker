@@ -858,6 +858,18 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(!/game\.backlog_order\}/.test(code('GameAdapter.kt')), 'cards show the stored backlog number again, not the position');
   });
 
+  // MOB-15: every failure rendered as "No games found", and a slow earlier search could land
+  // after a later one and overwrite it (the web's FE-2).
+  check('Android: a failed search says why, and only the latest search can render (MOB-15)', () => {
+    const search = code('fragments/SearchFragment.kt');
+    assert.ok(/SearchResults\.of\(response\.code\(\), response\.body\(\), response\.headers\(\)\[SearchResults\.DEGRADED_HEADER\]\)/.test(search),
+      'the search no longer classifies the answer (status, body, degraded header)');
+    assert.ok(/searchJob\?\.cancel\(\)\s*searchJob = viewLifecycleOwner\.lifecycleScope\.launch/.test(search),
+      'a new search no longer cancels the one in flight');
+    assert.ok(/query != currentQuery\) return@launch/.test(search), 'an answer for an older query can render again');
+    assert.ok(!/else emptyList\(\)/.test(search), 'a failed search becomes an empty list again');
+  });
+
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {
