@@ -72,6 +72,11 @@ env:
   # The committed mobile/gradle/wrapper/gradle-wrapper.jar, a genuine Gradle release
   # (matches the published wrapper checksum). A changed jar fails the build until re-pinned.
   GRADLE_WRAPPER_JAR_SHA256: e996d452d2645e70c01c11143ca2d3742734a28da2bf61f25c82bdc288c9e637
+  # The Gradle DISTRIBUTION, pinned here as well as in gradle-wrapper.properties (CISO review,
+  # PR #15): a Dependabot wrapper bump rewrites distributionUrl AND distributionSha256Sum
+  # together, so the properties file alone would check a new distribution against itself, and
+  # phase 1 would run it with a network. Dependabot never edits this file.
+  GRADLE_DISTRIBUTION_SHA256: 20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78
   ANDROID_PLATFORM: 'platforms;android-36'
   ANDROID_BUILD_TOOLS: 'build-tools;35.0.0'
   # One set of cache volumes per partition. Never shared between PRs and main.
@@ -131,9 +136,13 @@ jobs:
             exit 1
           fi
 
-      - name: Verify the Gradle wrapper jar
+      - name: Verify the Gradle wrapper jar and the pinned distribution
         run: |
           echo "${GRADLE_WRAPPER_JAR_SHA256}  mobile/gradle/wrapper/gradle-wrapper.jar" | sha256sum -c
+          grep -qxF "distributionSha256Sum=${GRADLE_DISTRIBUTION_SHA256}" mobile/gradle/wrapper/gradle-wrapper.properties || {
+            echo "::error::gradle-wrapper.properties names a Gradle distribution other than GRADLE_DISTRIBUTION_SHA256 in android.yml"
+            exit 1
+          }
 
       - name: Fetch and verify the Android command-line tools
         run: |

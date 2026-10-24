@@ -896,6 +896,19 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     const bot = require('js-yaml').load(fs.readFileSync(path.join(ROOT, '.github/dependabot.yml'), 'utf8'));
     const ecos = bot.updates.map((u) => `${u['package-ecosystem']} ${u.directory}`);
     assert.deepStrictEqual(ecos, ['gradle /mobile'], `Dependabot watches ${ecos}: only Gradle in /mobile is safe on this runner`);
+    // Not the WRAPPER: a bump rewrites the distribution and its checksum together (CISO review).
+    assert.ok((bot.updates[0].ignore || []).some((i) => i['dependency-name'] === 'gradle-wrapper'), 'Dependabot may bump the Gradle wrapper');
+    assert.ok(bot.updates[0].cooldown && bot.updates[0].cooldown['default-days'] >= 7, 'Dependabot proposes versions younger than a week');
+    const wf = loadWorkflow('android.yml');
+    const props = fs.readFileSync(path.join(ROOT, 'mobile/gradle/wrapper/gradle-wrapper.properties'), 'utf8');
+    assert.ok(props.includes(`distributionSha256Sum=${wf.env.GRADLE_DISTRIBUTION_SHA256}`) && /^[0-9a-f]{64}$/.test(wf.env.GRADLE_DISTRIBUTION_SHA256),
+      'android.yml GRADLE_DISTRIBUTION_SHA256 is not the distribution gradle-wrapper.properties names');
+    const verify = wf.jobs.android.steps.map(stepRun).find((r) => /GRADLE_WRAPPER_JAR_SHA256/.test(r)) || '';
+    assert.ok(/grep -qxF "distributionSha256Sum=\$\{GRADLE_DISTRIBUTION_SHA256\}"/.test(verify), 'android.yml does not refuse an unpinned Gradle distribution');
+    // The metadata's hashes are recomputed OFF the production host whenever the file changes.
+    const vm = loadWorkflow('verify-maven-hashes.yml');
+    assert.strictEqual(vm.jobs.verify['runs-on'], 'ubuntu-latest', 'the hash check must run on a GitHub-hosted runner, not the production host');
+    assert.ok((vm.on.pull_request.paths || []).includes('mobile/gradle/verification-metadata.xml'), 'the hash check does not run when the metadata changes');
   });
 
   // MOB-23: every debug build and test run used to log in to production with real accounts.

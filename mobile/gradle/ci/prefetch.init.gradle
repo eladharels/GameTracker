@@ -15,6 +15,8 @@ def gtCause = { Throwable t -> while (t.cause != null && t.cause != t) t = t.cau
 
 gradle.allprojects { p ->
     p.tasks.register('gtPrefetch') {
+        // The report runs after every project's prefetch (not gradle.buildFinished: deprecated).
+        finalizedBy(':gtPrefetchReport')
         doLast {
             // Kotlin/Native's bundle is resolvable but never used by an Android build, and is not
             // in the metadata: resolving it fails verification. Each configuration is caught, so
@@ -57,7 +59,11 @@ gradle.allprojects { p ->
     }
 }
 
-gradle.buildFinished {
-    println "[prefetch] ${gtFailures.size()} could not be fetched (phase 2 will fail if it needs one):"
-    gtFailures.unique().take(80).each { println "[prefetch]   ${it}" }
+gradle.rootProject { root ->
+    root.tasks.register('gtPrefetchReport') {
+        doLast {
+            println "[prefetch] ${gtFailures.size()} could not be fetched (phase 2 will fail if it needs one):"
+            gtFailures.unique().take(80).each { println "[prefetch]   ${it}" }
+        }
+    }
 }

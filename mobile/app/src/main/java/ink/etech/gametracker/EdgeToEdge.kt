@@ -12,8 +12,8 @@ import androidx.core.view.updatePadding
  * navigation bars, and Android 16 removes the opt-out, so the app does it deliberately and pads
  * what must stay clear. Both activities call [enable] right after setContentView.
  *
- * WindowCompat rather than androidx.activity's enableEdgeToEdge(): the activity library comes
- * in only through Compose today, which MOB-21 removes.
+ * WindowCompat rather than androidx.activity's enableEdgeToEdge(): androidx.activity arrives
+ * only transitively (fragment, appcompat), at a version this app does not choose.
  */
 object EdgeToEdge {
     private val BARS = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()

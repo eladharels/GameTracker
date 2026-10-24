@@ -1,10 +1,11 @@
 # MOB-21: dependency bumps for the Android app. Gradle only, and only mobile/.
 #
 # A Dependabot PR is a same-repo branch, so its CI runs on the self-hosted runner that is the
-# production host. For Gradle that is acceptable: a new version is not in
+# production host. For Gradle LIBRARIES that is acceptable: a new version is not in
 # mobile/gradle/verification-metadata.xml, so strict verification fails the build BEFORE any
-# new artifact is loaded, and the PR shows what the bump would need. Accepting one means
-# regenerating the metadata from an empty Gradle home (mobile/CLAUDE.md) and reviewing it.
+# new artifact is loaded, and the PR shows what the bump would need. Not the wrapper: below.
+# Accepting a bump means regenerating the metadata from an empty Gradle home, locally or on a
+# GitHub-hosted runner, never on this one (mobile/CLAUDE.md), and reviewing the diff.
 # npm is deliberately NOT here: its install runs lifecycle scripts on that host.
 version: 2
 updates:
@@ -17,6 +18,11 @@ updates:
     # usually pulled within days (Semgrep: dependabot-missing-cooldown).
     cooldown:
       default-days: 7
+    # The Gradle WRAPPER is never bumped here: that would run a new Gradle distribution in the
+    # networked phase 1 of the CI build. android.yml also refuses any distribution other than
+    # its pinned GRADLE_DISTRIBUTION_SHA256. A wrapper upgrade is a deliberate, reviewed change.
+    ignore:
+      - dependency-name: "gradle-wrapper"
     groups:
       androidx:
         patterns: ["androidx.*"]

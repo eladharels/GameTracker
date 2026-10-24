@@ -553,8 +553,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   (Biometric 1.1.0 is still the latest stable). Glide's kapt compiler is removed rather than
   moved to KSP: it only generates code for an `AppGlideModule`, which this app has none of, so
   kapt is gone entirely. The Compose plugin and dependencies are gone too (MOB-22).
-  `verification-metadata.xml` was regenerated from an EMPTY Gradle home by a one-off CI step,
-  reviewed, committed, and the step removed. Dependabot watches `/mobile` (Gradle only: npm
+  `verification-metadata.xml` was regenerated from an EMPTY Gradle home by a one-off CI step on
+  the self-hosted runner, reviewed, committed, and the step removed. **That was a one-off
+  exception, never a precedent** (CISO): the step ran tests, lint and assemble with a network
+  and no verification on the production host. Regenerate locally or on a GitHub-hosted runner.
+  The new hashes were checked off that host: 50 Maven Central artifacts by the CISO reviewer,
+  three by me, and EVERY hash, Google Maven included, by `verify-maven-hashes.yml` on a
+  GitHub-hosted runner (it runs whenever the file changes). The Gradle wrapper is excluded
+  from Dependabot, and `android.yml` refuses a distribution other than its own pinned
+  `GRADLE_DISTRIBUTION_SHA256`. Not declared directly: appcompat and activity, which arrive
+  transitively; declaring them is a metadata change of its own. Dependabot watches `/mobile` (Gradle only: npm
   installs run lifecycle scripts on the production host).
 
 ### [x] MOB-22 Medium — Dead code: three legacy activities, an unused Compose stack, an unreachable logout menu

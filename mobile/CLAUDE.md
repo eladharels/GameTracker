@@ -14,8 +14,7 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 - **Target / Compile SDK**: API 36 (Android 16)
 - **JVM Target**: Java 11
 - **Build System**: Gradle with Kotlin DSL (`build.gradle.kts`)
-- **UI Framework**: XML layouts and Fragments. No Compose: the theme files are deleted (MOB-22) and the
-  plugin and dependencies go with MOB-21
+- **UI Framework**: XML layouts and Fragments. No Compose (MOB-22: theme files; MOB-21: plugin and dependencies)
 
 ### Key Libraries
 Versions live in `gradle/libs.versions.toml` (MOB-21), the one place to read them; Dependabot
@@ -31,16 +30,6 @@ proposes bumps (`.github/dependabot.yml`). No Compose and no kapt.
 | Material Components | UI components and theming |
 | SwipeRefreshLayout, RecyclerView, Fragment KTX | Lists, pull-to-refresh, fragments |
 
----|---|---|
-| Retrofit | 2.9.0 | HTTP client / REST API calls |
-| OkHttp3 + Logging Interceptor | 4.11.0 | HTTP logging in **debug builds only**, at BASIC (no headers or bodies). Release builds have none (MOB-1) |
-| Gson | — | JSON serialization/deserialization |
-| Kotlin Coroutines | 1.6.4 | Async/non-blocking operations |
-| Glide | 4.15.1 | Image loading and caching |
-| AndroidX Biometric | — | Fingerprint / biometric authentication |
-| Material 3 | — | UI components and theming |
-| SwipeRefreshLayout | 1.1.0 | Pull-to-refresh |
-| Fragment KTX | 1.6.2 | Fragment extensions and lifecycle |
 
 ---
 
@@ -359,6 +348,14 @@ testReleaseUnitTest lintDebug assembleRelease`. A warm cache serves parent POMs 
 files from its cached resolution metadata, so they are never fetched and never recorded. The first
 file (PR #6) missed three that way, and `main`'s first cold build refused them (PR #7). Review the
 diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not an update.
+
+**Never regenerate it on the self-hosted runner** (it is the production host, and
+`--write-verification-metadata` runs tests, lint and assemble with a network and no verification
+at all). Regenerate it locally or on a GitHub-hosted runner. PR #15 (MOB-21) did it once on the
+runner, by a temporary step, as a deliberate exception: that is not a precedent.
+`verify-maven-hashes.yml` then recomputes every hash in the file from its public repository, on a
+GitHub-hosted runner, whenever the file changes: a regeneration is checked by a machine that is
+not the one that produced it.
 
 ---
 
