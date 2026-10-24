@@ -243,7 +243,7 @@ MainActivity  (single activity host)
 - **The library: `LibraryRepository`** (MOB-19), the ONLY caller of `getLibrary`. One copy in
   memory, keyed by the credential, served for 30 s; `force = true` for pull-to-refresh and for
   the add-time duplicate check (MOB-10). EVERY non-GET request drops it
-  (`LibraryRepository.WriteInterceptor`, in `ApiClient`), so a new write path cannot forget to.
+  (`LibraryWriteInterceptor`, in `ApiClient`; JVM-tested), so a new write path cannot forget to.
   Cleared at sign-out. The rules are `LibraryCache`, JVM-tested.
 - **Tabs are shown and hidden, never replaced** (MOB-19, `MainActivity.loadFragmentForTab`): each
   keeps its scroll, filter and search text. A tab reloads in `onHiddenChanged(false)` and in

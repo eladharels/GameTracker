@@ -4,8 +4,6 @@ import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.Interceptor
-import okhttp3.Response
 
 /**
  * The library, for every screen (MOB-19): one cached copy ([LibraryCache]) behind the session.
@@ -42,25 +40,6 @@ object LibraryRepository {
             throw e
         } catch (e: Exception) {
             null
-        }
-    }
-
-    /**
-     * Every write the app sends (anything but GET) drops the copy, before AND after it goes
-     * out: one place, so a new write path cannot forget to. Before, so a read started during
-     * the write is not stored; after, so a read finishing just before the server committed is
-     * not served.
-     */
-    class WriteInterceptor(private val onWrite: () -> Unit = { invalidate() }) : Interceptor {
-        override fun intercept(chain: Interceptor.Chain): Response {
-            val request = chain.request()
-            val write = request.method != "GET" && request.method != "HEAD"
-            if (write) onWrite()
-            try {
-                return chain.proceed(request)
-            } finally {
-                if (write) onWrite()
-            }
         }
     }
 }

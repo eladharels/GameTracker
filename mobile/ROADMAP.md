@@ -595,7 +595,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   trailing `/api/` are required at build time. The login-screen server field is not done: one
   instance is what this app is for today. Pinned in `test/runtime.test.js`.
 
-### [ ] MOB-24 Medium — No tests
+### [~] MOB-24 Medium — No tests
 - **Where:** `app/src/test/…/ExampleUnitTest.kt` and `app/src/androidTest/…/ExampleInstrumentedTest.kt`
   (templates only).
 - **Why:** none of the behaviour in this file is pinned: logging in release (MOB-1), logout
@@ -603,6 +603,20 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   The backend repo pins its equivalents; this tree has nothing.
 - **Fix:** start with JVM tests for the pure logic, and Robolectric for fragment lifecycle.
   Each item above names the test it needs.
+
+- **JVM part done (PR #6 to #15):** 13 suites under `app/src/test`, run by CI on every
+  build (`testDebugUnitTest testReleaseUnitTest`). Of the items above:
+  - MOB-1 logging in release: `ApiClientLoggingTest`.
+  - MOB-3 logout and MOB-5 401 handling: `SessionStoreTest`, `SessionExpiryInterceptorTest`.
+  - MOB-12 the undo: `PendingRemovalsTest`.
+  - MOB-15 the search states: `SearchResultsTest`. The stale-search race itself is the
+    fragment's (`query != currentQuery`), so it is pinned in `test/runtime.test.js`.
+  - Since: `GameStatusTest`, `BacklogOrderTest`, `LibraryMatchTest` (the shared vectors),
+    `LibraryCacheTest`, `LibraryWriteInterceptorTest`, `MobileTokenTest`, `UserDataTest`,
+    `SafeUrlTest`.
+  - The two template tests are deleted.
+- **Robolectric (fragment lifecycle) goes with MOB-21:** it is a new dependency, so it needs
+  the verification metadata regenerated from an empty Gradle home, which MOB-21 does.
 
 ### [ ] MOB-25 Low — Emit the app's API contract from the code instead of regex-parsing Kotlin
 - **Where:** the backend drift gate (`test/mobile-api.js`, added alongside PR #6) reads

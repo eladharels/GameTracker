@@ -732,7 +732,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
         assert.ok(!/\.replace\(R\.id\.fragment_container/.test(src), `${f} replaces the tab instead of MainActivity.openDetails`);
       }
     }
-    assert.ok(/LibraryRepository\.WriteInterceptor\(\)/.test(code('ApiClient.kt')), 'writes no longer invalidate the library copy');
+    assert.ok(/LibraryWriteInterceptor \{ LibraryRepository\.invalidate\(\) \}/.test(code('ApiClient.kt')), 'writes no longer invalidate the library copy');
     const main = code('MainActivity.kt');
     assert.ok(/tx\.hide\(it\)/.test(main) && /tx\.show\(target\)/.test(main), 'tabs are no longer shown and hidden');
     assert.ok((main.match(/\.replace\(R\.id\.fragment_container/g) || []).length <= 2, 'MainActivity replaces fragments outside its last-resort path');
