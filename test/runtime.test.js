@@ -678,6 +678,28 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-29: muted text read 2.35:1, and white on the status colours 2.3:1. WCAG 2.x, computed
+  // here from colors.xml, so a palette edit cannot silently undo it.
+  check('Android: text colours meet WCAG AA on the app surfaces (MOB-29)', () => {
+    const xml = fs.readFileSync(path.join(APP, 'res/values/colors.xml'), 'utf8');
+    const color = (n) => { const m = new RegExp(`name="${n}">#([0-9A-Fa-f]{6})<`).exec(xml); assert.ok(m, `no colour ${n}`); return m[1]; };
+    const lum = (h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      .reduce((a, c, i) => a + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const surfaces = ['gt_surface_0', 'gt_surface_1', 'gt_surface_2', 'gt_card_elevated'].map(color);
+    for (const t of ['gt_text_primary', 'gt_text_secondary', 'gt_text_muted', 'gt_text_dim']) {
+      for (const bg of surfaces) assert.ok(ratio(color(t), bg) >= 4.5, `${t} on #${bg} is ${ratio(color(t), bg).toFixed(2)}:1`);
+    }
+    for (const st of ['wishlist', 'playing', 'done', 'backlog', 'unreleased']) {
+      const r = ratio(color('gt_on_status'), color(`gt_status_${st}`));
+      assert.ok(r >= 4.5, `gt_on_status on gt_status_${st} is ${r.toFixed(2)}:1`);
+    }
+    assert.ok(ratio(color('gt_error_text'), '2D3142') >= 4.5, 'error snackbar text is below 4.5:1');
+    const item = fs.readFileSync(path.join(APP, 'res/layout/item_game.xml'), 'utf8');
+    assert.ok(!/textColor="@color\/white"/.test(item), 'a status badge on a card is white text again');
+  });
+
   // MOB-27: users read `Login failed: {"error":...}` and `Error: Unable to resolve host ...`, and
   // a 15-minute lockout read like a wrong password. Fixed text only, from ErrorText.
   check('Android: no server body or exception text reaches the user (MOB-27)', () => {

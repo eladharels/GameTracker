@@ -724,7 +724,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   now shows the real `versionName`. Notification channels live in My Account on the web,
   which this app does not reach.
 
-### [ ] MOB-29 Medium — Text contrast fails WCAG AA across the app
+### [~] MOB-29 Medium — Text contrast fails WCAG AA across the app
 - **Where and ratios (computed, WCAG 2.x):**
   - `gt_text_muted #4A5068` (`colors.xml:52`): **2.35:1** on the screen `#111218`, **2.18:1**
     on cards `#181A22`. It is used for real content, not decoration:
@@ -750,6 +750,15 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Brighten the error red for text on dark surfaces.
   - Pick `colorOnPrimary` per preset by contrast. The web app computes it the same way for
     its presets.
+
+- **Done (PR #15), except `colorOnPrimary`:**
+  - `gt_text_muted` `#858CA4` and `gt_text_dim` `#8890A8`: both >= 4.5:1 on every surface.
+  - Status badges, the backlog-position badge, the checked Details chip and "Mark as Done"
+    use `gt_on_status` `#0C0D11`, >= 4.5:1 on all five status colours.
+  - Error snackbar text is `#FF6B6B` (4.64:1 on its background).
+  - `test/runtime.test.js` computes the ratios FROM `colors.xml`.
+  - **`colorOnPrimary` per accent preset goes with MOB-33**, which replaces the presets with
+    the web's six: computing it for presets about to be deleted would be wasted.
 
 ### [ ] MOB-30 Medium — Screen-reader semantics: labels on decoration, none on controls, drag-only reorder
 - **Where:**

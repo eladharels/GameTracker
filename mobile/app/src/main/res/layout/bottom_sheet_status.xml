@@ -62,7 +62,7 @@
             android:textAllCaps="false"
             android:textSize="15sp"
             android:textStyle="bold"
-            android:textColor="@android:color/white"
+            android:textColor="@color/gt_on_status"
             android:backgroundTint="@color/gt_status_done"
             app:cornerRadius="14dp" />
 
