@@ -694,6 +694,11 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-18: a done or playing game with no date was counted and listed as Unreleased.
+  check('Android: the Unreleased filter is the status, never a missing date (MOB-18)', () => {
+    assert.ok(!/release_date\.isNullOrBlank\(\)/.test(code('fragments/LibraryFragment.kt')), 'Unreleased is decided by a blank date again');
+  });
+
   // MOB-31: targetSdk 36 draws under the system bars; the fixed 72dp nav and 80dp padding clipped.
   check('Android: both activities lay out edge-to-edge, padded by the real insets (MOB-31)', () => {
     for (const f of ['MainActivity.kt', 'LoginActivity.kt']) {

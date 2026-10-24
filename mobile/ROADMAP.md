@@ -458,11 +458,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Remove callbacks in `onDestroyView`.
   - This is largely subsumed by MOB-19 (ViewModels).
 
-### [ ] MOB-18 Low — Library "Unreleased" filter and count include any game with a blank date
+### [x] MOB-18 Low — Library "Unreleased" filter and count include any game with a blank date
 - **Where:** `LibraryFragment.kt:418-421`, `:485-487`.
 - **Why:** a `done` or `playing` game with no stored date is counted, and listed, as Unreleased.
   The chip count then disagrees with the server's status and with the web app.
 - **Fix:** filter on `status == "unreleased"` only.
+
+- **Done (PR #15):** the chip count and the list use the status alone. Pinned.
 
 ---
 

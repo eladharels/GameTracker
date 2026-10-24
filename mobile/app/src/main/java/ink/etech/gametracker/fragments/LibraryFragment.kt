@@ -435,7 +435,7 @@ class LibraryFragment : Fragment() {
         fun n(key: String) = when (key) {
             "all" -> allGames.size
             "unreleased" -> allGames.count {
-                it.status?.lowercase() == "unreleased" || it.release_date.isNullOrBlank()
+                GameStatus.canonical(it.status) == GameStatus.UNRELEASED   // the status only (MOB-18)
             }
             else -> allGames.count { it.status?.lowercase() == key }
         }
@@ -498,7 +498,7 @@ class LibraryFragment : Fragment() {
             "done"       -> allGames.filter { it.status?.lowercase() == "done" }
             "backlog"    -> BacklogOrder.backlog(allGames)
             "unreleased" -> allGames.filter {
-                it.status?.lowercase() == "unreleased" || it.release_date.isNullOrBlank()
+                GameStatus.canonical(it.status) == GameStatus.UNRELEASED   // the status only (MOB-18)
             }
             else -> allGames.toList()
         }
