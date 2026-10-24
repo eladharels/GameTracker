@@ -356,7 +356,8 @@
                 <com.google.android.material.switchmaterial.SwitchMaterial
                     android:id="@+id/switchCalendarSync"
                     android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
+                    android:layout_height="wrap_content"
+                    android:contentDescription="Calendar sync" />
             </LinearLayout>
 
             <com.google.android.material.button.MaterialButton

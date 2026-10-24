@@ -142,6 +142,8 @@ class MainActivity : AppCompatActivity() {
      * it is actually measured: the old fixed 72dp nav and 80dp padding clipped under a
      * gesture or 3-button bar.
      */
+    private var imeBottom = 0
+
     private fun layoutEdgeToEdge() {
         EdgeToEdge.enable(this)
         val container = findViewById<View>(R.id.fragment_container)
@@ -152,12 +154,15 @@ class MainActivity : AppCompatActivity() {
                 androidx.core.view.WindowInsetsCompat.Type.systemBars() or
                     androidx.core.view.WindowInsetsCompat.Type.displayCutout()
             )
-            v.setPadding(bars.left, bars.top, bars.right, v.paddingBottom)
+            imeBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+            v.setPadding(bars.left, bars.top, bars.right, maxOf(nav.height, imeBottom))
             nav.layoutParams = nav.layoutParams.apply { height = navContent + bars.bottom }
             insets
         }
+        // Above the nav as measured, or above the keyboard while it is open: the focused field
+        // in Details, Search or Library can then scroll into view (UI/UX review, PR #15).
         nav.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
-            val h = bottom - top
+            val h = maxOf(bottom - top, imeBottom)
             if (container.paddingBottom != h) container.setPadding(container.paddingLeft, container.paddingTop, container.paddingRight, h)
         }
     }

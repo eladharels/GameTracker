@@ -347,7 +347,7 @@ class LibraryFragment : Fragment() {
                 if (result != null) {
                     showSnackbar("Release reminder added for ${game.displayName}", SnackbarHelper.Type.SUCCESS)
                 } else {
-                    showSnackbar("Couldn't add reminder — check calendar settings", SnackbarHelper.Type.ERROR)
+                    showSnackbar("Couldn't add the reminder. Check calendar access, then try again.", SnackbarHelper.Type.ERROR)
                 }
             }
         }
@@ -563,7 +563,7 @@ class LibraryFragment : Fragment() {
                 if (isAdded && view != null) {
                     if (allGames.none { (it.game_id ?: it.id) == gameId }) allGames.add(game)
                     filterGames()
-                    showSnackbar("Couldn't remove ${game.displayName}", SnackbarHelper.Type.ERROR)
+                    showSnackbar("Couldn't remove ${game.displayName}. Try again.", SnackbarHelper.Type.ERROR)
                 }
             },
             // The window has closed, so Undo would do nothing: take it off screen. Snackbar

@@ -123,6 +123,8 @@ class GameAdapter(
             val to = from + delta
             if (from == RecyclerView.NO_POSITION || to !in games.indices) return
             moveItem(from, to)
+            // Both rows rebind, so their Move up/down actions and position badges are current.
+            notifyItemRangeChanged(minOf(from, to), 2)
             onReordered?.invoke()
             itemView.announceForAccessibility("Moved to position ${to + 1}")
         }

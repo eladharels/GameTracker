@@ -31,7 +31,7 @@ class LoginActivity : AppCompatActivity() {
         setContentView(R.layout.activity_login)
         // MOB-31: drawn edge-to-edge; the form stays clear of both bars.
         EdgeToEdge.enable(this)
-        EdgeToEdge.pad(findViewById<android.view.ViewGroup>(android.R.id.content).getChildAt(0), top = true, bottom = true)
+        EdgeToEdge.pad(findViewById<android.view.ViewGroup>(android.R.id.content).getChildAt(0), top = true, bottom = true, ime = true)
 
         val etUsername = findViewById<EditText>(R.id.etUsername)
         val etPassword = findViewById<EditText>(R.id.etPassword)

@@ -218,7 +218,7 @@ class GameDetailsFragment : Fragment() {
                 )
                 setTextColor(ColorStateList(
                     arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(Color.parseColor("#0C0D11"), Color.parseColor("#8890A8"))   // gt_on_status when checked (MOB-29)
+                    intArrayOf(ContextCompat.getColor(requireContext(), R.color.gt_on_status), Color.parseColor("#8890A8"))   // MOB-29
                 ))
                 isCheckedIconVisible = false
                 if (status == GameStatus.UNRELEASED) {

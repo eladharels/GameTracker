@@ -55,7 +55,7 @@ object SnackbarHelper {
         // Message text — color conveys type
         val textColor = when (type) {
             Type.SUCCESS -> Color.parseColor("#22C55E")   // success green (not a status colour)
-            Type.ERROR   -> Color.parseColor("#FF6B6B")   // gt_error_text: 4.6:1 on this background (MOB-29)
+            Type.ERROR   -> androidx.core.content.ContextCompat.getColor(snackView.context, R.color.gt_error_text)   // 4.6:1 here (MOB-29)
             Type.DEFAULT -> Color.parseColor("#F5F6FA")   // gt_text_main
         }
         snackView.findViewById<TextView>(com.google.android.material.R.id.snackbar_text)?.apply {

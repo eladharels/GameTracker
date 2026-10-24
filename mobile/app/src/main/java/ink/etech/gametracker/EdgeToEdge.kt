@@ -27,8 +27,12 @@ object EdgeToEdge {
         }
     }
 
-    /** Keeps [view]'s own padding and adds the bars' insets on the sides asked for. */
-    fun pad(view: View, top: Boolean = false, bottom: Boolean = false) {
+    /**
+     * Keeps [view]'s own padding and adds the bars' insets on the sides asked for. With [ime],
+     * the bottom also clears the keyboard: drawn edge-to-edge, adjustResize no longer shrinks
+     * the window, so a field under the keyboard could not be scrolled to (UI/UX review).
+     */
+    fun pad(view: View, top: Boolean = false, bottom: Boolean = false, ime: Boolean = false) {
         val baseTop = view.paddingTop
         val baseBottom = view.paddingBottom
         val baseLeft = view.paddingLeft
@@ -39,7 +43,11 @@ object EdgeToEdge {
                 left = baseLeft + bars.left,
                 right = baseRight + bars.right,
                 top = baseTop + if (top) bars.top else 0,
-                bottom = baseBottom + if (bottom) bars.bottom else 0,
+                bottom = baseBottom + when {
+                    ime -> maxOf(bars.bottom, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom)
+                    bottom -> bars.bottom
+                    else -> 0
+                },
             )
             insets
         }

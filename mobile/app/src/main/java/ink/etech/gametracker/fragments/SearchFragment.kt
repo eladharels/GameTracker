@@ -109,7 +109,16 @@ class SearchFragment : Fragment() {
     /** Shown again (MOB-19): the results stay, but their "In library" badges are re-read. */
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
-        if (hidden || view == null) return
+        if (hidden) {
+            // A keyboard left open over another tab (UI/UX review, PR #15).
+            if (::searchEditText.isInitialized) {
+                searchEditText.clearFocus()
+                androidx.core.content.ContextCompat.getSystemService(requireContext(), android.view.inputmethod.InputMethodManager::class.java)
+                    ?.hideSoftInputFromWindow(searchEditText.windowToken, 0)
+            }
+            return
+        }
+        if (view == null) return
         if (::searchHistoryScroll.isInitialized && currentQuery.isEmpty()) renderHistoryChips()
         viewLifecycleOwner.lifecycleScope.launch {
             fetchLibrary()?.let { library = it; if (view != null) gameAdapter.notifyDataSetChanged() }

@@ -88,11 +88,11 @@
             android:textAllCaps="false"
             android:textSize="15sp"
             android:textStyle="bold"
-            android:textColor="@android:color/white"
+            android:textColor="@color/gt_on_status"
             android:backgroundTint="@color/gt_status_unreleased"
             app:cornerRadius="14dp"
             app:icon="@drawable/ic_calendar"
-            app:iconTint="@android:color/white"
+            app:iconTint="@color/gt_on_status"
             app:iconSize="18dp"
             app:iconGravity="textStart" />
 

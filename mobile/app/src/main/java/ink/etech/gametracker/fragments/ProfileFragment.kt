@@ -211,7 +211,7 @@ class ProfileFragment : Fragment() {
             // Holding this phone's 30-day token (MOB-9), off means signed out: ask first.
             if (SignOut.confirmFingerprintOff(requireActivity()) { showBiometric(true) }) return
             FingerprintUnlock.disable(ctx)
-            showSnackbar("Fingerprint unlock off", SnackbarHelper.Type.DEFAULT)
+            showSnackbar("Fingerprint unlock off.", SnackbarHelper.Type.DEFAULT)
             return
         }
         FingerprintUnlock.enable(ctx, cryptoPrompt) { result ->
