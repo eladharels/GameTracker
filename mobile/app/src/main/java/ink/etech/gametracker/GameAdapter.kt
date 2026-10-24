@@ -11,6 +11,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
@@ -39,6 +40,12 @@ class GameAdapter(
      * demoted it to wishlist.
      */
     var ownedStatusOf: ((Game) -> String?)? = null
+
+    /**
+     * MOB-30: reordering by accessibility action ("Move up" / "Move down"), because a drag
+     * handle is unreachable with TalkBack (the web's FE-23). Called after the move, to persist.
+     */
+    var onReordered: (() -> Unit)? = null
     private var itemTouchHelper: ItemTouchHelper? = null
 
     fun setItemTouchHelper(helper: ItemTouchHelper) {
@@ -93,6 +100,32 @@ class GameAdapter(
         private val tvBacklogPosition: TextView = itemView.findViewById(R.id.tvBacklogPosition)
         private val viewStatusBorder: View = itemView.findViewById(R.id.viewStatusBorder)
         private val ivDragHandle: ImageView = itemView.findViewById(R.id.ivDragHandle)
+
+        /** Accessibility actions added by the last bind, removed before the next (rows are reused). */
+        private val actionIds = mutableListOf<Int>()
+
+        private fun action(label: String, run: () -> Unit) {
+            actionIds += ViewCompat.addAccessibilityAction(itemView, label) { _, _ -> run(); true }
+        }
+
+        private fun bindAccessibilityActions(game: Game, position: Int?) {
+            actionIds.forEach { ViewCompat.removeAccessibilityAction(itemView, it) }
+            actionIds.clear()
+            if (onLongPress != null) action("Change status") { onLongPress?.invoke(game) }
+            if (!showBacklogControls || !dragEnabled || position == null) return
+            val at = bindingAdapterPosition
+            if (at > 0) action("Move up") { moveBy(-1) }
+            if (at != RecyclerView.NO_POSITION && at < games.size - 1) action("Move down") { moveBy(1) }
+        }
+
+        private fun moveBy(delta: Int) {
+            val from = bindingAdapterPosition
+            val to = from + delta
+            if (from == RecyclerView.NO_POSITION || to !in games.indices) return
+            moveItem(from, to)
+            onReordered?.invoke()
+            itemView.announceForAccessibility("Moved to position ${to + 1}")
+        }
 
         fun bind(game: Game) {
             tvName.text = game.displayName
@@ -160,6 +193,8 @@ class GameAdapter(
                 ivDragHandle.visibility = View.GONE
                 ivDragHandle.setOnTouchListener(null)
             }
+
+            bindAccessibilityActions(game, position)
 
             // Add / Delete
             if (hideAddButton) {

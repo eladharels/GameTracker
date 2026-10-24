@@ -117,6 +117,8 @@ class LibraryFragment : Fragment() {
             onDelete = { game -> deleteGameFromLibrary(game) },
             onLongPress = { game -> showStatusBottomSheet(game) }
         )
+        // The same save as a finished drag (MOB-30): the whole order, in one call.
+        gameAdapter.onReordered = { persistBacklogOrder(gameAdapter.getGames()) }
         recyclerView.apply {
             layoutManager = LinearLayoutManager(context)
             adapter = gameAdapter

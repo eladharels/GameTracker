@@ -15,6 +15,7 @@ import com.google.android.material.button.MaterialButton
 import ink.etech.gametracker.CryptoPrompt
 import ink.etech.gametracker.FingerprintUnlock
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.fragment.app.Fragment
 import ink.etech.gametracker.ApiClient
 import ink.etech.gametracker.CalendarHelper
@@ -164,6 +165,10 @@ class ProfileFragment : Fragment() {
                 }
             }
 
+            // MOB-30: a focusable View with no label read as "unlabelled" to TalkBack.
+            dot.contentDescription = "${ThemeManager.PRESET_NAMES[i]} accent"
+            dot.isSelected = isSelected
+            ViewCompat.setStateDescription(dot, if (isSelected) "Selected" else null)
             dot.setOnClickListener {
                 if (presetColor == currentAccent) return@setOnClickListener
                 ThemeManager.setAccent(requireContext(), presetColor)

@@ -39,7 +39,8 @@
                 android:layout_height="match_parent"
                 android:scaleType="centerCrop"
                 android:background="@drawable/game_cover_bg"
-                android:contentDescription="Game cover" />
+                android:contentDescription="@null"
+                android:importantForAccessibility="no" />
         </androidx.cardview.widget.CardView>
 
         <!-- Backlog position badge (top-left corner of image) -->

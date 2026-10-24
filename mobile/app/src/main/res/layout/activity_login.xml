@@ -87,6 +87,8 @@
 
             <EditText
                 android:id="@+id/etUsername"
+                android:autofillHints="username"
+                android:importantForAutofill="yes"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:hint="Username"
@@ -119,6 +121,8 @@
 
             <EditText
                 android:id="@+id/etPassword"
+                android:autofillHints="password"
+                android:importantForAutofill="yes"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:hint="Password"

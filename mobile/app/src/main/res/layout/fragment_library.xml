@@ -61,7 +61,8 @@
                 android:src="@drawable/ic_sort"
                 android:tint="@color/gt_text_secondary"
                 android:layout_marginEnd="7dp"
-                android:contentDescription="Sort library" />
+                android:contentDescription="@null"
+                android:importantForAccessibility="no" />
 
             <TextView
                 android:id="@+id/tvSortLabel"
@@ -93,7 +94,8 @@
             android:src="@drawable/ic_search"
             android:tint="@color/gt_text_secondary"
             android:layout_marginEnd="10dp"
-            android:contentDescription="Search library" />
+            android:contentDescription="@null"
+                android:importantForAccessibility="no" />
 
         <EditText
             android:id="@+id/etLibrarySearch"
@@ -177,7 +179,8 @@
                     android:tint="?attr/colorPrimary"
                     android:alpha="0.4"
                     android:layout_marginBottom="18dp"
-                    android:contentDescription="Empty library" />
+                    android:contentDescription="@null"
+                android:importantForAccessibility="no" />
 
                 <TextView
                     android:layout_width="wrap_content"

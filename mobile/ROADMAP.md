@@ -760,7 +760,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - **`colorOnPrimary` per accent preset goes with MOB-33**, which replaces the presets with
     the web's six: computing it for presets about to be deleted would be wasted.
 
-### [ ] MOB-30 Medium — Screen-reader semantics: labels on decoration, none on controls, drag-only reorder
+### [x] MOB-30 Medium — Screen-reader semantics: labels on decoration, none on controls, drag-only reorder
 - **Where:**
   - Unlabelled controls: the five accent dots (`fragment_profile.xml:195-223`) are
     focusable `View`s with no `contentDescription` and no selected state.
@@ -782,6 +782,12 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Set decorative icons to `importantForAccessibility="no"`.
   - Add a live region to the login error, and `autofillHints="username"` / `"password"`.
   - Add `AccessibilityAction`s "Move up", "Move down" and "Change status" to library rows.
+
+- **Done (PR #15):** the accent dots are labelled with their preset names and expose a
+  selected state; the stars say the current rating; decorative icons and covers are
+  `importantForAccessibility="no"`; the sign-in fields carry `autofillHints` (the error already
+  had a live region); library rows have "Change status" and, in the reorderable backlog, "Move
+  up" / "Move down" actions that save the whole order like a drag. Pinned.
 
 ### [ ] MOB-31 Medium — Edge-to-edge is not handled, although `targetSdk = 36`
 - **Where:** `build.gradle.kts:16`; `activity_main.xml:2-35`. There are no

@@ -246,7 +246,7 @@ class GameDetailsFragment : Fragment() {
         val density = resources.displayMetrics.density
         val size = (30 * density).toInt()
         val gold = Color.parseColor("#FBBF24")
-        val empty = Color.parseColor("#4A5068")
+        val empty = Color.parseColor("#858CA4")   // gt_text_muted: 3:1+ for a control (MOB-29)
         for (i in 1..5) {
             val star = ImageView(requireContext()).apply {
                 setImageResource(R.drawable.ic_star)
@@ -254,7 +254,9 @@ class GameDetailsFragment : Fragment() {
                 layoutParams = LinearLayout.LayoutParams(size, size).apply {
                     marginEnd = (8 * density).toInt()
                 }
-                contentDescription = "Rate $i star"
+                // MOB-30: say the current value, not only "Rate 3 star".
+                contentDescription = if (i == rating) "Rated $i of 5. Tap to clear the rating."
+                    else "Rate $i of 5" + if (i == 1 && rating == 0) ". Not rated yet." else ""
                 setOnClickListener {
                     val newRating = if (rating == i) 0 else i
                     GameExtras.setRating(requireContext(), game, newRating)

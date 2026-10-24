@@ -678,6 +678,26 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-30: unlabelled controls, labelled decoration, a silent login error, and two gestures
+  // (drag, long-press) with no accessible equivalent.
+  check('Android: screen-reader labels, autofill and row actions (MOB-30)', () => {
+    const res = (p) => fs.readFileSync(path.join(APP, 'res/layout', p), 'utf8');
+    for (const f of ['item_game.xml', 'item_continue.xml', 'item_up_next.xml']) {
+      assert.ok(!/contentDescription="Game cover"/.test(res(f)), `${f}: every cover is announced as "Game cover" again`);
+    }
+    const login = res('activity_login.xml');
+    assert.ok(/autofillHints="username"/.test(login) && /autofillHints="password"/.test(login), 'the sign-in fields lost their autofill hints');
+    assert.ok(/android:id="@\+id\/tvLoginStatus"\s+android:accessibilityLiveRegion="polite"/.test(login), 'a failed sign-in is silent to TalkBack');
+    assert.ok(/dot\.contentDescription = "\$\{ThemeManager\.PRESET_NAMES\[i\]\} accent"/.test(code('fragments/ProfileFragment.kt')),
+      'the accent dots are unlabelled');
+    const adapter = code('GameAdapter.kt');
+    for (const a of ['Change status', 'Move up', 'Move down']) {
+      assert.ok(new RegExp(`action\\("${a}"\\)`).test(adapter), `library rows lost the "${a}" accessibility action`);
+    }
+    assert.ok(/gameAdapter\.onReordered = \{ persistBacklogOrder\(gameAdapter\.getGames\(\)\) \}/.test(code('fragments/LibraryFragment.kt')),
+      'an accessibility move is not saved');
+  });
+
   // MOB-29: muted text read 2.35:1, and white on the status colours 2.3:1. WCAG 2.x, computed
   // here from colors.xml, so a palette edit cannot silently undo it.
   check('Android: text colours meet WCAG AA on the app surfaces (MOB-29)', () => {
