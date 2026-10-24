@@ -309,11 +309,47 @@ check('CI installs tools from a private dir, checksum-verified every run, and ne
           const at = lines.findIndex((l) => /\btar -x/.test(l));
           assert.ok(at > 0 && /echo "\$\{\w+_SHA256\}\s+\$\{TARBALL\}" \| sha256sum -c -/.test(lines[at - 1]),
             `${where} extracts its cached tool without re-checking the pinned SHA-256 on the line before`);
+          // ...from a private copy in BIN, so the shared cache cannot be swapped between the
+          // check and the extraction (CISO review, PR #15).
+          assert.ok(at > 1 && /^\s*TARBALL="\$\{BIN\}\/[\w.-]+"\s*$/.test(lines[at - 2]),
+            `${where} checks and extracts the shared cached file instead of a private copy in BIN`);
         }
       }
     }
   }
   assert.ok(installs >= 4, `found ${installs} cached tool installs — expected gitleaks and three trivy`);
+});
+
+// MOB-38 moved host-file ownership changes from sudo into containers. Such a container runs with
+// a host directory mounted, as uid 0 or with added capabilities, so its image is code running
+// next to the host: it must be a digest-PINNED image, never one this run built from the pull
+// request (CISO review, PR #15). And no container gets DAC_READ_SEARCH unless its image is
+// pinned: with it, Docker's seccomp profile allows open_by_handle_at, a known escape.
+check('privileged helper containers run a digest-pinned image, never a PR-built one (MOB-38)', () => {
+  let helpers = 0;
+  for (const file of WORKFLOW_FILES) {
+    const wf = loadWorkflow(file);
+    for (const [jobName, job] of Object.entries(wf.jobs)) {
+      const env = { ...(wf.env || {}), ...(job.env || {}) };
+      for (const st of job.steps || []) {
+        const run = stepRun(st).replace(/\\\n\s*/g, ' ');
+        for (const cmd of run.split('\n').filter((l) => /\bdocker run\b/.test(l))) {
+          const privileged = /--cap-add|--user 0\b|--privileged/.test(cmd);
+          const binds = /-v "\$\{[A-Z_]+\}[^"]*:\//.test(cmd);
+          if (!privileged && !binds) continue;
+          const where = `${file} / ${jobName} / "${st.name}"`;
+          assert.ok(!/--privileged/.test(cmd), `${where} runs a --privileged container`);
+          const vars = [...cmd.matchAll(/"\$\{(\w+_IMAGE)\}"/g)].map((m) => m[1]);
+          assert.ok(vars.length === 1, `${where}: a privileged or bind-mounting docker run must name its image as one "\${X_IMAGE}"`);
+          assert.ok(!/^TEST_/.test(vars[0]), `${where} runs the PR-built ${vars[0]} with host access`);
+          assert.ok(/@sha256:[0-9a-f]{64}$/.test(String(env[vars[0]] || '')),
+            `${where}: ${vars[0]} is not pinned by digest in the workflow or job env`);
+          if (privileged) helpers++;
+        }
+      }
+    }
+  }
+  assert.ok(helpers >= 4, `found ${helpers} privileged helper containers -- expected the smoke chown and android's`);
 });
 
 // This repository is public and every job runs on the production host. A job reachable from
@@ -398,7 +434,9 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   // The runner is root, so its own uid is not a non-root uid: Gradle runs as a fixed BUILD_UID
   // (PR #6's first run with the guard refused uid 0), and mobile/ is handed back afterwards.
   assert.ok(/^[1-9]\d*$/.test(String(wf.env.BUILD_UID)), 'BUILD_UID is not a fixed non-root uid');
-  assert.ok(/--user "\$\{BUILD_UID\}:\$\{BUILD_UID\}"/.test(b) && !/--user "\$\(id -u\)/.test(runs),
+  // (The signing containers DO run as the runner, MOB-38: they run no build code, and a
+  // non-root runner's 0600 key is unreadable to anyone else. Only the BUILD is held to this.)
+  assert.ok(/--user "\$\{BUILD_UID\}:\$\{BUILD_UID\}"/.test(b) && !/--user "\$\(id -u\)/.test(b),
     'the build container does not run as BUILD_UID');
   const cleanup = stepRun(wf.jobs.android.steps.find((st) => st.if === 'always()'));
   assert.ok(/chown -R "\$\(id -u\):\$\(id -g\)" \/work/.test(cleanup), 'mobile/ is not handed back to the runner after the build');

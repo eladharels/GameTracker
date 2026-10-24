@@ -255,14 +255,19 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
      * On failure the list is reloaded from the server, which still has the old order.
      */
     private fun persistBacklogOrder(ordered: List<Game>) {
+        // Built HERE, on the main thread: the adapter's list is live, and a second drag during
+        // the call would change what is sent (Architect review, PR #15).
+        val body = BacklogOrder.request(ordered.toList())
         viewLifecycleOwner.lifecycleScope.launch {
             val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
             val token = Session.get(requireContext()).token ?: return@launch
             val username = prefs.getString("username", null) ?: return@launch
             val ok = try {
                 withContext(Dispatchers.IO) {
-                    ApiClient.api.reorderBacklog("Bearer $token", username, BacklogOrder.request(ordered)).isSuccessful
+                    ApiClient.api.reorderBacklog("Bearer $token", username, body).isSuccessful
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e   // the view is gone: no snackbar, no reload
             } catch (e: Exception) {
                 false
             }

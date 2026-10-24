@@ -204,7 +204,11 @@ The self-hosted runner is the production host, and it runs every job as root. Si
 MOB-38 change no workflow step needs root any more:
 - gitleaks and trivy are cached in the runner user's own `~/.cache/gametracker-tools`,
   re-checksummed every run, and run by path;
-- the smoke stack's data directory changes owner through a throwaway container;
+- the smoke stack's data directory changes owner through a throwaway container, run from a
+  digest-pinned image (never the PR's own build), and is emptied as uid 1000 with no
+  capabilities;
+- the APK signing containers run as the runner's own uid, so they can read its 0600 key and
+  leave nothing root-owned behind;
 - `test/runtime.test.js` fails if `sudo` comes back in any workflow.
 
 What is left is on the host. Do it in a quiet window. A run that starts mid-way fails, and
@@ -260,8 +264,9 @@ requests, or a private repository.
    - Delete root's caches: `/root/.cache/gametracker-semgrep`, `/root/.cache/trivy`.
 
 **Rollback:** `sudo ./svc.sh stop && sudo ./svc.sh uninstall`, then
-`sudo chown -R root:root /srv/actions-runner`, then `sudo ./svc.sh install` (no user means
-root) and `sudo ./svc.sh start`.
+`sudo chown -R root:root /srv/actions-runner`, then `sudo ./svc.sh install root` and
+`sudo ./svc.sh start`. Name `root` explicitly: with no argument `svc.sh` installs the service
+as `$SUDO_USER`, which under `sudo` is YOUR account, not root.
 
 Record the date under MOB-38 in `mobile/ROADMAP.md` when done.
 

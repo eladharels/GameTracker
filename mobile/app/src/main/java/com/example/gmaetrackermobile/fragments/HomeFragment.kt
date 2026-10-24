@@ -12,6 +12,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.gmaetrackermobile.ApiClient
+import com.example.gmaetrackermobile.BacklogOrder
 import com.example.gmaetrackermobile.ContinueAdapter
 import com.example.gmaetrackermobile.Game
 import com.example.gmaetrackermobile.MainActivity
@@ -118,8 +119,7 @@ class HomeFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         val v = view ?: return
 
         val playing = games.filter { it.status?.lowercase() == "playing" }
-        val backlog = games.filter { it.status?.lowercase() == "backlog" }
-            .sortedBy { it.backlog_order ?: Int.MAX_VALUE }
+        val backlog = BacklogOrder.backlog(games)   // the Library's order, from one place
         val done = games.filter { it.status?.lowercase() == "done" }
         val wishlist = games.count { it.status?.lowercase() == "wishlist" }
 

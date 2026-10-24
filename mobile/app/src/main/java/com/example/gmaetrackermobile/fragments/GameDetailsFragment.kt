@@ -158,6 +158,7 @@ class GameDetailsFragment : Fragment() {
                 currentGame = row
                 inLibrary = true
                 setupStatusChips()
+                callback?.onGameStatusUpdated()   // Search's badges, however the user goes back
                 setupRating()
                 loadNoteForCurrentGame()
                 showLibraryActions()

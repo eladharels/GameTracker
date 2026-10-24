@@ -273,8 +273,12 @@ jobs:
           printf '%s' "${KEYSTORE_PASSWORD}" > "${SIGN}/key/store.pass"
           printf '%s' "${KEY_PASSWORD:-${KEYSTORE_PASSWORD}}" > "${SIGN}/key/key.pass"
 
+          # All three run AS THE RUNNER (MOB-38, CISO review, PR #15): the key is 0600 and the
+          # directories 0700 under umask 077, and with no capabilities a container root cannot
+          # read or write them once the runner is not root. It also leaves nothing root-owned
+          # for the runner's rm -rf. sdkmanager gets a HOME inside /sdk: an arbitrary uid has none.
           # 1. Fresh build-tools, from the SHA-256-verified command-line tools. No key here.
-          docker run --rm --name gametracker-android-signtools --cap-drop ALL --security-opt no-new-privileges --memory 2g --pids-limit 512 \
+          docker run --rm --name gametracker-android-signtools --user "$(id -u):$(id -g)" -e HOME=/sdk/.home -e ANDROID_USER_HOME=/sdk/.home/android --cap-drop ALL --security-opt no-new-privileges --memory 2g --pids-limit 512 \
             -v "${ANDROID_DL}:/dl:ro" \
             -v "${SIGN}/sdk:/sdk" \
             -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_BUILD_TOOLS \
@@ -301,7 +305,7 @@ jobs:
           # Exit 3 = a NEWER build is already published (Architect review, PR #9): a re-run of
           # an older run keeps its old run number, and every updated phone would refuse it.
           rc=0
-          docker run --rm --name gametracker-android-check --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
+          docker run --rm --name gametracker-android-check --user "$(id -u):$(id -g)" --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
             -v "${SIGN}/sdk:/sdk:ro" \
             -v "${APK_OUT}:/in:ro" \
             -v "${APK_PUBLISH_DIR}:/published:ro" \
@@ -336,7 +340,7 @@ jobs:
           # 3. SIGN, and nothing else: only apksigner (Java) touches the file here, the key is
           # mounted read-only, there is no network, and the output goes to a directory the
           # checking container never saw. Named, so the always() step removes it if cancelled.
-          docker run --rm --name gametracker-android-sign --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
+          docker run --rm --name gametracker-android-sign --user "$(id -u):$(id -g)" --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
             -v "${SIGN}/sdk:/sdk:ro" \
             -v "${SIGN}/key:/key:ro" \
             -v "${SIGN}/aligned:/aligned:ro" \

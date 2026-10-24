@@ -153,8 +153,13 @@ jobs:
             mv -f "$DL/gitleaks.tar.gz" "${TARBALL}"
           fi
           BIN="$(mktemp -d "${RUNNER_TEMP}/gitleaks-bin.XXXXXXXX")"
+          # Checked and extracted from a PRIVATE copy, so the cached file cannot change
+          # between the two reads (CISO review, PR #15).
+          cp "${TARBALL}" "${BIN}/gitleaks.tar.gz"
+          TARBALL="${BIN}/gitleaks.tar.gz"
           echo "${GITLEAKS_SHA256}  ${TARBALL}" | sha256sum -c -
           tar -xzf "${TARBALL}" -C "${BIN}" gitleaks
+          rm -f "${TARBALL}"
           # Ahead of anything already on PATH, including an old root-installed copy.
           echo "${BIN}" >> "$GITHUB_PATH"
           export PATH="${BIN}:${PATH}"
@@ -583,8 +588,13 @@ jobs:
             mv -f "$DL/trivy.tar.gz" "${TARBALL}"
           fi
           BIN="$(mktemp -d "${RUNNER_TEMP}/trivy-bin.XXXXXXXX")"
+          # Checked and extracted from a PRIVATE copy, so the cached file cannot change
+          # between the two reads (CISO review, PR #15).
+          cp "${TARBALL}" "${BIN}/trivy.tar.gz"
+          TARBALL="${BIN}/trivy.tar.gz"
           echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
           tar -xzf "${TARBALL}" -C "${BIN}" trivy
+          rm -f "${TARBALL}"
           echo "${BIN}" >> "$GITHUB_PATH"
           export PATH="${BIN}:${PATH}"
           # Fail closed if the binary on PATH is not the pinned version.
@@ -663,8 +673,13 @@ jobs:
             mv -f "$DL/trivy.tar.gz" "${TARBALL}"
           fi
           BIN="$(mktemp -d "${RUNNER_TEMP}/trivy-bin.XXXXXXXX")"
+          # Checked and extracted from a PRIVATE copy, so the cached file cannot change
+          # between the two reads (CISO review, PR #15).
+          cp "${TARBALL}" "${BIN}/trivy.tar.gz"
+          TARBALL="${BIN}/trivy.tar.gz"
           echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
           tar -xzf "${TARBALL}" -C "${BIN}" trivy
+          rm -f "${TARBALL}"
           echo "${BIN}" >> "$GITHUB_PATH"
           export PATH="${BIN}:${PATH}"
           # Fail closed if the binary on PATH is not the pinned version.
@@ -751,8 +766,13 @@ jobs:
             mv -f "$DL/trivy.tar.gz" "${TARBALL}"
           fi
           BIN="$(mktemp -d "${RUNNER_TEMP}/trivy-bin.XXXXXXXX")"
+          # Checked and extracted from a PRIVATE copy, so the cached file cannot change
+          # between the two reads (CISO review, PR #15).
+          cp "${TARBALL}" "${BIN}/trivy.tar.gz"
+          TARBALL="${BIN}/trivy.tar.gz"
           echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
           tar -xzf "${TARBALL}" -C "${BIN}" trivy
+          rm -f "${TARBALL}"
           echo "${BIN}" >> "$GITHUB_PATH"
           export PATH="${BIN}:${PATH}"
           # Fail closed if the binary on PATH is not the pinned version.
@@ -826,6 +846,10 @@ jobs:
       TEST_BACKEND_IMAGE: ${{ needs.build-images.outputs.backend_image }}
       TEST_FRONTEND_IMAGE: ${{ needs.build-images.outputs.frontend_image }}
       TEST_MCP_IMAGE: ${{ needs.build-images.outputs.mcp_image }}
+      # The data-directory chown/cleanup helpers' image (MOB-38). Trusted and pinned by
+      # digest: the same JDK image android.yml builds in, so it is already on this host.
+      # Never a TEST_*_IMAGE: those are built from the pull request.
+      HELPER_IMAGE: eclipse-temurin:17-jdk-jammy@sha256:60fcdd4a85c94a23ef86d0d55867c6a8dbc4f7c3efc8286e259956c3ea4ef08c
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -858,14 +882,16 @@ jobs:
           mkdir "${SMOKE_DATA_DIR}/apk"
           printf 'PK smoke-test stand-in, not an APK\n' > "${SMOKE_DATA_DIR}/apk/gametracker.apk"
           chmod 755 "${SMOKE_DATA_DIR}/apk" && chmod 644 "${SMOKE_DATA_DIR}/apk/gametracker.apk"
-          # mktemp -d already creates the directory 0700. Only ownership needs
-          # changing, for the container's UID 1000 (node). Do NOT chmod after the
-          # chown — under `set -e` that would fail the job whenever the runner's
-          # own UID is not 1000.
-          # MOB-38: through Docker, not sudo, so the runner needs no root. The image is
-          # the backend this run built; only CHOWN, no network.
+          # mktemp -d creates the directory 0700, owned by the runner. It holds only dummy
+          # data, so it is opened to 755 FIRST: a container root with CHOWN alone cannot
+          # read a 0700 directory it does not own, and chown -R must read it. Do NOT chmod
+          # after the chown -- under `set -e` that would fail whenever the runner is not 1000.
+          # MOB-38: through Docker, not sudo, so the runner needs no root. The image is the
+          # digest-pinned HELPER_IMAGE, NEVER this run's backend: that one is PR-authored,
+          # and it would be running as uid 0 with a host directory mounted (CISO, PR #15).
+          chmod 755 "${SMOKE_DATA_DIR}"
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
-            --user 0 --entrypoint chown -v "${SMOKE_DATA_DIR}:/d" "${TEST_BACKEND_IMAGE}" -R 1000:1000 /d
+            --user 0 --entrypoint chown -v "${SMOKE_DATA_DIR}:/d" "${HELPER_IMAGE}" -R 1000:1000 /d
           echo "[smoke] Test data dir: ${SMOKE_DATA_DIR}"
 
       # A stack a cancelled or crashed run left behind would hold THIS partition's ports.
@@ -1300,11 +1326,13 @@ jobs:
             down --volumes --remove-orphans || true
           # Refuse to delete anything that isn't the mktemp -d directory we created.
           if [ -n "${SMOKE_DATA_DIR:-}" ] && [ -d "${SMOKE_DATA_DIR}" ] && [ ! -L "${SMOKE_DATA_DIR}" ]; then
-            # Its files belong to the container's UID 1000: hand them back to the runner
-            # through Docker first (MOB-38: no sudo), then delete as the runner.
-            docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH \
-              --security-opt no-new-privileges --user 0 --entrypoint chown \
-              -v "${SMOKE_DATA_DIR}:/d" "${TEST_BACKEND_IMAGE}" -R "$(id -u):$(id -g)" /d || true
+            # Its contents belong to the container's UID 1000: deleted AS 1000, with no
+            # capability at all (MOB-38: no sudo), then the empty directory as the runner.
+            # Never DAC_READ_SEARCH: with it, Docker's seccomp profile allows
+            # open_by_handle_at, a known escape (CISO review, PR #15).
+            docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+              --user 1000:1000 --entrypoint find \
+              -v "${SMOKE_DATA_DIR}:/d" "${HELPER_IMAGE}" /d -mindepth 1 -delete || true
             rm -rf --one-file-system "${SMOKE_DATA_DIR}"
           fi
           if [ -n "${SMOKE_TMP:-}" ] && [ -d "${SMOKE_TMP}" ] && [ ! -L "${SMOKE_TMP}" ]; then
