@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const SRC = path.join(__dirname, '..', 'mobile/app/src/main/java/com/example/gmaetrackermobile');
+const SRC = path.join(__dirname, '..', 'mobile/app/src/main/java/ink/etech/gametracker');
 const read = (f) => fs.readFileSync(path.join(SRC, f), 'utf8');
 
 const REFUSED = /@(SerializedName|HTTP|Url|JsonAdapter|FormUrlEncoded|Multipart)\b/;

@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.gmaetrackermobile"
+    namespace = "ink.etech.gametracker"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.gmaetrackermobile"
+        applicationId = "ink.etech.gametracker"
         minSdk = 24
         targetSdk = 36
         // CI passes -PgtVersionCode (android.yml's run number) for the build it publishes, so
@@ -25,7 +25,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 (MOB-20): shrinks the release APK and obfuscates it. The Gson models and the
+            // Retrofit interface are kept by proguard-rules.pro; android.yml checks the dex.
+            // Signing is not here, on purpose: CI signs the APK outside Gradle, with a key
+            // the build never sees (MOB-40).
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

@@ -608,7 +608,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   });
   check('Android: HTTP logging is debug-only and never logs headers or bodies (MOB-1)', () => {
     // Code only: the KDoc explaining the old bug names Level.BODY on purpose.
-    const client = fs.readFileSync(path.join(APP, 'java/com/example/gmaetrackermobile/ApiClient.kt'), 'utf8')
+    const client = fs.readFileSync(path.join(APP, 'java/ink/etech/gametracker/ApiClient.kt'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     assert.ok(!/Level\.(BODY|HEADERS)/.test(client), 'ApiClient logs at BODY or HEADERS: that is the bearer token and the password');
     assert.ok(/buildClient\(BuildConfig\.DEBUG/.test(client), 'the shipped client is not built from BuildConfig.DEBUG');
@@ -619,7 +619,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-10/11/12, the High data bugs. The behaviour is tested by the JVM suite in mobile/;
   // these pin the WIRING it cannot see. Code only, so an explanatory comment cannot satisfy
   // or trip a check.
-  const code = (rel) => fs.readFileSync(path.join(APP, 'java/com/example/gmaetrackermobile', rel), 'utf8')
+  const code = (rel) => fs.readFileSync(path.join(APP, 'java/ink/etech/gametracker', rel), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
   check('Android: the app\'s library-match vectors are the shared ones (MOB-10)', () => {
@@ -649,10 +649,38 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(!/status\s*=\s*"Wishlist"/.test(code('fragments/SearchFragment.kt')), 'search still sends a capitalised status');
   });
 
+  // MOB-20: R8 is on, and Gson reads fields BY NAME. Every model is kept, and the BUILT dex is
+  // checked in android.yml for one field of each; these three lists must stay one list.
+  check('Android: the app id is final, R8 is on, and every Gson model is kept by name (MOB-20)', () => {
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
+    const wf = loadWorkflow('android.yml');
+    assert.ok(/applicationId = "ink\.etech\.gametracker"/.test(gradle) && /namespace = "ink\.etech\.gametracker"/.test(gradle),
+      'applicationId / namespace is not ink.etech.gametracker');
+    assert.strictEqual(wf.env.APK_PACKAGE, 'ink.etech.gametracker', 'android.yml checks the APK for another package');
+    assert.ok(!fs.existsSync(path.join(APP, 'java/com/example')), 'sources are left under com/example');
+    const release = gradle.slice(gradle.indexOf('release {'));
+    assert.ok(/isMinifyEnabled = true/.test(release.slice(0, 600)), 'R8 is off for the release build');
+    const models = [...code('models.kt').matchAll(/data class (\w+)\(([\s\S]*?)\)\s*(?::|\{|$)/gm)]
+      .map((m) => ({ name: m[1], fields: [...m[2].matchAll(/val (\w+)/g)].map((v) => v[1]) }));
+    assert.ok(models.length >= 8, `found ${models.length} models in models.kt`);
+    const rules = fs.readFileSync(path.join(ROOT, 'mobile/app/proguard-rules.pro'), 'utf8').replace(/#.*$/gm, '');
+    const kept = [...rules.matchAll(/^-keep class ink\.etech\.gametracker\.(\w+) \{ \*; \}$/gm)].map((m) => m[1]).sort();
+    assert.deepStrictEqual(kept, models.map((m) => m.name).sort(), 'proguard-rules.pro does not keep exactly the models.kt classes');
+    const pairs = String(wf.env.R8_KEPT_FIELDS || '').trim().split(/\s+/).map((p) => p.split(':'));
+    assert.deepStrictEqual(pairs.map((p) => p[0]).sort(), models.map((m) => m.name).sort(),
+      'R8_KEPT_FIELDS does not name one field of every models.kt class');
+    for (const [cls, fld] of pairs) {
+      assert.ok(models.find((m) => m.name === cls).fields.includes(fld), `R8_KEPT_FIELDS: ${cls} has no field ${fld}`);
+    }
+    assert.ok(/-keep interface ink\.etech\.gametracker\.GameTrackerApi \{ \*; \}/.test(rules), 'the Retrofit interface is not kept');
+    const step = wf.jobs.android.steps.map(stepRun).find((r) => /dexdump/.test(r)) || '';
+    assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
+  });
+
   // MOB-19: every screen fetched the whole library in onViewCreated AND onResume, and a tab tap
   // built a new fragment. One cached copy, behind the session; tabs shown and hidden.
   check('Android: one library copy, one credential reader, tabs kept (MOB-19)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -698,7 +726,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   });
 
   check('Android: no statistic is invented from a game id (MOB-11)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -716,7 +744,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-6: the token was plaintext in SharedPreferences and the fingerprint only gated a
   // startActivity call. Each of these, broken, still "works" for every user.
   check('Android: the session token is never stored in the clear, and the fingerprint decrypts it (MOB-6)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -796,7 +824,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(!/src="user"/.test(outsideDebug), 'a release build trusts user-installed CAs');
     assert.ok(!/<pin-set/.test(nsc), 'certificate pinning was added: see ROADMAP MOB-8 before doing that');
     assert.ok(!/usesCleartextTraffic="true"/.test(manifest), 'the manifest re-enables cleartext');
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -823,7 +851,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-17: unscoped coroutines outlived their screen, and fragment-scoped ones updated
   // views that had been destroyed while the fragment sat on the back stack.
   check('Android: coroutines are scoped to what they touch (MOB-17)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const all = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -863,7 +891,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'the minted token asks for something other than exactly ["library"]');
     assert.ok(/expiresAt = expiry\(nowMillis\)\.second/.test(tok), 'the mint body no longer carries the fixed expiry');
     assert.ok(!/"admin"/.test(tok), 'MobileToken mentions the admin scope');
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const all = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -922,7 +950,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-13: statuses were sent capitalised, "Unreleased" was offered as a choice the server
   // overrides, "" was sent for an unknown date, and the server's answer was thrown away.
   check('Android: status writes go through GameStatus, never offer Unreleased, and read the answer (MOB-13)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const all = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -972,7 +1000,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const roots = new Set();
     for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.kt'))) {
       for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/^(?:(?:data|sealed|abstract|open|enum|private|internal)\s+)*(?:class|object|interface)\s+([A-Z]\w*)/gm)) {
@@ -986,9 +1014,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       const declared = new Set([...body.matchAll(/\b(?:class|object|interface)\s+([A-Z]\w*)/g)].map((m) => m[1]));
       for (const name of roots) {
         if (declared.has(name) || !new RegExp(`(?<![\\w.])${name}\\b`).test(body)) continue;
-        const imported = new RegExp(`^import com\\.example\\.gmaetrackermobile\\.(${name}|\\*)$`, 'm').test(src);
-        const qualified = new RegExp(`com\\.example\\.gmaetrackermobile\\.${name}\\b`).test(body);
-        assert.ok(imported || qualified, `fragments/${f} uses ${name} without importing com.example.gmaetrackermobile.${name}`);
+        const imported = new RegExp(`^import ink\\.etech\\.gametracker\\.(${name}|\\*)$`, 'm').test(src);
+        const qualified = new RegExp(`ink\\.etech\\.gametracker\\.${name}\\b`).test(body);
+        assert.ok(imported || qualified, `fragments/${f} uses ${name} without importing ink.etech.gametracker.${name}`);
       }
     }
   });
@@ -996,7 +1024,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-7: notes, ratings, search history and the calendar map were device-wide, so the next
   // account on a phone saw them, and its sync deleted the first account's calendar events.
   check('Android: per-user local data lives only in UserData, and the calendar map is never backed up (MOB-7)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {

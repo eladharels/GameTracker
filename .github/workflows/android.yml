@@ -89,7 +89,13 @@ env:
   APK_NAME: gametracker.apk
   # What the APK must declare before it is signed: a build that produced some other app is
   # not published under this name.
-  APK_PACKAGE: com.example.gmaetrackermobile
+  APK_PACKAGE: ink.etech.gametracker
+  # MOB-20: one field of every Gson model in models.kt, which must survive R8 by NAME (an
+  # obfuscated field is one the server's JSON never fills). Checked in the BUILT dex below;
+  # runtime.test.js holds this list equal to models.kt and to proguard-rules.pro.
+  R8_KEPT_FIELDS: >-
+    LoginRequest:password LoginResponse:token CreateTokenRequest:scopes CreatedToken:expiresAt
+    Game:game_name GameUpdateRequest:gameId BacklogReorderRequest:order GameUpsertResult:coerced
 
 jobs:
   android:
@@ -184,7 +190,7 @@ jobs:
             -e GT_VERSION_CODE="${GITHUB_RUN_NUMBER}" \
             -e HOME=/gradle/home -e GRADLE_USER_HOME=/gradle -e ANDROID_HOME=/sdk \
             -e ANDROID_USER_HOME=/gradle/android-user -e JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/gradle/tmp \
-            -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS \
+            -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS -e R8_KEPT_FIELDS \
             -w /work \
             "${JDK_IMAGE}" bash -euo pipefail -c '
               # Never the root uid, whatever --user says (the runner itself is root).
@@ -226,6 +232,20 @@ jobs:
               # is input to the signing step, never trusted as more than that.
               if [ "${status}" = 0 ]; then
                 install -m 0644 app/build/outputs/apk/release/app-release-unsigned.apk /out/unsigned.apk
+                # MOB-20: R8 kept every Gson model field by name, in the dex that ships. On
+                # pull requests too: a missing keep rule builds green and nulls every field.
+                BT="/sdk/build-tools/${ANDROID_BUILD_TOOLS#build-tools;}"
+                DEX="$(mktemp -d)"
+                (cd "${DEX}" && jar xf /out/unsigned.apk)
+                "${BT}/dexdump" "${DEX}"/classes*.dex > "${DEX}/dump.txt"
+                for pair in ${R8_KEPT_FIELDS}; do
+                  cls="${pair%%:*}"; fld="${pair#*:}"
+                  # No single quote may appear in this bash -c script: q is one, made by awk.
+                  awk -v c="Link/etech/gametracker/${cls};" -v f="${fld}" \
+                    "BEGIN { q = sprintf(\"%c\", 39) } \$1 == \"Class\" && \$2 == \"descriptor\" { in_c = (\$4 == q c q) } in_c && \$1 == \"name\" && \$3 == q f q { ok = 1 } END { exit !ok }" \
+                    "${DEX}/dump.txt" || { echo "::error::R8 renamed or removed ${cls}.${fld}: Gson would read it as null (proguard-rules.pro)"; status=1; }
+                done
+                rm -rf "${DEX}"
               fi
 
               # Keep only the dependency cache; the rest is regenerated.

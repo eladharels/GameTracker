@@ -41,7 +41,7 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 mobile/                                       # inside the GameTracker repo (was ../GameTracker-mobile/)
 ├── app/
 │   ├── src/main/
-│   │   ├── java/com/example/gmaetrackermobile/
+│   │   ├── java/ink/etech/gametracker/
 │   │   │   ├── ApiClient.kt                  # Retrofit singleton; buildClient(BuildConfig.DEBUG)
 │   │   │   ├── SessionStore.kt               # The session: token (IN MEMORY only), its sealed copy,
 │   │   │   │                                 #   username, JWT exp, "ended" signal (MOB-6)
@@ -346,8 +346,10 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 
 ## Known Technical Debt
 
-- Package name typo in namespace: `com.example.gmaetrackermobile` (should be `gametracker`) — do not change without a coordinated rename refactor
-- App name string has typo: `GmaeTrackerMobile` — cosmetic, low priority
+- (Fixed, MOB-20.) The app id and package are `ink.etech.gametracker`; the theme is
+  `Theme.GameTracker`. The old `com.example.gmaetrackermobile` is a DIFFERENT app to Android:
+  a phone that had it must uninstall it and install the new one once. Its on-phone notes and
+  ratings do not carry over. Never change the id again: every later change is that again
 - No ViewModel/LiveData (see State Management: tabs are kept and the library is cached, MOB-19)
 
 ---
@@ -436,7 +438,10 @@ Before releasing a new APK or publishing to any distribution channel:
 - [ ] Architect agent has reviewed and **approved** all changes
 - [ ] UI/UX agent has reviewed and **approved** all UI changes (if applicable)
 - [ ] Tested on at least one physical device or emulator at minimum SDK (API 24)
-- [ ] ProGuard/R8 rules verified for release build
+- [ ] ProGuard/R8 rules verified for release build. A new class in `models.kt` needs a keep rule
+      in `proguard-rules.pro` AND a field in android.yml's `R8_KEPT_FIELDS` (runtime.test.js
+      enforces both; android.yml then checks the BUILT dex). A Gson model outside `models.kt`
+      is not covered: keep them there
 - [ ] OkHttp logging interceptor is **disabled** in release build (no credential leaking)
 - [ ] No hardcoded secrets, tokens, or credentials in source code
 - [ ] `versionCode` incremented in `build.gradle.kts`

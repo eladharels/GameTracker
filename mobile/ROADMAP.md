@@ -503,7 +503,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - **Not done, deliberately:** a ViewModel per screen. With the tabs kept and one library
     copy it adds no behaviour today; revisit if a screen needs state across a rotation.
 
-### [ ] MOB-20 Medium — Release build: no R8, a `com.example` application id, no signing or versioning
+### [x] MOB-20 Medium — Release build: no R8, a `com.example` application id, no signing or versioning
 - **Where:** `app/build.gradle.kts:10`, `:14`, `:17-18`, `:24-25`; `proguard-rules.pro` (template only).
 - **Why:**
   - `isMinifyEnabled = false`: no shrinking or obfuscation, so the release APK carries every
@@ -519,6 +519,15 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Enable R8, with keep rules for the Gson-reflected models in `models.kt` (a missing rule
     serialises every field as `null`) and for Retrofit interfaces.
   - Add a signing config that reads from CI secrets, never from the repo.
+
+- **Done (PR #15):**
+  - The app id and package are `ink.etech.gametracker` (owner's decision: now, with a one-time
+    uninstall; the old app's on-phone notes and ratings do not move). `Theme.GameTracker`.
+  - R8 and resource shrinking are on. Every `models.kt` class is kept whole, plus the Retrofit
+    interface and the full-mode rules Retrofit 2.9.0 lacks. `android.yml` reads the BUILT dex
+    and fails when a Gson field lost its name: a missing rule otherwise builds green.
+  - Signing stays outside Gradle, in CI with a key the build never sees (MOB-40), and
+    `versionCode` is the run number. So no Gradle signing config, on purpose.
 
 ### [ ] MOB-21 Medium — Outdated dependencies and `kapt`
 - **Where:** `app/build.gradle.kts:63-83`, `gradle/libs.versions.toml:10`.

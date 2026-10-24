@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.GmaeTrackerMobile" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.GameTracker" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/gt_accent</item>
         <item name="colorPrimaryDark">@color/gt_accent_dim</item>
         <item name="android:windowBackground">@color/gt_surface_1</item>

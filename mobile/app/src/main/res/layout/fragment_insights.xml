@@ -43,7 +43,7 @@
             android:background="@drawable/glance_card_bg"
             android:padding="20dp">
 
-            <com.example.gmaetrackermobile.DonutView
+            <ink.etech.gametracker.DonutView
                 android:id="@+id/donut"
                 android:layout_width="118dp"
                 android:layout_height="118dp" />

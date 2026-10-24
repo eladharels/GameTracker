@@ -1,0 +1,248 @@
+package ink.etech.gametracker
+
+import android.Manifest
+import android.content.Context
+import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentManager
+import ink.etech.gametracker.fragments.HomeFragment
+import ink.etech.gametracker.fragments.InsightsFragment
+import ink.etech.gametracker.fragments.LibraryFragment
+import ink.etech.gametracker.fragments.ProfileFragment
+import ink.etech.gametracker.fragments.SearchFragment
+import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.appbar.MaterialToolbar
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.content.Intent
+import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
+
+class MainActivity : AppCompatActivity() {
+
+    private var onCalendarPermissionsResult: ((Boolean) -> Unit)? = null
+
+    private val calendarPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.READ_CALENDAR] == true &&
+                      permissions[Manifest.permission.WRITE_CALENDAR] == true
+        onCalendarPermissionsResult?.invoke(granted)
+        onCalendarPermissionsResult = null
+    }
+
+    fun requestCalendarPermissions(onResult: (Boolean) -> Unit) {
+        if (CalendarHelper.hasCalendarPermissions(this)) { onResult(true); return }
+        onCalendarPermissionsResult = onResult
+        calendarPermissionLauncher.launch(
+            arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+        )
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // No live session, no main screen (MOB-2). This also covers a process restored from
+        // Recents after the session was ended elsewhere.
+        if (!ensureLiveSession()) return
+        // Apply the user's chosen accent theme overlay BEFORE view inflation (after super so
+        // AppCompat is initialised, but before setContentView so views pick up the colours)
+        theme.applyStyle(ThemeManager.getThemeResId(this), true)
+        setContentView(R.layout.activity_main)
+
+        setupToolbar()
+
+        // Determine which tab to show: restore from savedInstanceState (e.g. after recreate()
+        // triggered by theme change) or default to Home on first launch.
+        val savedTab = savedInstanceState?.getInt(KEY_SELECTED_TAB) ?: R.id.navigation_home
+
+        // Set the visual indicator BEFORE attaching the listener (avoids double-loading)
+        val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_navigation)
+        if (savedTab != R.id.navigation_home) {
+            bottomNav.selectedItemId = savedTab
+        }
+
+        // A restored activity already has its tabs (and any open details) back from the
+        // FragmentManager; only a fresh one creates the first tab.
+        if (savedInstanceState == null) loadFragmentForTab(savedTab)
+
+        // Attach the listener for subsequent user taps
+        setupBottomNavigation()
+
+        // A request found the session expired (SessionExpiryInterceptor). Handled here, by the
+        // visible activity, never from OkHttp's thread.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                Session.ended.collect { toLogin(sessionEnded = true) }
+            }
+        }
+        if (intent.getBooleanExtra(EXTRA_OFFLINE, false)) {
+            Toast.makeText(this, "You're offline. Some screens may not load until you reconnect.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ensureLiveSession()
+    }
+
+    /** False (and on the way to the login screen) when there is no live session. */
+    private fun ensureLiveSession(): Boolean {
+        val session = Session.get(this)
+        // A 401 while another activity was on top clears the token and sets `redirecting`, but
+        // the "ended" event is dropped (nothing collects it off-screen): still say why.
+        if (session.token == null) { toLogin(sessionEnded = Session.redirecting); return false }
+        if (!session.hasLiveToken(skewSeconds = 0)) {
+            session.endSession()
+            toLogin(sessionEnded = true)
+            return false
+        }
+        return true
+    }
+
+    private fun toLogin(sessionEnded: Boolean) {
+        if (isFinishing) return
+        LibraryRepository.clear()
+        val intent = Intent(this, LoginActivity::class.java)
+            .putExtra(LoginActivity.EXTRA_SESSION_ENDED, sessionEnded)
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(intent)
+        finish()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_navigation)
+        outState.putInt(KEY_SELECTED_TAB, bottomNav.selectedItemId)
+    }
+
+    private fun setupToolbar() {
+        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        setSupportActionBar(toolbar)
+
+        toolbar.setOnMenuItemClickListener { menuItem ->
+            when (menuItem.itemId) {
+                R.id.action_logout -> { logout(); true }
+                else -> false
+            }
+        }
+    }
+
+    private fun setupBottomNavigation() {
+        val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_navigation)
+        bottomNav.setOnItemSelectedListener { item ->
+            when (item.itemId) {
+                R.id.navigation_home, R.id.navigation_search, R.id.navigation_library,
+                R.id.navigation_insights, R.id.navigation_profile -> { loadFragmentForTab(item.itemId); true }
+                else -> false
+            }
+        }
+    }
+
+    /** Programmatically switch tabs (used by Home shortcuts). */
+    fun selectTab(tabId: Int) {
+        findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = tabId
+    }
+
+    /**
+     * The five tabs are created once and then SHOWN and HIDDEN, never replaced (MOB-19): a new
+     * instance on every tap lost the scroll position, the filter and the search text, and
+     * re-downloaded the library. A restored activity (theme change) finds them by tag.
+     * A tab learns it is visible again from onHiddenChanged, not onResume.
+     */
+    private fun loadFragmentForTab(tabId: Int) {
+        val fm = supportFragmentManager
+        // A details screen belongs to the tab it was opened from: leaving the tab closes it.
+        if (fm.backStackEntryCount > 0) fm.popBackStackImmediate(null, FragmentManager.POP_BACK_STACK_INCLUSIVE)
+        val tag = TAB_PREFIX + tabId
+        try {
+            val tx = fm.beginTransaction().setReorderingAllowed(true)
+            val target = fm.findFragmentByTag(tag)
+            fm.fragments.filter { it.tag?.startsWith(TAB_PREFIX) == true && it !== target && !it.isHidden }
+                .forEach { tx.hide(it) }
+            if (target == null) tx.add(R.id.fragment_container, newTab(tabId), tag) else tx.show(target)
+            tx.commit()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error showing tab: ${e.message}", e)
+            loadFragment(newTab(tabId))
+        }
+    }
+
+    private fun newTab(tabId: Int): Fragment = when (tabId) {
+        R.id.navigation_search   -> SearchFragment()
+        R.id.navigation_library  -> LibraryFragment()
+        R.id.navigation_insights -> InsightsFragment()
+        R.id.navigation_profile  -> ProfileFragment()
+        else                     -> HomeFragment()
+    }
+
+    /**
+     * Game Details over the current tab: the tab is hidden, not destroyed, so Back returns to
+     * it exactly as it was (and onHiddenChanged tells it to re-read the library).
+     */
+    fun openDetails(details: Fragment) {
+        val fm = supportFragmentManager
+        val tx = fm.beginTransaction()
+            .setReorderingAllowed(true)
+            .setCustomAnimations(
+                R.anim.slide_in_right, R.anim.slide_out_left,
+                R.anim.slide_in_left, R.anim.slide_out_right
+            )
+        fm.fragments.filter { it.isAdded && !it.isHidden && it.id == R.id.fragment_container }.forEach { tx.hide(it) }
+        tx.add(R.id.fragment_container, details).addToBackStack(null).commit()
+    }
+
+    /** The last-resort path: one fragment, replacing everything. */
+    private fun loadFragment(fragment: Fragment) {
+        try {
+            supportFragmentManager.beginTransaction()
+                .setCustomAnimations(R.anim.slide_in_right, R.anim.slide_out_left)
+                .replace(R.id.fragment_container, fragment)
+                .commit()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error loading fragment: ${e.message}", e)
+            try {
+                val fallback = object : androidx.fragment.app.Fragment() {
+                    override fun onCreateView(
+                        inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
+                    ): View = android.widget.TextView(requireContext()).apply {
+                        text = "Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}"
+                        textSize = 16f
+                        gravity = android.view.Gravity.CENTER
+                        setTextColor(android.graphics.Color.WHITE)
+                        setBackgroundColor(android.graphics.Color.BLACK)
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    }
+                }
+                supportFragmentManager.beginTransaction()
+                    .replace(R.id.fragment_container, fallback)
+                    .commit()
+            } catch (fallbackError: Exception) {
+                android.util.Log.e("MainActivity", "Fallback fragment failed", fallbackError)
+                android.widget.Toast.makeText(this, "Critical error: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** Sign out: ALWAYS ends the session (MOB-3); see [SignOut]. */
+    private fun logout() = SignOut.start(this)
+
+    fun refreshCurrentFragment() {
+        val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
+        if (current is ink.etech.gametracker.fragments.GameDetailsFragment.GameDetailsCallback) {
+            current.onGameStatusUpdated()
+        }
+    }
+
+    companion object {
+        private const val KEY_SELECTED_TAB = "selected_tab"
+        private const val TAB_PREFIX = "tab:"
+        const val EXTRA_OFFLINE = "offline"
+    }
+}
