@@ -28,7 +28,7 @@ class DonutView @JvmOverloads constructor(
     }
     private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.parseColor("#C084FC")   // gt_status_done (MOB-33)
+        color = androidx.core.content.ContextCompat.getColor(context, R.color.gt_status_done)
         strokeWidth = 13f * density
         strokeCap = Paint.Cap.ROUND
     }
@@ -39,7 +39,7 @@ class DonutView @JvmOverloads constructor(
         isFakeBoldText = true
     }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#8890A8")
+        color = androidx.core.content.ContextCompat.getColor(context, R.color.gt_text_secondary)
         textAlign = Paint.Align.CENTER
         textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 12f, resources.displayMetrics)   // 12sp floor, follows font scale (MOB-32)
     }

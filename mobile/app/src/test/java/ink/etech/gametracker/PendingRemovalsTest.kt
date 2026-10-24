@@ -66,13 +66,15 @@ class PendingRemovalsTest {
 
     @Test
     fun `a refused removal is announced by name, for whichever screen is showing`() {
-        val heard = mutableListOf<String>()
+        val heard = mutableListOf<PendingRemovals.Failure>()
         val listener = CoroutineScope(Dispatchers.Unconfined).launch { removals.failures.collect { heard += it } }
         removals.schedule("jane", "igdb_1", 5000, delete = { false }, label = "Hades")
         removals.schedule("jane", "igdb_2", 5000, delete = { true }, label = "Celeste")
         gate.complete(Unit)
         listener.cancel()
-        assertEquals(listOf("Hades"), heard)   // MOB-39: the tab that asked may be hidden
+        // MOB-39: the tab that asked may be hidden. The OWNER travels with it, so the next
+        // account on the phone is never told about this one's game (CISO review).
+        assertEquals(listOf(PendingRemovals.Failure("jane", "Hades")), heard)
     }
 
     @Test

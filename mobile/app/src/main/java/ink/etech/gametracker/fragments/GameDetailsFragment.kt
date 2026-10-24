@@ -66,10 +66,11 @@ class GameDetailsFragment : Fragment() {
         private const val ARG_IN_LIBRARY = "in_library"
         // Never Unreleased: the server decides that from the date (MOB-13).
         private val STATUS_OPTIONS = GameStatus.PICKABLE
+        // colors.xml gt_status_*, read at use: no second copy of the palette (MOB-33).
         private val STATUS_COLORS = mapOf(
-            // = colors.xml gt_status_* (MOB-33, the web's palette)
-            "wishlist" to "#38BDF8", "backlog" to "#FBBF24",
-            "playing" to "#34D399", "done" to "#C084FC", "unreleased" to "#94A3B8"
+            "wishlist" to R.color.gt_status_wishlist, "backlog" to R.color.gt_status_backlog,
+            "playing" to R.color.gt_status_playing, "done" to R.color.gt_status_done,
+            "unreleased" to R.color.gt_status_unreleased,
         )
 
         /**
@@ -202,7 +203,7 @@ class GameDetailsFragment : Fragment() {
         // SAY it: a checked chip that cannot be tapped, ahead of the four choices.
         val shown = if (currentStatus == GameStatus.UNRELEASED) listOf(GameStatus.UNRELEASED) + STATUS_OPTIONS else STATUS_OPTIONS
         shown.forEach { status ->
-            val color = Color.parseColor(STATUS_COLORS[status] ?: "#8890A8")
+            val color = ContextCompat.getColor(requireContext(), STATUS_COLORS[status] ?: R.color.gt_text_secondary)
             val chip = Chip(requireContext()).apply {
                 text = GameStatus.label(status)
                 isCheckable = true
@@ -246,7 +247,7 @@ class GameDetailsFragment : Fragment() {
         starContainer.removeAllViews()
         val density = resources.displayMetrics.density
         val size = (30 * density).toInt()
-        val gold = Color.parseColor("#FBBF24")
+        val gold = ContextCompat.getColor(requireContext(), R.color.gt_star)   // not a status colour
         val empty = ContextCompat.getColor(requireContext(), R.color.gt_text_muted)   // 3:1+ for a control (MOB-29)
         for (i in 1..5) {
             val star = ImageView(requireContext()).apply {

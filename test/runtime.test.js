@@ -460,7 +460,7 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
     assert.ok(/bash gradlew [^\n]*--dependency-verification strict/.test(phase), `${name}'s gradlew is not strict`);
   }
   assert.ok(!/--network/.test(phase1.split('\n')[0]) && !/--network/.test(argsBlock), 'phase 1 or the shared arguments set a --network');
-  assert.ok(!/\/out/.test(phase1.split("'")[0]) && /-v "\$\{APK_OUT\}:\/out"/.test(phase2), 'only phase 2 may mount /out');
+  assert.ok(!/\/out/.test(phase1.split("'")[0]) && !/\/out/.test(argsBlock) && /-v "\$\{APK_OUT\}:\/out"/.test(phase2), 'only phase 2 may mount /out');
   assert.ok(b.indexOf('find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf') >= 0 && b.indexOf('find /sdk -mindepth 1') < b.indexOf('sdkmanager'),
     'the SDK is not wiped before sdkmanager installs it');
   assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(b), 'the build container does not refuse uid 0');
@@ -730,6 +730,14 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/LoginInput\.problem\(username, password\)/.test(login) && /LoginInput\.username\(username\)/.test(login),
       'the sign-in form no longer goes through LoginInput');
     assert.ok(!/password\.trim\(\)/.test(login), 'the password is trimmed before it is checked or sent');
+    // verifyAndEnter disables Sign in; every way it ends on the login screen must re-enable it
+    // (Architect review: an expired session stranded the user with a dead button).
+    const verify = login.slice(login.indexOf('private fun verifyAndEnter'));
+    const expired = verify.slice(0, verify.indexOf('\n    }\n')).split('notice(status, SESSION_EXPIRED_TEXT)');
+    assert.ok(expired.length >= 3, 'verifyAndEnter no longer has its two expiry paths -- update this pin');
+    for (const before of expired.slice(0, -1)) {
+      assert.ok(/btnSignIn\.isEnabled = true\s*(\/\/[^\n]*)?\s*$/.test(before), 'an expired-session path leaves Sign in disabled');
+    }
   });
 
   // MOB-33: the app had five accents (Blue default) where the web has six (Violet default), and
@@ -844,8 +852,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     }
     assert.ok(ratio(color('gt_error_text'), '2D3142') >= 4.5, 'error snackbar text is below 4.5:1');
     // The ratios above hold only if the code USES the tokens (Architect review, PR #15).
-    for (const f of ['SnackbarHelper.kt', 'fragments/GameDetailsFragment.kt', 'GameAdapter.kt']) {
-      for (const t of ['gt_error_text', 'gt_on_status', 'gt_text_muted', 'gt_text_secondary']) {
+    for (const f of ['SnackbarHelper.kt', 'fragments/GameDetailsFragment.kt', 'GameAdapter.kt', 'DonutView.kt']) {
+      for (const t of ['gt_error_text', 'gt_on_status', 'gt_text_muted', 'gt_text_secondary',
+        'gt_status_wishlist', 'gt_status_playing', 'gt_status_done', 'gt_status_backlog', 'gt_status_unreleased']) {
         assert.ok(!new RegExp(`parseColor\\("#${color(t)}"\\)`, 'i').test(code(f)), `${f} hard-codes ${t} instead of reading R.color.${t}`);
       }
     }
@@ -942,6 +951,10 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
         `${f} does not reload on being shown, or reloads while hidden`);
     }
     for (const f of ['SignOut.kt', 'MainActivity.kt']) assert.ok(/LibraryRepository\.clear\(\)/.test(code(f)), `${f} leaves the library in memory at sign-out`);
+    // A refused removal is told only to its owner: it may have been scheduled before a sign-out
+    // (CISO review, PR #15: the next account read the previous one's game title).
+    assert.ok(/failure\.owner != Session\.get\(this@MainActivity\)\.username/.test(code('MainActivity.kt')),
+      'a removal failure is shown without checking whose it was');
   });
 
   // MOB-16: Details offered Remove, Refresh and status chips (which silently ADDED the game)

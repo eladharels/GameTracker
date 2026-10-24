@@ -82,7 +82,10 @@ class MainActivity : AppCompatActivity() {
         // A removal the server refused, said on whatever screen is showing (MOB-39).
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                PendingRemovals.app.failures.collect { name ->
+                PendingRemovals.app.failures.collect { failure ->
+                    // Never another account's: the removal may have been scheduled before a sign-out.
+                    if (failure.owner != Session.get(this@MainActivity).username) return@collect
+                    val name = failure.label
                     val nav = findViewById<View>(R.id.bottom_navigation)
                     com.google.android.material.snackbar.Snackbar.make(nav, "Couldn't remove $name. It's back in your library.",
                         com.google.android.material.snackbar.Snackbar.LENGTH_LONG)

@@ -38,12 +38,16 @@ class PendingRemovals(
 
     private val pending = mutableMapOf<Key, Job>()
 
+    /** A removal the server refused: whose, and the game's name. */
+    data class Failure(val owner: String, val label: String)
+
     /**
-     * Every removal the server refused, by the game's name (MOB-39). The screen that scheduled
-     * it may be hidden or gone by then; the activity collects this and says so, wherever the
-     * user is. No replay: a failure nobody is shown is still visible on the next load.
+     * Every removal the server refused (MOB-39). The screen that scheduled it may be hidden or
+     * gone by then; the activity collects this and says so, wherever the user is, but ONLY to
+     * the [Failure.owner]: a removal outlives a sign-out by design, and the next account on the
+     * phone must never read the previous one's game title (CISO review, PR #15). No replay.
      */
-    val failures = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val failures = MutableSharedFlow<Failure>(extraBufferCapacity = 8)
 
     /**
      * Removes [gameId] after [delayMs] unless [undo] is called first. [delete] runs once, off
@@ -79,7 +83,7 @@ class PendingRemovals(
             val ok = try { delete() } catch (e: CancellationException) { throw e } catch (e: Exception) { false }
             if (!ok) {
                 onFailed(gameId)
-                failures.tryEmit(label)
+                failures.tryEmit(Failure(owner, label))
             }
         }
         pending[key] = job

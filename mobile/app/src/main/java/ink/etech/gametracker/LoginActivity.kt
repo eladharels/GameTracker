@@ -266,6 +266,7 @@ class LoginActivity : AppCompatActivity() {
         val bearer = session.bearer()
         if (bearer == null || !session.hasLiveToken()) {
             session.endSession()
+            btnSignIn.isEnabled = true   // the password is the way in now (Architect review)
             notice(status, SESSION_EXPIRED_TEXT)
             return
         }
@@ -283,6 +284,7 @@ class LoginActivity : AppCompatActivity() {
                     // in with the password while the check was in flight.
                     session.clearIfCurrent(bearer)
                     Session.redirecting = false
+                    btnSignIn.isEnabled = true
                     notice(status, SESSION_EXPIRED_TEXT)
                 }
                 else -> enterApp(offline = false)

@@ -428,7 +428,8 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 - Animation consistency (200ms slide transitions, no janky transitions)
 - Responsiveness across screen sizes (phones from small to large)
 - Bottom navigation behavior and tab state preservation
-- Status color system consistency (Wishlist gray, Playing blue, Done green, Backlog orange, Unreleased purple)
+- Status color system consistency (MOB-33, the web's palette: Wishlist sky #38BDF8, Playing emerald #34D399,
+  Done violet #C084FC, Backlog amber #FBBF24, Unreleased slate #94A3B8), each badge carrying its label
 - Game card design and cover image aspect ratio (portrait 3:4)
 - Alignment with today's standards for Android app design and interactivity
 

@@ -60,7 +60,7 @@
                 android:textStyle="bold"
                 android:text="A"
                 android:textColor="#FFFFFF"
-                android:textSize="18sp"
+                android:textSize="19sp"
                 tools:ignore="HardcodedText" />
         </LinearLayout>
 
