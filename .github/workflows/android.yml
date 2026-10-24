@@ -209,13 +209,11 @@ jobs:
               cp /gh/meta.xml gradle/verification-metadata.xml
               bash gradlew --no-daemon --write-verification-metadata sha256 \
                 help testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease
-              echo "GT-METADATA-BEGIN"
-              gzip -9c gradle/verification-metadata.xml | base64 -w0
-              echo
-              echo "GT-METADATA-END"
+              gzip -9c gradle/verification-metadata.xml | base64 -w0 > /gh/meta.b64
             '
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
             -v "${GT_REGEN_HOME}:/gh" "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /gh || true
+          cp "${GT_REGEN_HOME}/meta.b64" "${RUNNER_TEMP}/gt-metadata.b64"
           rm -rf --one-file-system "${GT_REGEN_HOME}"
 
       - name: Remove a build container left behind by a cancelled run
@@ -507,3 +505,7 @@ jobs:
             fi
           done
           df -h "$(docker info --format '{{.DockerRootDir}}')"
+          # TEMPORARY (MOB-21): the regenerated metadata, LAST in the log so it is easy to fetch.
+          if [ -f "${RUNNER_TEMP}/gt-metadata.b64" ]; then
+            echo "GT-METADATA-BEGIN"; cat "${RUNNER_TEMP}/gt-metadata.b64"; echo; echo "GT-METADATA-END"
+          fi
