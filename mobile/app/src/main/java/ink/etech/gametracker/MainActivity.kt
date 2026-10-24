@@ -197,7 +197,7 @@ class MainActivity : AppCompatActivity() {
                     override fun onCreateView(
                         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
                     ): View = android.widget.TextView(requireContext()).apply {
-                        text = "Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}"
+                        text = "Something went wrong loading this screen.\nPlease restart the app."
                         textSize = 16f
                         gravity = android.view.Gravity.CENTER
                         setTextColor(android.graphics.Color.WHITE)
@@ -211,7 +211,7 @@ class MainActivity : AppCompatActivity() {
                     .commit()
             } catch (fallbackError: Exception) {
                 android.util.Log.e("MainActivity", "Fallback fragment failed", fallbackError)
-                android.widget.Toast.makeText(this, "Critical error: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                android.widget.Toast.makeText(this, "Something went wrong. Please restart the app.", android.widget.Toast.LENGTH_LONG).show()
             }
         }
     }

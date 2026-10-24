@@ -677,6 +677,29 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-27: users read `Login failed: {"error":...}` and `Error: Unable to resolve host ...`, and
+  // a 15-minute lockout read like a wrong password. Fixed text only, from ErrorText.
+  check('Android: no server body or exception text reaches the user (MOB-27)', () => {
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of files) {
+      code(f).split('\n').forEach((line, i) => {
+        if (/\bLog\.[ewidv]\(/.test(line)) return;   // logcat may name the exception
+        assert.ok(!/\$\{e\.(message|localizedMessage)\}|\be\.localizedMessage\b|errorBody\(\)/.test(line),
+          `${f}:${i + 1} shows exception text or a server body to the user`);
+      });
+    }
+    const login = code('LoginActivity.kt');
+    assert.ok(/ErrorText\.signIn\(response\.code\(\), response\.headers\(\)\["Retry-After"\]\)/.test(login),
+      'sign-in failures are not mapped by status (a lockout would read as a wrong password)');
+  });
+
   // MOB-23: every debug build and test run used to log in to production with real accounts.
   check('Android: the server comes from the build type; release is production, fixed (MOB-23)', () => {
     // Whole-line comments only: a trailing-comment strip would eat the "https://" in a string.

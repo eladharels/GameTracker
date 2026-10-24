@@ -94,7 +94,7 @@ class SearchFragment : Fragment() {
                 renderHistoryChips()
             } catch (e: Exception) {
                 android.util.Log.e("SearchFragment", "Error initializing views: ${e.message}", e)
-                showError("Error initializing search screen: ${e.message}")
+                showError("Couldn't open search. Try again.")
             }
         }
     }

@@ -36,6 +36,7 @@ import android.widget.ImageView
 import java.text.SimpleDateFormat
 import java.util.Locale
 import ink.etech.gametracker.Session
+import ink.etech.gametracker.ErrorText
 import ink.etech.gametracker.MainActivity
 import ink.etech.gametracker.LibraryRepository
 
@@ -395,7 +396,7 @@ class LibraryFragment : Fragment() {
             } catch (e: Exception) {
                 if (index >= 0 && previousGame != null) allGames[index] = previousGame
                 filterGames()
-                showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR)
+                showSnackbar(ErrorText.action(e, "Couldn't save the status."), SnackbarHelper.Type.ERROR)
             }
         }
     }

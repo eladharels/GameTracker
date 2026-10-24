@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ink.etech.gametracker.Session
+import ink.etech.gametracker.ErrorText
 import ink.etech.gametracker.LibraryAdd
 import ink.etech.gametracker.LibraryMatch
 
@@ -298,10 +299,10 @@ class GameDetailsFragment : Fragment() {
             try {
                 val session = Session.get(requireContext())
                 val token = session.token ?: run {
-                    showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
+                    showSnackbar("You're signed out. Sign in again.", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val username = session.username ?: run {
-                    showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
+                    showSnackbar("You're signed out. Sign in again.", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val gameRequest = GameStatus.request(game, newStatus)
                 val response = withContext(Dispatchers.IO) {
@@ -327,7 +328,7 @@ class GameDetailsFragment : Fragment() {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     setupStatusChips()   // undo the tapped chip's optimistic check
-                    showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR)
+                    showSnackbar(ErrorText.action(e, "Couldn't save the status."), SnackbarHelper.Type.ERROR)
                 }
             }
         }
@@ -351,13 +352,13 @@ class GameDetailsFragment : Fragment() {
                     if (response.isSuccessful) {
                         showSnackbar("Game data refreshed", SnackbarHelper.Type.SUCCESS)
                     } else {
-                        showSnackbar("Failed to refresh game data", SnackbarHelper.Type.ERROR)
+                        showSnackbar("Couldn't refresh the game data. Try again.", SnackbarHelper.Type.ERROR)
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     restoreRefreshButton()
-                    showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR)
+                    showSnackbar(ErrorText.action(e, "Couldn't refresh the game data."), SnackbarHelper.Type.ERROR)
                 }
             }
         }
@@ -385,10 +386,10 @@ class GameDetailsFragment : Fragment() {
             try {
                 val session = Session.get(requireContext())
                 val token = session.token ?: run {
-                    showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
+                    showSnackbar("You're signed out. Sign in again.", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val username = session.username ?: run {
-                    showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
+                    showSnackbar("You're signed out. Sign in again.", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val gameId = game.game_id ?: game.id ?: ""
                 val response = withContext(Dispatchers.IO) {
@@ -402,11 +403,11 @@ class GameDetailsFragment : Fragment() {
                         showSnackbar("${game.displayName} removed")
                         requireActivity().supportFragmentManager.popBackStack()
                     } else {
-                        showSnackbar("Failed to remove game", SnackbarHelper.Type.ERROR)
+                        showSnackbar("Couldn't remove the game. Try again.", SnackbarHelper.Type.ERROR)
                     }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR) }
+                withContext(Dispatchers.Main) { showSnackbar(ErrorText.action(e, "Couldn't remove the game."), SnackbarHelper.Type.ERROR) }
             }
         }
     }

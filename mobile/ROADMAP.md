@@ -675,7 +675,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 
 ## UX — Design & accessibility
 
-### [ ] MOB-27 Medium — Error messages show raw server JSON and exception text; lockout and outage read as a failed password
+### [x] MOB-27 Medium — Error messages show raw server JSON and exception text; lockout and outage read as a failed password
 - **Where:**
   - `LoginActivity.kt:123-126` (`"Login failed: " + errorBody().string()`) and `:128-134`
     (`"Error: ${e.localizedMessage}"`).
@@ -696,6 +696,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - I/O failure → "Can't reach the server".
 
   Parse `{error}` only for logging.
+
+- **Done (PR #15):** `ErrorText` (JVM-tested) is the one mapping. Sign-in follows the web's
+  `loginErrors.js`: 401 wrong password; 429 "try again in N minutes" from `Retry-After`; 403
+  "ask an administrator"; 5xx "unavailable right now"; no answer "can't reach the server".
+  Every other failure is "Couldn't <action>. Try again." or the unreachable sentence. No
+  server body or exception message reaches the screen (`test/runtime.test.js` scans every
+  line outside `Log.*`). The button says "Sign in", as the web does.
 
 ### [ ] MOB-28 Medium — Settings screen states things that aren't true
 - **Where:** `SettingsActivity.kt:86-96`; the biometric toggle is duplicated at

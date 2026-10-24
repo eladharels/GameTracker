@@ -104,7 +104,7 @@ class LoginActivity : AppCompatActivity() {
                         // second sign-in mid-mint (Architect review, PR #14).
                         if (!(response.isSuccessful && response.body() != null)) {
                             btnLogin.isEnabled = true
-                            btnLogin.text = "Login"
+                            btnLogin.text = "Sign in"
                         } else {
                             btnLogin.text = "Signing in…"
                         }
@@ -120,19 +120,19 @@ class LoginActivity : AppCompatActivity() {
                             // The password lives on only in this call's local, for the token
                             // mint below; never in a field or saved state (MOB-9).
                             etPassword.text.clear()
-                            tvLoginStatus.text = "Login successful!"
+                            tvLoginStatus.text = "Signed in"
                             afterPasswordSignIn(jwt, normalizedUsername, password)
                         } else {
-                            val errorBody = response.errorBody()?.string() ?: response.message()
-                            tvLoginStatus.text = "Login failed: $errorBody"
+                            // Fixed text by status (MOB-27): never the server's body.
+                            tvLoginStatus.text = ErrorText.signIn(response.code(), response.headers()["Retry-After"])
                         }
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         // Re-enable button
                         btnLogin.isEnabled = true
-                        btnLogin.text = "Login"
-                        tvLoginStatus.text = "Error: ${e.localizedMessage}"
+                        btnLogin.text = "Sign in"
+                        tvLoginStatus.text = if (e is java.io.IOException) ErrorText.signIn(null) else ErrorText.signIn(-1)
                     }
                 }
             }
