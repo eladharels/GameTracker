@@ -80,7 +80,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (intent.getBooleanExtra(EXTRA_OFFLINE, false)) {
-            Toast.makeText(this, "You're offline. Some screens may not load until you reconnect.", Toast.LENGTH_LONG).show()
+            // A snackbar over the nav, like every other notice in the app (MOB-36; was a Toast).
+            val nav = findViewById<View>(R.id.bottom_navigation)
+            com.google.android.material.snackbar.Snackbar.make(nav, "You're offline. Some screens may not load until you reconnect.",
+                com.google.android.material.snackbar.Snackbar.LENGTH_LONG)
+                .setAnchorView(nav)
+                .also { SnackbarHelper.applyStyle(it) }
+                .show()
         }
     }
 

@@ -68,7 +68,7 @@ data class GameUpsertResult(val success: Boolean?, val status: String?, val coer
  *  - Parse failure → the raw string (graceful degradation)
  */
 fun formatReleaseLabel(releaseStr: String): String {
-    if (releaseStr.isBlank()) return "Unreleased"
+    if (releaseStr.isBlank()) return "Date unknown"   // not "Unreleased": that is a status (MOB-18)
     return try {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
         sdf.isLenient = false

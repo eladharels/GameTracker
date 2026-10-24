@@ -783,7 +783,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     const main = code('MainActivity.kt');
     assert.ok(/setOnApplyWindowInsetsListener\(container\)/.test(main) && /addOnLayoutChangeListener/.test(main),
       'the screens are not padded by the insets and the measured nav');
-    assert.ok(/EdgeToEdge\.pad\(/.test(code('LoginActivity.kt')), 'the sign-in form can sit under the bars');
+    assert.ok(/EdgeToEdge\.pad\([^\n]*ime = true\)/.test(code('LoginActivity.kt')), 'the sign-in form can sit under the bars or the keyboard');
+    // Edge-to-edge stops adjustResize: the keyboard's inset must be read, or it covers fields.
+    assert.ok(/Type\.ime\(\)/.test(code('EdgeToEdge.kt')) && /Type\.ime\(\)/.test(main), 'nothing clears the keyboard (IME inset)');
   });
 
   // MOB-30: unlabelled controls, labelled decoration, a silent login error, and two gestures
@@ -824,6 +826,12 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       assert.ok(r >= 4.5, `gt_on_status on gt_status_${st} is ${r.toFixed(2)}:1`);
     }
     assert.ok(ratio(color('gt_error_text'), '2D3142') >= 4.5, 'error snackbar text is below 4.5:1');
+    // The ratios above hold only if the code USES the tokens (Architect review, PR #15).
+    for (const f of ['SnackbarHelper.kt', 'fragments/GameDetailsFragment.kt', 'GameAdapter.kt']) {
+      for (const t of ['gt_error_text', 'gt_on_status', 'gt_text_muted', 'gt_text_secondary']) {
+        assert.ok(!new RegExp(`parseColor\\("#${color(t)}"\\)`, 'i').test(code(f)), `${f} hard-codes ${t} instead of reading R.color.${t}`);
+      }
+    }
     const item = fs.readFileSync(path.join(APP, 'res/layout/item_game.xml'), 'utf8');
     assert.ok(!/textColor="@color\/white"/.test(item), 'a status badge on a card is white text again');
   });
@@ -1051,7 +1059,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
           `${path.relative(dir, f)} loads ${arg} without SafeUrl.https: a server-supplied URL reaches the network unchecked`);
       }
     }
-    assert.ok(loads >= 3, `found ${loads} Glide loads -- the scan is broken`);
+    // Two since GameAdapter draws covers through CoverBinder (MOB-35).
+    assert.ok(loads >= 2, `found ${loads} Glide loads -- the scan is broken`);
   });
 
   // MOB-17: unscoped coroutines outlived their screen, and fragment-scoped ones updated

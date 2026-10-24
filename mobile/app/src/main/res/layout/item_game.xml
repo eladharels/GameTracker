@@ -33,6 +33,24 @@
             app:cardCornerRadius="12dp"
             app:cardElevation="0dp">
 
+            <!-- MOB-35: a letter tile under the cover (CoverBinder), not the system
+                 "broken image" icon, when there is no cover. -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/cover_gradient">
+
+                <TextView
+                    android:id="@+id/tvCoverLetter"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:textColor="#33FFFFFF"
+                    android:textSize="28sp"
+                    android:textStyle="bold"
+                    android:importantForAccessibility="no" />
+            </FrameLayout>
+
             <ImageView
                 android:id="@+id/ivCover"
                 android:layout_width="match_parent"

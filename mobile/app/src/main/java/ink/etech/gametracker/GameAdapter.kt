@@ -92,6 +92,7 @@ class GameAdapter(
     inner class GameViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val tvName: TextView = itemView.findViewById(R.id.tvName)
         private val ivCover: ImageView = itemView.findViewById(R.id.ivCover)
+        private val tvCoverLetter: TextView = itemView.findViewById(R.id.tvCoverLetter)
         private val btnAdd: Button = itemView.findViewById(R.id.btnAdd)
         private val btnDelete: ImageButton = itemView.findViewById(R.id.btnDelete)
         private val tvReleaseDate: TextView = itemView.findViewById(R.id.tvReleaseDate)
@@ -164,17 +165,8 @@ class GameAdapter(
                 tvPrice.visibility = View.GONE
             }
 
-            // Cover with fade-in
-            val coverUrl = SafeUrl.https(game.cover)   // https only (MOB-8)
-            if (coverUrl != null) {
-                Glide.with(itemView)
-                    .load(coverUrl)
-                    .transition(DrawableTransitionOptions.withCrossFade(200))
-                    .placeholder(R.drawable.rounded_image_bg)
-                    .into(ivCover)
-            } else {
-                ivCover.setImageResource(android.R.drawable.ic_menu_report_image)
-            }
+            // Cover over a letter tile (MOB-35: was the system "broken image" icon). https only.
+            CoverBinder.bind(ivCover, tvCoverLetter, game)
 
             // Backlog controls
             val position = backlogPositions[game.game_id ?: game.id ?: ""]

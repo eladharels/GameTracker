@@ -176,7 +176,7 @@ class GameDetailsFragment : Fragment() {
         tvMeta.text = GameExtras.subtitle(game)
 
         val price = game.last_price
-        tvPrice.text = if (!price.isNullOrBlank()) price else "TBA"
+        tvPrice.text = if (!price.isNullOrBlank()) price else "No price"   // "TBA" read as a release date (MOB-35)
 
         val coverUrl = SafeUrl.https(game.cover)   // https only (MOB-8)
         if (coverUrl != null) {
@@ -218,7 +218,7 @@ class GameDetailsFragment : Fragment() {
                 )
                 setTextColor(ColorStateList(
                     arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(ContextCompat.getColor(requireContext(), R.color.gt_on_status), Color.parseColor("#8890A8"))   // MOB-29
+                    intArrayOf(ContextCompat.getColor(requireContext(), R.color.gt_on_status), ContextCompat.getColor(requireContext(), R.color.gt_text_secondary))   // MOB-29
                 ))
                 isCheckedIconVisible = false
                 if (status == GameStatus.UNRELEASED) {
@@ -247,7 +247,7 @@ class GameDetailsFragment : Fragment() {
         val density = resources.displayMetrics.density
         val size = (30 * density).toInt()
         val gold = Color.parseColor("#FBBF24")
-        val empty = Color.parseColor("#858CA4")   // gt_text_muted: 3:1+ for a control (MOB-29)
+        val empty = ContextCompat.getColor(requireContext(), R.color.gt_text_muted)   // 3:1+ for a control (MOB-29)
         for (i in 1..5) {
             val star = ImageView(requireContext()).apply {
                 setImageResource(R.drawable.ic_star)

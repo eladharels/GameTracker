@@ -811,6 +811,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     nav (drop the fixed height).
   - Size the fragment container's bottom padding from the nav's measured height.
 
+- **Done (PR #15), to be checked on a phone:** `EdgeToEdge` (WindowCompat, not
+  androidx.activity, which arrives only through Compose). Both activities draw edge-to-edge
+  with transparent bars. The screens are padded by the status bar and cutout, the bottom nav
+  grows by the navigation bar (Material pads its own content), and the screens end above the
+  nav AS MEASURED instead of a fixed 80dp. The sign-in form is padded on both sides. No
+  emulator here, so the first look is on the owner's Android 15/16 phone with the next APK.
+
 ### [x] MOB-32 Low — Touch targets under 48 dp, and 9–11 sp text
 - **Where:**
   - Game Details back button, 40×40 dp (`fragment_game_details.xml:36-38`).
@@ -865,7 +872,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Done (PR #15):** `LoginInput` (JVM-tested) trims and lowercases the username and only
   requires a non-empty password; the message names the empty field. Pinned.
 
-### [ ] MOB-35 Low — Smaller UX defects
+### [x] MOB-35 Low — Smaller UX defects
 - **Where and what:**
   - Biometric switch (`ProfileFragment.kt:191-195`): `onAuthenticationFailed` is
     *non-terminal* (the prompt stays open), yet it un-checks the switch. That fires the
@@ -883,7 +890,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     `supportsRtl` is untested.
 - **Fix:** individually small. Group them into one UI polish PR after MOB-29 to MOB-31.
 
-### [ ] MOB-36 Low — Session and fingerprint polish left over from PR #6 (UI/UX review)
+- **Done (PR #15):**
+  - The fingerprint switch: a finger not recognised is non-terminal and keeps the prompt up
+    (MOB-6's `CryptoPrompt`); cancelling the login prompt is a neutral notice, not an error.
+  - **No re-lock on return from the background: the owner's decision** (no app lock).
+  - A missing price reads "No price"; a list row with no cover gets `CoverBinder`'s letter
+    tile; a game with no date reads "Date unknown", never "Unreleased" (a status).
+  - **Not done: localisation.** Moving ~all copy to `strings.xml` and testing RTL is a project
+    of its own; nothing here makes it harder.
+
+### [x] MOB-36 Low — Session and fingerprint polish left over from PR #6 (UI/UX review)
 - **Where and what:**
   - `Session.ended` has no replay, so an expiry signalled while another activity is on top
     is dropped. Since PR #6, `MainActivity.onResume` still shows the expiry notice (it reads
@@ -902,6 +918,12 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - When the username is prefilled, focus the password field.
   - The offline notice is a Toast. The rest of the app uses `SnackbarHelper`.
 - **Fix:** one small PR, with MOB-35.
+
+- **Done (PR #15):** `Session.ended` stays documented (no replay; `MainActivity.onResume`
+  re-checks). Sign in is disabled while the stored session is checked; the fingerprint retry
+  button and the silent cancel came with MOB-6. "Sign in" and "fingerprint" throughout, the
+  toggle-off messages agree. The login notice is announced after layout; a prefilled
+  username starts in the password field; the offline notice is a snackbar.
 
 ### [x] MOB-37 Medium — Android CI: build code has network access on the production host
 - **Where:** `.github/workflows/android.yml`, the "Build and test inside the container" step.
@@ -1029,13 +1051,6 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - **Lose the key and no future APK updates an installed one.** Users would have to
     uninstall, losing the device-only ratings and notes (MOB-11). Back it up (runbook).
 
-- **Done (PR #15), to be checked on a phone:** `EdgeToEdge` (WindowCompat, not
-  androidx.activity, which arrives only through Compose). Both activities draw edge-to-edge
-  with transparent bars. The screens are padded by the status bar and cutout, the bottom nav
-  grows by the navigation bar (Material pads its own content), and the screens end above the
-  nav AS MEASURED instead of a fixed 80dp. The sign-in form is padded on both sides. No
-  emulator here, so the first look is on the owner's Android 15/16 phone with the next APK.
-
 ---
 
 ## Operational notes
@@ -1068,8 +1083,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     workflow. The same-repo gate is the boundary.
   - **Residual risk:** the SDK components `sdkmanager` installs are verified only against
     Google's repository metadata.
-  - **Residual risk, open (MOB-37):** the build container is on Docker's default bridge, so
-    build code can reach every port the host publishes and the LAN.
+  - **Residual risk (MOB-37, done):** only phase 1 has a network, and only the Gradle plugins
+    run there; tests, lint, kapt and assemble run under `--network none`.
   - **Upgrades:** any dependency upgrade (MOB-21) must regenerate the verification metadata
     in the same PR.
 - **Visible behaviour change from MOB-3/MOB-5:** after PR #6, a session ends 12 hours after

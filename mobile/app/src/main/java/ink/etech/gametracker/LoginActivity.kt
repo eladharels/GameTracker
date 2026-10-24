@@ -22,6 +22,7 @@ class LoginActivity : AppCompatActivity() {
     // Created in onCreate: a BiometricPrompt must exist before the activity is resumed.
     private lateinit var cryptoPrompt: CryptoPrompt
     private lateinit var btnFingerprint: Button
+    private lateinit var btnSignIn: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +37,7 @@ class LoginActivity : AppCompatActivity() {
         val etUsername = findViewById<EditText>(R.id.etUsername)
         val etPassword = findViewById<EditText>(R.id.etPassword)
         val btnLogin = findViewById<Button>(R.id.btnLogin)
+        btnSignIn = btnLogin
         val tvLoginStatus = findViewById<TextView>(R.id.tvLoginStatus)
         // After a dismissed prompt: a way back to the fingerprint without restarting the app.
         btnFingerprint = findViewById(R.id.btnBiometric)
@@ -47,8 +49,11 @@ class LoginActivity : AppCompatActivity() {
         Session.redirecting = false
         errorColor = tvLoginStatus.currentTextColor
 
-        // Signing out keeps the username (MOB-3): prefill it.
-        session.username?.let { if (etUsername.text.isNullOrEmpty()) etUsername.setText(it) }
+        // Signing out keeps the username (MOB-3): prefill it, and start in the password (MOB-36).
+        session.username?.let {
+            if (etUsername.text.isNullOrEmpty()) etUsername.setText(it)
+            etPassword.requestFocus()
+        }
 
         // Arrived here because the session expired (a boolean extra, never text: this activity
         // is exported, and any app could otherwise put its own words on the login screen).
@@ -244,6 +249,9 @@ class LoginActivity : AppCompatActivity() {
     private fun notice(status: TextView, text: String) {
         status.setTextColor(ContextCompat.getColor(this, R.color.gt_text_secondary))
         status.text = text
+        // Set in onCreate, before the view is attached, the live region may not speak: say it
+        // once laid out (MOB-36).
+        status.post { status.announceForAccessibility(text) }
     }
 
     /**
@@ -252,6 +260,8 @@ class LoginActivity : AppCompatActivity() {
      * NOT a sign-out: the user goes in and is told they are offline.
      */
     private fun verifyAndEnter(status: TextView) {
+        // No password sign-in while the stored session is being checked (MOB-36).
+        btnSignIn.isEnabled = false
         val session = Session.get(this)
         val bearer = session.bearer()
         if (bearer == null || !session.hasLiveToken()) {

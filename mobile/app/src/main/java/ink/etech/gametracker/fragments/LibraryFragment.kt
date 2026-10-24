@@ -259,11 +259,17 @@ class LibraryFragment : Fragment() {
      * none of them checked, so a failure part-way left the backlog half-moved with no error.
      * On failure the list is reloaded from the server, which still has the old order.
      */
+    private var persistJob: kotlinx.coroutines.Job? = null
+
     private fun persistBacklogOrder(ordered: List<Game>) {
         // Built HERE, on the main thread: the adapter's list is live, and a second drag during
         // the call would change what is sent (Architect review, PR #15).
         val body = BacklogOrder.request(ordered.toList())
-        viewLifecycleOwner.lifecycleScope.launch {
+        // Quick TalkBack moves: only the LATEST order is sent, after a short pause, so two
+        // whole-order PUTs cannot land out of order (Architect review, PR #15).
+        persistJob?.cancel()
+        persistJob = viewLifecycleOwner.lifecycleScope.launch {
+            kotlinx.coroutines.delay(400)
             val session = Session.get(requireContext())
             val token = session.token ?: return@launch
             val username = session.username ?: return@launch

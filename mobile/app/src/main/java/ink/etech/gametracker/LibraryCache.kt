@@ -39,7 +39,9 @@ class LibraryCache(
         if (!force) fresh(owner)?.let { return it }
         val seen = stored
         return mutex.withLock {
-            // Another caller fetched while this one waited: that answer is newer than the ask.
+            // Another caller's fetch completed while this one waited: it ran concurrently with
+            // this ask, and no write came between (a write bumps `generation`, and a fetch that
+            // spans one is never stored), so it is as fresh as a new request would be.
             if (stored != seen) copy?.takeIf { it.owner == owner }?.let { return@withLock it.games }
             if (!force) fresh(owner)?.let { return@withLock it }
             val gen = generation
