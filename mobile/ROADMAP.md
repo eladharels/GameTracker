@@ -880,7 +880,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - The offline notice is a Toast. The rest of the app uses `SnackbarHelper`.
 - **Fix:** one small PR, with MOB-35.
 
-### [ ] MOB-37 Medium — Android CI: build code has network access on the production host
+### [x] MOB-37 Medium — Android CI: build code has network access on the production host
 - **Where:** `.github/workflows/android.yml`, the "Build and test inside the container" step.
 - **What:** the Gradle container runs on Docker's default bridge network. Build code (kapt
   processors, lint jars, unit tests) can therefore reach every port the host publishes:
@@ -902,6 +902,14 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Interim mitigation:** `BACKEND_BIND=127.0.0.1` with `TRUST_PROXY=2` (root README, "Reverse
   proxy topology") takes the backend port off the reachable set.
 - **Source:** CISO review of PR #6.
+
+- **Done (PR #15):** two containers. Phase 1 (network) prunes the Gradle home, reinstalls the
+  SDK and runs only `gtPrefetch` (`gradle/ci/prefetch.init.gradle`), which downloads every
+  artifact listed in `verification-metadata.xml`, strict, and reports any the repositories
+  cannot serve. Phase 2 runs tests, lint, assemble and the R8 dex check `--offline` under
+  `--network none`. The wrapper distribution is re-downloaded and re-checked every job and kept
+  only from phase 1 to phase 2. Residual: Gradle plugins run in phase 1, with a network.
+  Pinned in `test/runtime.test.js`.
 
 ### [ ] MOB-38 High — The self-hosted runner (the production host) runs every CI job as root
 - **Code side done (PR #15):** no workflow step needs root any more. gitleaks and trivy are

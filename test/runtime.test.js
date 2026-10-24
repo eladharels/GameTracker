@@ -431,7 +431,23 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   const gradlewAt = b.indexOf('bash gradlew');
   const firstPrune = b.indexOf('find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf');
   assert.ok(firstPrune >= 0 && firstPrune < gradlewAt, 'the Gradle home is not pruned before gradlew runs');
-  assert.ok(!/! -name wrapper/.test(b), 'the Gradle wrapper distribution is kept in a writable volume');
+  // The wrapper distribution is deleted by the FIRST prune (so phase 1 re-downloads and
+  // re-checks it) and by the LAST; only phase 2 of the same job may keep it (MOB-37).
+  const prunes = [...b.matchAll(/find \/gradle -mindepth 1 -maxdepth 1 ([^\n]*)-exec rm -rf/g)].map((m) => m[1]);
+  assert.ok(prunes.length >= 3 && !/wrapper/.test(prunes[0]) && !/wrapper/.test(prunes[prunes.length - 1]),
+    'the Gradle wrapper distribution is kept across jobs in a writable volume');
+  // MOB-37: two containers; dependency code (tests, lint, kapt, assemble) runs only in the
+  // second, with no network and from the cache.
+  const runsAt = [...b.matchAll(/docker run /g)].map((m) => m.index);
+  assert.ok(runsAt.length === 2, `expected the resolve and the build containers, found ${runsAt.length} docker runs`);
+  const phase1 = b.slice(runsAt[0], runsAt[1]);
+  const phase2 = b.slice(runsAt[1]);
+  assert.ok(/--network none/.test(phase2.split('\n')[0]), 'the build container (phase 2) has a network');
+  assert.ok(/bash gradlew --offline /.test(phase2) && /testDebugUnitTest/.test(phase2) && /assembleRelease/.test(phase2),
+    'tests, lint and assemble do not run offline in phase 2');
+  assert.ok(/-I gradle\/ci\/prefetch\.init\.gradle gtPrefetch\s*$/m.test(phase1) && !/testDebugUnitTest|lintDebug|assemble/.test(phase1),
+    'phase 1 (networked) runs more than the prefetch');
+  assert.ok(fs.existsSync(path.join(ROOT, 'mobile/gradle/ci/prefetch.init.gradle')), 'the prefetch init script is missing');
   assert.ok(b.indexOf('find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf') >= 0 && b.indexOf('find /sdk -mindepth 1') < b.indexOf('sdkmanager'),
     'the SDK is not wiped before sdkmanager installs it');
   assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(b), 'the build container does not refuse uid 0');
