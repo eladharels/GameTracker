@@ -820,6 +820,32 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(!/errorBody|\.message\(\)/.test(mintApi), 'MobileTokenApi reads the server\'s error text: the UI must say fixed things');
   });
 
+  // MOB-13: statuses were sent capitalised, "Unreleased" was offered as a choice the server
+  // overrides, "" was sent for an unknown date, and the server's answer was thrown away.
+  check('Android: status writes go through GameStatus, never offer Unreleased, and read the answer (MOB-13)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const all = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) all.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of all.filter((x) => x !== 'GameStatus.kt' && x !== 'models.kt')) {
+      assert.ok(!/\bGameUpdateRequest\s*\(/.test(code(f)), `${f} builds an add/update body itself: use GameStatus.request`);
+    }
+    const gs = code('GameStatus.kt');
+    assert.ok(/releaseDate = game\.release\.ifBlank \{ null \}/.test(gs), 'an unknown release date is no longer sent as null');
+    assert.ok(/val PICKABLE = listOf\(WISHLIST, BACKLOG, PLAYING, DONE\)/.test(gs), 'the pickable statuses changed: Unreleased is never a choice');
+    assert.ok(/suspend fun addOrUpdateGame\([\s\S]*?\): Response<GameUpsertResult>/.test(code('GameTrackerApi.kt')),
+      'addOrUpdateGame discards the server\'s answer again');
+    const sheet = fs.readFileSync(path.join(APP, 'res/layout/bottom_sheet_status.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(!/itemUnreleased|"Unreleased"/.test(sheet), 'the status sheet offers Unreleased as a choice');
+    for (const f of ['fragments/LibraryFragment.kt', 'fragments/GameDetailsFragment.kt']) {
+      assert.ok(/GameStatus\.stored\(/.test(code(f)), `${f} no longer shows the status the server stored`);
+    }
+  });
+
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {

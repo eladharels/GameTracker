@@ -31,6 +31,7 @@ import com.google.android.material.chip.Chip
 import org.json.JSONArray
 import com.example.gmaetrackermobile.Session
 import com.example.gmaetrackermobile.UserData
+import com.example.gmaetrackermobile.GameStatus
 
 class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchEditText: EditText
@@ -369,14 +370,8 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                     return@launch
                 }
 
-                val gameRequest = com.example.gmaetrackermobile.GameUpdateRequest(
-                    gameId = game.game_id ?: game.id ?: "",
-                    gameName = game.displayName,
-                    coverUrl = game.cover,
-                    releaseDate = game.release,
-                    status = "wishlist",
-                    steamAppId = game.steam_app_id ?: game.steamAppId
-                )
+                // The server stores Unreleased instead when the game is not out (MOB-13).
+                val gameRequest = GameStatus.request(game, GameStatus.WISHLIST)
                 val response = com.example.gmaetrackermobile.ApiClient.api
                     .addOrUpdateGame("Bearer $token", username, gameRequest)
                 if (response.isSuccessful) fetchLibrary()?.let { library = it }
@@ -389,7 +384,9 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                         // refused), but say so, as the web app does.
                         val note = if (match == LibraryMatch.Kind.POSSIBLE)
                             ". A game with the same name is already in your library." else "!"
-                        showSnackbar("${game.displayName} added to library$note", SnackbarHelper.Type.SUCCESS)
+                        val saved = GameStatus.stored(GameStatus.WISHLIST, response.body())
+                        val where = if (saved == GameStatus.WISHLIST) "" else " as ${GameStatus.label(saved)}"
+                        showSnackbar("${game.displayName} added to library$where$note", SnackbarHelper.Type.SUCCESS)
                         maybeCreateCalendarEvent(game)
                     } else {
                         showSnackbar("Failed to add game to library", SnackbarHelper.Type.ERROR)

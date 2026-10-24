@@ -53,6 +53,10 @@ data class GameUpdateRequest(
 
 data class BacklogOrderRequest(val direction: String)
 
+// The answer to POST /api/user/:u/games (MOB-13): `status` is what the server STORED, which
+// the release date can make different from the request (`coerced`). The app shows this one.
+data class GameUpsertResult(val success: Boolean?, val status: String?, val coerced: Boolean?)
+
 /**
  * Converts a raw "yyyy-MM-dd" release string into a human-readable countdown label.
  *  - Blank / null  → "Unreleased"

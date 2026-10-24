@@ -1845,6 +1845,10 @@ checkAsync('POST /api/user/:u/games reads EXACTLY the fields GameUpdateRequest s
   });
   assert.strictEqual(res.statusCode, 200);
   assertKeys(res.body, ['success', 'status', 'coerced'], 'POST /api/user/:u/games');
+  // MOB-13: the app reads this answer (GameUpsertResult), so every field it binds must be one
+  // the route returns.
+  const unread = MOBILE.gameUpsertResult.filter((f) => !['success', 'status', 'coerced'].includes(f));
+  assert.deepStrictEqual(unread, [], `the app's GameUpsertResult reads fields the route never returns: ${unread}`);
   assert.deepStrictEqual(res.body, { success: true, status: 'wishlist', coerced: false });
   // Every field the app sends reaches the service under the same name, and nothing the app
   // does not send is required: a renamed body key would arrive as undefined.

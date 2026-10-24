@@ -22,7 +22,7 @@ import com.example.gmaetrackermobile.CalendarHelper
 import com.example.gmaetrackermobile.Game
 import com.example.gmaetrackermobile.SafeUrl
 import com.example.gmaetrackermobile.GameExtras
-import com.example.gmaetrackermobile.GameUpdateRequest
+import com.example.gmaetrackermobile.GameStatus
 import com.example.gmaetrackermobile.R
 import com.example.gmaetrackermobile.SnackbarHelper
 import com.google.android.material.chip.Chip
@@ -52,7 +52,8 @@ class GameDetailsFragment : Fragment() {
 
     companion object {
         private const val ARG_GAME = "game"
-        private val STATUS_OPTIONS = listOf("Wishlist", "Backlog", "Playing", "Done")
+        // Never Unreleased: the server decides that from the date (MOB-13).
+        private val STATUS_OPTIONS = GameStatus.PICKABLE
         private val STATUS_COLORS = mapOf(
             "wishlist" to "#8890A8", "backlog" to "#F97316",
             "playing" to "#22B8F6", "done" to "#22C55E"
@@ -137,14 +138,13 @@ class GameDetailsFragment : Fragment() {
 
     private fun setupStatusChips() {
         val game = currentGame ?: return
-        currentStatus = game.status ?: "Wishlist"
+        currentStatus = GameStatus.canonical(game.status) ?: GameStatus.WISHLIST
         chipGroupStatus.removeAllViews()
 
         STATUS_OPTIONS.forEach { status ->
-            val key = status.lowercase()
-            val color = Color.parseColor(STATUS_COLORS[key] ?: "#8890A8")
+            val color = Color.parseColor(STATUS_COLORS[status] ?: "#8890A8")
             val chip = Chip(requireContext()).apply {
-                text = status
+                text = GameStatus.label(status)
                 isCheckable = true
                 isChecked = currentStatus.equals(status, ignoreCase = true)
                 chipStrokeWidth = resources.displayMetrics.density * 1.5f
@@ -238,24 +238,23 @@ class GameDetailsFragment : Fragment() {
                 val username = prefs.getString("username", null) ?: run {
                     showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
                 }
-                val gameRequest = GameUpdateRequest(
-                    gameId = game.game_id ?: game.id ?: "",
-                    gameName = game.displayName,
-                    coverUrl = game.cover,
-                    releaseDate = game.release,
-                    status = newStatus,
-                    steamAppId = game.steam_app_id ?: game.steamAppId
-                )
+                val gameRequest = GameStatus.request(game, newStatus)
                 val response = withContext(Dispatchers.IO) {
                     ApiClient.api.addOrUpdateGame("Bearer $token", username, gameRequest)
                 }
                 withContext(Dispatchers.Main) {
                     if (response.isSuccessful) {
-                        currentStatus = newStatus
-                        currentGame = game.copy(status = newStatus)
-                        showSnackbar("Status: $newStatus", SnackbarHelper.Type.SUCCESS)
+                        // What the server stored, which the date can make different (MOB-13).
+                        val answer = response.body()
+                        val saved = GameStatus.stored(newStatus, answer)
+                        currentStatus = saved
+                        currentGame = game.copy(status = saved)
+                        setupStatusChips()
+                        showSnackbar(GameStatus.outcome(game, newStatus, answer),
+                            if (answer?.coerced == true) SnackbarHelper.Type.DEFAULT else SnackbarHelper.Type.SUCCESS)
                         callback?.onGameStatusUpdated()
                     } else {
+                        setupStatusChips()
                         showSnackbar("Failed to update status", SnackbarHelper.Type.ERROR)
                     }
                 }

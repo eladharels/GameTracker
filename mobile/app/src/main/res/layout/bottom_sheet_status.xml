@@ -274,48 +274,8 @@
 
     </LinearLayout>
 
-    <!-- Divider -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="@color/gt_border"
-        android:layout_marginStart="20dp" />
-
-    <!-- Unreleased -->
-    <LinearLayout
-        android:id="@+id/itemUnreleased"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="20dp"
-        android:paddingEnd="20dp"
-        android:background="?attr/selectableItemBackground"
-        android:clickable="true"
-        android:focusable="true">
-
-        <View
-            android:layout_width="10dp"
-            android:layout_height="10dp"
-            android:background="@drawable/status_badge_bg"
-            android:backgroundTint="@color/gt_status_unreleased"
-            android:layout_marginEnd="18dp" />
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Unreleased"
-            android:textSize="15sp"
-            android:textColor="@color/gt_text_primary" />
-
-        <View
-            android:layout_width="6dp"
-            android:layout_height="6dp"
-            android:background="@drawable/status_badge_bg"
-            android:backgroundTint="@color/gt_status_unreleased"
-            android:alpha="0.4" />
-
-    </LinearLayout>
+    <!-- No "Unreleased" row (MOB-13): the server decides that from the release date, so
+         it is never a choice. A game that is not out yet stays Unreleased whatever is picked,
+         and the app says so. -->
 
 </LinearLayout>

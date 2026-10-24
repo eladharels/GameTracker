@@ -36,7 +36,7 @@ interface GameTrackerApi {
         @Header("Authorization") token: String,
         @Path("username") username: String,
         @Body game: GameUpdateRequest
-    ): Response<Unit>
+    ): Response<GameUpsertResult>
 
     @DELETE("user/{username}/games/{gameId}")
     suspend fun deleteGame(

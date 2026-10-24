@@ -327,7 +327,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Never touch `viewLifecycleOwner` from a callback that can outlive the view.
   - Add a Robolectric test: delete, then destroy the view, then advance 5 s.
 
-### [ ] MOB-13 ✔ Medium — Status writes ignore the server's answer; `unreleased` is offered as a choice; `""` is sent for an unknown date
+### [x] MOB-13 ✔ Medium — Status writes ignore the server's answer; `unreleased` is offered as a choice; `""` is sent for an unknown date — *fixed in PR #15*
+- **Fixed:** `GameStatus` is the one place the statuses are spelled. Every add/update body is
+  built by `GameStatus.request`: lowercase, and `null` for an unknown date. The route's
+  answer is modelled (`GameUpsertResult`). Library, Details and Search show the status the
+  server STORED, and say why when it differs ("isn't out until …, so it stays Unreleased").
+  Unreleased is gone from the status sheet and the chips. Pinned in `GameStatusTest`,
+  `test/runtime.test.js` and the api-contract Android gate.
 - **Where:**
   - `GameTrackerApi.kt:22-27`: `Response<Unit>` discards the body.
   - `LibraryFragment.kt:301` offers "Unreleased" as a choice; `:346-385` updates optimistically.

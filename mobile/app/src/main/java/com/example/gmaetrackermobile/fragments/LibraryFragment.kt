@@ -21,7 +21,7 @@ import com.example.gmaetrackermobile.PendingRemovals
 import com.example.gmaetrackermobile.BacklogOrderRequest
 import com.example.gmaetrackermobile.CalendarHelper
 import com.example.gmaetrackermobile.GameAdapter
-import com.example.gmaetrackermobile.GameUpdateRequest
+import com.example.gmaetrackermobile.GameStatus
 import com.example.gmaetrackermobile.R
 import com.example.gmaetrackermobile.Game
 import com.example.gmaetrackermobile.SnackbarHelper
@@ -287,7 +287,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 sheetView.findViewById<View>(R.id.ctaMarkDone)?.visibility = View.VISIBLE
                 sheetView.findViewById<View>(R.id.btnCtaMarkDone)?.setOnClickListener {
                     dialog.dismiss()
-                    updateGameStatus(game, "Done")
+                    updateGameStatus(game, GameStatus.DONE)
                     showSnackbar("🎉 Congrats on finishing ${game.displayName}!", SnackbarHelper.Type.SUCCESS)
                 }
             }
@@ -300,8 +300,9 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             }
         }
 
-        val statuses = listOf("Wishlist", "Playing", "Done", "Backlog", "Unreleased")
-        val ids = listOf(R.id.itemWishlist, R.id.itemPlaying, R.id.itemDone, R.id.itemBacklog, R.id.itemUnreleased)
+        // Unreleased is not offered: the server decides it from the release date (MOB-13).
+        val statuses = listOf(GameStatus.WISHLIST, GameStatus.PLAYING, GameStatus.DONE, GameStatus.BACKLOG)
+        val ids = listOf(R.id.itemWishlist, R.id.itemPlaying, R.id.itemDone, R.id.itemBacklog)
 
         statuses.zip(ids).forEach { (status, id) ->
             sheetView.findViewById<View>(id).setOnClickListener {
@@ -353,7 +354,6 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             allGames[index] = allGames[index].copy(status = newStatus)
             filterGames()
         }
-        showSnackbar("${game.displayName} → $newStatus", SnackbarHelper.Type.SUCCESS)
 
         viewLifecycleOwner.lifecycleScope.launch {
             try {
@@ -362,14 +362,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 val username = prefs.getString("username", null) ?: return@launch
                 val id = game.game_id ?: game.id ?: return@launch
 
-                val request = GameUpdateRequest(
-                    gameId = id,
-                    gameName = game.displayName,
-                    coverUrl = game.cover,
-                    releaseDate = game.release,
-                    status = newStatus,
-                    steamAppId = game.steam_app_id ?: game.steamAppId
-                )
+                val request = GameStatus.request(game.copy(game_id = id), newStatus)
                 val response = withContext(Dispatchers.IO) {
                     ApiClient.api.addOrUpdateGame("Bearer $token", username, request)
                 }
@@ -377,7 +370,18 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                     if (index >= 0 && previousGame != null) allGames[index] = previousGame
                     filterGames()
                     showSnackbar("Failed to update status", SnackbarHelper.Type.ERROR)
+                    return@launch
                 }
+                // The server's answer, not the request, is the status now (MOB-13).
+                val answer = response.body()
+                val saved = GameStatus.stored(newStatus, answer)
+                val at = allGames.indexOfFirst { it.game_id == id || it.id == id }
+                if (at >= 0 && allGames[at].status != saved) {
+                    allGames[at] = allGames[at].copy(status = saved)
+                    filterGames()
+                }
+                showSnackbar(GameStatus.outcome(game, newStatus, answer),
+                    if (answer?.coerced == true) SnackbarHelper.Type.DEFAULT else SnackbarHelper.Type.SUCCESS)
             } catch (e: Exception) {
                 if (index >= 0 && previousGame != null) allGames[index] = previousGame
                 filterGames()
