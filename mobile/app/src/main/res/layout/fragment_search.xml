@@ -195,6 +195,7 @@
         android:orientation="vertical"
         android:gravity="center"
         android:padding="32dp"
+        android:accessibilityLiveRegion="polite"
         android:visibility="gone">
 
         <!-- Empty OR failed, with the reason (MOB-15): SearchResults.state sets both texts. -->
@@ -204,7 +205,6 @@
             android:layout_height="wrap_content"
             android:textStyle="bold"
             android:text="No matches"
-            android:accessibilityLiveRegion="polite"
             android:textAlignment="center"
             android:textColor="@color/gt_text_primary"
             android:textSize="17sp"

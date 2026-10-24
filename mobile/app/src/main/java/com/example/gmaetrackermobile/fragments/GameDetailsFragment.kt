@@ -25,6 +25,7 @@ import com.example.gmaetrackermobile.GameExtras
 import com.example.gmaetrackermobile.GameStatus
 import com.example.gmaetrackermobile.R
 import com.example.gmaetrackermobile.SnackbarHelper
+import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import kotlinx.coroutines.Dispatchers
@@ -213,7 +214,10 @@ class GameDetailsFragment : Fragment() {
         currentStatus = GameStatus.canonical(game.status) ?: GameStatus.WISHLIST
         chipGroupStatus.removeAllViews()
 
-        STATUS_OPTIONS.forEach { status ->
+        // Unreleased is the server's conclusion, never a choice (MOB-13), but the card must still
+        // SAY it: a checked chip that cannot be tapped, ahead of the four choices.
+        val shown = if (currentStatus == GameStatus.UNRELEASED) listOf(GameStatus.UNRELEASED) + STATUS_OPTIONS else STATUS_OPTIONS
+        shown.forEach { status ->
             val color = Color.parseColor(STATUS_COLORS[status] ?: "#8890A8")
             val chip = Chip(requireContext()).apply {
                 text = GameStatus.label(status)
@@ -233,9 +237,16 @@ class GameDetailsFragment : Fragment() {
                     intArrayOf(Color.WHITE, Color.parseColor("#8890A8"))
                 ))
                 isCheckedIconVisible = false
-                setOnClickListener {
-                    isChecked = true
-                    updateGameStatus(status)
+                if (status == GameStatus.UNRELEASED) {
+                    isClickable = false
+                    isFocusable = false
+                    contentDescription = if (game.release.isBlank()) "Status: Unreleased. No release date yet."
+                        else "Status: Unreleased until ${game.release}."
+                } else {
+                    setOnClickListener {
+                        isChecked = true
+                        updateGameStatus(status)
+                    }
                 }
             }
             chipGroupStatus.addView(chip)
@@ -323,16 +334,21 @@ class GameDetailsFragment : Fragment() {
                         currentStatus = saved
                         currentGame = game.copy(status = saved)
                         setupStatusChips()
+                        val coerced = answer?.coerced == true
                         showSnackbar(GameStatus.outcome(game, newStatus, answer),
-                            if (answer?.coerced == true) SnackbarHelper.Type.DEFAULT else SnackbarHelper.Type.SUCCESS)
+                            if (coerced) SnackbarHelper.Type.DEFAULT else SnackbarHelper.Type.SUCCESS,
+                            if (coerced) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT)
                         callback?.onGameStatusUpdated()
                     } else {
                         setupStatusChips()
-                        showSnackbar("Failed to update status", SnackbarHelper.Type.ERROR)
+                        showSnackbar("Couldn't save the status. Try again.", SnackbarHelper.Type.ERROR)
                     }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR) }
+                withContext(Dispatchers.Main) {
+                    setupStatusChips()   // undo the tapped chip's optimistic check
+                    showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR)
+                }
             }
         }
     }
@@ -378,7 +394,7 @@ class GameDetailsFragment : Fragment() {
         val game = currentGame ?: return
         com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
             .setTitle("Remove ${game.displayName}?")
-            .setMessage("It leaves your library, with its status. Your notes and rating on this phone stay.")
+            .setMessage("It's removed from your library on the server. Notes and ratings stored on this phone are kept.")
             .setPositiveButton("Remove") { _, _ -> removeGameFromLibrary() }
             .setNegativeButton("Cancel", null)
             .show()
@@ -417,7 +433,11 @@ class GameDetailsFragment : Fragment() {
         }
     }
 
-    private fun showSnackbar(message: String, type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT) {
-        SnackbarHelper.show(this, message, type)
+    private fun showSnackbar(
+        message: String,
+        type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT,
+        duration: Int = Snackbar.LENGTH_SHORT,
+    ) {
+        SnackbarHelper.show(this, message, type, duration)
     }
 }

@@ -291,6 +291,13 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         searchHistoryScroll.visibility = View.GONE
         view?.findViewById<View>(R.id.tvRecentLabel)?.visibility = View.GONE
 
+        // A retry must visibly do something, even when it fails the same way (UI/UX review):
+        // the state says "Searching…" and the button waits until the answer is shown.
+        if (errorState.visibility == View.VISIBLE) {
+            tvStateTitle.text = "Searching…"
+            tvStateBody.text = ""
+            btnRetry.isEnabled = false
+        }
         searchJob?.cancel()
         searchJob = viewLifecycleOwner.lifecycleScope.launch {
             val result = searchAllGames(query)
@@ -318,6 +325,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         }
         tvStateTitle.text = state.first
         tvStateBody.text = state.second
+        btnRetry.isEnabled = true
         btnRetry.visibility = if (SearchResults.canRetry(result)) View.VISIBLE else View.GONE
         errorState.visibility = View.VISIBLE
         recyclerView.visibility = View.GONE

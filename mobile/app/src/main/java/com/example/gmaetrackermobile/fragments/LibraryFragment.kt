@@ -286,8 +286,8 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 sheetView.findViewById<View>(R.id.ctaMarkDone)?.visibility = View.VISIBLE
                 sheetView.findViewById<View>(R.id.btnCtaMarkDone)?.setOnClickListener {
                     dialog.dismiss()
-                    updateGameStatus(game, GameStatus.DONE)
-                    showSnackbar("🎉 Congrats on finishing ${game.displayName}!", SnackbarHelper.Type.SUCCESS)
+                    // Congratulated only once the server has stored it (UI/UX review, PR #15).
+                    updateGameStatus(game, GameStatus.DONE, celebrate = true)
                 }
             }
             "unreleased" -> {
@@ -345,7 +345,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
     // ── Status update ─────────────────────────────────────────────────────────
 
-    private fun updateGameStatus(game: Game, newStatus: String) {
+    private fun updateGameStatus(game: Game, newStatus: String, celebrate: Boolean = false) {
         val gameId = game.game_id ?: game.id
         val index = if (gameId != null) allGames.indexOfFirst { it.game_id == gameId || it.id == gameId } else -1
         val previousGame = if (index >= 0) allGames[index] else null
@@ -368,7 +368,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 if (!response.isSuccessful) {
                     if (index >= 0 && previousGame != null) allGames[index] = previousGame
                     filterGames()
-                    showSnackbar("Failed to update status", SnackbarHelper.Type.ERROR)
+                    showSnackbar("Couldn't save the status. Try again.", SnackbarHelper.Type.ERROR)
                     return@launch
                 }
                 // The server's answer, not the request, is the status now (MOB-13).
@@ -379,8 +379,12 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                     allGames[at] = allGames[at].copy(status = saved)
                     filterGames()
                 }
-                showSnackbar(GameStatus.outcome(game, newStatus, answer),
-                    if (answer?.coerced == true) SnackbarHelper.Type.DEFAULT else SnackbarHelper.Type.SUCCESS)
+                val coerced = answer?.coerced == true
+                val message = if (celebrate && saved == GameStatus.DONE) "🎉 Congrats on finishing ${game.displayName}!"
+                    else GameStatus.outcome(game, newStatus, answer)
+                // The why-not explanation is two lines and the point of MOB-13: give it time.
+                showSnackbar(message, if (coerced) SnackbarHelper.Type.DEFAULT else SnackbarHelper.Type.SUCCESS,
+                    if (coerced) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT)
             } catch (e: Exception) {
                 if (index >= 0 && previousGame != null) allGames[index] = previousGame
                 filterGames()
@@ -591,8 +595,12 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         updateChipCounts()
     }
 
-    private fun showSnackbar(message: String, type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT) {
-        SnackbarHelper.show(this, message, type)
+    private fun showSnackbar(
+        message: String,
+        type: SnackbarHelper.Type = SnackbarHelper.Type.DEFAULT,
+        duration: Int = Snackbar.LENGTH_SHORT,
+    ) {
+        SnackbarHelper.show(this, message, type, duration)
     }
 
     override fun onGameStatusUpdated() = loadLibrary()
