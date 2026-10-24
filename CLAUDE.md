@@ -329,11 +329,12 @@ GameTracker/
 │   │                               #   green. Ends with the ANDROID GATE: every field of the
 │   │                               #   app's models is in a pinned key set, and its request
 │   │                               #   bodies are driven through the real handlers
-│   ├── mobile-api.js               # NOT a test: reads mobile/'s GameTrackerApi.kt and
-│   │                               #   models.kt for the Android gate (api-surface: every route
-│   │                               #   the app calls is live at a reachable tier; api-contract:
-│   │                               #   every field is pinned). Regex over Kotlin, so it FAILS
-│   │                               #   CLOSED: counts, anchors, and a refusal of @SerializedName
+│   ├── mobile-api.js               # NOT a test: reads mobile/api-contract.json for the Android
+│   │                               #   gate (api-surface: every route the app calls is live at a
+│   │                               #   reachable tier; api-contract: every field is pinned). The
+│   │                               #   JSON is written by REFLECTION in mobile/'s ApiContractTest,
+│   │                               #   which fails when it is stale (MOB-25). Still FAILS CLOSED:
+│   │                               #   counts, anchors, cross-checks against the Kotlin source
 │   └── v1-shapes.js                # The published v1 key sets, ONE copy shared by the pins,
 │                                   #   the Android gate and library-shape.test.js
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)
@@ -1259,12 +1260,12 @@ cleanup-pr-images  (needs: build-images + the 3 Trivy jobs + smoke-test + deploy
 > Residual risk:
 >   - The SDK components `sdkmanager` installs are verified only against Google's repository
 >     metadata.
->   - **The build container is on Docker's default bridge network.** Build code (kapt, lint
->     jars, unit tests) can reach every port this host publishes: the backend on `BACKEND_BIND`,
->     the MCP port and the smoke stacks. It can also reach the LAN, including the directory
->     server. The fix is a networked resolve phase followed by an `--offline` build under
->     `--network none`; it is MOB-37 in `mobile/ROADMAP.md`. Until then, `BACKEND_BIND=127.0.0.1`
->     with `TRUST_PROXY=2` takes the backend port off the reachable set.
+>   - **Gradle PLUGINS run with a network** (MOB-37). The build is two containers: phase 1
+>     installs the SDK and downloads exactly the artifacts in `verification-metadata.xml`
+>     (`mobile/gradle/ci/prefetch.init.gradle`), and configuring the build runs the plugins
+>     there. Kapt processors, lint jars and unit tests run only in phase 2, `--offline` under
+>     `--network none`. `BACKEND_BIND=127.0.0.1` with `TRUST_PROXY=2` still narrows what phase 1
+>     can reach.
 >
 > Any dependency change in `mobile/` must regenerate the verification metadata in the same PR,
 > **from an EMPTY Gradle home** (see `mobile/CLAUDE.md`). A warm cache never fetches parent POMs

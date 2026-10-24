@@ -94,10 +94,11 @@ export default function MobileAppSection() {
               <li>If Play Protect warns about an unknown developer, choose <strong>Install anyway</strong>.</li>
             </ol>
             <p className="mobile-app-note">
-              New versions install over the old one: download again to update. If a test build
-              from somewhere else is installed, Android refuses this one (&ldquo;App not
-              installed&rdquo;) until you uninstall it. Uninstalling deletes the ratings and notes
-              stored on that phone.
+              New versions install over the old one: download again to update. Had the app before
+              this version? It installs as a second app: sign out in the old one first, then
+              uninstall it. Its ratings and notes are not carried over. If a test build is
+              installed, Android refuses this one (&ldquo;App not installed&rdquo;) until you
+              uninstall it.
             </p>
           </>
         )}

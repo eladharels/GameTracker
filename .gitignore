@@ -19,3 +19,7 @@ gametracker.db-shm
 sent_notifications.json
 crackwatch-cache.json
 system-status-cache.json
+
+# Python bytecode (a local py_compile once committed one; PR #15 review)
+__pycache__/
+*.pyc

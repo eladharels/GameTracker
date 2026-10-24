@@ -733,7 +733,7 @@ const ANDROID_ROUTES = [
   'GET /api/user/:username/games',
   'POST /api/user/:username/games',
   'DELETE /api/user/:username/games/:gameId',
-  'PUT /api/user/:username/games/:gameId/backlog-order',
+  'PUT /api/user/:username/backlog-reorder',
   'POST /api/user/:username/games/:gameId/refresh-metadata',
 ];
 check('the app calls exactly the pinned routes, each reachable with a library-scoped token (MOB-9)', () => {

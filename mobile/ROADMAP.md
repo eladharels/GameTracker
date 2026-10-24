@@ -327,7 +327,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Never touch `viewLifecycleOwner` from a callback that can outlive the view.
   - Add a Robolectric test: delete, then destroy the view, then advance 5 s.
 
-### [ ] MOB-13 ✔ Medium — Status writes ignore the server's answer; `unreleased` is offered as a choice; `""` is sent for an unknown date
+### [x] MOB-13 ✔ Medium — Status writes ignore the server's answer; `unreleased` is offered as a choice; `""` is sent for an unknown date — *fixed in PR #15*
+- **Fixed:** `GameStatus` is the one place the statuses are spelled. Every add/update body is
+  built by `GameStatus.request`: lowercase, and `null` for an unknown date. The route's
+  answer is modelled (`GameUpsertResult`). Library, Details and Search show the status the
+  server STORED, and say why when it differs ("isn't out until …, so it stays Unreleased").
+  Unreleased is gone from the status sheet and the chips. Pinned in `GameStatusTest`,
+  `test/runtime.test.js` and the api-contract Android gate.
 - **Where:**
   - `GameTrackerApi.kt:22-27`: `Response<Unit>` discards the body.
   - `LibraryFragment.kt:301` offers "Unreleased" as a choice; `:346-385` updates optimistically.
@@ -351,7 +357,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Remove Unreleased from the pickers.
   - Send the lowercase canonical values, and `null` for an unknown date.
 
-### [ ] MOB-14 Medium — Backlog reorder is N unconditional calls with the results ignored
+### [x] MOB-14 ✔ Medium — Backlog reorder is N unconditional calls with the results ignored — *fixed in PR #15*
+- **Fixed:** `BacklogOrder`. A drag sends the WHOLE backlog in one `PUT …/backlog-reorder`,
+  applied in one transaction. A failure reloads the server's order and says so. Drag (and its
+  handle) is off while a search narrows the list. Cards show the game's position in the
+  whole backlog, like Home, never the stored number. Pinned in `BacklogOrderTest`, the
+  api-contract Android gate (the real route, driven with the app's body) and
+  `test/runtime.test.js`.
 - **Where:** `LibraryFragment.kt:248-271`. The drag delta is computed on the filtered list at
   `:490-495`. `GameAdapter.kt:129-131` shows `#backlog_order`; `HomeAdapters.kt:74` shows
   `#position+1`.
@@ -371,7 +383,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Show the list position everywhere.
   - On failure, reload and say so.
 
-### [ ] MOB-15 Medium — Search: a failure reads as "No games found", and stale responses win
+### [x] MOB-15 ✔ Medium — Search: a failure reads as "No games found", and stale responses win — *fixed in PR #15*
+- **Fixed:**
+  - `SearchResults` classifies every search as found, empty, or failed with a reason:
+    offline, signed out, rate limited, or server.
+  - Each reason has its own fixed message and a Try again button (not when signed out).
+  - The server's `X-Catalog-Degraded` header is shown as "results may be incomplete", so a
+    provider outage is never presented as an exhaustive answer.
+  - A new search cancels the one in flight, and an answer for any query but the current one
+    is dropped.
+  - Pinned in `SearchResultsTest` and `test/runtime.test.js`.
 - **Where:** `SearchFragment.kt:292-303` (every non-2xx and every exception becomes
   `emptyList()`), `:263-289` (the `catch` is therefore unreachable), `:44-45` and `:229-241`
   (debounce with no cancellation of the previous request).
@@ -386,7 +407,18 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Hold the search `Job` and cancel it before starting another. Alternatively, drop any
     response whose query is not the current one.
 
-### [ ] MOB-16 Medium — Game Details offers library-only actions for games that are not in the library
+### [x] MOB-16 ✔ Medium — Game Details offers library-only actions for games that are not in the library — *fixed in PR #15*
+- **Fixed:**
+  - `GameDetailsFragment.newInstance(game, inLibrary)`. Search passes the user's own
+    library row when the game is owned, so Details shows its real status (this also closes
+    MOB-39's first bullet).
+  - A game that is not in the library gets one action, "Add to library". Status chips,
+    rating, notes, Refresh and Remove are hidden. After the add, the screen becomes the
+    library entry.
+  - The add goes through `LibraryAdd`, now shared with Search, so the MOB-10 fresh-library
+    check cannot be skipped on one screen.
+  - Remove asks for confirmation (this screen has no undo).
+  - Pinned in `test/runtime.test.js`.
 - **Where:** `GameDetailsFragment.kt:111-130`, `:198-206`, opened from search at
   `SearchFragment.kt:121-130`.
 - **Why:** the same screen serves search results and library entries. For a search result it
@@ -426,17 +458,19 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Remove callbacks in `onDestroyView`.
   - This is largely subsumed by MOB-19 (ViewModels).
 
-### [ ] MOB-18 Low — Library "Unreleased" filter and count include any game with a blank date
+### [x] MOB-18 Low — Library "Unreleased" filter and count include any game with a blank date
 - **Where:** `LibraryFragment.kt:418-421`, `:485-487`.
 - **Why:** a `done` or `playing` game with no stored date is counted, and listed, as Unreleased.
   The chip count then disagrees with the server's status and with the web app.
 - **Fix:** filter on `status == "unreleased"` only.
 
+- **Done (PR #15):** the chip count and the list use the status alone. Pinned.
+
 ---
 
 ## ARC — Architecture & build
 
-### [ ] MOB-19 Medium — No data layer: every screen refetches the whole library, twice
+### [x] MOB-19 Medium — No data layer: every screen refetches the whole library, twice
 - **Where:**
   - `LibraryFragment.kt:74` and `:81-84`, `HomeFragment.kt:40` and `:43-46`,
     `InsightsFragment.kt:35-41` (each loads in `onViewCreated` **and** `onResume`, so there
@@ -460,7 +494,18 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - One `ViewModel` per screen.
   - Show/hide fragments instead of replacing them, or use Navigation with saved state.
 
-### [ ] MOB-20 Medium — Release build: no R8, a `com.example` application id, no signing or versioning
+- **Done (PR #15):**
+  - `LibraryRepository` over `LibraryCache` (JVM-tested): one copy, keyed by the credential,
+    30 s, concurrent readers share a request, every write drops it, and a read that started
+    before a write is not stored. `getLibrary` has one caller.
+  - Every `"auth"` read goes through `Session` (token, username). `display_name` reads are gone:
+    nothing on the phone ever wrote it.
+  - Tabs are shown and hidden; Details opens over the hidden tab.
+  - Pinned in `test/runtime.test.js`.
+  - **Not done, deliberately:** a ViewModel per screen. With the tabs kept and one library
+    copy it adds no behaviour today; revisit if a screen needs state across a rotation.
+
+### [x] MOB-20 Medium — Release build: no R8, a `com.example` application id, no signing or versioning
 - **Where:** `app/build.gradle.kts:10`, `:14`, `:17-18`, `:24-25`; `proguard-rules.pro` (template only).
 - **Why:**
   - `isMinifyEnabled = false`: no shrinking or obfuscation, so the release APK carries every
@@ -477,7 +522,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     serialises every field as `null`) and for Retrofit interfaces.
   - Add a signing config that reads from CI secrets, never from the repo.
 
-### [ ] MOB-21 Medium — Outdated dependencies and `kapt`
+- **Done (PR #15):**
+  - The app id and package are `ink.etech.gametracker` (owner's decision: now, with a one-time
+    uninstall; the old app's on-phone notes and ratings do not move). `Theme.GameTracker`.
+  - R8 and resource shrinking are on. Every `models.kt` class is kept whole, plus the Retrofit
+    interface and the full-mode rules Retrofit 2.9.0 lacks. `android.yml` reads the BUILT dex
+    and fails when a Gson field lost its name: a missing rule otherwise builds green.
+  - Signing stays outside Gradle, in CI with a key the build never sees (MOB-40), and
+    `versionCode` is the run number. So no Gradle signing config, on purpose.
+
+### [x] MOB-21 Medium — Outdated dependencies and `kapt`
 - **Where:** `app/build.gradle.kts:63-83`, `gradle/libs.versions.toml:10`.
 - **Why:** several libraries are two or more years behind current stable:
   - `retrofit`/`converter-gson` 2.9.0, `okhttp logging-interceptor` 4.11.0;
@@ -494,7 +548,25 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Add a Dependabot `gradle` entry for `/mobile`, and include `mobile/` in the
     dependency-verification metadata that the CI job enforces.
 
-### [ ] MOB-22 Medium — Dead code: three legacy activities, an unused Compose stack, an unreachable logout menu
+- **Done (PR #15):** every version in `libs.versions.toml`; Retrofit 2.11.0, OkHttp 4.12.0,
+  coroutines 1.9.0, Glide 4.16.0, RecyclerView 1.4.0, Material 1.12.0, Fragment 1.8.5
+  (Biometric 1.1.0 is still the latest stable). Glide's kapt compiler is removed rather than
+  moved to KSP: it only generates code for an `AppGlideModule`, which this app has none of, so
+  kapt is gone entirely. The Compose plugin and dependencies are gone too (MOB-22).
+  `verification-metadata.xml` was regenerated from an EMPTY Gradle home by a one-off CI step on
+  the self-hosted runner, reviewed, committed, and the step removed. **That was a one-off
+  exception, never a precedent** (CISO): the step ran tests, lint and assemble with a network
+  and no verification on the production host. Regenerate locally or on a GitHub-hosted runner.
+  The new hashes were checked off that host: 50 Maven Central artifacts by the CISO reviewer,
+  three by me, and EVERY hash, Google Maven included, by `verify-maven-hashes.yml` on a
+  GitHub-hosted runner (it runs whenever the file changes): **818 of 818 equal** on its first
+  complete run (PR #15, run 40077599743, commit eb6064d). The Gradle wrapper is excluded
+  from Dependabot, and `android.yml` refuses a distribution other than its own pinned
+  `GRADLE_DISTRIBUTION_SHA256`. Not declared directly: appcompat and activity, which arrive
+  transitively; declaring them is a metadata change of its own. Dependabot watches `/mobile` (Gradle only: npm
+  installs run lifecycle scripts on the production host).
+
+### [x] MOB-22 Medium — Dead code: three legacy activities, an unused Compose stack, an unreachable logout menu
 - **Where:**
   - `GameDetailsActivity.kt`, `GameSearchActivity.kt`, `MyLibraryActivity.kt` (434 lines, not
     in the manifest, so they crash if ever started) and their three layouts.
@@ -515,7 +587,14 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Delete all of it.
   - For the display name, either fetch it from `GET /api/user/me` or drop the lookup.
 
-### [ ] MOB-23 Medium — Server URL is hard-coded to production; debug builds use the live backend
+- **Code part done (PR #15):** the three activities were already gone; the Compose theme
+  (`ui/theme`), the hidden toolbar with its unreachable sign-out, `refreshCurrentFragment` and
+  the always-null Details callback are deleted (tabs refresh in `onHiddenChanged`, MOB-19), and
+  the `display_name` reads with MOB-19. The note API is in use since MOB-7. Pinned.
+- **The Compose dependencies and plugin were removed with MOB-21**, whose metadata
+  regeneration covers the changed resolution.
+
+### [x] MOB-23 Medium — Server URL is hard-coded to production; debug builds use the live backend
 - **Where:** `ApiClient.kt:17`; `mobile/CLAUDE.md:323` ("APK tested against the live
   production backend").
 - **Why:**
@@ -528,7 +607,14 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     production.
   - Optionally a server-URL field on the login screen (https only; see MOB-8).
 
-### [ ] MOB-24 Medium — No tests
+- **Done (PR #15):** `BuildConfig.API_BASE` per build type. Release is production, with no
+  override, so a published APK cannot be built to talk elsewhere. Debug takes
+  `-PgtDebugApiBase`; with none it still falls back to production, because no staging URL is
+  recorded anywhere in this repo (owner: set it in `~/.gradle/gradle.properties`). https and a
+  trailing `/api/` are required at build time. The login-screen server field is not done: one
+  instance is what this app is for today. Pinned in `test/runtime.test.js`.
+
+### [x] MOB-24 Medium — No tests
 - **Where:** `app/src/test/…/ExampleUnitTest.kt` and `app/src/androidTest/…/ExampleInstrumentedTest.kt`
   (templates only).
 - **Why:** none of the behaviour in this file is pinned: logging in release (MOB-1), logout
@@ -537,7 +623,22 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Fix:** start with JVM tests for the pure logic, and Robolectric for fragment lifecycle.
   Each item above names the test it needs.
 
-### [ ] MOB-25 Low — Emit the app's API contract from the code instead of regex-parsing Kotlin
+- **JVM part done (PR #6 to #15):** 13 suites under `app/src/test`, run by CI on every
+  build (`testDebugUnitTest testReleaseUnitTest`). Of the items above:
+  - MOB-1 logging in release: `ApiClientLoggingTest`.
+  - MOB-3 logout and MOB-5 401 handling: `SessionStoreTest`, `SessionExpiryInterceptorTest`.
+  - MOB-12 the undo: `PendingRemovalsTest`.
+  - MOB-15 the search states: `SearchResultsTest`. The stale-search race itself is the
+    fragment's (`query != currentQuery`), so it is pinned in `test/runtime.test.js`.
+  - Since: `GameStatusTest`, `BacklogOrderTest`, `LibraryMatchTest` (the shared vectors),
+    `LibraryCacheTest`, `LibraryWriteInterceptorTest`, `MobileTokenTest`, `UserDataTest`,
+    `SafeUrlTest`.
+  - The two template tests are deleted.
+- **Robolectric (fragment lifecycle): not added.** It fetches the Android runtime jars itself
+  at test time, from the network, which the offline phase 2 of the CI build (MOB-37) refuses.
+  The fragment behaviour it would test is pinned from source in `test/runtime.test.js`.
+
+### [x] MOB-25 Low — Emit the app's API contract from the code instead of regex-parsing Kotlin
 - **Where:** the backend drift gate (`test/mobile-api.js`, added alongside PR #6) reads
   `GameTrackerApi.kt` and `models.kt` with regular expressions.
 - **Why:** a regex over source text breaks on formatting, default arguments, annotations
@@ -550,7 +651,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - It writes `mobile/api-contract.json`, which is committed.
   - The backend gate reads that JSON. A CI step fails if regenerating it changes it.
 
-### [ ] MOB-26 Medium — Documentation contradicts the code
+- **Done (PR #15):** `ApiContractTest` reflects over `GameTrackerApi` and the `models.kt`
+  classes and compares the result with the committed `mobile/api-contract.json`; it runs in the
+  Android job, so a stale file fails CI there. `test/mobile-api.js` reads the JSON, and still
+  fails closed: counts, anchors, the model list against `models.kt`, the route count against
+  the interface. The regex parser and its self-tests are gone.
+
+### [x] MOB-26 Medium — Documentation contradicts the code
 - **Where and what:**
   - `mobile/CLAUDE.md`:
     - `:14` says API 36 is "Android 15"; it is Android 16.
@@ -583,11 +690,18 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     repo does.
   - Update the root `CLAUDE.md` pointer.
 
+- **Done (PR #15):** `mobile/CLAUDE.md` corrected from the code: Android 16, logging in debug
+  only (true since MOB-1), the five tabs (Discover is the search tab), status chips, the login
+  checks as they are, the token (MOB-3/6), coroutine scopes (MOB-17), the file tree (the new
+  helpers, no Compose theme), and the palette summarised FROM `colors.xml` instead of a stale
+  copy. `SECURITY_FIXES.md` and `UI_UX_IMPROVEMENTS.md` carry a "historical" banner naming what
+  is false. The root `CLAUDE.md` already points at `mobile/`.
+
 ---
 
 ## UX — Design & accessibility
 
-### [ ] MOB-27 Medium — Error messages show raw server JSON and exception text; lockout and outage read as a failed password
+### [x] MOB-27 Medium — Error messages show raw server JSON and exception text; lockout and outage read as a failed password
 - **Where:**
   - `LoginActivity.kt:123-126` (`"Login failed: " + errorBody().string()`) and `:128-134`
     (`"Error: ${e.localizedMessage}"`).
@@ -609,7 +723,14 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 
   Parse `{error}` only for logging.
 
-### [ ] MOB-28 Medium — Settings screen states things that aren't true
+- **Done (PR #15):** `ErrorText` (JVM-tested) is the one mapping. Sign-in follows the web's
+  `loginErrors.js`: 401 wrong password; 429 "try again in N minutes" from `Retry-After`; 403
+  "ask an administrator"; 5xx "unavailable right now"; no answer "can't reach the server".
+  Every other failure is "Couldn't <action>. Try again." or the unreachable sentence. No
+  server body or exception message reaches the screen (`test/runtime.test.js` scans every
+  line outside `Log.*`). The button says "Sign in", as the web does.
+
+### [x] MOB-28 Medium — Settings screen states things that aren't true
 - **Where:** `SettingsActivity.kt:86-96`; the biometric toggle is duplicated at
   `SettingsActivity.kt:27-83` and `ProfileFragment.kt:167-212`.
 - **Why:**
@@ -623,7 +744,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     notification settings on `/api/user/me` are candidates.
   - Keep one biometric control.
 
-### [ ] MOB-29 Medium — Text contrast fails WCAG AA across the app
+- **Done (PR #15):** the Settings screen is deleted. Everything on it was either the second
+  copy of the fingerprint control or untrue: "Notifications On", "3 connected sources",
+  "Appearance Dark" and "v2.4.0" were literals. Profile keeps the ONE fingerprint switch and
+  now shows the real `versionName`. Notification channels live in My Account on the web,
+  which this app does not reach.
+
+### [x] MOB-29 Medium — Text contrast fails WCAG AA across the app
 - **Where and ratios (computed, WCAG 2.x):**
   - `gt_text_muted #4A5068` (`colors.xml:52`): **2.35:1** on the screen `#111218`, **2.18:1**
     on cards `#181A22`. It is used for real content, not decoration:
@@ -650,7 +777,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Pick `colorOnPrimary` per preset by contrast. The web app computes it the same way for
     its presets.
 
-### [ ] MOB-30 Medium — Screen-reader semantics: labels on decoration, none on controls, drag-only reorder
+- **Done (PR #15), except `colorOnPrimary`:**
+  - `gt_text_muted` `#858CA4` and `gt_text_dim` `#8890A8`: both >= 4.5:1 on every surface.
+  - Status badges, the backlog-position badge, the checked Details chip and "Mark as Done"
+    use `gt_on_status` `#0C0D11`, >= 4.5:1 on all five status colours.
+  - Error snackbar text is `#FF6B6B` (4.64:1 on its background).
+  - `test/runtime.test.js` computes the ratios FROM `colors.xml`.
+  - `colorOnPrimary` per preset: done with MOB-33 (dark ink wins on all six; computed in
+    the test).
+
+### [x] MOB-30 Medium — Screen-reader semantics: labels on decoration, none on controls, drag-only reorder
 - **Where:**
   - Unlabelled controls: the five accent dots (`fragment_profile.xml:195-223`) are
     focusable `View`s with no `contentDescription` and no selected state.
@@ -673,7 +809,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Add a live region to the login error, and `autofillHints="username"` / `"password"`.
   - Add `AccessibilityAction`s "Move up", "Move down" and "Change status" to library rows.
 
-### [ ] MOB-31 Medium — Edge-to-edge is not handled, although `targetSdk = 36`
+- **Done (PR #15):** the accent dots are labelled with their preset names and expose a
+  selected state; the stars say the current rating; decorative icons and covers are
+  `importantForAccessibility="no"`; the sign-in fields carry `autofillHints` (the error already
+  had a live region); library rows have "Change status" and, in the reorderable backlog, "Move
+  up" / "Move down" actions that save the whole order like a drag. Pinned.
+
+### [x] MOB-31 Medium — Edge-to-edge is not handled, although `targetSdk = 36`
 - **Where:** `build.gradle.kts:16`; `activity_main.xml:2-35`. There are no
   `fitsSystemWindows`, `WindowInsets` or `enableEdgeToEdge` references anywhere in `mobile/`.
 - **Why:** from Android 15, apps targeting SDK 35+ are drawn edge-to-edge, and on Android 16
@@ -687,7 +829,14 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     nav (drop the fixed height).
   - Size the fragment container's bottom padding from the nav's measured height.
 
-### [ ] MOB-32 Low — Touch targets under 48 dp, and 9–11 sp text
+- **Done (PR #15), to be checked on a phone:** `EdgeToEdge` (WindowCompat, not
+  androidx.activity, which arrives only through Compose). Both activities draw edge-to-edge
+  with transparent bars. The screens are padded by the status bar and cutout, the bottom nav
+  grows by the navigation bar (Material pads its own content), and the screens end above the
+  nav AS MEASURED instead of a fixed 80dp. The sign-in form is padded on both sides. No
+  emulator here, so the first look is on the owner's Android 15/16 phone with the next APK.
+
+### [x] MOB-32 Low — Touch targets under 48 dp, and 9–11 sp text
 - **Where:**
   - Game Details back button, 40×40 dp (`fragment_game_details.xml:36-38`).
   - Library clear-search button, 40×40 dp (`fragment_library.xml:114-116`).
@@ -700,7 +849,11 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Use `minWidth`/`minHeight="48dp"`, or `TouchDelegate`, keeping the visual size.
   - Set a floor of 12 sp.
 
-### [ ] MOB-33 Low — Accent palette differs from the web app, and one preset matches a status colour
+- **Done (PR #15):** Details back, Library clear-search and sort, the drag handle, the Add
+  button, the Search button and the Details buttons are 48dp. Every text size is at least
+  12sp, the Insights donut included (now in sp, so it follows the font scale). Pinned.
+
+### [x] MOB-33 Low — Accent palette differs from the web app, and one preset matches a status colour
 - **Where:** `ThemeManager.kt:31-40`, `themes.xml:40-73`, `colors.xml:33`.
 - **Why:**
   - The web ships six presets: Violet `#8b5cf6` (the default), Blue, Emerald, Amber, Rose
@@ -715,7 +868,15 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Move the status colours off the preset hues, or render status with a shape or icon as
     well as colour.
 
-### [ ] MOB-34 Low — Login input handling
+- **Done (PR #15):** the web's six presets, names, order and Violet default
+  (`ThemeManager`, `themes.xml`), and the web's status palette (`--color-status-*`): light
+  tints, none equal to a preset, and every status badge also carries its label (the owner's
+  choice: distinct shades plus a label). The brand drawables moved from the old blue to
+  violet. Six 48dp-tall picker cells with a centred 40dp circle. `test/runtime.test.js` reads
+  both lists from the web's source and computes `colorOnPrimary` contrast per preset. A
+  colour saved by the old picker falls back to Violet.
+
+### [x] MOB-34 Low — Login input handling
 - **Where:** `LoginActivity.kt:81-97`.
 - **Why:**
   - The username is lowercased but not trimmed, so an autocorrect trailing space sends
@@ -726,7 +887,10 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Trim the username.
   - Only check that the password is non-empty.
 
-### [ ] MOB-35 Low — Smaller UX defects
+- **Done (PR #15):** `LoginInput` (JVM-tested) trims and lowercases the username and only
+  requires a non-empty password; the message names the empty field. Pinned.
+
+### [x] MOB-35 Low — Smaller UX defects
 - **Where and what:**
   - Biometric switch (`ProfileFragment.kt:191-195`): `onAuthenticationFailed` is
     *non-terminal* (the prompt stays open), yet it un-checks the switch. That fires the
@@ -744,7 +908,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     `supportsRtl` is untested.
 - **Fix:** individually small. Group them into one UI polish PR after MOB-29 to MOB-31.
 
-### [ ] MOB-36 Low — Session and fingerprint polish left over from PR #6 (UI/UX review)
+- **Done (PR #15):**
+  - The fingerprint switch: a finger not recognised is non-terminal and keeps the prompt up
+    (MOB-6's `CryptoPrompt`); cancelling the login prompt is a neutral notice, not an error.
+  - **No re-lock on return from the background: the owner's decision** (no app lock).
+  - A missing price reads "No price"; a list row with no cover gets `CoverBinder`'s letter
+    tile; a game with no date reads "Date unknown", never "Unreleased" (a status).
+  - **Not done: localisation.** Moving ~all copy to `strings.xml` and testing RTL is a project
+    of its own; nothing here makes it harder.
+
+### [x] MOB-36 Low — Session and fingerprint polish left over from PR #6 (UI/UX review)
 - **Where and what:**
   - `Session.ended` has no replay, so an expiry signalled while another activity is on top
     is dropped. Since PR #6, `MainActivity.onResume` still shows the expiry notice (it reads
@@ -764,7 +937,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - The offline notice is a Toast. The rest of the app uses `SnackbarHelper`.
 - **Fix:** one small PR, with MOB-35.
 
-### [ ] MOB-37 Medium — Android CI: build code has network access on the production host
+- **Done (PR #15):** `Session.ended` stays documented (no replay; `MainActivity.onResume`
+  re-checks). Sign in is disabled while the stored session is checked; the fingerprint retry
+  button and the silent cancel came with MOB-6. "Sign in" and "fingerprint" throughout, the
+  toggle-off messages agree. The login notice is announced after layout; a prefilled
+  username starts in the password field; the offline notice is a snackbar.
+
+### [x] MOB-37 Medium — Android CI: build code has network access on the production host
 - **Where:** `.github/workflows/android.yml`, the "Build and test inside the container" step.
 - **What:** the Gradle container runs on Docker's default bridge network. Build code (kapt
   processors, lint jars, unit tests) can therefore reach every port the host publishes:
@@ -787,7 +966,20 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   proxy topology") takes the backend port off the reachable set.
 - **Source:** CISO review of PR #6.
 
+- **Done (PR #15):** two containers. Phase 1 (network) prunes the Gradle home, reinstalls the
+  SDK and runs only `gtPrefetch` (`gradle/ci/prefetch.init.gradle`), which downloads every
+  artifact listed in `verification-metadata.xml`, strict, and reports any the repositories
+  cannot serve. Phase 2 runs tests, lint, assemble and the R8 dex check `--offline` under
+  `--network none`. The wrapper distribution is re-downloaded and re-checked every job and kept
+  only from phase 1 to phase 2. Residual: Gradle plugins run in phase 1, with a network.
+  Pinned in `test/runtime.test.js`.
+
 ### [ ] MOB-38 High — The self-hosted runner (the production host) runs every CI job as root
+- **Code side done (PR #15):** no workflow step needs root any more. gitleaks and trivy are
+  cached in the runner user's home and re-checksummed on every run. The smoke data directory
+  changes owner through a throwaway container. `test/runtime.test.js` fails on any `sudo`.
+  **Left: the host switch**, in `OPERATOR_RUNBOOK.md` ("MOB-38"). Tick this item once that
+  is done.
 - **Where:** the runner service on the production host. It is not in this repository.
 - **What:** every CI step runs as uid 0 beside the live stack. That covers `npm ci`, the image
   builds, Trivy, the smoke stacks, deploy and the Android job's host-side steps. PR #6 found
@@ -803,7 +995,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Owner / date:** the repository owner, date to be set. Recorded by the CISO re-check of PR
   #6 (74d21bf).
 
-### [ ] MOB-39 Low — Follow-ups from the PR #8 reviews (MOB-10/11/12)
+### [x] MOB-39 Low — Follow-ups from the PR #8 reviews (MOB-10/11/12)
 - **Where and what:**
   - A search result opened in `GameDetailsFragment` falls back to `currentStatus = "Wishlist"`
     (`GameDetailsFragment.kt`, status chips). For a game the user already owns, tapping a chip
@@ -828,6 +1020,21 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Contrast of 10 sp white on the green and grey status fills, and the 44 dp add button
     (MOB-29, MOB-32).
 - **Source:** CISO and UI/UX reviews of PR #8.
+
+- **Done (PR #15):**
+  - A search result opens Details as the OWNED row, with its real status, or with only "Add"
+    (MOB-16).
+  - The badge reads "In your library, status Done" to TalkBack and keeps to one line.
+  - Add is disabled while its requests run; "Couldn't check your library" has a Retry action
+    (nothing was posted, so retrying is safe).
+  - A refused removal is said by `MainActivity`, on whatever screen is showing
+    (`PendingRemovals.failures`, JVM-tested): the tab that asked may be hidden.
+  - Search reads the badges' library copy in parallel with the search.
+  - Contrast and target size: MOB-29 and MOB-32.
+  - **Not done:** precomputing normalised rows (a 2,000-game library re-normalises on bind;
+    not measured to matter), Insights "completed this year" (needs the stats route on
+    mobile), and the check-then-add race, which only the server can close (v2's
+    `addResolvedGame`; recorded as the move to v2).
 
 ### [x] MOB-40 ✔ Medium — Distribute the app: one signed APK at one URL — *done in PR #9*
 - **Asked for:** "only one copy of the APK on each deploy, served by the server under a
@@ -909,8 +1116,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     workflow. The same-repo gate is the boundary.
   - **Residual risk:** the SDK components `sdkmanager` installs are verified only against
     Google's repository metadata.
-  - **Residual risk, open (MOB-37):** the build container is on Docker's default bridge, so
-    build code can reach every port the host publishes and the LAN.
+  - **Residual risk (MOB-37, done):** only phase 1 has a network, and only the Gradle plugins
+    run there; tests, lint, kapt and assemble run under `--network none`.
   - **Upgrades:** any dependency upgrade (MOB-21) must regenerate the verification metadata
     in the same PR.
 - **Visible behaviour change from MOB-3/MOB-5:** after PR #6, a session ends 12 hours after

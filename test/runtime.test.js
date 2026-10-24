@@ -274,7 +274,7 @@ const WORKFLOW_FILES = fs.readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.tes
 const loadWorkflow = (f) => require('js-yaml').load(fs.readFileSync(path.join(WORKFLOW_DIR, f), 'utf8'));
 const stepRun = (st) => (st.run || '').replace(/^\s*#.*$/gm, '');
 
-check('CI installs tools from a private dir, checksum-verified before sudo install', () => {
+check('CI installs tools from a private dir, checksum-verified every run, and never uses sudo (MOB-38)', () => {
   let installs = 0;
   for (const file of WORKFLOW_FILES) {
     const wf = loadWorkflow(file);
@@ -297,16 +297,63 @@ check('CI installs tools from a private dir, checksum-verified before sudo insta
           for (const m of run.matchAll(/^\s*(\w+)="([0-9a-f]{64})"/gm)) pinned[m[1]] = m[2];
           assert.ok(/^[0-9a-f]{64}$/.test(pinned[fed[1]] || ''), `${where}: ${fed[1]} is not a pinned 64-hex SHA-256`);
         }
-        if (/sudo install\b/.test(run)) {
+        // MOB-38: the runner is to run as a non-root user (OPERATOR_RUNBOOK.md), so no step
+        // may need root: tools are cached in the runner's home and run by path, and the
+        // smoke stack's files change owner through Docker.
+        assert.ok(!/(^|[\s;&|(])sudo\s/m.test(run), `${where} uses sudo: the runner must not need root (MOB-38)`);
+        if (/>> "\$GITHUB_PATH"/.test(run) && /\btar -x/.test(run)) {
           installs++;
-          const check = run.search(/sha256sum -c/), untar = run.search(/tar -x/), inst = run.search(/sudo install/);
-          assert.ok(check >= 0 && check < untar && untar < inst,
-            `${where} installs as root without checking a pinned SHA-256 first`);
+          // The cache is writable by every later job, so the pinned hash is re-checked on
+          // EVERY run, on the line that extracts it: not only when it was downloaded.
+          const lines = run.split('\n');
+          const at = lines.findIndex((l) => /\btar -x/.test(l));
+          assert.ok(at > 0 && /echo "\$\{\w+_SHA256\}\s+\$\{TARBALL\}" \| sha256sum -c -/.test(lines[at - 1]),
+            `${where} extracts its cached tool without re-checking the pinned SHA-256 on the line before`);
+          // ...from a private copy in BIN, so the shared cache cannot be swapped between the
+          // check and the extraction (CISO review, PR #15).
+          assert.ok(at > 1 && /^\s*TARBALL="\$\{BIN\}\/[\w.-]+"\s*$/.test(lines[at - 2]),
+            `${where} checks and extracts the shared cached file instead of a private copy in BIN`);
         }
       }
     }
   }
-  assert.ok(installs >= 4, `found ${installs} root installs — expected gitleaks and three trivy`);
+  assert.ok(installs >= 4, `found ${installs} cached tool installs — expected gitleaks and three trivy`);
+});
+
+// MOB-38 moved host-file ownership changes from sudo into containers. Such a container runs with
+// a host directory mounted, as uid 0 or with added capabilities, so its image is code running
+// next to the host: it must be a digest-PINNED image, never one this run built from the pull
+// request (CISO review, PR #15). And no container gets DAC_READ_SEARCH unless its image is
+// pinned: with it, Docker's seccomp profile allows open_by_handle_at, a known escape.
+check('privileged helper containers run a digest-pinned image, never a PR-built one (MOB-38)', () => {
+  let helpers = 0;
+  for (const file of WORKFLOW_FILES) {
+    const wf = loadWorkflow(file);
+    for (const [jobName, job] of Object.entries(wf.jobs)) {
+      const env = { ...(wf.env || {}), ...(job.env || {}) };
+      for (const st of job.steps || []) {
+        const run = stepRun(st).replace(/\\\n\s*/g, ' ');
+        for (const cmd of run.split('\n').filter((l) => /\bdocker run\b/.test(l))) {
+          const privileged = /--cap-add|--user 0\b|--privileged/.test(cmd);
+          // Any -v/--volume/--mount whose source is a host path or a variable (CISO re-review).
+          const binds = /(?:-v|--volume)[ =]"?(?:\$\{?\w+|\/|\$PWD|\.)[^:" ]*:\//.test(cmd) || /--mount\b/.test(cmd);
+          if (!privileged && !binds) continue;
+          const where = `${file} / ${jobName} / "${st.name}"`;
+          assert.ok(!/--privileged/.test(cmd), `${where} runs a --privileged container`);
+          const vars = [...cmd.matchAll(/"\$\{(\w+_IMAGE)\}"/g)].map((m) => m[1]);
+          assert.ok(vars.length === 1, `${where}: a privileged or bind-mounting docker run must name its image as one "\${X_IMAGE}"`);
+          assert.ok(!/^TEST_/.test(vars[0]), `${where} runs the PR-built ${vars[0]} with host access`);
+          assert.ok(/@sha256:[0-9a-f]{64}$/.test(String(env[vars[0]] || '')),
+            `${where}: ${vars[0]} is not pinned by digest in the workflow or job env`);
+          if (privileged) helpers++;
+        }
+      }
+    }
+  }
+  assert.ok(helpers >= 4, `found ${helpers} privileged helper containers -- expected the smoke chown and android's`);
+  // One trusted image, written in two files: they must not drift apart on a bump.
+  const helper = loadWorkflow('docker-build-deploy.yml').jobs['smoke-test'].env.HELPER_IMAGE;
+  assert.strictEqual(helper, loadWorkflow('android.yml').env.JDK_IMAGE, 'HELPER_IMAGE and android.yml JDK_IMAGE differ');
 });
 
 // This repository is public and every job runs on the production host. A job reachable from
@@ -384,14 +431,45 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   const gradlewAt = b.indexOf('bash gradlew');
   const firstPrune = b.indexOf('find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf');
   assert.ok(firstPrune >= 0 && firstPrune < gradlewAt, 'the Gradle home is not pruned before gradlew runs');
-  assert.ok(!/! -name wrapper/.test(b), 'the Gradle wrapper distribution is kept in a writable volume');
+  // The wrapper distribution is deleted by the FIRST prune (so phase 1 re-downloads and
+  // re-checks it) and by the LAST; only phase 2 of the same job may keep it (MOB-37).
+  const prunes = [...b.matchAll(/find \/gradle -mindepth 1 -maxdepth 1 ([^\n]*)-exec rm -rf/g)].map((m) => m[1]);
+  assert.ok(prunes.length >= 3 && !/wrapper/.test(prunes[0]) && !/wrapper/.test(prunes[prunes.length - 1]),
+    'the Gradle wrapper distribution is kept across jobs in a writable volume');
+  // MOB-37: two containers; dependency code (tests, lint, kapt, assemble) runs only in the
+  // second, with no network and from the cache.
+  const runsAt = [...b.matchAll(/docker run /g)].map((m) => m.index);
+  assert.ok(runsAt.length === 2, `expected the resolve and the build containers, found ${runsAt.length} docker runs`);
+  const phase1 = b.slice(runsAt[0], runsAt[1]);
+  const phase2 = b.slice(runsAt[1]);
+  assert.ok(/--network none/.test(phase2.split('\n')[0]), 'the build container (phase 2) has a network');
+  assert.ok(/bash gradlew --offline /.test(phase2) && /testDebugUnitTest/.test(phase2) && /assembleRelease/.test(phase2),
+    'tests, lint and assemble do not run offline in phase 2');
+  assert.ok(/-I gradle\/ci\/prefetch\.init\.gradle gtPrefetch\s*$/m.test(phase1) && !/testDebugUnitTest|lintDebug|assemble/.test(phase1),
+    'phase 1 (networked) runs more than the prefetch');
+  assert.ok(fs.existsSync(path.join(ROOT, 'mobile/gradle/ci/prefetch.init.gradle')), 'the prefetch init script is missing');
+  // Per PHASE, not over the whole step: phase 1 alone satisfied every b.includes above, so
+  // phase 2 could have dropped its hardening or its strict verification (CISO review, PR #15).
+  const argsBlock = (/gt_build_args=\(([\s\S]*?)\n\s*\)/.exec(b) || [])[1] || '';
+  for (const flag of ['--cap-drop ALL', 'no-new-privileges', '--memory', '--pids-limit', '--user "${BUILD_UID}:${BUILD_UID}"', '/tmp:rw,noexec']) {
+    assert.ok(argsBlock.includes(flag), `the shared container arguments lost ${flag}`);
+  }
+  for (const [name, phase] of [['phase 1', phase1], ['phase 2', phase2]]) {
+    assert.ok(/"\$\{gt_build_args\[@\]\}"/.test(phase.split('\n')[0]), `${name}'s docker run does not use the shared hardened arguments`);
+    assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(phase), `${name} does not refuse uid 0`);
+    assert.ok(/bash gradlew [^\n]*--dependency-verification strict/.test(phase), `${name}'s gradlew is not strict`);
+  }
+  assert.ok(!/--network/.test(phase1.split('\n')[0]) && !/--network/.test(argsBlock), 'phase 1 or the shared arguments set a --network');
+  assert.ok(!/\/out/.test(phase1.split("'")[0]) && !/\/out/.test(argsBlock) && /-v "\$\{APK_OUT\}:\/out"/.test(phase2), 'only phase 2 may mount /out');
   assert.ok(b.indexOf('find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf') >= 0 && b.indexOf('find /sdk -mindepth 1') < b.indexOf('sdkmanager'),
     'the SDK is not wiped before sdkmanager installs it');
   assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(b), 'the build container does not refuse uid 0');
   // The runner is root, so its own uid is not a non-root uid: Gradle runs as a fixed BUILD_UID
   // (PR #6's first run with the guard refused uid 0), and mobile/ is handed back afterwards.
   assert.ok(/^[1-9]\d*$/.test(String(wf.env.BUILD_UID)), 'BUILD_UID is not a fixed non-root uid');
-  assert.ok(/--user "\$\{BUILD_UID\}:\$\{BUILD_UID\}"/.test(b) && !/--user "\$\(id -u\)/.test(runs),
+  // (The signing containers DO run as the runner, MOB-38: they run no build code, and a
+  // non-root runner's 0600 key is unreadable to anyone else. Only the BUILD is held to this.)
+  assert.ok(/--user "\$\{BUILD_UID\}:\$\{BUILD_UID\}"/.test(b) && !/--user "\$\(id -u\)/.test(b),
     'the build container does not run as BUILD_UID');
   const cleanup = stepRun(wf.jobs.android.steps.find((st) => st.if === 'always()'));
   assert.ok(/chown -R "\$\(id -u\):\$\(id -g\)" \/work/.test(cleanup), 'mobile/ is not handed back to the runner after the build');
@@ -534,7 +612,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // first "/>", which inside an activity is a child element's.
   const activities = [...manifest.matchAll(/<activity\b[^>]*?\/>|<activity\b[^>]*>[\s\S]*?<\/activity>/g)].map((m) => m[0]);
   check('Android: only the launcher activity is exported (MOB-2)', () => {
-    assert.ok(activities.length >= 3, `parsed ${activities.length} activities from the manifest -- the scan is broken`);
+    // Two since MOB-28 removed Settings: Login (the launcher) and Main.
+    assert.ok(activities.length >= 2, `parsed ${activities.length} activities from the manifest -- the scan is broken`);
     for (const a of activities) {
       const name = /android:name="([^"]+)"/.exec(a)[1];
       const launcher = /android\.intent\.category\.LAUNCHER/.test(a);
@@ -559,7 +638,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   });
   check('Android: HTTP logging is debug-only and never logs headers or bodies (MOB-1)', () => {
     // Code only: the KDoc explaining the old bug names Level.BODY on purpose.
-    const client = fs.readFileSync(path.join(APP, 'java/com/example/gmaetrackermobile/ApiClient.kt'), 'utf8')
+    const client = fs.readFileSync(path.join(APP, 'java/ink/etech/gametracker/ApiClient.kt'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     assert.ok(!/Level\.(BODY|HEADERS)/.test(client), 'ApiClient logs at BODY or HEADERS: that is the bearer token and the password');
     assert.ok(/buildClient\(BuildConfig\.DEBUG/.test(client), 'the shipped client is not built from BuildConfig.DEBUG');
@@ -570,7 +649,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-10/11/12, the High data bugs. The behaviour is tested by the JVM suite in mobile/;
   // these pin the WIRING it cannot see. Code only, so an explanatory comment cannot satisfy
   // or trip a check.
-  const code = (rel) => fs.readFileSync(path.join(APP, 'java/com/example/gmaetrackermobile', rel), 'utf8')
+  const code = (rel) => fs.readFileSync(path.join(APP, 'java/ink/etech/gametracker', rel), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
   check('Android: the app\'s library-match vectors are the shared ones (MOB-10)', () => {
@@ -582,18 +661,349 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'mobile/app/src/test/resources/library-match-vectors.json differs from test/library-match-vectors.js: regenerate it');
   });
 
-  check('Android: search never sends an add without checking a fresh library (MOB-10)', () => {
-    const search = code('fragments/SearchFragment.kt');
-    const add = search.slice(search.indexOf('private fun addGameToLibrary'));
-    assert.ok(add.length > 0 && add.indexOf('LibraryMatch.match(') >= 0, 'addGameToLibrary does not consult LibraryMatch');
-    assert.ok(add.indexOf('fetchLibrary()') < add.indexOf('LibraryMatch.match(')
+  check('Android: an add never posts without checking a fresh library, from Search or Details (MOB-10, MOB-16)', () => {
+    // The rule lives in LibraryAdd, shared by both screens (MOB-16), so one cannot drift.
+    const lib = code('LibraryAdd.kt');
+    const add = lib.slice(lib.indexOf('suspend fun add('));
+    assert.ok(add.length > 0 && add.indexOf('LibraryMatch.match(') >= 0, 'LibraryAdd.add does not consult LibraryMatch');
+    // FORCED: the shared copy can be 30 s old (MOB-19), and a stale copy is the MOB-10 bug.
+    const fresh = add.indexOf('LibraryRepository.load(context, force = true)');
+    assert.ok(fresh >= 0 && fresh < add.indexOf('LibraryMatch.match(')
       && add.indexOf('LibraryMatch.match(') < add.indexOf('addOrUpdateGame('),
       'the add is not preceded by a fresh library read and a match check');
-    assert.ok(!/status\s*=\s*"Wishlist"/.test(search), 'search still sends a capitalised status');
+    assert.ok(/\?: return@withContext Outcome\.CheckFailed/.test(add), 'an add proceeds when the library check itself failed');
+    assert.ok(!/addOrUpdateGame\(/.test(code('fragments/SearchFragment.kt')), 'Search posts an add itself instead of through LibraryAdd');
+    for (const f of ['fragments/SearchFragment.kt', 'fragments/GameDetailsFragment.kt']) {
+      assert.ok(/LibraryAdd\.add\(/.test(code(f)), `${f} no longer adds through LibraryAdd`);
+    }
+    assert.ok(!/status\s*=\s*"Wishlist"/.test(code('fragments/SearchFragment.kt')), 'search still sends a capitalised status');
+  });
+
+  // MOB-20: R8 is on, and Gson reads fields BY NAME. Every model is kept, and the BUILT dex is
+  // checked in android.yml for one field of each; these three lists must stay one list.
+  check('Android: the app id is final, R8 is on, and every Gson model is kept by name (MOB-20)', () => {
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
+    const wf = loadWorkflow('android.yml');
+    assert.ok(/applicationId = "ink\.etech\.gametracker"/.test(gradle) && /namespace = "ink\.etech\.gametracker"/.test(gradle),
+      'applicationId / namespace is not ink.etech.gametracker');
+    assert.strictEqual(wf.env.APK_PACKAGE, 'ink.etech.gametracker', 'android.yml checks the APK for another package');
+    assert.ok(!fs.existsSync(path.join(APP, 'java/com/example')), 'sources are left under com/example');
+    const release = gradle.slice(gradle.indexOf('release {'));
+    assert.ok(/isMinifyEnabled = true/.test(release.slice(0, 600)), 'R8 is off for the release build');
+    const models = [...code('models.kt').matchAll(/data class (\w+)\(([\s\S]*?)\)\s*(?::|\{|$)/gm)]
+      .map((m) => ({ name: m[1], fields: [...m[2].matchAll(/val (\w+)/g)].map((v) => v[1]) }));
+    assert.ok(models.length >= 8, `found ${models.length} models in models.kt`);
+    const rules = fs.readFileSync(path.join(ROOT, 'mobile/app/proguard-rules.pro'), 'utf8').replace(/#.*$/gm, '');
+    const kept = [...rules.matchAll(/^-keep class ink\.etech\.gametracker\.(\w+) \{ \*; \}$/gm)].map((m) => m[1]).sort();
+    assert.deepStrictEqual(kept, models.map((m) => m.name).sort(), 'proguard-rules.pro does not keep exactly the models.kt classes');
+    const pairs = String(wf.env.R8_KEPT_FIELDS || '').trim().split(/\s+/).map((p) => p.split(':'));
+    assert.deepStrictEqual(pairs.map((p) => p[0]).sort(), models.map((m) => m.name).sort(),
+      'R8_KEPT_FIELDS does not name one field of every models.kt class');
+    for (const [cls, fld] of pairs) {
+      assert.ok(models.find((m) => m.name === cls).fields.includes(fld), `R8_KEPT_FIELDS: ${cls} has no field ${fld}`);
+    }
+    assert.ok(/-keep interface ink\.etech\.gametracker\.GameTrackerApi \{ \*; \}/.test(rules), 'the Retrofit interface is not kept');
+    const step = wf.jobs.android.steps.map(stepRun).find((r) => /dexdump/.test(r)) || '';
+    assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
+  });
+
+  // A "--" inside an XML comment is not well-formed, and aapt2 fails the whole build on it; this
+  // tree has no XML parser at hand, so it is checked here, in seconds, not in the Android job.
+  check('Android: no "--" inside a resource or manifest XML comment', () => {
+    const files = [path.join(APP, 'AndroidManifest.xml')];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.xml')) files.push(path.join(d, e.name));
+      }
+    })(path.join(APP, 'res'));
+    for (const f of files) {
+      for (const m of fs.readFileSync(f, 'utf8').matchAll(/<!--([\s\S]*?)-->/g)) {
+        assert.ok(!m[1].includes('--') && !m[1].endsWith('-'), `${path.relative(APP, f)}: "--" inside a comment: ${m[1].trim().slice(0, 60)}`);
+      }
+    }
+  });
+
+  // MOB-34: "alice " (autocorrect) failed to sign in, and a password of spaces was refused here.
+  check('Android: the username is trimmed, the password sent as typed (MOB-34)', () => {
+    const login = code('LoginActivity.kt');
+    assert.ok(/LoginInput\.problem\(username, password\)/.test(login) && /LoginInput\.username\(username\)/.test(login),
+      'the sign-in form no longer goes through LoginInput');
+    assert.ok(!/password\.trim\(\)/.test(login), 'the password is trimmed before it is checked or sent');
+    // verifyAndEnter disables Sign in; every way it ends on the login screen must re-enable it
+    // (Architect review: an expired session stranded the user with a dead button).
+    const verify = login.slice(login.indexOf('private fun verifyAndEnter'));
+    const expired = verify.slice(0, verify.indexOf('\n    }\n')).split('notice(status, SESSION_EXPIRED_TEXT)');
+    assert.ok(expired.length >= 3, 'verifyAndEnter no longer has its two expiry paths -- update this pin');
+    for (const before of expired.slice(0, -1)) {
+      assert.ok(/btnSignIn\.isEnabled = true\s*(\/\/[^\n]*)?\s*$/.test(before), 'an expired-session path leaves Sign in disabled');
+    }
+  });
+
+  // MOB-33: the app had five accents (Blue default) where the web has six (Violet default), and
+  // three presets WERE status colours. Now both lists are the web's, read from its source.
+  check('Android: the web\'s accent presets and status palette, with readable text on each (MOB-29, MOB-33)', () => {
+    const app = fs.readFileSync(path.join(ROOT, 'frontend/src/App.jsx'), 'utf8');
+    const web = [...app.slice(app.indexOf('const ACCENT_PRESETS'), app.indexOf(']', app.indexOf('const ACCENT_PRESETS')))
+      .matchAll(/name: '(\w+)',\s*value: '#([0-9a-f]{6})'/g)].map((m) => ({ name: m[1], hex: m[2].toUpperCase() }));
+    assert.ok(web.length === 6, `found ${web.length} web presets -- the parse is broken`);
+    const tm = code('ThemeManager.kt');
+    const hexes = [...tm.slice(tm.indexOf('val PRESETS')).matchAll(/0xFF([0-9A-F]{6})\.toInt\(\)/g)].slice(0, 6).map((m) => m[1]);
+    assert.deepStrictEqual(hexes, web.map((w) => w.hex), 'ThemeManager.PRESETS are not the web\'s presets, in its order');
+    const names = /PRESET_NAMES = arrayOf\(([^)]*)\)/.exec(tm)[1].match(/"(\w+)"/g).map((n) => n.replace(/"/g, ''));
+    assert.deepStrictEqual(names, web.map((w) => w.name), 'PRESET_NAMES are not the web\'s names');
+    const lum = (h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      .reduce((a, c, i) => a + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const themes = fs.readFileSync(path.join(APP, 'res/values/themes.xml'), 'utf8');
+    for (const { name, hex } of web) {
+      const m = new RegExp(`ThemeOverlay\\.GameTracker\\.${name}"[\\s\\S]*?colorPrimary">#([0-9A-F]{6})<[\\s\\S]*?colorOnPrimary">#([0-9A-F]{6})<`).exec(themes);
+      assert.ok(m && m[1] === hex, `no ThemeOverlay.GameTracker.${name} with colorPrimary #${hex}`);
+      assert.ok(ratio(m[2], hex) >= 4.5, `colorOnPrimary on ${name} is ${ratio(m[2], hex).toFixed(2)}:1`);
+    }
+    const css = fs.readFileSync(path.join(ROOT, 'frontend/src/App.css'), 'utf8');
+    const colors = fs.readFileSync(path.join(APP, 'res/values/colors.xml'), 'utf8');
+    for (const st of ['wishlist', 'playing', 'done', 'backlog', 'unreleased']) {
+      const w = new RegExp(`--color-status-${st}:\\s*#([0-9a-f]{6})`).exec(css)[1].toUpperCase();
+      const a = new RegExp(`name="gt_status_${st}">#([0-9A-F]{6})<`).exec(colors)[1];
+      assert.strictEqual(a, w, `gt_status_${st} is not the web's --color-status-${st}`);
+      assert.ok(!web.some((p) => p.hex === a), `gt_status_${st} is an accent preset: a control would look like a status`);
+    }
+  });
+
+  // MOB-32: 40dp targets and 9-10sp text. Floor of 12sp everywhere; the named controls 48dp.
+  check('Android: no text under 12sp, and the small controls are 48dp (MOB-32)', () => {
+    const dir = path.join(APP, 'res/layout');
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.xml'))) {
+      for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/android:textSize="([\d.]+)sp"/g)) {
+        assert.ok(Number(m[1]) >= 12, `${f}: textSize ${m[1]}sp is under the 12sp floor`);
+      }
+    }
+    const size = (f, id) => {
+      const s = fs.readFileSync(path.join(dir, f), 'utf8');
+      const i = s.indexOf(`android:id="@+id/${id}"`);
+      assert.ok(i >= 0, `${f} has no ${id}`);
+      const tag = s.slice(s.lastIndexOf('<', i), s.indexOf('>', i));
+      return [/layout_width="(\d+)dp"/.exec(tag), /layout_height="(\d+)dp"/.exec(tag)].map((m) => (m ? Number(m[1]) : Infinity));
+    };
+    for (const [f, id] of [['fragment_game_details.xml', 'btnBack'], ['fragment_library.xml', 'btnClearSearch'],
+      ['fragment_library.xml', 'btnSort'], ['item_game.xml', 'ivDragHandle'], ['item_game.xml', 'btnAdd'],
+      ['fragment_search.xml', 'btnSearch'], ['fragment_game_details.xml', 'btnRefreshMetadata']]) {
+      const [w, h] = size(f, id);
+      assert.ok(w >= 48 && h >= 48, `${f} ${id} is ${w}x${h}dp, under 48dp`);
+    }
+  });
+
+  // MOB-18: a done or playing game with no date was counted and listed as Unreleased.
+  check('Android: the Unreleased filter is the status, never a missing date (MOB-18)', () => {
+    assert.ok(!/release_date\.isNullOrBlank\(\)/.test(code('fragments/LibraryFragment.kt')), 'Unreleased is decided by a blank date again');
+  });
+
+  // MOB-31: targetSdk 36 draws under the system bars; the fixed 72dp nav and 80dp padding clipped.
+  check('Android: both activities lay out edge-to-edge, padded by the real insets (MOB-31)', () => {
+    for (const f of ['MainActivity.kt', 'LoginActivity.kt']) {
+      assert.ok(/EdgeToEdge\.enable\(this\)/.test(code(f)), `${f} is not edge-to-edge`);
+    }
+    const main = code('MainActivity.kt');
+    assert.ok(/setOnApplyWindowInsetsListener\(container\)/.test(main) && /addOnLayoutChangeListener/.test(main),
+      'the screens are not padded by the insets and the measured nav');
+    assert.ok(/EdgeToEdge\.pad\([^\n]*ime = true\)/.test(code('LoginActivity.kt')), 'the sign-in form can sit under the bars or the keyboard');
+    // Edge-to-edge stops adjustResize: the keyboard's inset must be read, or it covers fields.
+    assert.ok(/Type\.ime\(\)/.test(code('EdgeToEdge.kt')) && /Type\.ime\(\)/.test(main), 'nothing clears the keyboard (IME inset)');
+  });
+
+  // MOB-30: unlabelled controls, labelled decoration, a silent login error, and two gestures
+  // (drag, long-press) with no accessible equivalent.
+  check('Android: screen-reader labels, autofill and row actions (MOB-30)', () => {
+    const res = (p) => fs.readFileSync(path.join(APP, 'res/layout', p), 'utf8');
+    for (const f of ['item_game.xml', 'item_continue.xml', 'item_up_next.xml']) {
+      assert.ok(!/contentDescription="Game cover"/.test(res(f)), `${f}: every cover is announced as "Game cover" again`);
+    }
+    const login = res('activity_login.xml');
+    assert.ok(/autofillHints="username"/.test(login) && /autofillHints="password"/.test(login), 'the sign-in fields lost their autofill hints');
+    assert.ok(/android:id="@\+id\/tvLoginStatus"\s+android:accessibilityLiveRegion="polite"/.test(login), 'a failed sign-in is silent to TalkBack');
+    assert.ok(/dot\.contentDescription = "\$\{ThemeManager\.PRESET_NAMES\[i\]\} accent"/.test(code('fragments/ProfileFragment.kt')),
+      'the accent dots are unlabelled');
+    const adapter = code('GameAdapter.kt');
+    for (const a of ['Change status', 'Move up', 'Move down']) {
+      assert.ok(new RegExp(`action\\("${a}"\\)`).test(adapter), `library rows lost the "${a}" accessibility action`);
+    }
+    assert.ok(/gameAdapter\.onReordered = \{ persistBacklogOrder\(gameAdapter\.getGames\(\)\) \}/.test(code('fragments/LibraryFragment.kt')),
+      'an accessibility move is not saved');
+  });
+
+  // MOB-29: muted text read 2.35:1, and white on the status colours 2.3:1. WCAG 2.x, computed
+  // here from colors.xml, so a palette edit cannot silently undo it.
+  check('Android: text colours meet WCAG AA on the app surfaces (MOB-29)', () => {
+    const xml = fs.readFileSync(path.join(APP, 'res/values/colors.xml'), 'utf8');
+    const color = (n) => { const m = new RegExp(`name="${n}">#([0-9A-Fa-f]{6})<`).exec(xml); assert.ok(m, `no colour ${n}`); return m[1]; };
+    const lum = (h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      .reduce((a, c, i) => a + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const surfaces = ['gt_surface_0', 'gt_surface_1', 'gt_surface_2', 'gt_card_elevated'].map(color);
+    for (const t of ['gt_text_primary', 'gt_text_secondary', 'gt_text_muted', 'gt_text_dim']) {
+      for (const bg of surfaces) assert.ok(ratio(color(t), bg) >= 4.5, `${t} on #${bg} is ${ratio(color(t), bg).toFixed(2)}:1`);
+    }
+    for (const st of ['wishlist', 'playing', 'done', 'backlog', 'unreleased']) {
+      const r = ratio(color('gt_on_status'), color(`gt_status_${st}`));
+      assert.ok(r >= 4.5, `gt_on_status on gt_status_${st} is ${r.toFixed(2)}:1`);
+    }
+    assert.ok(ratio(color('gt_error_text'), '2D3142') >= 4.5, 'error snackbar text is below 4.5:1');
+    // The ratios above hold only if the code USES the tokens (Architect review, PR #15).
+    for (const f of ['SnackbarHelper.kt', 'fragments/GameDetailsFragment.kt', 'GameAdapter.kt', 'DonutView.kt']) {
+      for (const t of ['gt_error_text', 'gt_on_status', 'gt_text_muted', 'gt_text_secondary',
+        'gt_status_wishlist', 'gt_status_playing', 'gt_status_done', 'gt_status_backlog', 'gt_status_unreleased']) {
+        assert.ok(!new RegExp(`parseColor\\("#${color(t)}"\\)`, 'i').test(code(f)), `${f} hard-codes ${t} instead of reading R.color.${t}`);
+      }
+    }
+    const item = fs.readFileSync(path.join(APP, 'res/layout/item_game.xml'), 'utf8');
+    assert.ok(!/textColor="@color\/white"/.test(item), 'a status badge on a card is white text again');
+  });
+
+  // MOB-27: users read `Login failed: {"error":...}` and `Error: Unable to resolve host ...`, and
+  // a 15-minute lockout read like a wrong password. Fixed text only, from ErrorText.
+  check('Android: no server body or exception text reaches the user (MOB-27)', () => {
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of files) {
+      code(f).split('\n').forEach((line, i) => {
+        if (/\bLog\.[ewidv]\(/.test(line)) return;   // logcat may name the exception
+        // Any exception message or the HTTP reason phrase, not only `${e.message}` (CISO review).
+        assert.ok(!/\b(e|t|err|error|ex|throwable)\.(message|localizedMessage)\b|errorBody\(\)|response\.message\(\)/.test(line),
+          `${f}:${i + 1} shows exception text or a server body to the user`);
+      });
+    }
+    const login = code('LoginActivity.kt');
+    assert.ok(/ErrorText\.signIn\(response\.code\(\), response\.headers\(\)\["Retry-After"\]\)/.test(login),
+      'sign-in failures are not mapped by status (a lockout would read as a wrong password)');
+  });
+
+  // A local py_compile once put a .pyc in a commit, through `git add -A` (PR #15 review). git
+  // itself cannot be asked here (the runner refuses the checkout as "dubious ownership"), so
+  // the ignore rules that stop it are what is pinned.
+  check('Python bytecode is git-ignored (an unreviewable binary; PR #15 review)', () => {
+    const ignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim());
+    assert.ok(ignore.includes('__pycache__/') && ignore.includes('*.pyc'), '.gitignore no longer ignores Python bytecode');
+  });
+
+  // MOB-21: versions in one catalog, no Compose and no kapt, and Dependabot watching mobile/ --
+  // Gradle only: an npm Dependabot PR would run lifecycle scripts on the production host.
+  check('Android: dependencies in the version catalog, no Compose or kapt, Dependabot on Gradle only (MOB-21)', () => {
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
+    const deps = gradle.slice(gradle.indexOf('dependencies {'));
+    assert.ok(!/(implementation|testImplementation|androidTestImplementation)\("[^"]+:[^"]+:[^"]+"\)/.test(deps), 'a dependency version is written in build.gradle.kts, not libs.versions.toml');
+    assert.ok(!/compose|kapt\(|org\.jetbrains\.kotlin\.kapt/.test(gradle), 'Compose or kapt is back');
+    const bot = require('js-yaml').load(fs.readFileSync(path.join(ROOT, '.github/dependabot.yml'), 'utf8'));
+    const ecos = bot.updates.map((u) => `${u['package-ecosystem']} ${u.directory}`);
+    assert.deepStrictEqual(ecos, ['gradle /mobile'], `Dependabot watches ${ecos}: only Gradle in /mobile is safe on this runner`);
+    // Not the WRAPPER: a bump rewrites the distribution and its checksum together (CISO review).
+    assert.ok((bot.updates[0].ignore || []).some((i) => i['dependency-name'] === 'gradle-wrapper'), 'Dependabot may bump the Gradle wrapper');
+    assert.ok(bot.updates[0].cooldown && bot.updates[0].cooldown['default-days'] >= 7, 'Dependabot proposes versions younger than a week');
+    const wf = loadWorkflow('android.yml');
+    const props = fs.readFileSync(path.join(ROOT, 'mobile/gradle/wrapper/gradle-wrapper.properties'), 'utf8');
+    assert.ok(props.includes(`distributionSha256Sum=${wf.env.GRADLE_DISTRIBUTION_SHA256}`) && /^[0-9a-f]{64}$/.test(wf.env.GRADLE_DISTRIBUTION_SHA256),
+      'android.yml GRADLE_DISTRIBUTION_SHA256 is not the distribution gradle-wrapper.properties names');
+    const verify = wf.jobs.android.steps.map(stepRun).find((r) => /GRADLE_WRAPPER_JAR_SHA256/.test(r)) || '';
+    assert.ok(/grep -qxF "distributionSha256Sum=\$\{GRADLE_DISTRIBUTION_SHA256\}"/.test(verify), 'android.yml does not refuse an unpinned Gradle distribution');
+    // The metadata's hashes are recomputed OFF the production host whenever the file changes.
+    const vm = loadWorkflow('verify-maven-hashes.yml');
+    assert.strictEqual(vm.jobs.verify['runs-on'], 'ubuntu-latest', 'the hash check must run on a GitHub-hosted runner, not the production host');
+    assert.ok((vm.on.pull_request.paths || []).includes('mobile/gradle/verification-metadata.xml'), 'the hash check does not run when the metadata changes');
+  });
+
+  // MOB-23: every debug build and test run used to log in to production with real accounts.
+  check('Android: the server comes from the build type; release is production, fixed (MOB-23)', () => {
+    // Whole-line comments only: a trailing-comment strip would eat the "https://" in a string.
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    assert.ok(/val productionApiBase = "https:\/\/gametracker\.etech\.ink\/api\/"/.test(gradle), 'the production API base moved');
+    const release = gradle.slice(gradle.indexOf('release {'), gradle.indexOf('release {') + 500);
+    assert.ok(/buildConfigField\("String", "API_BASE", apiBaseField\(productionApiBase\)\)/.test(release),
+      'the release build does not use the fixed production API base');
+    assert.ok(!/findProperty/.test(release), 'a Gradle property can change the RELEASE server');
+    assert.ok(/require\(Regex\("\^https:\/\//.test(gradle), 'the API base is not required to be https');
+    assert.ok(/BASE_URL = BuildConfig\.API_BASE/.test(code('ApiClient.kt')), 'ApiClient hard-codes its server again');
+    for (const f of ['ApiClient.kt', 'MobileTokenApi.kt', 'LoginActivity.kt']) {
+      // The RAW file: code() strips from "//" on, which is the middle of every URL.
+      const raw = fs.readFileSync(path.join(APP, 'java/ink/etech/gametracker', f), 'utf8');
+      assert.ok(!/"https?:\/\/[^"]*\/api/.test(raw), `${f} hard-codes an API URL`);
+    }
+  });
+
+  // MOB-22: code that could not run, re-read by every reviewer (and fixed twice for MOB-3).
+  check('Android: the dead Compose theme, toolbar menu and callback stay deleted (MOB-22)', () => {
+    const J = path.join(APP, 'java/ink/etech/gametracker');
+    assert.ok(!fs.existsSync(path.join(J, 'ui')), 'the unused Compose theme (ui/theme) is back');
+    assert.ok(!fs.existsSync(path.join(APP, 'res/menu/main_menu.xml')), 'the unreachable toolbar menu is back');
+    for (const f of ['MainActivity.kt', 'fragments/GameDetailsFragment.kt']) {
+      assert.ok(!/GameDetailsCallback|refreshCurrentFragment|setupToolbar/.test(code(f)), `${f} brings back a dead path`);
+    }
+    for (const f of ['GameDetailsActivity.kt', 'GameSearchActivity.kt', 'MyLibraryActivity.kt']) {
+      assert.ok(!fs.existsSync(path.join(J, f)), `${f}, never in the manifest, is back`);
+    }
+  });
+
+  // MOB-19: every screen fetched the whole library in onViewCreated AND onResume, and a tab tap
+  // built a new fragment. One cached copy, behind the session; tabs shown and hidden.
+  check('Android: one library copy, one credential reader, tabs kept (MOB-19)', () => {
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of files) {
+      const src = code(f);
+      if (f !== 'LibraryRepository.kt' && f !== 'GameTrackerApi.kt') {
+        assert.ok(!/\.getLibrary\(/.test(src), `${f} fetches the library itself instead of through LibraryRepository`);
+      }
+      if (f !== 'SessionStore.kt') {
+        assert.ok(!/getSharedPreferences\("auth"/.test(src), `${f} reads the "auth" preferences itself instead of through Session`);
+        assert.ok(!/getString\("(?:username|token|display_name)"/.test(src), `${f} reads a session key directly`);
+      }
+      if (f.startsWith('fragments/')) {
+        assert.ok(!/\.replace\(R\.id\.fragment_container/.test(src), `${f} replaces the tab instead of MainActivity.openDetails`);
+      }
+    }
+    assert.ok(/LibraryWriteInterceptor \{ LibraryRepository\.invalidate\(\) \}/.test(code('ApiClient.kt')), 'writes no longer invalidate the library copy');
+    const main = code('MainActivity.kt');
+    assert.ok(/tx\.hide\(it\)/.test(main) && /tx\.show\(target\)/.test(main), 'tabs are no longer shown and hidden');
+    assert.ok((main.match(/\.replace\(R\.id\.fragment_container/g) || []).length <= 2, 'MainActivity replaces fragments outside its last-resort path');
+    for (const f of ['HomeFragment.kt', 'LibraryFragment.kt', 'InsightsFragment.kt']) {
+      const src = code('fragments/' + f);
+      assert.ok(/if \(!isHidden\) loadLibrary\(\)/.test(src) && /override fun onHiddenChanged/.test(src),
+        `${f} does not reload on being shown, or reloads while hidden`);
+    }
+    for (const f of ['SignOut.kt', 'MainActivity.kt']) assert.ok(/LibraryRepository\.clear\(\)/.test(code(f)), `${f} leaves the library in memory at sign-out`);
+    // A refused removal is told only to its owner: it may have been scheduled before a sign-out
+    // (CISO review, PR #15: the next account read the previous one's game title).
+    assert.ok(/failure\.owner != Session\.get\(this@MainActivity\)\.username/.test(code('MainActivity.kt')),
+      'a removal failure is shown without checking whose it was');
+  });
+
+  // MOB-16: Details offered Remove, Refresh and status chips (which silently ADDED the game)
+  // for search results not in the library, and Remove had no confirmation and no undo.
+  check('Android: Details offers library actions only for library games, and Remove asks first (MOB-16)', () => {
+    const d = code('fragments/GameDetailsFragment.kt');
+    assert.ok(/fun newInstance\(game: Game, inLibrary: Boolean = true\)/.test(d), 'Details no longer knows whether the game is in the library');
+    assert.ok(/btnRemoveFromLibrary\.setOnClickListener \{ confirmRemove\(\) \}/.test(d), 'Remove no longer asks for confirmation');
+    for (const v of ['cardStatus', 'cardRating', 'cardNotes', 'btnRefreshMetadata', 'btnRemoveFromLibrary']) {
+      assert.ok(new RegExp(`${v}\\.visibility = library`).test(d), `${v} is shown for a game that is not in the library`);
+    }
+    assert.ok(/inLibrary = false\)/.test(code('fragments/SearchFragment.kt')), 'Search opens Details for a non-library game as if it were owned');
   });
 
   check('Android: no statistic is invented from a game id (MOB-11)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -611,7 +1021,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-6: the token was plaintext in SharedPreferences and the fingerprint only gated a
   // startActivity call. Each of these, broken, still "works" for every user.
   check('Android: the session token is never stored in the clear, and the fingerprint decrypts it (MOB-6)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -691,7 +1101,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(!/src="user"/.test(outsideDebug), 'a release build trusts user-installed CAs');
     assert.ok(!/<pin-set/.test(nsc), 'certificate pinning was added: see ROADMAP MOB-8 before doing that');
     assert.ok(!/usesCleartextTraffic="true"/.test(manifest), 'the manifest re-enables cleartext');
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -702,7 +1112,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     let loads = 0;
     for (const f of files) {
       const src = fs.readFileSync(f, 'utf8');
-      for (const m of src.matchAll(/\.load\(([^)]*)\)/g)) {
+      // Glide's .load(url). LibraryRepository.load(context) is not a URL (MOB-19).
+      for (const m of src.matchAll(/(?<!LibraryRepository)\.load\(([^)]*)\)/g)) {
         loads++;
         const arg = m[1].trim();
         // The argument is either the check itself or a local assigned from it.
@@ -711,13 +1122,14 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
           `${path.relative(dir, f)} loads ${arg} without SafeUrl.https: a server-supplied URL reaches the network unchecked`);
       }
     }
-    assert.ok(loads >= 3, `found ${loads} Glide loads -- the scan is broken`);
+    // Two since GameAdapter draws covers through CoverBinder (MOB-35).
+    assert.ok(loads >= 2, `found ${loads} Glide loads -- the scan is broken`);
   });
 
   // MOB-17: unscoped coroutines outlived their screen, and fragment-scoped ones updated
   // views that had been destroyed while the fragment sat on the back stack.
   check('Android: coroutines are scoped to what they touch (MOB-17)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const all = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -757,7 +1169,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'the minted token asks for something other than exactly ["library"]');
     assert.ok(/expiresAt = expiry\(nowMillis\)\.second/.test(tok), 'the mint body no longer carries the fixed expiry');
     assert.ok(!/"admin"/.test(tok), 'MobileToken mentions the admin scope');
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const all = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -813,10 +1225,60 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(!/errorBody|\.message\(\)/.test(mintApi), 'MobileTokenApi reads the server\'s error text: the UI must say fixed things');
   });
 
+  // MOB-13: statuses were sent capitalised, "Unreleased" was offered as a choice the server
+  // overrides, "" was sent for an unknown date, and the server's answer was thrown away.
+  check('Android: status writes go through GameStatus, never offer Unreleased, and read the answer (MOB-13)', () => {
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
+    const all = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) all.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of all.filter((x) => x !== 'GameStatus.kt' && x !== 'models.kt')) {
+      assert.ok(!/\bGameUpdateRequest\s*\(/.test(code(f)), `${f} builds an add/update body itself: use GameStatus.request`);
+    }
+    const gs = code('GameStatus.kt');
+    assert.ok(/releaseDate = game\.release\.ifBlank \{ null \}/.test(gs), 'an unknown release date is no longer sent as null');
+    assert.ok(/val PICKABLE = listOf\(WISHLIST, BACKLOG, PLAYING, DONE\)/.test(gs), 'the pickable statuses changed: Unreleased is never a choice');
+    assert.ok(/suspend fun addOrUpdateGame\([\s\S]*?\): Response<GameUpsertResult>/.test(code('GameTrackerApi.kt')),
+      'addOrUpdateGame discards the server\'s answer again');
+    const sheet = fs.readFileSync(path.join(APP, 'res/layout/bottom_sheet_status.xml'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(!/itemUnreleased|"Unreleased"/.test(sheet), 'the status sheet offers Unreleased as a choice');
+    for (const f of ['fragments/LibraryFragment.kt', 'fragments/GameDetailsFragment.kt']) {
+      assert.ok(/GameStatus\.stored\(/.test(code(f)), `${f} no longer shows the status the server stored`);
+    }
+  });
+
+  // MOB-14: a drag sent one unchecked call per step moved, computed on the search-filtered
+  // list, and cards showed the stored number while Home showed the position.
+  check('Android: a backlog drag is ONE whole-order call, never while searching, and positions are real (MOB-14)', () => {
+    const api = code('GameTrackerApi.kt');
+    assert.ok(/@PUT\("user\/\{username\}\/backlog-reorder"\)/.test(api), 'the app no longer sends the whole order in one call');
+    assert.ok(!/backlog-order"/.test(api), 'the app calls the per-step backlog-order route again');
+    const lib = code('fragments/LibraryFragment.kt');
+    assert.ok(/BacklogOrder\.canDrag\(currentFilter, searchQuery\)/.test(lib), 'drag is allowed while a search narrows the backlog');
+    assert.ok(!/repeat\(/.test(lib), 'a drag repeats a call per step again');
+    assert.ok(!/game\.backlog_order\}/.test(code('GameAdapter.kt')), 'cards show the stored backlog number again, not the position');
+  });
+
+  // MOB-15: every failure rendered as "No games found", and a slow earlier search could land
+  // after a later one and overwrite it (the web's FE-2).
+  check('Android: a failed search says why, and only the latest search can render (MOB-15)', () => {
+    const search = code('fragments/SearchFragment.kt');
+    assert.ok(/SearchResults\.of\(response\.code\(\), response\.body\(\), response\.headers\(\)\[SearchResults\.DEGRADED_HEADER\]\)/.test(search),
+      'the search no longer classifies the answer (status, body, degraded header)');
+    assert.ok(/searchJob\?\.cancel\(\)\s*searchJob = viewLifecycleOwner\.lifecycleScope\.launch/.test(search),
+      'a new search no longer cancels the one in flight');
+    assert.ok(/query != currentQuery\) return@launch/.test(search), 'an answer for an older query can render again');
+    assert.ok(!/else emptyList\(\)/.test(search), 'a failed search becomes an empty list again');
+  });
+
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const roots = new Set();
     for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.kt'))) {
       for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/^(?:(?:data|sealed|abstract|open|enum|private|internal)\s+)*(?:class|object|interface)\s+([A-Z]\w*)/gm)) {
@@ -830,9 +1292,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       const declared = new Set([...body.matchAll(/\b(?:class|object|interface)\s+([A-Z]\w*)/g)].map((m) => m[1]));
       for (const name of roots) {
         if (declared.has(name) || !new RegExp(`(?<![\\w.])${name}\\b`).test(body)) continue;
-        const imported = new RegExp(`^import com\\.example\\.gmaetrackermobile\\.(${name}|\\*)$`, 'm').test(src);
-        const qualified = new RegExp(`com\\.example\\.gmaetrackermobile\\.${name}\\b`).test(body);
-        assert.ok(imported || qualified, `fragments/${f} uses ${name} without importing com.example.gmaetrackermobile.${name}`);
+        const imported = new RegExp(`^import ink\\.etech\\.gametracker\\.(${name}|\\*)$`, 'm').test(src);
+        const qualified = new RegExp(`ink\\.etech\\.gametracker\\.${name}\\b`).test(body);
+        assert.ok(imported || qualified, `fragments/${f} uses ${name} without importing ink.etech.gametracker.${name}`);
       }
     }
   });
@@ -840,7 +1302,7 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // MOB-7: notes, ratings, search history and the calendar map were device-wide, so the next
   // account on a phone saw them, and its sync deleted the first account's calendar events.
   check('Android: per-user local data lives only in UserData, and the calendar map is never backed up (MOB-7)', () => {
-    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const dir = path.join(APP, 'java/ink/etech/gametracker');
     const files = [];
     (function walk(d) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -855,8 +1317,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       assert.ok(!/"search_history"|"(note|rating)_/.test(src), `${f} reads or writes notes, ratings or search history outside UserData`);
       assert.ok(!/"(calendar_id|calendar_sync_enabled|event_map)"/.test(src), `${f} keeps calendar settings outside UserData`);
     }
-    // Both sign-out buttons go through SignOut, which asks about the calendar (owner's decision).
-    assert.ok(/private fun logout\(\) = SignOut\.start\(this\)/.test(code('MainActivity.kt')), 'the menu sign-out bypasses SignOut');
+    // Sign-out goes through SignOut, which asks about the calendar (owner's decision). The
+    // toolbar menu that had a second path was unreachable and is gone (MOB-22).
+    assert.ok(!/fun logout\(/.test(code('MainActivity.kt')), 'MainActivity has its own sign-out again');
     assert.ok(/btnLogout\)\.setOnClickListener \{ SignOut\.start\(requireActivity\(\)\) \}/.test(code('fragments/ProfileFragment.kt')),
       'Profile\'s sign-out bypasses SignOut');
     const calExclude = /<exclude\s+domain="sharedpref"\s+path="calendar\.xml"\s*\/>/;

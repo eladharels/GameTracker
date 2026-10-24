@@ -1,0 +1,69 @@
+// MOB-37, phase 1 of the Android CI build (android.yml): download, WITH network, everything
+// phase 2 resolves. Configuring the build to get here runs the Gradle plugins (hash-verified);
+// no task of the build itself runs. Phase 2 then builds, tests and lints with --offline under
+// --network none, so dependency code (processors, lint jars, unit tests) never has a network.
+//
+// Two passes, because one was not enough (MOB-21's cold cache): a lenient single-artifact
+// resolve of every entry in gradle/verification-metadata.xml silently SKIPPED download
+// failures, and phase 2 then found no .aar for half of androidx. So:
+//   1. every resolvable configuration of every project, as the build itself resolves them;
+//   2. every artifact the verification metadata lists (lint and other detached configurations).
+// Every file is still checked against the metadata (strict) as it is fetched. Failures are
+// PRINTED, not swallowed; phase 2 remains the test of completeness.
+def gtFailures = Collections.synchronizedList([])
+def gtCause = { Throwable t -> while (t.cause != null && t.cause != t) t = t.cause; (t.message ?: t.class.simpleName).readLines()[0] }
+
+gradle.allprojects { p ->
+    p.tasks.register('gtPrefetch') {
+        // The report runs after every project's prefetch (not gradle.buildFinished: deprecated).
+        finalizedBy(':gtPrefetchReport')
+        doLast {
+            // Kotlin/Native's bundle is resolvable but never used by an Android build, and is not
+            // in the metadata: resolving it fails verification. Each configuration is caught, so
+            // one failure is reported and the rest are still fetched.
+            p.configurations.findAll { it.canBeResolved && !(it.name ==~ /(?i).*kotlinNative.*|.*kotlinKlib.*/) }.each { c ->
+                try {
+                    def view = c.incoming.artifactView { lenient(true) }
+                    view.artifacts.artifactFiles.files
+                    view.artifacts.failures.each { gtFailures << "${p.path}:${c.name}: ${gtCause(it)}" }
+                } catch (Exception e) {
+                    gtFailures << "${p.path}:${c.name}: ${gtCause(e)}"
+                }
+            }
+            if (p != p.rootProject) return
+            def meta = new groovy.xml.XmlSlurper().parse(p.file('gradle/verification-metadata.xml'))
+            def notations = new LinkedHashSet<String>()
+            meta.components.component.each { comp ->
+                def g = comp.@group.text(), n = comp.@name.text(), v = comp.@version.text()
+                def prefix = "${n}-${v}"
+                comp.artifact.each { a ->
+                    def file = a.@name.text()
+                    if (!file.startsWith(prefix)) return
+                    def rest = file.substring(prefix.length())
+                    def dot = rest.lastIndexOf('.')
+                    if (dot < 0) return
+                    def ext = rest.substring(dot + 1)
+                    // .pom and .module are metadata, fetched with the artifact they describe.
+                    if (ext in ['pom', 'module']) return
+                    def classifier = rest.substring(0, dot).replaceFirst('^-', '')
+                    notations << (classifier ? "${g}:${n}:${v}:${classifier}@${ext}" : "${g}:${n}:${v}@${ext}")
+                }
+            }
+            notations.each { notation ->
+                def cfg = p.configurations.detachedConfiguration(p.dependencies.create(notation))
+                cfg.transitive = false
+                try { cfg.resolve() } catch (Exception e) { gtFailures << "${notation}: ${gtCause(e)}" }
+            }
+            println "[prefetch] ${notations.size()} listed artifacts"
+        }
+    }
+}
+
+gradle.rootProject { root ->
+    root.tasks.register('gtPrefetchReport') {
+        doLast {
+            println "[prefetch] ${gtFailures.size()} could not be fetched (phase 2 will fail if it needs one):"
+            gtFailures.unique().take(80).each { println "[prefetch]   ${it}" }
+        }
+    }
+}

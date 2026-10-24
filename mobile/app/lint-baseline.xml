@@ -7,7 +7,7 @@
         errorLine1="            if (rated.isEmpty()) &quot;—&quot; else String.format(&quot;%.1f&quot;, rated.average())"
         errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="80"
             column="43"/>
     </issue>
@@ -18,7 +18,7 @@
         errorLine1="            if (rated.isEmpty()) &quot;—&quot; else String.format(&quot;%.1f&quot;, rated.average())"
         errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="80"
             column="43"/>
     </issue>
@@ -69,7 +69,7 @@
         errorLine1="        val sheetView = layoutInflater.inflate(R.layout.bottom_sheet_sort, null)"
         errorLine2="                                                                           ~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/LibraryFragment.kt"
             line="139"
             column="76"/>
     </issue>
@@ -80,7 +80,7 @@
         errorLine1="        val sheetView = layoutInflater.inflate(R.layout.bottom_sheet_status, null)"
         errorLine2="                                                                             ~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/LibraryFragment.kt"
             line="277"
             column="78"/>
     </issue>
@@ -575,7 +575,7 @@
         errorLine1="    fun submit(list: List&lt;Game>) { items = list; notifyDataSetChanged() }"
         errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            file="src/main/java/ink/etech/gametracker/HomeAdapters.kt"
             line="19"
             column="50"/>
     </issue>
@@ -586,7 +586,7 @@
         errorLine1="    fun submit(list: List&lt;Game>) { items = list; notifyDataSetChanged() }"
         errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            file="src/main/java/ink/etech/gametracker/HomeAdapters.kt"
             line="54"
             column="50"/>
     </issue>
@@ -615,7 +615,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme_GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme_GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -626,7 +626,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_1` with a theme that also paints a background (inferred theme is `@style/Theme_GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_1` with a theme that also paints a background (inferred theme is `@style/Theme_GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_1&quot;>"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -637,7 +637,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -648,7 +648,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -659,7 +659,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -670,7 +670,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -681,7 +681,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;>"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -692,7 +692,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -703,7 +703,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `@color/gt_surface_0` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;@color/gt_surface_0&quot;>"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -714,7 +714,7 @@
 
     <issue
         id="Overdraw"
-        message="Possible overdraw: Root element paints background `?attr/selectableItemBackgroundBorderless` with a theme that also paints a background (inferred theme is `@style/Theme.GmaeTrackerMobile`)"
+        message="Possible overdraw: Root element paints background `?attr/selectableItemBackgroundBorderless` with a theme that also paints a background (inferred theme is `@style/Theme.GameTracker`)"
         errorLine1="    android:background=&quot;?attr/selectableItemBackgroundBorderless&quot;>"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -1213,7 +1213,7 @@
         errorLine1="        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/CalendarHelper.kt"
             line="67"
             column="9"/>
     </issue>
@@ -1224,7 +1224,7 @@
         errorLine1="        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/CalendarHelper.kt"
             line="76"
             column="9"/>
     </issue>
@@ -1235,7 +1235,7 @@
         errorLine1="        context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/CalendarHelper.kt"
             line="106"
             column="9"/>
     </issue>
@@ -1246,7 +1246,7 @@
         errorLine1="        context.getSharedPreferences(PREFS_EVENTS, Context.MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/CalendarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/CalendarHelper.kt"
             line="219"
             column="9"/>
     </issue>
@@ -1257,7 +1257,7 @@
         errorLine1="        color = Color.parseColor(&quot;#14FFFFFF&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="26"
             column="17"/>
     </issue>
@@ -1268,7 +1268,7 @@
         errorLine1="        color = Color.parseColor(&quot;#14FFFFFF&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="26"
             column="17"/>
     </issue>
@@ -1279,7 +1279,7 @@
         errorLine1="        color = Color.parseColor(&quot;#22C55E&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="31"
             column="17"/>
     </issue>
@@ -1290,7 +1290,7 @@
         errorLine1="        color = Color.parseColor(&quot;#22C55E&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="31"
             column="17"/>
     </issue>
@@ -1301,7 +1301,7 @@
         errorLine1="        color = Color.parseColor(&quot;#F0F1F8&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="36"
             column="17"/>
     </issue>
@@ -1312,7 +1312,7 @@
         errorLine1="        color = Color.parseColor(&quot;#F0F1F8&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="36"
             column="17"/>
     </issue>
@@ -1323,7 +1323,7 @@
         errorLine1="        color = Color.parseColor(&quot;#8890A8&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="42"
             column="17"/>
     </issue>
@@ -1334,7 +1334,7 @@
         errorLine1="        color = Color.parseColor(&quot;#8890A8&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/DonutView.kt"
+            file="src/main/java/ink/etech/gametracker/DonutView.kt"
             line="42"
             column="17"/>
     </issue>
@@ -1345,7 +1345,7 @@
         errorLine1="            val color = Color.parseColor(STATUS_COLORS[key] ?: &quot;#8890A8&quot;)"
         errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="141"
             column="25"/>
     </issue>
@@ -1356,7 +1356,7 @@
         errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#0F1118&quot;))"
         errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="149"
             column="39"/>
     </issue>
@@ -1367,7 +1367,7 @@
         errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#0F1118&quot;))"
         errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="149"
             column="39"/>
     </issue>
@@ -1378,7 +1378,7 @@
         errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#1AFFFFFF&quot;))"
         errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="153"
             column="39"/>
     </issue>
@@ -1389,7 +1389,7 @@
         errorLine1="                    intArrayOf(color, Color.parseColor(&quot;#1AFFFFFF&quot;))"
         errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="153"
             column="39"/>
     </issue>
@@ -1400,7 +1400,7 @@
         errorLine1="                    intArrayOf(Color.WHITE, Color.parseColor(&quot;#8890A8&quot;))"
         errorLine2="                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="157"
             column="45"/>
     </issue>
@@ -1411,7 +1411,7 @@
         errorLine1="        val gold = Color.parseColor(&quot;#FBBF24&quot;)"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="178"
             column="20"/>
     </issue>
@@ -1422,7 +1422,7 @@
         errorLine1="        val empty = Color.parseColor(&quot;#4A5068&quot;)"
         errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="179"
             column="21"/>
     </issue>
@@ -1433,7 +1433,7 @@
         errorLine1="        prefs.edit().putString(noteKey(gameId), note).apply()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="225"
             column="9"/>
     </issue>
@@ -1444,7 +1444,7 @@
         errorLine1="        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/GameExtras.kt"
+            file="src/main/java/ink/etech/gametracker/GameExtras.kt"
             line="79"
             column="9"/>
     </issue>
@@ -1455,7 +1455,7 @@
         errorLine1="        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/GameExtras.kt"
+            file="src/main/java/ink/etech/gametracker/GameExtras.kt"
             line="88"
             column="9"/>
     </issue>
@@ -1466,7 +1466,7 @@
         errorLine1="        addBar(statusContainer, &quot;Playing&quot;, playing, total, Color.parseColor(&quot;#22B8F6&quot;))"
         errorLine2="                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="85"
             column="60"/>
     </issue>
@@ -1477,7 +1477,7 @@
         errorLine1="        addBar(statusContainer, &quot;Backlog&quot;, backlog, total, Color.parseColor(&quot;#F97316&quot;))"
         errorLine2="                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="86"
             column="60"/>
     </issue>
@@ -1488,7 +1488,7 @@
         errorLine1="        addBar(statusContainer, &quot;Completed&quot;, done, total, Color.parseColor(&quot;#22C55E&quot;))"
         errorLine2="                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="87"
             column="59"/>
     </issue>
@@ -1499,7 +1499,7 @@
         errorLine1="        addBar(statusContainer, &quot;Wishlist&quot;, wishlist, total, Color.parseColor(&quot;#8890A8&quot;))"
         errorLine2="                                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="88"
             column="62"/>
     </issue>
@@ -1510,7 +1510,7 @@
         errorLine1="            setTextColor(Color.parseColor(&quot;#C3C8D8&quot;))"
         errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="122"
             column="26"/>
     </issue>
@@ -1521,7 +1521,7 @@
         errorLine1="                setColor(Color.parseColor(&quot;#10FFFFFF&quot;))"
         errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="131"
             column="26"/>
     </issue>
@@ -1532,7 +1532,7 @@
         errorLine1="                setColor(Color.parseColor(&quot;#10FFFFFF&quot;))"
         errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="131"
             column="26"/>
     </issue>
@@ -1543,7 +1543,7 @@
         errorLine1="            setTextColor(Color.parseColor(&quot;#F0F1F8&quot;))"
         errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="152"
             column="26"/>
     </issue>
@@ -1554,7 +1554,7 @@
         errorLine1="                requireContext().getSharedPreferences(&quot;app_prefs&quot;, Context.MODE_PRIVATE)"
         errorLine2="                ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/LibraryFragment.kt"
             line="158"
             column="17"/>
     </issue>
@@ -1565,7 +1565,7 @@
         errorLine1="                                prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, false).apply()"
         errorLine2="                                ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="112"
             column="33"/>
     </issue>
@@ -1576,7 +1576,7 @@
         errorLine1="                            prefs.edit()"
         errorLine2="                            ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="115"
             column="29"/>
     </issue>
@@ -1587,7 +1587,7 @@
         errorLine1="            prefs.edit().remove(&quot;token&quot;).remove(&quot;username&quot;).apply()"
         errorLine2="            ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            file="src/main/java/ink/etech/gametracker/MainActivity.kt"
             line="152"
             column="13"/>
     </issue>
@@ -1598,7 +1598,7 @@
         errorLine1="                    prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, true).apply()"
         errorLine2="                    ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="182"
             column="21"/>
     </issue>
@@ -1609,7 +1609,7 @@
         errorLine1="                prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, false).apply()"
         errorLine2="                ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="208"
             column="17"/>
     </issue>
@@ -1620,7 +1620,7 @@
         errorLine1="            prefs.edit().remove(&quot;token&quot;).remove(&quot;username&quot;).apply()"
         errorLine2="            ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="307"
             column="13"/>
     </issue>
@@ -1631,7 +1631,7 @@
         errorLine1="        requireContext().getSharedPreferences(&quot;app_prefs&quot;, MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="157"
             column="9"/>
     </issue>
@@ -1642,7 +1642,7 @@
         errorLine1="        requireContext().getSharedPreferences(&quot;app_prefs&quot;, MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="165"
             column="9"/>
     </issue>
@@ -1653,7 +1653,7 @@
         errorLine1="        requireContext().getSharedPreferences(&quot;app_prefs&quot;, MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="171"
             column="9"/>
     </issue>
@@ -1664,7 +1664,7 @@
         errorLine1="            setTextColor(android.graphics.Color.parseColor(&quot;#FF4D4F&quot;))"
         errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="211"
             column="26"/>
     </issue>
@@ -1675,7 +1675,7 @@
         errorLine1="                    prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, true).apply()"
         errorLine2="                    ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SettingsActivity.kt"
+            file="src/main/java/ink/etech/gametracker/SettingsActivity.kt"
             line="45"
             column="21"/>
     </issue>
@@ -1686,7 +1686,7 @@
         errorLine1="                prefs.edit().putBoolean(&quot;fingerprint_enabled&quot;, false).apply()"
         errorLine2="                ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SettingsActivity.kt"
+            file="src/main/java/ink/etech/gametracker/SettingsActivity.kt"
             line="75"
             column="17"/>
     </issue>
@@ -1697,7 +1697,7 @@
         errorLine1="            setColor(Color.parseColor(&quot;#2D3142&quot;))"
         errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/SnackbarHelper.kt"
             line="41"
             column="22"/>
     </issue>
@@ -1708,7 +1708,7 @@
         errorLine1="            setColor(Color.parseColor(&quot;#2D3142&quot;))"
         errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/SnackbarHelper.kt"
             line="41"
             column="22"/>
     </issue>
@@ -1719,7 +1719,7 @@
         errorLine1="            setStroke(dp(1), Color.parseColor(&quot;#3E4258&quot;))"
         errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/SnackbarHelper.kt"
             line="43"
             column="30"/>
     </issue>
@@ -1730,7 +1730,7 @@
         errorLine1="            setStroke(dp(1), Color.parseColor(&quot;#3E4258&quot;))"
         errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/SnackbarHelper.kt"
             line="43"
             column="30"/>
     </issue>
@@ -1741,7 +1741,7 @@
         errorLine1="            Type.SUCCESS -> Color.parseColor(&quot;#22C55E&quot;)   // gt_status_done green"
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/SnackbarHelper.kt"
             line="54"
             column="29"/>
     </issue>
@@ -1752,7 +1752,7 @@
         errorLine1="            Type.ERROR   -> Color.parseColor(&quot;#FF4D4F&quot;)   // gt_logout_red"
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/SnackbarHelper.kt"
             line="55"
             column="29"/>
     </issue>
@@ -1763,7 +1763,7 @@
         errorLine1="            Type.DEFAULT -> Color.parseColor(&quot;#F5F6FA&quot;)   // gt_text_main"
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/SnackbarHelper.kt"
+            file="src/main/java/ink/etech/gametracker/SnackbarHelper.kt"
             line="56"
             column="29"/>
     </issue>
@@ -1774,7 +1774,7 @@
         errorLine1="        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)"
         errorLine2="        ^">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/ThemeManager.kt"
+            file="src/main/java/ink/etech/gametracker/ThemeManager.kt"
             line="60"
             column="9"/>
     </issue>
@@ -1917,7 +1917,7 @@
         errorLine1="                tvBacklogPosition.text = &quot;#${game.backlog_order}&quot;"
         errorLine2="                                         ~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/GameAdapter.kt"
+            file="src/main/java/ink/etech/gametracker/GameAdapter.kt"
             line="130"
             column="42"/>
     </issue>
@@ -1928,7 +1928,7 @@
         errorLine1="        tvReleaseDate.text = &quot;Release Date: $releaseDate&quot;"
         errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/GameDetailsActivity.kt"
+            file="src/main/java/ink/etech/gametracker/GameDetailsActivity.kt"
             line="36"
             column="30"/>
     </issue>
@@ -1939,7 +1939,7 @@
         errorLine1="        tvReleaseDate.text = &quot;Release Date: $releaseDate&quot;"
         errorLine2="                              ~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/GameDetailsActivity.kt"
+            file="src/main/java/ink/etech/gametracker/GameDetailsActivity.kt"
             line="36"
             column="31"/>
     </issue>
@@ -1950,7 +1950,7 @@
         errorLine1="        btnRefreshMetadata.text = &quot;Refresh&quot;"
         errorLine2="                                   ~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/GameDetailsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/GameDetailsFragment.kt"
             line="306"
             column="36"/>
     </issue>
@@ -1961,7 +1961,7 @@
         errorLine1="            queue.text = &quot;#${position + 1}&quot;"
         errorLine2="                         ~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            file="src/main/java/ink/etech/gametracker/HomeAdapters.kt"
             line="74"
             column="26"/>
     </issue>
@@ -1972,7 +1972,7 @@
         errorLine1="            queue.text = &quot;#${position + 1}&quot;"
         errorLine2="                             ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/HomeAdapters.kt"
+            file="src/main/java/ink/etech/gametracker/HomeAdapters.kt"
             line="74"
             column="30"/>
     </issue>
@@ -1983,7 +1983,7 @@
         errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSummary).text = &quot;$done done&quot;"
         errorLine2="                                                            ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="70"
             column="61"/>
     </issue>
@@ -1994,7 +1994,7 @@
         errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSummary).text = &quot;$done done&quot;"
         errorLine2="                                                                  ~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="70"
             column="67"/>
     </issue>
@@ -2005,7 +2005,7 @@
         errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSub).text = &quot;of $total tracked games completed&quot;"
         errorLine2="                                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="71"
             column="57"/>
     </issue>
@@ -2016,7 +2016,7 @@
         errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSub).text = &quot;of $total tracked games completed&quot;"
         errorLine2="                                                         ~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="71"
             column="58"/>
     </issue>
@@ -2027,7 +2027,7 @@
         errorLine1="        v.findViewById&lt;TextView>(R.id.tvDoneSub).text = &quot;of $total tracked games completed&quot;"
         errorLine2="                                                                  ~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="71"
             column="67"/>
     </issue>
@@ -2038,7 +2038,7 @@
         errorLine1="            &quot;${(pct * 100).toInt()}% completion rate&quot;"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="73"
             column="13"/>
     </issue>
@@ -2049,7 +2049,7 @@
         errorLine1="            &quot;${(pct * 100).toInt()}% completion rate&quot;"
         errorLine2="                                   ~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="73"
             column="36"/>
     </issue>
@@ -2060,7 +2060,7 @@
         errorLine1="        v.findViewById&lt;TextView>(R.id.tvTotalHours).text = &quot;${hours}h&quot;"
         errorLine2="                                                           ~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="76"
             column="60"/>
     </issue>
@@ -2071,7 +2071,7 @@
         errorLine1="            text = value.toString()"
         errorLine2="                   ~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/InsightsFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/InsightsFragment.kt"
             line="151"
             column="20"/>
     </issue>
@@ -2082,7 +2082,7 @@
         errorLine1="            chip.text = &quot;$label  ${n(key)}&quot;"
         errorLine2="                        ~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/LibraryFragment.kt"
             line="425"
             column="25"/>
     </issue>
@@ -2093,7 +2093,7 @@
         errorLine1="            &quot;${allGames.size} games · ${hours}h tracked&quot;"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/LibraryFragment.kt"
             line="555"
             column="13"/>
     </issue>
@@ -2104,7 +2104,7 @@
         errorLine1="            &quot;${allGames.size} games · ${hours}h tracked&quot;"
         errorLine2="                             ~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/LibraryFragment.kt"
             line="555"
             column="30"/>
     </issue>
@@ -2115,7 +2115,7 @@
         errorLine1="            &quot;${allGames.size} games · ${hours}h tracked&quot;"
         errorLine2="                                              ~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/LibraryFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/LibraryFragment.kt"
             line="555"
             column="47"/>
     </issue>
@@ -2126,7 +2126,7 @@
         errorLine1="                        tvLoginStatus.text = &quot;No saved login found. Please login with username and password first.&quot;"
         errorLine2="                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="55"
             column="47"/>
     </issue>
@@ -2137,7 +2137,7 @@
         errorLine1="                    tvLoginStatus.text = &quot;Authentication error: $errString&quot;"
         errorLine2="                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="61"
             column="42"/>
     </issue>
@@ -2148,7 +2148,7 @@
         errorLine1="                    tvLoginStatus.text = &quot;Authentication error: $errString&quot;"
         errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="61"
             column="43"/>
     </issue>
@@ -2159,7 +2159,7 @@
         errorLine1="                    tvLoginStatus.text = &quot;Authentication failed. Try again or login with password.&quot;"
         errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="65"
             column="43"/>
     </issue>
@@ -2170,7 +2170,7 @@
         errorLine1="                tvLoginStatus.text = &quot;Username and password are required&quot;"
         errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="87"
             column="39"/>
     </issue>
@@ -2181,7 +2181,7 @@
         errorLine1="            btnLogin.text = &quot;Logging in...&quot;"
         errorLine2="                             ~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="93"
             column="30"/>
     </issue>
@@ -2192,7 +2192,7 @@
         errorLine1="                        btnLogin.text = &quot;Login&quot;"
         errorLine2="                                         ~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="105"
             column="42"/>
     </issue>
@@ -2203,7 +2203,7 @@
         errorLine1="                            tvLoginStatus.text = &quot;Login successful!&quot;"
         errorLine2="                                                  ~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="119"
             column="51"/>
     </issue>
@@ -2214,7 +2214,7 @@
         errorLine1="                            tvLoginStatus.text = &quot;Login failed: $errorBody&quot;"
         errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="125"
             column="50"/>
     </issue>
@@ -2225,7 +2225,7 @@
         errorLine1="                            tvLoginStatus.text = &quot;Login failed: $errorBody&quot;"
         errorLine2="                                                  ~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="125"
             column="51"/>
     </issue>
@@ -2236,7 +2236,7 @@
         errorLine1="                        btnLogin.text = &quot;Login&quot;"
         errorLine2="                                         ~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="132"
             column="42"/>
     </issue>
@@ -2247,7 +2247,7 @@
         errorLine1="                        tvLoginStatus.text = &quot;Error: ${e.localizedMessage}&quot;"
         errorLine2="                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="133"
             column="46"/>
     </issue>
@@ -2258,7 +2258,7 @@
         errorLine1="                        tvLoginStatus.text = &quot;Error: ${e.localizedMessage}&quot;"
         errorLine2="                                              ~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/LoginActivity.kt"
+            file="src/main/java/ink/etech/gametracker/LoginActivity.kt"
             line="133"
             column="47"/>
     </issue>
@@ -2269,7 +2269,7 @@
         errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
         errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            file="src/main/java/ink/etech/gametracker/MainActivity.kt"
             line="130"
             column="32"/>
     </issue>
@@ -2280,7 +2280,7 @@
         errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
         errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            file="src/main/java/ink/etech/gametracker/MainActivity.kt"
             line="130"
             column="33"/>
     </issue>
@@ -2291,7 +2291,7 @@
         errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
         errorLine2="                                                                           ~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            file="src/main/java/ink/etech/gametracker/MainActivity.kt"
             line="130"
             column="76"/>
     </issue>
@@ -2302,7 +2302,7 @@
         errorLine1="                        text = &quot;Something went wrong loading this screen.\nPlease restart the app.\n\nError: ${e.message}&quot;"
         errorLine2="                                                                                                      ~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/MainActivity.kt"
+            file="src/main/java/ink/etech/gametracker/MainActivity.kt"
             line="130"
             column="103"/>
     </issue>
@@ -2313,7 +2313,7 @@
         errorLine1="        view.findViewById&lt;TextView>(R.id.tvUsername).text = &quot;@$username&quot;"
         errorLine2="                                                            ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="66"
             column="61"/>
     </issue>
@@ -2324,7 +2324,7 @@
         errorLine1="                        view?.findViewById&lt;TextView>(R.id.tvProfileTotal)?.text = games.size.toString()"
         errorLine2="                                                                                  ~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="88"
             column="83"/>
     </issue>
@@ -2335,7 +2335,7 @@
         errorLine1="                            games.count { it.status?.lowercase() == &quot;playing&quot; }.toString()"
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="90"
             column="29"/>
     </issue>
@@ -2346,7 +2346,7 @@
         errorLine1="                            games.count { it.status?.lowercase() == &quot;done&quot; }.toString()"
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="92"
             column="29"/>
     </issue>
@@ -2357,7 +2357,7 @@
         errorLine1="                            games.count { it.status?.lowercase() == &quot;backlog&quot; }.toString()"
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="94"
             column="29"/>
     </issue>
@@ -2368,7 +2368,7 @@
         errorLine1="                    tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
         errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="253"
             column="37"/>
     </issue>
@@ -2379,7 +2379,7 @@
         errorLine1="                    tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
         errorLine2="                                     ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="253"
             column="38"/>
     </issue>
@@ -2390,7 +2390,7 @@
         errorLine1="                    btnSync.text = &quot;Syncing…&quot;"
         errorLine2="                                    ~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="255"
             column="37"/>
     </issue>
@@ -2401,7 +2401,7 @@
         errorLine1="                        btnSync.text = &quot;Sync Games to Calendar&quot;"
         errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="259"
             column="41"/>
     </issue>
@@ -2412,7 +2412,7 @@
         errorLine1="                        tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
         errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="260"
             column="41"/>
     </issue>
@@ -2423,7 +2423,7 @@
         errorLine1="                        tvStatus.text = &quot;Syncing to: ${selected.displayName}&quot;"
         errorLine2="                                         ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/ProfileFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/ProfileFragment.kt"
             line="260"
             column="42"/>
     </issue>
@@ -2434,7 +2434,7 @@
         errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
         errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="57"
             column="24"/>
     </issue>
@@ -2445,7 +2445,7 @@
         errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
         errorLine2="                        ~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="57"
             column="25"/>
     </issue>
@@ -2456,7 +2456,7 @@
         errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
         errorLine2="                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="57"
             column="42"/>
     </issue>
@@ -2467,7 +2467,7 @@
         errorLine1="                text = &quot;Search Screen\n\nSomething went wrong loading this screen.\nPlease restart the app.&quot;"
         errorLine2="                                                                                    ~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="57"
             column="85"/>
     </issue>
@@ -2478,7 +2478,7 @@
         errorLine1="            text = &quot;Clear all&quot;"
         errorLine2="                    ~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="209"
             column="21"/>
     </issue>
@@ -2489,7 +2489,7 @@
         errorLine1="                        searchResultsHeader.text = &quot;No games found for &apos;$query&apos;&quot;"
         errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="271"
             column="52"/>
     </issue>
@@ -2500,7 +2500,7 @@
         errorLine1="                        searchResultsHeader.text = &quot;No games found for &apos;$query&apos;&quot;"
         errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="271"
             column="53"/>
     </issue>
@@ -2511,7 +2511,7 @@
         errorLine1="                        searchResultsHeader.text = &quot;Found ${games.size} game(s) for &apos;$query&apos;&quot;"
         errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="276"
             column="52"/>
     </issue>
@@ -2522,7 +2522,7 @@
         errorLine1="                        searchResultsHeader.text = &quot;Found ${games.size} game(s) for &apos;$query&apos;&quot;"
         errorLine2="                                                    ~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="276"
             column="53"/>
     </issue>
@@ -2533,7 +2533,7 @@
         errorLine1="                        searchResultsHeader.text = &quot;Found ${games.size} game(s) for &apos;$query&apos;&quot;"
         errorLine2="                                                                       ~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/gmaetrackermobile/fragments/SearchFragment.kt"
+            file="src/main/java/ink/etech/gametracker/fragments/SearchFragment.kt"
             line="276"
             column="72"/>
     </issue>

@@ -1,17 +1,28 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
-    id("org.jetbrains.kotlin.kapt")
     id("kotlin-parcelize")
 }
 
+// MOB-23: the server the app talks to, per build type. RELEASE is production, fixed: the
+// published APK must never be built to talk elsewhere, so no property can change it. DEBUG
+// takes -PgtDebugApiBase=https://<staging>/api/ (or gtDebugApiBase in ~/.gradle/gradle.properties)
+// and falls back to production only when none is given. HTTPS only, as the network config
+// requires anyway, and always ending in /api/ (Retrofit's base URL).
+val productionApiBase = "https://gametracker.etech.ink/api/"
+fun apiBaseField(url: String): String {
+    require(Regex("^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/([A-Za-z0-9._~-]+/)*api/$").matches(url)) {
+        "API base must be https://<host>[:port]/.../api/ -- got: $url"
+    }
+    return "\"$url\""
+}
+
 android {
-    namespace = "com.example.gmaetrackermobile"
+    namespace = "ink.etech.gametracker"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.gmaetrackermobile"
+        applicationId = "ink.etech.gametracker"
         minSdk = 24
         targetSdk = 36
         // CI passes -PgtVersionCode (android.yml's run number) for the build it publishes, so
@@ -24,8 +35,18 @@ android {
     }
 
     buildTypes {
+        debug {
+            val debugBase = (project.findProperty("gtDebugApiBase") as String?)?.takeIf { it.isNotBlank() }
+            buildConfigField("String", "API_BASE", apiBaseField(debugBase ?: productionApiBase))
+        }
         release {
-            isMinifyEnabled = false
+            buildConfigField("String", "API_BASE", apiBaseField(productionApiBase))
+            // R8 (MOB-20): shrinks the release APK and obfuscates it. The Gson models and the
+            // Retrofit interface are kept by proguard-rules.pro; android.yml checks the dex.
+            // Signing is not here, on purpose: CI signs the APK outside Gradle, with a key
+            // the build never sees (MOB-40).
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -40,7 +61,6 @@ android {
         jvmTarget = "11"
     }
     buildFeatures {
-        compose = true
         // ApiClient.buildClient(BuildConfig.DEBUG): release builds get no HTTP logging (MOB-1).
         buildConfig = true
     }
@@ -51,45 +71,26 @@ android {
 }
 
 dependencies {
-
+    // MOB-21: every version lives in gradle/libs.versions.toml. Compose (never used, MOB-22) and
+    // kapt are gone: Glide's annotation processor only matters for an AppGlideModule, which
+    // this app does not have. A change here regenerates gradle/verification-metadata.xml from
+    // an EMPTY Gradle home (mobile/CLAUDE.md), and Dependabot proposes the bumps.
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.converter.gson)
+    implementation(libs.okhttp.logging)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.glide)
+    implementation(libs.androidx.recyclerview)
+    implementation(libs.material)
+    implementation(libs.androidx.swiperefreshlayout)
+    implementation(libs.androidx.fragment.ktx)
+    implementation(libs.androidx.biometric)
+
     testImplementation(libs.junit)
-    // Same version as the OkHttp the app resolves (logging-interceptor 4.11.0).
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.11.0")
+    // Same version as the OkHttp the app resolves (logging-interceptor).
+    testImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
-    debugImplementation(libs.androidx.ui.test.manifest)
-    
-    // Retrofit for API calls
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
-    
-    // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
-    
-    // Image loading
-    implementation("com.github.bumptech.glide:glide:4.15.1")
-    kapt("com.github.bumptech.glide:compiler:4.15.1")
-    
-    // UI Components
-    implementation("androidx.recyclerview:recyclerview:1.3.1")
-    implementation("com.google.android.material:material:1.9.0")
-    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
-    implementation("androidx.fragment:fragment-ktx:1.6.2")
-    
-    // Network logging
-    implementation("com.squareup.okhttp3:logging-interceptor:4.11.0")
-    
-    // Biometric authentication
-    implementation("androidx.biometric:biometric:1.1.0")
 }

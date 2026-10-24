@@ -71,7 +71,7 @@
                 android:id="@+id/btnSearch"
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="wrap_content"
-                android:layout_height="40dp"
+                android:layout_height="48dp"
                 android:minWidth="0dp"
                 android:text="Search"
                 android:textColor="?attr/colorPrimary"
@@ -93,7 +93,7 @@
         android:layout_marginBottom="2dp"
         android:visibility="gone"
         android:text="Recent searches"
-        android:textSize="11sp"
+        android:textSize="12sp"
         android:textStyle="bold"
         android:textAllCaps="true"
         android:letterSpacing="0.1"
@@ -165,7 +165,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Results"
-        android:textSize="11sp"
+        android:textSize="12sp"
         android:textStyle="bold"
         android:textColor="@color/gt_text_muted"
         android:textAllCaps="true"
@@ -195,9 +195,12 @@
         android:orientation="vertical"
         android:gravity="center"
         android:padding="32dp"
+        android:accessibilityLiveRegion="polite"
         android:visibility="gone">
 
+        <!-- Empty OR failed, with the reason (MOB-15): SearchResults.state sets both texts. -->
         <TextView
+            android:id="@+id/tvSearchStateTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:textStyle="bold"
@@ -209,12 +212,24 @@
             tools:ignore="HardcodedText" />
 
         <TextView
+            android:id="@+id/tvSearchStateBody"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Try a different title, series, or genre keyword."
             android:textAlignment="center"
             android:textColor="@color/gt_text_secondary"
             android:textSize="14sp"
+            tools:ignore="HardcodedText" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSearchRetry"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginTop="16dp"
+            android:text="Try again"
+            android:textAllCaps="false"
+            android:visibility="gone"
             tools:ignore="HardcodedText" />
     </LinearLayout>
 </LinearLayout>

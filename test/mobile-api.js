@@ -1,79 +1,45 @@
-// What the Android app (mobile/) asks of the backend, read from its own source.
+// What the Android app (mobile/) asks of the backend.
 //
 // Not a test: a helper shared by api-surface.test.js (every route the app calls exists, at a
 // tier the app can reach) and api-contract.test.js (every field the app binds is a field a
 // pinned response carries). The app is the v1 client the freeze exists for, and it lives in
-// this repository now, so a backend rename that would break it can fail CI by name.
+// this repository, so a backend rename that would break it can fail CI by name.
 //
-// It parses Kotlin with regular expressions, so it FAILS CLOSED rather than quietly finding
-// nothing: minimum counts, named anchors that must be found, and a refusal of every Retrofit
-// or Gson construct that would make a name in the source differ from the name on the wire
-// (@SerializedName, @HTTP, @Url, @JsonAdapter). A sturdier source of truth -- a JVM test in
-// mobile/ that writes the contract as JSON by reflection -- is recorded in mobile/ROADMAP.md.
+// MOB-25: the contract is mobile/api-contract.json, written by a JVM test in mobile/
+// (ApiContractTest) by REFLECTION over the compiled Retrofit interface and Gson models. That
+// test fails in the Android job when the file no longer matches the code, and it refuses
+// @SerializedName, @JsonAdapter, @HTTP and @Url. This file used to regex-parse the Kotlin,
+// which broke on formatting and could silently find nothing. It still FAILS CLOSED: minimum
+// counts, anchors, and cross-checks against the source that a stale JSON would fail.
 const fs = require('fs');
 const path = require('path');
 
-const SRC = path.join(__dirname, '..', 'mobile/app/src/main/java/com/example/gmaetrackermobile');
+const MOBILE_DIR = path.join(__dirname, '..', 'mobile');
+const SRC = path.join(MOBILE_DIR, 'app/src/main/java/ink/etech/gametracker');
 const read = (f) => fs.readFileSync(path.join(SRC, f), 'utf8');
+const contractFile = () => JSON.parse(fs.readFileSync(path.join(MOBILE_DIR, 'api-contract.json'), 'utf8'));
 
-const REFUSED = /@(SerializedName|HTTP|Url|JsonAdapter|FormUrlEncoded|Multipart)\b/;
+// The JSON key for each models.kt class: Game -> game, LoginRequest -> loginRequest.
+const keyOf = (cls) => cls[0].toLowerCase() + cls.slice(1);
 
-// [{method, path}] with Retrofit's relative paths turned into Express keys:
+// [{method, path, key}] with Retrofit's relative paths turned into Express keys:
 // "user/{username}/games" -> "/api/user/:username/games".
 function apiRoutes() {
-  const text = read('GameTrackerApi.kt');
-  if (REFUSED.test(text)) throw new Error(`GameTrackerApi.kt uses ${REFUSED.exec(text)[0]}: extend mobile-api.js before relying on it`);
-  const routes = [...text.matchAll(/@(GET|POST|PUT|DELETE|PATCH)\("([^"]+)"\)/g)].map(([, method, p]) => ({
-    method,
-    path: `/api/${p.replace(/^\//, '').replace(/\{(\w+)\}/g, ':$1')}`,
-    key: `${method} /api/${p.replace(/^\//, '').replace(/\{(\w+)\}/g, ':$1')}`,
-  }));
-  const annotations = (text.match(/^\s*@(GET|POST|PUT|DELETE|PATCH)\b/gm) || []).length;
-  if (routes.length !== annotations) throw new Error(`parsed ${routes.length} of ${annotations} route annotations in GameTrackerApi.kt`);
-  if (routes.length < 7) throw new Error(`only ${routes.length} routes parsed from GameTrackerApi.kt; the parse is broken`);
+  const routes = contractFile().routes.map((r) => {
+    const [method, p] = r.split(' ');
+    const expressPath = `/api/${p.replace(/^\//, '').replace(/\{(\w+)\}/g, ':$1')}`;
+    return { method, path: expressPath, key: `${method} ${expressPath}` };
+  });
+  // A stale file: the interface gained or lost a route the JSON does not show.
+  const annotations = (read('GameTrackerApi.kt').match(/^\s*@(GET|POST|PUT|DELETE|PATCH)\b/gm) || []).length;
+  if (routes.length !== annotations) {
+    throw new Error(`api-contract.json has ${routes.length} routes, GameTrackerApi.kt ${annotations}: regenerate it (GT_WRITE_CONTRACT=1)`);
+  }
+  if (routes.length < 7) throw new Error(`only ${routes.length} routes in api-contract.json`);
   for (const anchor of ['POST /api/auth/login', 'GET /api/games/search', 'GET /api/user/:username/games']) {
-    if (!routes.some((r) => r.key === anchor)) throw new Error(`anchor route ${anchor} not found in GameTrackerApi.kt`);
+    if (!routes.some((r) => r.key === anchor)) throw new Error(`anchor route ${anchor} not in api-contract.json`);
   }
   return routes;
-}
-
-// The constructor properties of `data class <name>(...)` in Kotlin source `text`, in order.
-// The parameter list ends at its BALANCED closing paren: a lazy match stopped at the first `)`
-// ending a line, so `@Expose(serialize = false)` or a multi-line default silently cut the
-// class short (Architect review, PR #6). Any annotation with arguments inside the list is
-// refused outright: it is how a name or a (de)serialisation rule gets changed.
-function parseDataClass(text, name) {
-  const head = new RegExp(`data class ${name}\\s*\\(`).exec(text);
-  if (!head) throw new Error(`data class ${name} not found`);
-  let depth = 1;
-  let i = head.index + head[0].length;
-  const start = i;
-  for (; i < text.length && depth > 0; i++) {
-    // A paren inside a string or char literal is not structure (`val a: String = ")"` hid
-    // the next field, Architect re-review). Raw strings first, then escaped ones.
-    if (text.startsWith('"""', i)) {
-      const end = text.indexOf('"""', i + 3);
-      if (end < 0) break;
-      i = end + 2;
-    } else if (text[i] === '"' || text[i] === "'") {
-      const q = text[i];
-      for (i++; i < text.length && text[i] !== q; i++) if (text[i] === '\\') i++;
-    } else if (text[i] === '(') depth++;
-    else if (text[i] === ')') depth--;
-  }
-  if (depth !== 0) throw new Error(`data class ${name}: unbalanced parentheses`);
-  const body = text.slice(start, i - 1).replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-  if (/@[\w.:]+\s*\(/.test(body)) throw new Error(`data class ${name} has an annotation with arguments: extend mobile-api.js before relying on it`);
-  const declared = (body.match(/\b(val|var)\b/g) || []).length;
-  const fields = [...body.matchAll(/\b(?:val|var)\s+(\w+)\s*:/g)].map((x) => x[1]);
-  if (fields.length !== declared || fields.length === 0) throw new Error(`parsed ${fields.length} of ${declared} properties of ${name}`);
-  return fields;
-}
-
-function dataClassFields(name) {
-  const text = read('models.kt');
-  if (REFUSED.test(text)) throw new Error(`models.kt uses ${REFUSED.exec(text)[0]}: extend mobile-api.js before relying on it`);
-  return parseDataClass(text, name);
 }
 
 // Gson's field NAMING can also be changed once for the whole client, far from the models: a
@@ -85,23 +51,30 @@ function assertPlainGson() {
   }
 }
 
-// The full picture, with the anchors that prove the parse saw the real classes.
 function mobileContract() {
-  const game = dataClassFields('Game');
-  if (game.length < 12 || !game.includes('game_id') || !game.includes('backlog_order')) {
-    throw new Error(`Game parsed as [${game}]: the parse is broken`);
+  const json = contractFile();
+  // Every data class in models.kt is in the JSON, and nothing else is.
+  const classes = [...read('models.kt').matchAll(/^data class (\w+)\(/gm)].map((m) => keyOf(m[1])).sort();
+  const keys = Object.keys(json).filter((k) => k !== 'routes').sort();
+  if (JSON.stringify(classes) !== JSON.stringify(keys)) {
+    throw new Error(`api-contract.json models [${keys}] differ from models.kt [${classes}]: regenerate it (GT_WRITE_CONTRACT=1)`);
+  }
+  const game = json.game;
+  if (!Array.isArray(game) || game.length < 12 || !game.includes('game_id') || !game.includes('backlog_order')) {
+    throw new Error(`Game in api-contract.json is [${game}]: the file is broken`);
   }
   assertPlainGson();
   return {
     routes: apiRoutes(),
     game,
-    loginResponse: dataClassFields('LoginResponse'),
-    loginRequest: dataClassFields('LoginRequest'),
-    gameUpdateRequest: dataClassFields('GameUpdateRequest'),
-    backlogOrderRequest: dataClassFields('BacklogOrderRequest'),
-    createTokenRequest: dataClassFields('CreateTokenRequest'),
-    createdToken: dataClassFields('CreatedToken'),
+    loginResponse: json.loginResponse,
+    loginRequest: json.loginRequest,
+    gameUpdateRequest: json.gameUpdateRequest,
+    backlogReorderRequest: json.backlogReorderRequest,
+    createTokenRequest: json.createTokenRequest,
+    createdToken: json.createdToken,
+    gameUpsertResult: json.gameUpsertResult,
   };
 }
 
-module.exports = { mobileContract, apiRoutes, dataClassFields, parseDataClass, SRC };
+module.exports = { mobileContract, apiRoutes, SRC };

@@ -1,3 +1,5 @@
+> **Historical — do not use as a specification** (ROADMAP MOB-26). Several things described here are not in the app: a 3-item navigation (there are 5 tabs), a toolbar with settings and logout (deleted, MOB-22), source filter chips and pull-to-refresh on search, and source pills. `CLAUDE.md` → Navigation Structure describes what exists.
+
 # UI/UX Improvements - GameTracker Mobile App
 
 ## 🎨 **Major UI/UX Enhancements Implemented**

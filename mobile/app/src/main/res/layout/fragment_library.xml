@@ -46,7 +46,7 @@
         <LinearLayout
             android:id="@+id/btnSort"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
+            android:layout_height="48dp"
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:background="@drawable/input_field_bg_pill"
@@ -61,7 +61,8 @@
                 android:src="@drawable/ic_sort"
                 android:tint="@color/gt_text_secondary"
                 android:layout_marginEnd="7dp"
-                android:contentDescription="Sort library" />
+                android:contentDescription="@null"
+                android:importantForAccessibility="no" />
 
             <TextView
                 android:id="@+id/tvSortLabel"
@@ -93,7 +94,8 @@
             android:src="@drawable/ic_search"
             android:tint="@color/gt_text_secondary"
             android:layout_marginEnd="10dp"
-            android:contentDescription="Search library" />
+            android:contentDescription="@null"
+                android:importantForAccessibility="no" />
 
         <EditText
             android:id="@+id/etLibrarySearch"
@@ -112,9 +114,9 @@
 
         <ImageView
             android:id="@+id/btnClearSearch"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="11dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="15dp"
             android:src="@drawable/ic_delete"
             android:tint="@color/gt_text_muted"
             android:visibility="gone"
@@ -177,7 +179,8 @@
                     android:tint="?attr/colorPrimary"
                     android:alpha="0.4"
                     android:layout_marginBottom="18dp"
-                    android:contentDescription="Empty library" />
+                    android:contentDescription="@null"
+                android:importantForAccessibility="no" />
 
                 <TextView
                     android:layout_width="wrap_content"

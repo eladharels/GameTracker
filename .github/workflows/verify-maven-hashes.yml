@@ -1,0 +1,39 @@
+# Recomputes every SHA-256 in mobile/gradle/verification-metadata.xml from the public Maven
+# repositories, whenever that file changes (CISO review, PR #15).
+#
+# The metadata is trust-on-first-use: whatever machine regenerated it wrote those hashes. This
+# job checks them from somewhere else -- a GITHUB-HOSTED runner, deliberately NOT the
+# self-hosted runner, which is the production host. It downloads files and hashes them; it
+# executes nothing it downloads, and it has no secrets and a read-only token.
+name: Verify Android dependency hashes (off the production host)
+
+on:
+  pull_request:
+    paths:
+      - mobile/gradle/verification-metadata.xml
+      - mobile/gradle/ci/verify-maven-hashes.py
+      - .github/workflows/verify-maven-hashes.yml
+  push:
+    branches: [main]
+    paths:
+      - mobile/gradle/verification-metadata.xml
+      - mobile/gradle/ci/verify-maven-hashes.py
+      - .github/workflows/verify-maven-hashes.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Recompute the verification-metadata hashes
+    # The same-repo gate every PR job here carries (test/runtime.test.js).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Recompute every hash from Google Maven, Maven Central and the plugin portal
+        run: python3 -I mobile/gradle/ci/verify-maven-hashes.py mobile/gradle/verification-metadata.xml

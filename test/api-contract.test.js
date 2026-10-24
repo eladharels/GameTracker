@@ -1748,24 +1748,12 @@ checkAsync('PUT /api/user/me/sharing: truthiness to 1/0, a missing value is 400,
 
 // ── The Android app (mobile/) against the frozen v1 contract ────────────────────────────
 // The app is the v1 client this freeze exists for, and it lives in this repository. Its
-// models are read from source (test/mobile-api.js, which fails closed) and checked against
+// models come from mobile/api-contract.json (written by reflection, MOB-25) and are checked against
 // the SAME key constants the pins above assert, so a backend rename that would break the app
 // fails here, naming the Android field it breaks.
 console.log('the Android app (mobile/) against the v1 contract:');
-const { mobileContract, parseDataClass } = require('./mobile-api');
+const { mobileContract } = require('./mobile-api');
 const MOBILE = mobileContract();
-
-check('the Kotlin parse fails closed on the shapes a lazy regex got wrong', () => {
-  // A parameterised annotation ended the old lazy match early, and the dropped field went
-  // unnoticed because both counts were taken on the shortened body.
-  assert.throws(() => parseDataClass('data class Y(val a: String,\n  @Expose(serialize = false)\n  val b: String)', 'Y'), /annotation with arguments/);
-  // A multi-line default must not cut the class short either.
-  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = listOf(1,\n 2).toString(),\n val b: Int)', 'Y'), ['a', 'b']);
-  assert.throws(() => parseDataClass('data class Y(val a: String', 'Y'), /unbalanced/);
-  // A paren inside a string literal is not the end of the class.
-  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = ")",\n val b: Int)', 'Y'), ['a', 'b']);
-  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = "\\")(",\n val b: Char = \')\')', 'Y'), ['a', 'b']);
-});
 
 check('every Game field the app binds is a field a pinned response carries', () => {
   // One Kotlin class serves both library rows and search results (models.kt), so a field is
@@ -1776,7 +1764,7 @@ check('every Game field the app binds is a field a pinned response carries', () 
 });
 check('the app\'s LoginResponse is exactly the pinned {token}', () => {
   assert.deepStrictEqual([...MOBILE.loginResponse].sort(), [...LOGIN_TOKEN_KEYS].sort());
-  assert.deepStrictEqual(MOBILE.loginRequest, ['username', 'password'], 'LoginRequest changed shape');
+  assert.deepStrictEqual([...MOBILE.loginRequest].sort(), ['password', 'username'], 'LoginRequest changed shape');
 });
 
 checkAsync('MOB-9: the app\'s CreateTokenRequest reaches the mint as sent, and CreatedToken reads only what it returns', async () => {
@@ -1845,6 +1833,10 @@ checkAsync('POST /api/user/:u/games reads EXACTLY the fields GameUpdateRequest s
   });
   assert.strictEqual(res.statusCode, 200);
   assertKeys(res.body, ['success', 'status', 'coerced'], 'POST /api/user/:u/games');
+  // MOB-13: the app reads this answer (GameUpsertResult), so every field it binds must be one
+  // the route returns.
+  const unread = MOBILE.gameUpsertResult.filter((f) => !['success', 'status', 'coerced'].includes(f));
+  assert.deepStrictEqual(unread, [], `the app's GameUpsertResult reads fields the route never returns: ${unread}`);
   assert.deepStrictEqual(res.body, { success: true, status: 'wishlist', coerced: false });
   // Every field the app sends reaches the service under the same name, and nothing the app
   // does not send is required: a renamed body key would arrive as undefined.
@@ -1868,18 +1860,19 @@ checkAsync('DELETE /api/user/:u/games/:id is {success:true}', async () => {
   });
   assert.deepStrictEqual([res.statusCode, res.body, removed], [200, { success: true }, [7, 'igdb_1']]);
 });
-checkAsync('PUT .../backlog-order reads BacklogOrderRequest.direction; a bad direction is 400', async () => {
-  assert.deepStrictEqual(MOBILE.backlogOrderRequest, ['direction'], 'BacklogOrderRequest changed shape');
-  let moved;
-  const replace = [[libraryService, 'moveBacklogItem', async (u, g, d) => { moved = d; }]];
-  const ok = await callRoute('put', '/api/user/:username/games/:gameId/backlog-order',
-    { params: { username: 'jane', gameId: 'igdb_1' }, body: { [MOBILE.backlogOrderRequest[0]]: 'up' } }, { replace });
-  assert.deepStrictEqual([ok.statusCode, ok.body, moved], [200, { success: true }, 'up']);
-  const bad = await callRoute('put', '/api/user/:username/games/:gameId/backlog-order',
-    { params: { username: 'jane', gameId: 'igdb_1' }, body: { direction: 'sideways' } }, { replace });
+checkAsync('PUT .../backlog-reorder reads BacklogReorderRequest.order in one call; an empty order is 400 (MOB-14)', async () => {
+  assert.deepStrictEqual(MOBILE.backlogReorderRequest, ['order'], 'BacklogReorderRequest changed shape');
+  let got;
+  const replace = [[libraryService, 'reorderBacklog', async (u, order) => { got = order; return { updated: order.length, requested: order.length }; }]];
+  const ok = await callRoute('put', '/api/user/:username/backlog-reorder',
+    { params: { username: 'jane' }, body: { [MOBILE.backlogReorderRequest[0]]: ['igdb_2', 'igdb_1'] } }, { replace });
+  assert.deepStrictEqual([ok.statusCode, ok.body, got], [200, { success: true }, ['igdb_2', 'igdb_1']]);
+  const bad = await callRoute('put', '/api/user/:username/backlog-reorder',
+    { params: { username: 'jane' }, body: { order: [] } }, { replace });
   assert.strictEqual(bad.statusCode, 400);
-  assertKeys(bad.body, ['error'], 'backlog-order 400');
+  assertKeys(bad.body, ['error'], 'backlog-reorder 400');
 });
+
 checkAsync('GET /api/games/search is a BARE array of search items; no q is 400 {error}', async () => {
   const catalogService = require('../services/catalog');
   const item = { id: 'igdb_1', name: 'Hades', releaseDate: '2020-09-17', coverUrl: null, source: 'igdb', steamAppId: null };

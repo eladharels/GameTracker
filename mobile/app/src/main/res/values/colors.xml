@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Legacy / compat colors (kept for any remaining references) -->
-    <color name="colorPrimary">#5B8DEF</color>
-    <color name="colorPrimaryDark">#3A5FA0</color>
-    <color name="colorAccent">#5B8DEF</color>
+    <color name="colorPrimary">#8B5CF6</color>
+    <color name="colorPrimaryDark">#7C3AED</color>
+    <color name="colorAccent">#8B5CF6</color>
     <color name="colorBackground">#111218</color>
     <color name="colorSurface">#181A22</color>
     <color name="colorOnPrimary">#FFFFFF</color>
@@ -15,22 +15,24 @@
     <!-- Legacy GameTracker palette (kept for Kotlin references) -->
     <color name="gt_background">#111218</color>
     <color name="gt_card">#181A22</color>
-    <color name="gt_accent_blue">#5B8DEF</color>
+    <color name="gt_accent_blue">#8B5CF6</color>
     <color name="gt_logout_red">#FF4D4F</color>
     <color name="gt_text_main">#F0F1F8</color>
     <color name="gt_text_secondary">#8890A8</color>
     <color name="gt_divider">#0FFFFFFF</color>
     <color name="gt_card_bg">#181A22</color>
     <color name="gt_card_elevated">#1F2130</color>
-    <color name="gt_accent_dim">#3A5FA0</color>
+    <color name="gt_accent_dim">#5B3BB0</color>
     <color name="gt_surface_subtle">#1AFFFFFF</color>
 
     <!-- Status colors -->
-    <color name="gt_status_wishlist">#8890A8</color>
-    <color name="gt_status_playing">#22B8F6</color>
-    <color name="gt_status_done">#22C55E</color>
-    <color name="gt_status_backlog">#F97316</color>
-    <color name="gt_status_unreleased">#8B5CF6</color>
+    <!-- MOB-33: the web's status palette (App.css color-status tokens): light tints, each a
+         distinct shade from the accent presets, and every badge also carries its label. -->
+    <color name="gt_status_wishlist">#38BDF8</color>
+    <color name="gt_status_playing">#34D399</color>
+    <color name="gt_status_done">#C084FC</color>
+    <color name="gt_status_backlog">#FBBF24</color>
+    <color name="gt_status_unreleased">#94A3B8</color>
 
     <!-- New Design Token Surface Scale -->
     <color name="gt_surface_0">#0C0D11</color>
@@ -44,18 +46,27 @@
     <color name="gt_border_strong">#1AFFFFFF</color>
 
     <!-- New Design Token Accent -->
-    <color name="gt_accent">#5B8DEF</color>
-    <color name="gt_accent_glow">#335B8DEF</color>
+    <color name="gt_accent">#8B5CF6</color>
+    <color name="gt_accent_glow">#338B5CF6</color>
 
     <!-- New Design Token Text -->
     <color name="gt_text_primary">#F0F1F8</color>
-    <color name="gt_text_muted">#4A5068</color>
+    <!-- MOB-29: was #4A5068 (2.35:1 on the screen). Now >= 4.5:1 on every surface. -->
+    <color name="gt_text_muted">#858CA4</color>
 
     <!-- Prototype-aligned tokens -->
     <color name="gt_surface_card">#15171F</color>
     <color name="gt_input_bg">#181A22</color>
     <color name="gt_text_light">#C3C8D8</color>
-    <color name="gt_text_dim">#5B6175</color>
+    <!-- MOB-29: was #5B6175 (3.04:1). -->
+    <color name="gt_text_dim">#8890A8</color>
     <color name="gt_gold">#FBBF24</color>
     <color name="gt_accent_purple">#7B5BEF</color>
+    <!-- MOB-29: text ON a status colour. White read 2.3:1 on Done/Playing; this dark ink is
+         >= 4.5:1 on all five. -->
+    <color name="gt_on_status">#0C0D11</color>
+    <!-- MOB-29: error TEXT on the snackbar's #2D3142 (gt_logout_red read 3.94:1 there). -->
+    <color name="gt_error_text">#FF6B6B</color>
+    <!-- The rating stars. Not a status colour, though it is the same amber. -->
+    <color name="gt_star">#FBBF24</color>
 </resources>

@@ -43,7 +43,7 @@
             android:background="@drawable/glance_card_bg"
             android:padding="20dp">
 
-            <com.example.gmaetrackermobile.DonutView
+            <ink.etech.gametracker.DonutView
                 android:id="@+id/donut"
                 android:layout_width="118dp"
                 android:layout_height="118dp" />
@@ -79,7 +79,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
                     android:background="@drawable/pill_soft_bg"
-                    android:backgroundTint="#2422C55E"
+                    android:backgroundTint="#24C084FC"
                     android:paddingHorizontal="11dp"
                     android:paddingVertical="6dp"
                     android:textColor="@color/gt_status_done"

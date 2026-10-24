@@ -33,11 +33,10 @@
 #     steps below for why the key never meets build code and why exactly one copy exists.
 #     It is NOT gated on docker-build-deploy.yml (the contract gate, Trivy, deploy): one
 #     runner cannot wait for a deploy that waits for it. Recorded in MOB-40.
-#   - The build container is on Docker's default bridge network, so the build code (kapt
-#     processors, lint jars, unit tests) can reach every port this host publishes: the backend
-#     on BACKEND_BIND, the MCP port, the smoke stacks, and the LAN, including the directory
-#     server. Splitting the build into a networked resolve phase and an --offline phase under
-#     --network none is MOB-37 in mobile/ROADMAP.md.
+#   - MOB-37: the build runs in TWO containers. Only the first, which installs the SDK and
+#     downloads the recorded artifacts, has a network; Gradle PLUGINS run there (they
+#     configure the build). Kapt processors, lint jars and unit tests run in the second,
+#     under --network none, so they cannot reach this host's ports or its LAN.
 #
 # Deliberately a SEPARATE workflow from docker-build-deploy.yml: path filters exist only at
 # workflow level, and this job must never gate, trigger or delay `deploy` by dependency.
@@ -73,6 +72,11 @@ env:
   # The committed mobile/gradle/wrapper/gradle-wrapper.jar, a genuine Gradle release
   # (matches the published wrapper checksum). A changed jar fails the build until re-pinned.
   GRADLE_WRAPPER_JAR_SHA256: e996d452d2645e70c01c11143ca2d3742734a28da2bf61f25c82bdc288c9e637
+  # The Gradle DISTRIBUTION, pinned here as well as in gradle-wrapper.properties (CISO review,
+  # PR #15): a Dependabot wrapper bump rewrites distributionUrl AND distributionSha256Sum
+  # together, so the properties file alone would check a new distribution against itself, and
+  # phase 1 would run it with a network. Dependabot never edits this file.
+  GRADLE_DISTRIBUTION_SHA256: 20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78
   ANDROID_PLATFORM: 'platforms;android-36'
   ANDROID_BUILD_TOOLS: 'build-tools;35.0.0'
   # One set of cache volumes per partition. Never shared between PRs and main.
@@ -89,7 +93,13 @@ env:
   APK_NAME: gametracker.apk
   # What the APK must declare before it is signed: a build that produced some other app is
   # not published under this name.
-  APK_PACKAGE: com.example.gmaetrackermobile
+  APK_PACKAGE: ink.etech.gametracker
+  # MOB-20: one field of every Gson model in models.kt, which must survive R8 by NAME (an
+  # obfuscated field is one the server's JSON never fills). Checked in the BUILT dex below;
+  # runtime.test.js holds this list equal to models.kt and to proguard-rules.pro.
+  R8_KEPT_FIELDS: >-
+    LoginRequest:password LoginResponse:token CreateTokenRequest:scopes CreatedToken:expiresAt
+    Game:game_name GameUpdateRequest:gameId BacklogReorderRequest:order GameUpsertResult:coerced
 
 jobs:
   android:
@@ -126,9 +136,13 @@ jobs:
             exit 1
           fi
 
-      - name: Verify the Gradle wrapper jar
+      - name: Verify the Gradle wrapper jar and the pinned distribution
         run: |
           echo "${GRADLE_WRAPPER_JAR_SHA256}  mobile/gradle/wrapper/gradle-wrapper.jar" | sha256sum -c
+          grep -qxF "distributionSha256Sum=${GRADLE_DISTRIBUTION_SHA256}" mobile/gradle/wrapper/gradle-wrapper.properties || {
+            echo "::error::gradle-wrapper.properties names a Gradle distribution other than GRADLE_DISTRIBUTION_SHA256 in android.yml"
+            exit 1
+          }
 
       - name: Fetch and verify the Android command-line tools
         run: |
@@ -167,34 +181,45 @@ jobs:
       # any leftover is removed before starting, and the always() step at the end removes it,
       # cancelled or not.
       - name: Remove a build container left behind by a cancelled run
-        run: docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
+        run: docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" "gametracker-android-resolve-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
 
+      # MOB-37: TWO containers. Phase 1 has a network and runs no dependency code: it installs
+      # the SDK and downloads exactly the artifacts recorded in verification-metadata.xml
+      # (gradle/ci/prefetch.init.gradle). Phase 2 builds, tests and lints with --offline under
+      # --network none: kapt processors, lint jars and unit tests can reach nothing on this
+      # host or its LAN. Gradle plugins do run in phase 1 (they configure the build); they are
+      # hash-verified like everything else.
       - name: Build and test inside the container
         run: |
-          docker run --rm --name "gametracker-android-build-${VOLUME_PARTITION}" \
-            --user "${BUILD_UID}:${BUILD_UID}" \
-            --cap-drop ALL --security-opt no-new-privileges \
-            --memory 4g --cpus 2 --pids-limit 1024 \
-            --tmpfs /tmp:rw,noexec,nosuid,size=1g \
-            -v "${GITHUB_WORKSPACE}/mobile:/work" \
-            -v "${ANDROID_DL}:/dl:ro" \
-            -v "${APK_OUT}:/out" \
-            -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
-            -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle" \
-            -e GT_VERSION_CODE="${GITHUB_RUN_NUMBER}" \
-            -e HOME=/gradle/home -e GRADLE_USER_HOME=/gradle -e ANDROID_HOME=/sdk \
-            -e ANDROID_USER_HOME=/gradle/android-user -e JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/gradle/tmp \
-            -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS \
-            -w /work \
+          gt_build_args=(
+            --user "${BUILD_UID}:${BUILD_UID}"
+            --cap-drop ALL --security-opt no-new-privileges
+            --memory 4g --cpus 2 --pids-limit 1024
+            --tmpfs /tmp:rw,noexec,nosuid,size=1g
+            -v "${GITHUB_WORKSPACE}/mobile:/work"
+            -v "${ANDROID_DL}:/dl:ro"
+            -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk"
+            -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle"
+            -e GT_VERSION_CODE="${GITHUB_RUN_NUMBER}"
+            -e HOME=/gradle/home -e GRADLE_USER_HOME=/gradle -e ANDROID_HOME=/sdk
+            -e ANDROID_USER_HOME=/gradle/android-user -e JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/gradle/tmp
+            -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS -e R8_KEPT_FIELDS
+            -w /work
+          )
+
+          # Phase 1: network. Configuring the build runs the Gradle PLUGINS here (AGP, Kotlin,
+          # kapt), hash-verified; no processor, lint jar or test runs. No /out: it makes nothing.
+          docker run --rm --name "gametracker-android-resolve-${VOLUME_PARTITION}" "${gt_build_args[@]}" \
             "${JDK_IMAGE}" bash -euo pipefail -c '
               # Never the root uid, whatever --user says (the runner itself is root).
               [ "$(id -u)" != 0 ] || { echo "::error::refusing to build as uid 0"; exit 1; }
               # Before the build, not only after it: a killed build never reaches the prune at
               # the end, and Gradle loads init.d/ and gradle.properties from its home on start.
+              # The wrapper distribution goes too, so the download below re-checks it
+              # (distributionSha256Sum): nothing executable is trusted from an earlier job.
               find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf {} +
               find /gradle/caches -mindepth 1 -maxdepth 1 ! -name modules-2 -exec rm -rf {} + 2>/dev/null || true
               mkdir -p /gradle/home /gradle/android-user /gradle/tmp
-              # Build outputs never outlive the job, whatever happens below.
               trap "rm -rf /work/build /work/app/build /work/.gradle /work/.kotlin" EXIT
 
               # Re-verified and re-extracted every run: a cache volume is writable by every
@@ -216,19 +241,48 @@ jobs:
               # (sha256). It was generated by this job over the final dependency set on PR #6
               # and reviewed before it was committed: trust-on-first-use, recorded. A dependency
               # change regenerates it, locally, and the diff is reviewed like code.
+              bash gradlew --no-daemon --dependency-verification strict \
+                -I gradle/ci/prefetch.init.gradle gtPrefetch
+            '
+
+          # Phase 2: NO network. Everything it needs is in the caches phase 1 filled.
+          docker run --rm --name "gametracker-android-build-${VOLUME_PARTITION}" --network none "${gt_build_args[@]}" \
+            -v "${APK_OUT}:/out" \
+            "${JDK_IMAGE}" bash -euo pipefail -c '
+              [ "$(id -u)" != 0 ] || { echo "::error::refusing to build as uid 0"; exit 1; }
+              # Phase 1 of THIS job left the verified wrapper distribution; anything else that
+              # Gradle would load from its home is removed again.
+              find /gradle -mindepth 1 -maxdepth 1 ! -name caches ! -name wrapper -exec rm -rf {} +
+              mkdir -p /gradle/home /gradle/android-user /gradle/tmp
+              trap "rm -rf /work/build /work/app/build /work/.gradle /work/.kotlin" EXIT
+              BT="/sdk/build-tools/${ANDROID_BUILD_TOOLS#build-tools;}"
+              # Still strict: --offline reads the cache, and every file in it is checked again.
               status=0
               # gtVersionCode: every published APK is a higher versionCode than the last, so it
               # installs as an update (MOB-40). The run number of this workflow only ever grows
               # (it restarts only if the workflow file is renamed: then add an offset here).
-              bash gradlew --no-daemon --dependency-verification strict -PgtVersionCode="${GT_VERSION_CODE}" \
+              bash gradlew --offline --no-daemon --dependency-verification strict -PgtVersionCode="${GT_VERSION_CODE}" \
                 testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease || status=$?
               # The UNSIGNED APK leaves through /out before the trap deletes the build tree. It
               # is input to the signing step, never trusted as more than that.
               if [ "${status}" = 0 ]; then
                 install -m 0644 app/build/outputs/apk/release/app-release-unsigned.apk /out/unsigned.apk
+                # MOB-20: R8 kept every Gson model field by name, in the dex that ships. On
+                # pull requests too: a missing keep rule builds green and nulls every field.
+                DEX="$(mktemp -d)"
+                (cd "${DEX}" && jar xf /out/unsigned.apk)
+                "${BT}/dexdump" "${DEX}"/classes*.dex > "${DEX}/dump.txt"
+                for pair in ${R8_KEPT_FIELDS}; do
+                  cls="${pair%%:*}"; fld="${pair#*:}"
+                  # No single quote may appear in this bash -c script: q is one, made by awk.
+                  awk -v c="Link/etech/gametracker/${cls};" -v f="${fld}" \
+                    "BEGIN { q = sprintf(\"%c\", 39) } \$1 == \"Class\" && \$2 == \"descriptor\" { in_c = (\$4 == q c q) } in_c && \$1 == \"name\" && \$3 == q f q { ok = 1 } END { exit !ok }" \
+                    "${DEX}/dump.txt" || { echo "::error::R8 renamed or removed ${cls}.${fld}: Gson would read it as null (proguard-rules.pro)"; status=1; }
+                done
+                rm -rf "${DEX}"
               fi
 
-              # Keep only the dependency cache; the rest is regenerated.
+              # Keep only the dependency cache; the rest (the wrapper included) is regenerated.
               find /gradle -mindepth 1 -maxdepth 1 ! -name caches -exec rm -rf {} +
               find /gradle/caches -mindepth 1 -maxdepth 1 ! -name modules-2 -exec rm -rf {} + 2>/dev/null || true
               exit "${status}"
@@ -273,8 +327,12 @@ jobs:
           printf '%s' "${KEYSTORE_PASSWORD}" > "${SIGN}/key/store.pass"
           printf '%s' "${KEY_PASSWORD:-${KEYSTORE_PASSWORD}}" > "${SIGN}/key/key.pass"
 
+          # All three run AS THE RUNNER (MOB-38, CISO review, PR #15): the key is 0600 and the
+          # directories 0700 under umask 077, and with no capabilities a container root cannot
+          # read or write them once the runner is not root. It also leaves nothing root-owned
+          # for the runner's rm -rf. sdkmanager gets a HOME inside /sdk: an arbitrary uid has none.
           # 1. Fresh build-tools, from the SHA-256-verified command-line tools. No key here.
-          docker run --rm --name gametracker-android-signtools --cap-drop ALL --security-opt no-new-privileges --memory 2g --pids-limit 512 \
+          docker run --rm --name gametracker-android-signtools --user "$(id -u):$(id -g)" -e HOME=/sdk/.home -e ANDROID_USER_HOME=/sdk/.home/android -e JAVA_TOOL_OPTIONS=-Duser.home=/sdk/.home --cap-drop ALL --security-opt no-new-privileges --memory 2g --pids-limit 512 \
             -v "${ANDROID_DL}:/dl:ro" \
             -v "${SIGN}/sdk:/sdk" \
             -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_BUILD_TOOLS \
@@ -301,7 +359,7 @@ jobs:
           # Exit 3 = a NEWER build is already published (Architect review, PR #9): a re-run of
           # an older run keeps its old run number, and every updated phone would refuse it.
           rc=0
-          docker run --rm --name gametracker-android-check --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
+          docker run --rm --name gametracker-android-check --user "$(id -u):$(id -g)" --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
             -v "${SIGN}/sdk:/sdk:ro" \
             -v "${APK_OUT}:/in:ro" \
             -v "${APK_PUBLISH_DIR}:/published:ro" \
@@ -336,7 +394,7 @@ jobs:
           # 3. SIGN, and nothing else: only apksigner (Java) touches the file here, the key is
           # mounted read-only, there is no network, and the output goes to a directory the
           # checking container never saw. Named, so the always() step removes it if cancelled.
-          docker run --rm --name gametracker-android-sign --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
+          docker run --rm --name gametracker-android-sign --user "$(id -u):$(id -g)" --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256 \
             -v "${SIGN}/sdk:/sdk:ro" \
             -v "${SIGN}/key:/key:ro" \
             -v "${SIGN}/aligned:/aligned:ro" \
@@ -374,15 +432,28 @@ jobs:
         if: always()
         run: |
           # First: never leave a build running on the host, even when this job was cancelled.
-          docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
+          docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" "gametracker-android-resolve-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
           # Likewise the signing containers (the key is mounted into one of them).
           docker rm -f gametracker-android-sign gametracker-android-check gametracker-android-signtools >/dev/null 2>&1 || true
           # The unsigned APK and the signing directory (the key, if the step was killed) never
           # outlive the job: the published file is the only copy (MOB-40).
+          # APK_OUT is written by the build as BUILD_UID: emptied AS that uid, with no
+          # capability, so a non-root runner can then remove it (MOB-38, Architect review).
+          if [ -n "${APK_OUT:-}" ] && [ -d "${APK_OUT}" ] && [ ! -L "${APK_OUT}" ]; then
+            docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+              --user "${BUILD_UID}:${BUILD_UID}" -v "${APK_OUT}:/out" "${JDK_IMAGE}" \
+              find /out -mindepth 1 -delete || true
+          fi
+          # Not fatal here: the hand-back below must still run. A leftover is reported.
           for d in "${APK_OUT:-}" "${ANDROID_SIGN:-}"; do
-            if [ -n "${d}" ] && [ -d "${d}" ] && [ ! -L "${d}" ]; then rm -rf --one-file-system "${d}"; fi
+            if [ -n "${d}" ] && [ -d "${d}" ] && [ ! -L "${d}" ]; then
+              rm -rf --one-file-system "${d}" || echo "::warning::could not remove ${d}"
+            fi
           done
           # Give mobile/ back to the runner, so the next checkout can clean and update it.
+          # DAC_READ_SEARCH here and in the prep/du helpers is acceptable where the smoke
+          # helpers refuse it: the image is pinned and runs only chown/du, so no attacker code
+          # runs in the container to call open_by_handle_at (CISO re-review, PR #15).
           docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
             -v "${GITHUB_WORKSPACE}/mobile:/work" \
             "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /work \

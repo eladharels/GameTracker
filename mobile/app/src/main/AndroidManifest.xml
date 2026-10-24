@@ -19,7 +19,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.GmaeTrackerMobile">
+        android:theme="@style/Theme.GameTracker">
         <!-- The launcher MUST be exported: Android starts it from the home screen. It is the
              only exported component (pinned by test/runtime.test.js), holds no session of its
              own, and takes only a boolean extra (never text) from its intent.
@@ -28,7 +28,7 @@
             android:name=".LoginActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.GmaeTrackerMobile">
+            android:theme="@style/Theme.GameTracker">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -41,8 +41,7 @@
             android:name=".MainActivity"
             android:exported="false"
             android:label="@string/app_name"
-            android:theme="@style/Theme.GmaeTrackerMobile" />
-        <activity android:name=".SettingsActivity" />
+            android:theme="@style/Theme.GameTracker" />
     </application>
 
 </manifest>

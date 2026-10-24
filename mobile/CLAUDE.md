@@ -11,23 +11,25 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 - **Language**: Kotlin
 - **Platform**: Android (Native)
 - **Minimum SDK**: API 24 (Android 7.0 Nougat)
-- **Target / Compile SDK**: API 36 (Android 15)
+- **Target / Compile SDK**: API 36 (Android 16)
 - **JVM Target**: Java 11
 - **Build System**: Gradle with Kotlin DSL (`build.gradle.kts`)
-- **UI Framework**: Jetpack Compose (enabled) + XML layouts (Fragment-based architecture)
+- **UI Framework**: XML layouts and Fragments. No Compose (MOB-22: theme files; MOB-21: plugin and dependencies)
 
 ### Key Libraries
-| Library | Version | Purpose |
-|---|---|---|
-| Retrofit | 2.9.0 | HTTP client / REST API calls |
-| OkHttp3 + Logging Interceptor | 4.11.0 | HTTP logging in **debug builds only**, at BASIC (no headers or bodies). Release builds have none (MOB-1) |
-| Gson | — | JSON serialization/deserialization |
-| Kotlin Coroutines | 1.6.4 | Async/non-blocking operations |
-| Glide | 4.15.1 | Image loading and caching |
-| AndroidX Biometric | — | Fingerprint / biometric authentication |
-| Material 3 | — | UI components and theming |
-| SwipeRefreshLayout | 1.1.0 | Pull-to-refresh |
-| Fragment KTX | 1.6.2 | Fragment extensions and lifecycle |
+Versions live in `gradle/libs.versions.toml` (MOB-21), the one place to read them; Dependabot
+proposes bumps (`.github/dependabot.yml`). No Compose and no kapt.
+
+| Library | Purpose |
+|---|---|
+| Retrofit + converter-gson | HTTP client / REST API calls; Gson binds `models.kt` by field name |
+| OkHttp logging-interceptor | HTTP logging in **debug builds only**, at BASIC (no headers or bodies). Release builds have none (MOB-1) |
+| Kotlin Coroutines | Async work, scoped to the view (MOB-17) |
+| Glide | Image loading and caching (no annotation processor: there is no AppGlideModule) |
+| AndroidX Biometric | The fingerprint prompt, always with a CryptoObject (MOB-6) |
+| Material Components | UI components and theming |
+| SwipeRefreshLayout, RecyclerView, Fragment KTX | Lists, pull-to-refresh, fragments |
+
 
 ---
 
@@ -41,7 +43,7 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
 mobile/                                       # inside the GameTracker repo (was ../GameTracker-mobile/)
 ├── app/
 │   ├── src/main/
-│   │   ├── java/com/example/gmaetrackermobile/
+│   │   ├── java/ink/etech/gametracker/
 │   │   │   ├── ApiClient.kt                  # Retrofit singleton; buildClient(BuildConfig.DEBUG)
 │   │   │   ├── SessionStore.kt               # The session: token (IN MEMORY only), its sealed copy,
 │   │   │   │                                 #   username, JWT exp, "ended" signal (MOB-6)
@@ -73,22 +75,31 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   │                                 #   remove the account's calendar events
 │   │   │   ├── LoginActivity.kt              # Entry point — auth screen
 │   │   │   ├── MainActivity.kt               # Main container — hosts all fragments
-│   │   │   ├── SettingsActivity.kt           # App settings screen
+│   │   │   ├── GameStatus.kt                 # The five statuses, the four a user may PICK, and
+│   │   │   │                                 #   what the server says it stored (MOB-13)
+│   │   │   ├── BacklogOrder.kt               # The backlog's order, positions and the one
+│   │   │   │                                 #   whole-order request (MOB-14)
+│   │   │   ├── SearchResults.kt              # Found / empty / failed-and-why (MOB-15)
+│   │   │   ├── LibraryAdd.kt                 # THE add: fresh library, match, then post (MOB-10/16)
+│   │   │   ├── LibraryCache.kt               # The one library copy's rules (MOB-19, JVM-tested)
+│   │   │   ├── LibraryRepository.kt          #   and its wiring to the API: the only getLibrary
+│   │   │   ├── LibraryWriteInterceptor.kt    # Every non-GET drops the copy (MOB-19)
+│   │   │   ├── HomeAdapters.kt, CoverBinder.kt, DonutView.kt, ThemeManager.kt, SnackbarHelper.kt,
+│   │   │   │   CalendarHelper.kt             # Home lists, covers, the Insights donut, accent
+│   │   │   │                                 #   presets, snackbars, calendar sync
 │   │   │   ├── fragments/
-│   │   │   │   ├── SearchFragment.kt         # Game search UI
+│   │   │   │   ├── HomeFragment.kt           # Greeting, now playing, up next, shortcuts
+│   │   │   │   ├── SearchFragment.kt         # "Discover": catalog search
 │   │   │   │   ├── LibraryFragment.kt        # User library management
-│   │   │   │   ├── ProfileFragment.kt        # User profile + stats
-│   │   │   │   └── GameDetailsFragment.kt    # Game detail bottom sheet / view
-│   │   │   ├── SafeUrl.kt                    # https-only gate for every server-supplied image URL
-│   │   │   │                                 #   (MOB-8; twin of the web's safeUrl.js)
-│   │   │   └── ui/theme/
-│   │   │       ├── Color.kt
-│   │   │       ├── Theme.kt
-│   │   │       └── Type.kt
+│   │   │   │   ├── InsightsFragment.kt       # Counts and completion, from the library
+│   │   │   │   ├── ProfileFragment.kt        # User profile + stats + settings
+│   │   │   │   └── GameDetailsFragment.kt    # Game details, opened over the tab (MOB-19)
+│   │   │   └── SafeUrl.kt                    # https-only gate for every server-supplied image URL
+│   │   │                                     #   (MOB-8; twin of the web's safeUrl.js)
 │   │   ├── res/
 │   │   │   ├── layout/                       # XML layouts for all screens
 │   │   │   ├── values/                       # Colors, strings, themes
-│   │   │   ├── menu/                         # Navigation and action bar menus
+│   │   │   ├── menu/                         # The bottom navigation (the toolbar menu is gone, MOB-22)
 │   │   │   ├── drawable/                     # Icons and drawables
 │   │   │   └── anim/                         # Slide transition animations
 │   │   └── AndroidManifest.xml
@@ -106,7 +117,11 @@ mobile/                                       # inside the GameTracker repo (was
 
 ## Backend Connection
 
-- **Base URL**: `https://gametracker.etech.ink/api/`
+- **Base URL**: `BuildConfig.API_BASE`, per build type (MOB-23). Release is always
+  `https://gametracker.etech.ink/api/` and no property changes it. Debug takes
+  `-PgtDebugApiBase=https://<staging>/api/` (or `gtDebugApiBase` in `~/.gradle/gradle.properties`)
+  and falls back to production only when none is set. https only, ending in `/api/`, or the
+  build fails
 - **Protocol**: HTTPS
 - **Auth**: Bearer Token in `Authorization` header (held in memory; sealed by the Keystore when
   fingerprint unlock is on, MOB-6)
@@ -121,7 +136,7 @@ mobile/                                       # inside the GameTracker repo (was
 | GET | `/user/{username}/games` | Fetch user's game library |
 | POST | `/user/{username}/games` | Add / update game in library |
 | DELETE | `/user/{username}/games/{gameId}` | Remove game from library |
-| PUT | `/user/{username}/games/{gameId}/backlog-order` | Move game in backlog |
+| PUT | `/user/{username}/backlog-reorder` | The whole backlog order in one call, one transaction (MOB-14) |
 | POST | `/user/{username}/games/{gameId}/refresh-metadata` | Refresh game info |
 | GET | `/user/me` | After fingerprint unlock: does the stored session still work? (MOB-5) |
 | POST | `/user/me/tokens` | Mint this phone's 30-day library token at a password sign-in (MOB-9) |
@@ -131,8 +146,10 @@ mobile/                                       # inside the GameTracker repo (was
 > lives in the same repo. `test/api-surface.test.js` fails if a route in `GameTrackerApi.kt` is
 > not a live v1 route at a tier the app can reach. `test/api-contract.test.js` fails if a field
 > in `models.kt` is not in a pinned response. Adding an endpoint or a field here means adding it
-> to the backend's pins first. `@SerializedName` is refused by the parser: keep Kotlin names
-> equal to wire names.
+> to the backend's pins first. The gate reads `mobile/api-contract.json`, which `ApiContractTest`
+> writes by reflection (MOB-25) and fails on when stale: after changing the API or a model, run
+> the unit tests with `GT_WRITE_CONTRACT=1` and commit the diff. `@SerializedName`, `@JsonAdapter`,
+> `@HTTP` and `@Url` are refused: keep Kotlin names equal to wire names.
 
 ---
 
@@ -144,7 +161,7 @@ LoginActivity  (LAUNCHER — entry point)
 MainActivity  (single activity host)
     ├── Bottom Navigation (5 tabs):
     │   ├── Home            → HomeFragment
-    │   ├── Search          → SearchFragment
+    │   ├── Discover        → SearchFragment
     │   ├── Library         → LibraryFragment
     │   ├── Insights        → InsightsFragment
     │   └── Profile         → ProfileFragment
@@ -172,9 +189,10 @@ MainActivity  (single activity host)
     └── GameDetailsFragment  (pushed onto back stack)
         ├── Cover image (Glide)
         ├── Title, release date, price
-        ├── Status spinner
-        ├── Update status / Refresh metadata buttons
-        └── Remove from library button
+        ├── Status chips (Wishlist, Backlog, Playing, Done; Unreleased is shown, never picked)
+        ├── Rating and notes (this phone only), Refresh metadata
+        ├── Remove from library (asks first)
+        └── For a game NOT in the library: only "Add to library" (MOB-16)
 ```
 
 ---
@@ -183,7 +201,8 @@ MainActivity  (single activity host)
 
 ### Login Flow
 1. User enters username + password in `LoginActivity`
-2. Client validates non-empty, trims whitespace, lowercases username
+2. `LoginInput`: the username is trimmed and lowercased; the password is sent as typed and only
+   has to be non-empty (MOB-34)
 3. `POST /auth/login` with `LoginRequest`
 4. On success: the token is held IN MEMORY by `SessionStore`; only the username goes to the
    `"auth"` prefs. With fingerprint unlock on, one fingerprint prompt seals the new token
@@ -202,7 +221,7 @@ MainActivity  (single activity host)
 - `TokenVault` holds an AES-256-GCM key in the Android Keystore (StrongBox where available):
   `setUserAuthenticationRequired(true)`, per-use STRONG biometric (`setUserAuthenticationParameters(0,
   AUTH_BIOMETRIC_STRONG)`, `-1` validity below API 30), `setInvalidatedByBiometricEnrollment(true)`.
-- Turning it on (Profile switch, Settings button, or after a password sign-in) runs a
+- Turning it on (the Profile switch, or after a password sign-in) runs a
   `BiometricPrompt` with an ENCRYPT `CryptoObject` and stores only the ciphertext, IV and the
   token's `exp` (`token_sealed_*_v1` in `"auth"` prefs).
 - On `LoginActivity` load: prompt ONLY if fingerprint unlock is on AND a sealed copy exists
@@ -236,7 +255,21 @@ MainActivity  (single activity host)
 
 ## State Management
 
-- **No ViewModel/LiveData** — fragment-level mutable lists + coroutines
+- **The library: `LibraryRepository`** (MOB-19), the ONLY caller of `getLibrary`. One copy in
+  memory, keyed by the credential, served for 30 s; `force = true` for pull-to-refresh and for
+  the add-time duplicate check (MOB-10). EVERY non-GET request drops it
+  (`LibraryWriteInterceptor`, in `ApiClient`; JVM-tested), so a new write path cannot forget to.
+  Cleared at sign-out. The rules are `LibraryCache`, JVM-tested.
+- **Tabs are shown and hidden, never replaced** (MOB-19, `MainActivity.loadFragmentForTab`): each
+  keeps its scroll, filter and search text. A tab reloads in `onHiddenChanged(false)` and in
+  `onResume` only when not hidden. Game Details opens with `MainActivity.openDetails`, which
+  hides the tab (Back shows it again). No fragment calls `.replace(R.id.fragment_container)`.
+- **No ViewModel/LiveData.** Deliberate, for now: with tabs kept and one library copy, a
+  ViewModel would add no behaviour. What it would still buy is state across a configuration
+  change; the FragmentManager restores the tabs, but not their in-memory lists (they re-read
+  the copy).
+- **Session values: `Session.get(ctx)`** (`token`, `username`, `bearer()`). No screen reads the
+  `"auth"` preferences itself (pinned in `test/runtime.test.js`)
 - **Auth state**: the token in memory (`SessionStore`); username, biometric flag and the sealed
   copy in SharedPreferences
 - **Per-account local data**: `UserData` (MOB-7). Never a device-wide key: the next account
@@ -245,34 +278,22 @@ MainActivity  (single activity host)
   in fragments for anything that touches a view. The fragment's own `lifecycleScope` only for
   work that must outlive the view, marked `// outlives the view: <why>`. No `CoroutineScope(...)`
   except `PendingRemovals`' process scope. All pinned in `test/runtime.test.js`
-- **State reload**: Fragments reload from API on resume / lifecycle events (no persistent cache)
+- **State reload**: tabs re-read the shared library copy when shown (MOB-19); nothing is cached on disk
 
 ---
 
 ## Design System
 
 ### Color Palette
-> **Stale:** the values below are what this file used to claim. The code uses `#111218`
-> backgrounds and a `#5B8DEF` default accent, with 5 accent presets (`ThemeManager`). See
-> MOB-26 and MOB-33 in `mobile/ROADMAP.md` before trusting this table.
-
-| Role | Hex | Usage |
-|---|---|---|
-| Primary Background | `#181A20` | Screen backgrounds |
-| Card/Surface | `#23262F` | Game cards, bottom sheets |
-| Accent Blue | `#22B8F6` | Buttons, active states, status "Playing" |
-| Text Primary | `#F5F6FA` | Main text |
-| Text Secondary | `#A0A3B1` | Subtitles, metadata |
-| Status Wishlist | `#6B7280` | Gray |
-| Status Playing | `#22B8F6` | Blue |
-| Status Done | `#22C55E` | Green |
-| Status Backlog | `#F97316` | Orange |
-| Status Unreleased | `#8B5CF6` | Purple |
+`res/values/colors.xml` is the source; this is a summary of it, not a second copy. Screens are
+`gt_surface_1` `#111218`, cards `gt_surface_2`/`gt_card`, body text `gt_text_primary` `#F0F1F8`,
+secondary text `gt_text_secondary` `#8890A8`. The accent is one of the web's six presets (`ThemeManager`, Violet default), not
+a fixed colour. Status colours are `gt_status_*`, the web's `--color-status-*` (MOB-33). Contrast rules: MOB-29 in `mobile/ROADMAP.md`.
 
 ### UI Patterns
 - Material Design 3 components throughout
 - Dark-first theme
-- Snackbar for user feedback (not dialogs)
+- Snackbar for feedback; a dialog only to confirm something that cannot be undone (Remove, sign-out)
 - Loading progress indicators on async operations
 - Empty state messages with guidance
 - Slide animations (200ms) on fragment transitions (`slide_in_right`, `slide_out_left`)
@@ -328,13 +349,23 @@ files from its cached resolution metadata, so they are never fetched and never r
 file (PR #6) missed three that way, and `main`'s first cold build refused them (PR #7). Review the
 diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not an update.
 
+**Never regenerate it on the self-hosted runner** (it is the production host, and
+`--write-verification-metadata` runs tests, lint and assemble with a network and no verification
+at all). Regenerate it locally or on a GitHub-hosted runner. PR #15 (MOB-21) did it once on the
+runner, by a temporary step, as a deliberate exception: that is not a precedent.
+`verify-maven-hashes.yml` then recomputes every hash in the file from its public repository, on a
+GitHub-hosted runner, whenever the file changes: a regeneration is checked by a machine that is
+not the one that produced it.
+
 ---
 
 ## Known Technical Debt
 
-- Package name typo in namespace: `com.example.gmaetrackermobile` (should be `gametracker`) — do not change without a coordinated rename refactor
-- App name string has typo: `GmaeTrackerMobile` — cosmetic, low priority
-- No ViewModel/LiveData — state reloads on every fragment resume (network-heavy)
+- (Fixed, MOB-20.) The app id and package are `ink.etech.gametracker`; the theme is
+  `Theme.GameTracker`. The old `com.example.gmaetrackermobile` is a DIFFERENT app to Android:
+  a phone that had it must uninstall it and install the new one once. Its on-phone notes and
+  ratings do not carry over. Never change the id again: every later change is that again
+- No ViewModel/LiveData (see State Management: tabs are kept and the library is cached, MOB-19)
 
 ---
 
@@ -396,7 +427,7 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 **Invocation**: Launch the UI/UX agent to review any UI changes.
 
 **Scope of review**:
-- Consistency with the dark theme color palette (`#181A20`, `#22B8F6` accent, status colors)
+- Consistency with the dark theme palette in `res/values/colors.xml` (accent presets in `ThemeManager`)
 - Material Design 3 component usage and guidelines compliance
 - Touch target sizes (minimum 48dp for interactive elements)
 - Accessibility: content descriptions, TalkBack support, sufficient color contrast
@@ -406,7 +437,8 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 - Animation consistency (200ms slide transitions, no janky transitions)
 - Responsiveness across screen sizes (phones from small to large)
 - Bottom navigation behavior and tab state preservation
-- Status color system consistency (Wishlist gray, Playing blue, Done green, Backlog orange, Unreleased purple)
+- Status color system consistency (MOB-33, the web's palette: Wishlist sky #38BDF8, Playing emerald #34D399,
+  Done violet #C084FC, Backlog amber #FBBF24, Unreleased slate #94A3B8), each badge carrying its label
 - Game card design and cover image aspect ratio (portrait 3:4)
 - Alignment with today's standards for Android app design and interactivity
 
@@ -422,8 +454,11 @@ Before releasing a new APK or publishing to any distribution channel:
 - [ ] Architect agent has reviewed and **approved** all changes
 - [ ] UI/UX agent has reviewed and **approved** all UI changes (if applicable)
 - [ ] Tested on at least one physical device or emulator at minimum SDK (API 24)
-- [ ] ProGuard/R8 rules verified for release build
+- [ ] ProGuard/R8 rules verified for release build. A new class in `models.kt` needs a keep rule
+      in `proguard-rules.pro` AND a field in android.yml's `R8_KEPT_FIELDS` (runtime.test.js
+      enforces both; android.yml then checks the BUILT dex). A Gson model outside `models.kt`
+      is not covered: keep them there
 - [ ] OkHttp logging interceptor is **disabled** in release build (no credential leaking)
 - [ ] No hardcoded secrets, tokens, or credentials in source code
 - [ ] `versionCode` incremented in `build.gradle.kts`
-- [ ] APK tested against the live production backend (`https://gametracker.etech.ink/api/`)
+- [ ] Debug builds tested against staging (`-PgtDebugApiBase`), then the release APK against production
