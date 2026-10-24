@@ -106,7 +106,11 @@ mobile/                                       # inside the GameTracker repo (was
 
 ## Backend Connection
 
-- **Base URL**: `https://gametracker.etech.ink/api/`
+- **Base URL**: `BuildConfig.API_BASE`, per build type (MOB-23). Release is always
+  `https://gametracker.etech.ink/api/` and no property changes it. Debug takes
+  `-PgtDebugApiBase=https://<staging>/api/` (or `gtDebugApiBase` in `~/.gradle/gradle.properties`)
+  and falls back to production only when none is set. https only, ending in `/api/`, or the
+  build fails
 - **Protocol**: HTTPS
 - **Auth**: Bearer Token in `Authorization` header (held in memory; sealed by the Keystore when
   fingerprint unlock is on, MOB-6)
@@ -445,4 +449,4 @@ Before releasing a new APK or publishing to any distribution channel:
 - [ ] OkHttp logging interceptor is **disabled** in release build (no credential leaking)
 - [ ] No hardcoded secrets, tokens, or credentials in source code
 - [ ] `versionCode` incremented in `build.gradle.kts`
-- [ ] APK tested against the live production backend (`https://gametracker.etech.ink/api/`)
+- [ ] Debug builds tested against staging (`-PgtDebugApiBase`), then the release APK against production

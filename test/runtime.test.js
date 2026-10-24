@@ -677,6 +677,24 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-23: every debug build and test run used to log in to production with real accounts.
+  check('Android: the server comes from the build type; release is production, fixed (MOB-23)', () => {
+    // Whole-line comments only: a trailing-comment strip would eat the "https://" in a string.
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    assert.ok(/val productionApiBase = "https:\/\/gametracker\.etech\.ink\/api\/"/.test(gradle), 'the production API base moved');
+    const release = gradle.slice(gradle.indexOf('release {'), gradle.indexOf('release {') + 500);
+    assert.ok(/buildConfigField\("String", "API_BASE", apiBaseField\(productionApiBase\)\)/.test(release),
+      'the release build does not use the fixed production API base');
+    assert.ok(!/findProperty/.test(release), 'a Gradle property can change the RELEASE server');
+    assert.ok(/require\(Regex\("\^https:\/\//.test(gradle), 'the API base is not required to be https');
+    assert.ok(/BASE_URL = BuildConfig\.API_BASE/.test(code('ApiClient.kt')), 'ApiClient hard-codes its server again');
+    for (const f of ['ApiClient.kt', 'MobileTokenApi.kt', 'LoginActivity.kt']) {
+      // The RAW file: code() strips from "//" on, which is the middle of every URL.
+      const raw = fs.readFileSync(path.join(APP, 'java/ink/etech/gametracker', f), 'utf8');
+      assert.ok(!/"https?:\/\/[^"]*\/api/.test(raw), `${f} hard-codes an API URL`);
+    }
+  });
+
   // MOB-22: code that could not run, re-read by every reviewer (and fixed twice for MOB-3).
   check('Android: the dead Compose theme, toolbar menu and callback stay deleted (MOB-22)', () => {
     const J = path.join(APP, 'java/ink/etech/gametracker');

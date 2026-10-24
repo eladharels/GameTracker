@@ -6,6 +6,19 @@ plugins {
     id("kotlin-parcelize")
 }
 
+// MOB-23: the server the app talks to, per build type. RELEASE is production, fixed: the
+// published APK must never be built to talk elsewhere, so no property can change it. DEBUG
+// takes -PgtDebugApiBase=https://<staging>/api/ (or gtDebugApiBase in ~/.gradle/gradle.properties)
+// and falls back to production only when none is given. HTTPS only, as the network config
+// requires anyway, and always ending in /api/ (Retrofit's base URL).
+val productionApiBase = "https://gametracker.etech.ink/api/"
+fun apiBaseField(url: String): String {
+    require(Regex("^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/([A-Za-z0-9._~-]+/)*api/$").matches(url)) {
+        "API base must be https://<host>[:port]/.../api/ -- got: $url"
+    }
+    return "\"$url\""
+}
+
 android {
     namespace = "ink.etech.gametracker"
     compileSdk = 36
@@ -24,7 +37,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            val debugBase = (project.findProperty("gtDebugApiBase") as String?)?.takeIf { it.isNotBlank() }
+            buildConfigField("String", "API_BASE", apiBaseField(debugBase ?: productionApiBase))
+        }
         release {
+            buildConfigField("String", "API_BASE", apiBaseField(productionApiBase))
             // R8 (MOB-20): shrinks the release APK and obfuscates it. The Gson models and the
             // Retrofit interface are kept by proguard-rules.pro; android.yml checks the dex.
             // Signing is not here, on purpose: CI signs the APK outside Gradle, with a key

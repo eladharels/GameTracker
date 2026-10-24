@@ -8,7 +8,8 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object ApiClient {
-    private const val BASE_URL = "https://gametracker.etech.ink/api/"
+    // Per build type, from build.gradle.kts (MOB-23): release is always production.
+    private val BASE_URL = BuildConfig.API_BASE
 
     @Volatile private var appContext: Context? = null
 

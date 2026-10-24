@@ -575,7 +575,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   libraries resolve, and strict verification then needs `verification-metadata.xml`
   regenerated from an empty Gradle home, which MOB-21 does through CI anyway.
 
-### [ ] MOB-23 Medium — Server URL is hard-coded to production; debug builds use the live backend
+### [x] MOB-23 Medium — Server URL is hard-coded to production; debug builds use the live backend
 - **Where:** `ApiClient.kt:17`; `mobile/CLAUDE.md:323` ("APK tested against the live
   production backend").
 - **Why:**
@@ -587,6 +587,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - `buildConfigField("String", "API_BASE", …)` per build type: debug → staging, release →
     production.
   - Optionally a server-URL field on the login screen (https only; see MOB-8).
+
+- **Done (PR #15):** `BuildConfig.API_BASE` per build type. Release is production, with no
+  override, so a published APK cannot be built to talk elsewhere. Debug takes
+  `-PgtDebugApiBase`; with none it still falls back to production, because no staging URL is
+  recorded anywhere in this repo (owner: set it in `~/.gradle/gradle.properties`). https and a
+  trailing `/api/` are required at build time. The login-screen server field is not done: one
+  instance is what this app is for today. Pinned in `test/runtime.test.js`.
 
 ### [ ] MOB-24 Medium — No tests
 - **Where:** `app/src/test/…/ExampleUnitTest.kt` and `app/src/androidTest/…/ExampleInstrumentedTest.kt`
