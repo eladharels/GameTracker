@@ -145,8 +145,10 @@ mobile/                                       # inside the GameTracker repo (was
 > lives in the same repo. `test/api-surface.test.js` fails if a route in `GameTrackerApi.kt` is
 > not a live v1 route at a tier the app can reach. `test/api-contract.test.js` fails if a field
 > in `models.kt` is not in a pinned response. Adding an endpoint or a field here means adding it
-> to the backend's pins first. `@SerializedName` is refused by the parser: keep Kotlin names
-> equal to wire names.
+> to the backend's pins first. The gate reads `mobile/api-contract.json`, which `ApiContractTest`
+> writes by reflection (MOB-25) and fails on when stale: after changing the API or a model, run
+> the unit tests with `GT_WRITE_CONTRACT=1` and commit the diff. `@SerializedName`, `@JsonAdapter`,
+> `@HTTP` and `@Url` are refused: keep Kotlin names equal to wire names.
 
 ---
 

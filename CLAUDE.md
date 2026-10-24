@@ -329,11 +329,12 @@ GameTracker/
 │   │                               #   green. Ends with the ANDROID GATE: every field of the
 │   │                               #   app's models is in a pinned key set, and its request
 │   │                               #   bodies are driven through the real handlers
-│   ├── mobile-api.js               # NOT a test: reads mobile/'s GameTrackerApi.kt and
-│   │                               #   models.kt for the Android gate (api-surface: every route
-│   │                               #   the app calls is live at a reachable tier; api-contract:
-│   │                               #   every field is pinned). Regex over Kotlin, so it FAILS
-│   │                               #   CLOSED: counts, anchors, and a refusal of @SerializedName
+│   ├── mobile-api.js               # NOT a test: reads mobile/api-contract.json for the Android
+│   │                               #   gate (api-surface: every route the app calls is live at a
+│   │                               #   reachable tier; api-contract: every field is pinned). The
+│   │                               #   JSON is written by REFLECTION in mobile/'s ApiContractTest,
+│   │                               #   which fails when it is stale (MOB-25). Still FAILS CLOSED:
+│   │                               #   counts, anchors, cross-checks against the Kotlin source
 │   └── v1-shapes.js                # The published v1 key sets, ONE copy shared by the pins,
 │                                   #   the Android gate and library-shape.test.js
 ├── schema-migrate.js               # Ordered transactional migration runner (fatal on error)

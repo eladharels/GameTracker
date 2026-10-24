@@ -620,7 +620,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Robolectric (fragment lifecycle) goes with MOB-21:** it is a new dependency, so it needs
   the verification metadata regenerated from an empty Gradle home, which MOB-21 does.
 
-### [ ] MOB-25 Low — Emit the app's API contract from the code instead of regex-parsing Kotlin
+### [x] MOB-25 Low — Emit the app's API contract from the code instead of regex-parsing Kotlin
 - **Where:** the backend drift gate (`test/mobile-api.js`, added alongside PR #6) reads
   `GameTrackerApi.kt` and `models.kt` with regular expressions.
 - **Why:** a regex over source text breaks on formatting, default arguments, annotations
@@ -632,6 +632,12 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     response models (field names, after `@SerializedName`).
   - It writes `mobile/api-contract.json`, which is committed.
   - The backend gate reads that JSON. A CI step fails if regenerating it changes it.
+
+- **Done (PR #15):** `ApiContractTest` reflects over `GameTrackerApi` and the `models.kt`
+  classes and compares the result with the committed `mobile/api-contract.json`; it runs in the
+  Android job, so a stale file fails CI there. `test/mobile-api.js` reads the JSON, and still
+  fails closed: counts, anchors, the model list against `models.kt`, the route count against
+  the interface. The regex parser and its self-tests are gone.
 
 ### [x] MOB-26 Medium — Documentation contradicts the code
 - **Where and what:**

@@ -1748,24 +1748,12 @@ checkAsync('PUT /api/user/me/sharing: truthiness to 1/0, a missing value is 400,
 
 // ── The Android app (mobile/) against the frozen v1 contract ────────────────────────────
 // The app is the v1 client this freeze exists for, and it lives in this repository. Its
-// models are read from source (test/mobile-api.js, which fails closed) and checked against
+// models come from mobile/api-contract.json (written by reflection, MOB-25) and are checked against
 // the SAME key constants the pins above assert, so a backend rename that would break the app
 // fails here, naming the Android field it breaks.
 console.log('the Android app (mobile/) against the v1 contract:');
-const { mobileContract, parseDataClass } = require('./mobile-api');
+const { mobileContract } = require('./mobile-api');
 const MOBILE = mobileContract();
-
-check('the Kotlin parse fails closed on the shapes a lazy regex got wrong', () => {
-  // A parameterised annotation ended the old lazy match early, and the dropped field went
-  // unnoticed because both counts were taken on the shortened body.
-  assert.throws(() => parseDataClass('data class Y(val a: String,\n  @Expose(serialize = false)\n  val b: String)', 'Y'), /annotation with arguments/);
-  // A multi-line default must not cut the class short either.
-  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = listOf(1,\n 2).toString(),\n val b: Int)', 'Y'), ['a', 'b']);
-  assert.throws(() => parseDataClass('data class Y(val a: String', 'Y'), /unbalanced/);
-  // A paren inside a string literal is not the end of the class.
-  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = ")",\n val b: Int)', 'Y'), ['a', 'b']);
-  assert.deepStrictEqual(parseDataClass('data class Y(val a: String = "\\")(",\n val b: Char = \')\')', 'Y'), ['a', 'b']);
-});
 
 check('every Game field the app binds is a field a pinned response carries', () => {
   // One Kotlin class serves both library rows and search results (models.kt), so a field is
@@ -1776,7 +1764,7 @@ check('every Game field the app binds is a field a pinned response carries', () 
 });
 check('the app\'s LoginResponse is exactly the pinned {token}', () => {
   assert.deepStrictEqual([...MOBILE.loginResponse].sort(), [...LOGIN_TOKEN_KEYS].sort());
-  assert.deepStrictEqual(MOBILE.loginRequest, ['username', 'password'], 'LoginRequest changed shape');
+  assert.deepStrictEqual([...MOBILE.loginRequest].sort(), ['password', 'username'], 'LoginRequest changed shape');
 });
 
 checkAsync('MOB-9: the app\'s CreateTokenRequest reaches the mint as sent, and CreatedToken reads only what it returns', async () => {

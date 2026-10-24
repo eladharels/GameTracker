@@ -1,0 +1,66 @@
+{
+  "backlogReorderRequest": [
+    "order"
+  ],
+  "createTokenRequest": [
+    "expiresAt",
+    "name",
+    "password",
+    "scopes"
+  ],
+  "createdToken": [
+    "expiresAt",
+    "id",
+    "token"
+  ],
+  "game": [
+    "backlog_order",
+    "coverUrl",
+    "cover_url",
+    "game_id",
+    "game_name",
+    "id",
+    "last_price",
+    "last_price_updated",
+    "name",
+    "releaseDate",
+    "release_date",
+    "source",
+    "status",
+    "steamAppId",
+    "steam_app_id",
+    "user_id"
+  ],
+  "gameUpdateRequest": [
+    "coverUrl",
+    "gameId",
+    "gameName",
+    "releaseDate",
+    "status",
+    "steamAppId"
+  ],
+  "gameUpsertResult": [
+    "coerced",
+    "status",
+    "success"
+  ],
+  "loginRequest": [
+    "password",
+    "username"
+  ],
+  "loginResponse": [
+    "token"
+  ],
+  "routes": [
+    "DELETE user/me/tokens/{tokenId}",
+    "DELETE user/{username}/games/{gameId}",
+    "GET games/search",
+    "GET user/me",
+    "GET user/{username}/games",
+    "POST auth/login",
+    "POST user/me/tokens",
+    "POST user/{username}/games",
+    "POST user/{username}/games/{gameId}/refresh-metadata",
+    "PUT user/{username}/backlog-reorder"
+  ]
+}
