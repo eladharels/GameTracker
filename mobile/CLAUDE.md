@@ -236,7 +236,21 @@ MainActivity  (single activity host)
 
 ## State Management
 
-- **No ViewModel/LiveData** — fragment-level mutable lists + coroutines
+- **The library: `LibraryRepository`** (MOB-19), the ONLY caller of `getLibrary`. One copy in
+  memory, keyed by the credential, served for 30 s; `force = true` for pull-to-refresh and for
+  the add-time duplicate check (MOB-10). EVERY non-GET request drops it
+  (`LibraryRepository.WriteInterceptor`, in `ApiClient`), so a new write path cannot forget to.
+  Cleared at sign-out. The rules are `LibraryCache`, JVM-tested.
+- **Tabs are shown and hidden, never replaced** (MOB-19, `MainActivity.loadFragmentForTab`): each
+  keeps its scroll, filter and search text. A tab reloads in `onHiddenChanged(false)` and in
+  `onResume` only when not hidden. Game Details opens with `MainActivity.openDetails`, which
+  hides the tab (Back shows it again). No fragment calls `.replace(R.id.fragment_container)`.
+- **No ViewModel/LiveData.** Deliberate, for now: with tabs kept and one library copy, a
+  ViewModel would add no behaviour. What it would still buy is state across a configuration
+  change; the FragmentManager restores the tabs, but not their in-memory lists (they re-read
+  the copy).
+- **Session values: `Session.get(ctx)`** (`token`, `username`, `bearer()`). No screen reads the
+  `"auth"` preferences itself (pinned in `test/runtime.test.js`)
 - **Auth state**: the token in memory (`SessionStore`); username, biometric flag and the sealed
   copy in SharedPreferences
 - **Per-account local data**: `UserData` (MOB-7). Never a device-wide key: the next account
@@ -334,7 +348,7 @@ diff: a regeneration only ADDS entries. A changed checksum is a stop sign, not a
 
 - Package name typo in namespace: `com.example.gmaetrackermobile` (should be `gametracker`) — do not change without a coordinated rename refactor
 - App name string has typo: `GmaeTrackerMobile` — cosmetic, low priority
-- No ViewModel/LiveData — state reloads on every fragment resume (network-heavy)
+- No ViewModel/LiveData (see State Management: tabs are kept and the library is cached, MOB-19)
 
 ---
 

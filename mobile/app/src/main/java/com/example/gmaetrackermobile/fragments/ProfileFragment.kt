@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.LibraryRepository
 import com.example.gmaetrackermobile.SignOut
 import com.example.gmaetrackermobile.UserData
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -61,12 +62,18 @@ class ProfileFragment : Fragment() {
         context?.let { showBiometric(FingerprintUnlock.isOn(it)) }
     }
 
+    /** Shown again by a tab tap (MOB-19): the counts may have changed on another tab. */
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (!hidden && view != null) loadLibraryStats()
+    }
+
     // ── Profile info ──────────────────────────────────────────────────────────
 
     private fun setupProfileInfo(view: View) {
-        val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-        val username = prefs.getString("username", "Unknown") ?: "Unknown"
-        val displayName = prefs.getString("display_name", username)?.takeIf { it.isNotBlank() } ?: username
+        val session = Session.get(requireContext())
+        val username = session.username ?: "Unknown"
+        val displayName = username   // display_name was never written on the phone (MOB-22)
         view.findViewById<TextView>(R.id.tvUsername).text = "@$username"
         view.findViewById<TextView>(R.id.tvDisplayName).text = displayName
         view.findViewById<TextView>(R.id.tvAvatarInitial).text =
@@ -82,24 +89,22 @@ class ProfileFragment : Fragment() {
     private fun loadLibraryStats() {
         // The view's scope (MOB-17): this was an unscoped CoroutineScope that called
         // requireContext() on an IO thread after the fragment could have detached.
-        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+        val ctx = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: return@launch
-                val username = prefs.getString("username", null) ?: return@launch
-                val response = ApiClient.api.getLibrary("Bearer $token", username)
-                withContext(Dispatchers.Main) {
-                    if (response.isSuccessful && isAdded) {
-                        val games = response.body() ?: emptyList()
-                        view?.findViewById<TextView>(R.id.tvProfileTotal)?.text = games.size.toString()
-                        view?.findViewById<TextView>(R.id.tvProfilePlaying)?.text =
-                            games.count { it.status?.lowercase() == "playing" }.toString()
-                        view?.findViewById<TextView>(R.id.tvProfileDone)?.text =
-                            games.count { it.status?.lowercase() == "done" }.toString()
-                        view?.findViewById<TextView>(R.id.tvProfileBacklog)?.text =
-                            games.count { it.status?.lowercase() == "backlog" }.toString()
-                    }
+                // The shared copy (MOB-19); null when it could not be read: keep the old numbers.
+                val games = LibraryRepository.load(ctx)
+                if (games != null && isAdded) {
+                    view?.findViewById<TextView>(R.id.tvProfileTotal)?.text = games.size.toString()
+                    view?.findViewById<TextView>(R.id.tvProfilePlaying)?.text =
+                        games.count { it.status?.lowercase() == "playing" }.toString()
+                    view?.findViewById<TextView>(R.id.tvProfileDone)?.text =
+                        games.count { it.status?.lowercase() == "done" }.toString()
+                    view?.findViewById<TextView>(R.id.tvProfileBacklog)?.text =
+                        games.count { it.status?.lowercase() == "backlog" }.toString()
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // Stats are optional — fail silently
             }
@@ -292,12 +297,8 @@ class ProfileFragment : Fragment() {
 
     private suspend fun syncAllLibraryGames(ctx: Context): Int = withContext(Dispatchers.IO) {
         try {
-            val prefs = ctx.getSharedPreferences("auth", Context.MODE_PRIVATE)
-            val token = Session.get(ctx).token ?: return@withContext 0
-            val username = prefs.getString("username", null) ?: return@withContext 0
-            val response = ApiClient.api.getLibrary("Bearer $token", username)
-            if (!response.isSuccessful) return@withContext 0
-            val games: List<Game> = response.body() ?: emptyList()
+            // Fresh: the calendar is written from it (MOB-19).
+            val games: List<Game> = LibraryRepository.load(ctx, force = true) ?: return@withContext 0
 
             CalendarHelper.deleteAllEvents(ctx)
 

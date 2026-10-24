@@ -30,6 +30,7 @@ import android.widget.TextView
 import com.google.android.material.chip.Chip
 import org.json.JSONArray
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.LibraryRepository
 import com.example.gmaetrackermobile.UserData
 import com.example.gmaetrackermobile.GameStatus
 import com.example.gmaetrackermobile.SearchResult
@@ -105,6 +106,16 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         }
     }
 
+    /** Shown again (MOB-19): the results stay, but their "In library" badges are re-read. */
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (hidden || view == null) return
+        if (::searchHistoryScroll.isInitialized && currentQuery.isEmpty()) renderHistoryChips()
+        viewLifecycleOwner.lifecycleScope.launch {
+            fetchLibrary()?.let { library = it; if (view != null) gameAdapter.notifyDataSetChanged() }
+        }
+    }
+
     override fun onGameStatusUpdated() {
         if (currentQuery.isNotEmpty()) performSearch()
     }
@@ -140,18 +151,11 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             onAddToLibrary = { game -> addGameToLibrary(game) },
             hideAddButton = false,
             onItemClick = { game ->
-                requireActivity().supportFragmentManager.beginTransaction()
-                    .setCustomAnimations(
-                        R.anim.slide_in_right, R.anim.slide_out_left,
-                        R.anim.slide_in_left, R.anim.slide_out_right
-                    )
-                    // Your own row when the game is already in your library, so Details shows
+                // Your own row when the game is already in your library, so Details shows
                     // its real status and library actions (MOB-16, MOB-39); otherwise only Add.
-                    .replace(R.id.fragment_container, LibraryMatch.owned(library, game)
-                        ?.let { GameDetailsFragment.newInstance(it, inLibrary = true) }
-                        ?: GameDetailsFragment.newInstance(game, inLibrary = false))
-                    .addToBackStack(null)
-                    .commit()
+                (activity as? MainActivity)?.openDetails(
+                    LibraryMatch.owned(library, game) ?.let { GameDetailsFragment.newInstance(it, inLibrary = true) } ?: GameDetailsFragment.newInstance(game, inLibrary = false)
+                )
             }
         )
         gameAdapter.ownedStatusOf = { game -> LibraryMatch.owned(library, game)?.status }
@@ -332,7 +336,7 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     }
 
     private suspend fun searchAllGames(query: String): SearchResult {
-        val token = Session.get(requireContext()).token ?: return SearchResult.Failed(SearchResult.Reason.SIGNED_OUT)
+        val token = session.token ?: return SearchResult.Failed(SearchResult.Reason.SIGNED_OUT)
         return try {
             val response = withContext(Dispatchers.IO) {
                 com.example.gmaetrackermobile.ApiClient.api.searchGames(query, "Bearer $token")
@@ -351,20 +355,15 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     /** The library, or null when it could not be read. */
     private suspend fun fetchLibrary(): List<Game>? {
         if (!isAdded) return null
-        val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
-        val token = Session.get(requireContext()).token ?: return null
-        val username = prefs.getString("username", null) ?: return null
-        return LibraryAdd.fetchLibrary("Bearer $token", username)
+        // Shared copy (MOB-19); the add itself re-reads it fresh (LibraryAdd, MOB-10).
+        return LibraryRepository.load(requireContext())
     }
 
     private fun addGameToLibrary(game: Game) {
         if (!isAdded) return
         viewLifecycleOwner.lifecycleScope.launch {
-            val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
-            val token = Session.get(requireContext()).token ?: return@launch
-            val username = prefs.getString("username", null) ?: return@launch
             // A fresh library check, then the add: MOB-10, in LibraryAdd (shared with Details).
-            val outcome = LibraryAdd.add("Bearer $token", username, game)
+            val outcome = LibraryAdd.add(requireContext(), game)
             when (outcome) {
                 is LibraryAdd.Outcome.Added -> outcome.library?.let { library = it }
                 is LibraryAdd.Outcome.AlreadyOwned -> library = outcome.library

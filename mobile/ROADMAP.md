@@ -468,7 +468,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 
 ## ARC — Architecture & build
 
-### [ ] MOB-19 Medium — No data layer: every screen refetches the whole library, twice
+### [x] MOB-19 Medium — No data layer: every screen refetches the whole library, twice
 - **Where:**
   - `LibraryFragment.kt:74` and `:81-84`, `HomeFragment.kt:40` and `:43-46`,
     `InsightsFragment.kt:35-41` (each loads in `onViewCreated` **and** `onResume`, so there
@@ -491,6 +491,17 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     `Session.get(ctx).bearer()`.
   - One `ViewModel` per screen.
   - Show/hide fragments instead of replacing them, or use Navigation with saved state.
+
+- **Done (PR #15):**
+  - `LibraryRepository` over `LibraryCache` (JVM-tested): one copy, keyed by the credential,
+    30 s, concurrent readers share a request, every write drops it, and a read that started
+    before a write is not stored. `getLibrary` has one caller.
+  - Every `"auth"` read goes through `Session` (token, username). `display_name` reads are gone:
+    nothing on the phone ever wrote it.
+  - Tabs are shown and hidden; Details opens over the hidden tab.
+  - Pinned in `test/runtime.test.js`.
+  - **Not done, deliberately:** a ViewModel per screen. With the tabs kept and one library
+    copy it adds no behaviour today; revisit if a screen needs state across a rotation.
 
 ### [ ] MOB-20 Medium — Release build: no R8, a `com.example` application id, no signing or versioning
 - **Where:** `app/build.gradle.kts:10`, `:14`, `:17-18`, `:24-25`; `proguard-rules.pro` (template only).

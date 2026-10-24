@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.LibraryRepository
 
 class HomeFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
@@ -41,17 +42,24 @@ class HomeFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         loadLibrary()
     }
 
+    // A hidden tab is resumed with the activity too: only the visible one reads (MOB-19).
     override fun onResume() {
         super.onResume()
-        loadLibrary()
+        if (!isHidden) loadLibrary()
+    }
+
+    /** Shown again, by a tab tap or by Back from Game Details (MOB-19). */
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (!hidden && view != null) loadLibrary()
     }
 
     override fun onGameStatusUpdated() = loadLibrary()
 
     private fun setupHeader(view: View) {
-        val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-        val username = prefs.getString("username", "Player") ?: "Player"
-        val displayName = prefs.getString("display_name", null)?.takeIf { it.isNotBlank() } ?: username
+        val session = Session.get(requireContext())
+        val username = session.username ?: "Player"
+        val displayName = username   // display_name was never written on the phone (MOB-22)
 
         view.findViewById<TextView>(R.id.tvUserName).text = displayName
         view.findViewById<TextView>(R.id.tvAvatarInitial).text =
@@ -89,29 +97,15 @@ class HomeFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     }
 
     private fun openGame(game: Game) {
-        requireActivity().supportFragmentManager.beginTransaction()
-            .setCustomAnimations(
-                R.anim.slide_in_right, R.anim.slide_out_left,
-                R.anim.slide_in_left, R.anim.slide_out_right
-            )
-            .replace(R.id.fragment_container, GameDetailsFragment.newInstance(game))
-            .addToBackStack(null)
-            .commit()
+        (activity as? MainActivity)?.openDetails(GameDetailsFragment.newInstance(game))
     }
 
+    /** From the shared copy (MOB-19): opening the tab no longer downloads the library twice. */
     private fun loadLibrary() {
+        val ctx = context ?: return
+        LibraryRepository.peek(ctx)?.let { bind(it) }
         viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: return@launch
-                val username = prefs.getString("username", null) ?: return@launch
-                val response = withContext(Dispatchers.IO) {
-                    ApiClient.api.getLibrary("Bearer $token", username)
-                }
-                if (response.isSuccessful && isAdded) bind(response.body() ?: emptyList())
-            } catch (e: Exception) {
-                android.util.Log.e("HomeFragment", "Load error: ${e.message}", e)
-            }
+            LibraryRepository.load(ctx)?.let { if (isAdded) bind(it) }
         }
     }
 

@@ -36,6 +36,8 @@ import android.widget.ImageView
 import java.text.SimpleDateFormat
 import java.util.Locale
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.MainActivity
+import com.example.gmaetrackermobile.LibraryRepository
 
 class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var recyclerView: RecyclerView
@@ -80,9 +82,16 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         }
     }
 
+    // A hidden tab is resumed with the activity too: only the visible one reads (MOB-19).
     override fun onResume() {
         super.onResume()
-        loadLibrary()
+        if (!isHidden) loadLibrary()
+    }
+
+    /** Shown again, by a tab tap or by Back from Game Details (MOB-19). */
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (!hidden && view != null) loadLibrary()
     }
 
     // ── View init ────────────────────────────────────────────────────────────
@@ -102,14 +111,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             onAddToLibrary = {},
             hideAddButton = true,
             onItemClick = { game ->
-                requireActivity().supportFragmentManager.beginTransaction()
-                    .setCustomAnimations(
-                        R.anim.slide_in_right, R.anim.slide_out_left,
-                        R.anim.slide_in_left, R.anim.slide_out_right
-                    )
-                    .replace(R.id.fragment_container, GameDetailsFragment.newInstance(game))
-                    .addToBackStack(null)
-                    .commit()
+                (activity as? MainActivity)?.openDetails(GameDetailsFragment.newInstance(game))
             },
             onDelete = { game -> deleteGameFromLibrary(game) },
             onLongPress = { game -> showStatusBottomSheet(game) }
@@ -259,9 +261,9 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         // the call would change what is sent (Architect review, PR #15).
         val body = BacklogOrder.request(ordered.toList())
         viewLifecycleOwner.lifecycleScope.launch {
-            val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-            val token = Session.get(requireContext()).token ?: return@launch
-            val username = prefs.getString("username", null) ?: return@launch
+            val session = Session.get(requireContext())
+            val token = session.token ?: return@launch
+            val username = session.username ?: return@launch
             val ok = try {
                 withContext(Dispatchers.IO) {
                     ApiClient.api.reorderBacklog("Bearer $token", username, body).isSuccessful
@@ -361,9 +363,9 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: return@launch
-                val username = prefs.getString("username", null) ?: return@launch
+                val session = Session.get(requireContext())
+                val token = session.token ?: return@launch
+                val username = session.username ?: return@launch
                 val id = game.game_id ?: game.id ?: return@launch
 
                 val request = GameStatus.request(game.copy(game_id = id), newStatus)
@@ -441,7 +443,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     }
 
     private fun setupSwipeRefresh() {
-        swipeRefreshLayout.setOnRefreshListener { loadLibrary() }
+        swipeRefreshLayout.setOnRefreshListener { loadLibrary(force = true) }
     }
 
     private fun setupLibrarySearch() {
@@ -461,30 +463,23 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
 
     // ── Load + filter + sort ─────────────────────────────────────────────────
 
-    private fun loadLibrary() {
-        swipeRefreshLayout.isRefreshing = true
+    /** From the shared copy (MOB-19); [force] (pull-to-refresh) always asks the server. */
+    private fun loadLibrary(force: Boolean = false) {
+        val ctx = requireContext()
+        // No spinner for a copy already held: the list is drawn at once.
+        swipeRefreshLayout.isRefreshing = force || LibraryRepository.peek(ctx) == null
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: run {
-                    swipeRefreshLayout.isRefreshing = false; return@launch
-                }
-                val username = prefs.getString("username", null) ?: run {
-                    swipeRefreshLayout.isRefreshing = false; return@launch
-                }
-                val response = withContext(Dispatchers.IO) {
-                    ApiClient.api.getLibrary("Bearer $token", username)
-                }
-                if (response.isSuccessful) {
-                    allGames.clear()
-                    // A removal still inside its undo window has not reached the server yet,
-                    // so the server still lists it. Keep it hidden until it lands or is undone.
-                    val pendingRemoval = PendingRemovals.app.pendingIds(username)
-                    allGames.addAll((response.body() ?: emptyList()).filterNot {
-                        (it.game_id ?: it.id) in pendingRemoval
-                    })
-                    filterGames()
-                }
+                val username = Session.get(ctx).username ?: return@launch
+                val games = LibraryRepository.load(ctx, force) ?: return@launch
+                allGames.clear()
+                // A removal still inside its undo window has not reached the server yet,
+                // so the server still lists it. Keep it hidden until it lands or is undone.
+                val pendingRemoval = PendingRemovals.app.pendingIds(username)
+                allGames.addAll(games.filterNot { (it.game_id ?: it.id) in pendingRemoval })
+                filterGames()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 android.util.Log.e("LibraryFragment", "Load error: ${e.message}", e)
             } finally {

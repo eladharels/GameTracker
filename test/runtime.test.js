@@ -636,7 +636,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     const lib = code('LibraryAdd.kt');
     const add = lib.slice(lib.indexOf('suspend fun add('));
     assert.ok(add.length > 0 && add.indexOf('LibraryMatch.match(') >= 0, 'LibraryAdd.add does not consult LibraryMatch');
-    assert.ok(add.indexOf('fetchLibrary(') < add.indexOf('LibraryMatch.match(')
+    // FORCED: the shared copy can be 30 s old (MOB-19), and a stale copy is the MOB-10 bug.
+    const fresh = add.indexOf('LibraryRepository.load(context, force = true)');
+    assert.ok(fresh >= 0 && fresh < add.indexOf('LibraryMatch.match(')
       && add.indexOf('LibraryMatch.match(') < add.indexOf('addOrUpdateGame('),
       'the add is not preceded by a fresh library read and a match check');
     assert.ok(/\?: return@withContext Outcome\.CheckFailed/.test(add), 'an add proceeds when the library check itself failed');
@@ -645,6 +647,42 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       assert.ok(/LibraryAdd\.add\(/.test(code(f)), `${f} no longer adds through LibraryAdd`);
     }
     assert.ok(!/status\s*=\s*"Wishlist"/.test(code('fragments/SearchFragment.kt')), 'search still sends a capitalised status');
+  });
+
+  // MOB-19: every screen fetched the whole library in onViewCreated AND onResume, and a tab tap
+  // built a new fragment. One cached copy, behind the session; tabs shown and hidden.
+  check('Android: one library copy, one credential reader, tabs kept (MOB-19)', () => {
+    const dir = path.join(APP, 'java/com/example/gmaetrackermobile');
+    const files = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.kt')) files.push(path.relative(dir, path.join(d, e.name)));
+      }
+    })(dir);
+    for (const f of files) {
+      const src = code(f);
+      if (f !== 'LibraryRepository.kt' && f !== 'GameTrackerApi.kt') {
+        assert.ok(!/\.getLibrary\(/.test(src), `${f} fetches the library itself instead of through LibraryRepository`);
+      }
+      if (f !== 'SessionStore.kt') {
+        assert.ok(!/getSharedPreferences\("auth"/.test(src), `${f} reads the "auth" preferences itself instead of through Session`);
+        assert.ok(!/getString\("(?:username|token|display_name)"/.test(src), `${f} reads a session key directly`);
+      }
+      if (f.startsWith('fragments/')) {
+        assert.ok(!/\.replace\(R\.id\.fragment_container/.test(src), `${f} replaces the tab instead of MainActivity.openDetails`);
+      }
+    }
+    assert.ok(/LibraryRepository\.WriteInterceptor\(\)/.test(code('ApiClient.kt')), 'writes no longer invalidate the library copy');
+    const main = code('MainActivity.kt');
+    assert.ok(/tx\.hide\(it\)/.test(main) && /tx\.show\(target\)/.test(main), 'tabs are no longer shown and hidden');
+    assert.ok((main.match(/\.replace\(R\.id\.fragment_container/g) || []).length <= 2, 'MainActivity replaces fragments outside its last-resort path');
+    for (const f of ['HomeFragment.kt', 'LibraryFragment.kt', 'InsightsFragment.kt']) {
+      const src = code('fragments/' + f);
+      assert.ok(/if \(!isHidden\) loadLibrary\(\)/.test(src) && /override fun onHiddenChanged/.test(src),
+        `${f} does not reload on being shown, or reloads while hidden`);
+    }
+    for (const f of ['SignOut.kt', 'MainActivity.kt']) assert.ok(/LibraryRepository\.clear\(\)/.test(code(f)), `${f} leaves the library in memory at sign-out`);
   });
 
   // MOB-16: Details offered Remove, Refresh and status chips (which silently ADDED the game)

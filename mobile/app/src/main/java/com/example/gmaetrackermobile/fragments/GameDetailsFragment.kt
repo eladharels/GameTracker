@@ -132,15 +132,8 @@ class GameDetailsFragment : Fragment() {
         val game = currentGame ?: return
         btnAddToLibrary.isEnabled = false
         viewLifecycleOwner.lifecycleScope.launch {
-            val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-            val token = Session.get(requireContext()).token
-            val username = prefs.getString("username", null)
-            if (token == null || username == null) {
-                btnAddToLibrary.isEnabled = true
-                return@launch
-            }
             // The same fresh-library check as Search (MOB-10), in one place.
-            val outcome = LibraryAdd.add("Bearer $token", username, game)
+            val outcome = LibraryAdd.add(requireContext(), game)
             btnAddToLibrary.isEnabled = true
             val row = when (outcome) {
                 is LibraryAdd.Outcome.Added -> outcome.library?.let { LibraryMatch.owned(it, game) }
@@ -316,11 +309,11 @@ class GameDetailsFragment : Fragment() {
         val game = currentGame ?: return
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: run {
+                val session = Session.get(requireContext())
+                val token = session.token ?: run {
                     showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
                 }
-                val username = prefs.getString("username", null) ?: run {
+                val username = session.username ?: run {
                     showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val gameRequest = GameStatus.request(game, newStatus)
@@ -360,9 +353,9 @@ class GameDetailsFragment : Fragment() {
         btnRefreshMetadata.text = "…"
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: run { restoreRefreshButton(); return@launch }
-                val username = prefs.getString("username", null) ?: run { restoreRefreshButton(); return@launch }
+                val session = Session.get(requireContext())
+                val token = session.token ?: run { restoreRefreshButton(); return@launch }
+                val username = session.username ?: run { restoreRefreshButton(); return@launch }
                 val gameId = game.game_id ?: game.id ?: run { restoreRefreshButton(); return@launch }
                 val response = withContext(Dispatchers.IO) {
                     ApiClient.api.refreshGameMetadata("Bearer $token", username, gameId)
@@ -405,11 +398,11 @@ class GameDetailsFragment : Fragment() {
         val game = currentGame ?: return
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: run {
+                val session = Session.get(requireContext())
+                val token = session.token ?: run {
                     showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
                 }
-                val username = prefs.getString("username", null) ?: run {
+                val username = session.username ?: run {
                     showSnackbar("Authentication error", SnackbarHelper.Type.ERROR); return@launch
                 }
                 val gameId = game.game_id ?: game.id ?: ""

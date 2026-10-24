@@ -1,5 +1,6 @@
 package com.example.gmaetrackermobile
 
+import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,8 +23,12 @@ object LibraryAdd {
         object Failed : Outcome()
     }
 
-    suspend fun add(bearer: String, username: String, game: Game): Outcome = withContext(Dispatchers.IO) {
-        val fresh = fetchLibrary(bearer, username) ?: return@withContext Outcome.CheckFailed
+    suspend fun add(context: Context, game: Game): Outcome = withContext(Dispatchers.IO) {
+        val session = Session.get(context)
+        val bearer = session.bearer() ?: return@withContext Outcome.CheckFailed
+        val username = session.username ?: return@withContext Outcome.CheckFailed
+        // FORCED: never the shared copy, which can be up to 30 s old (MOB-10, MOB-19).
+        val fresh = LibraryRepository.load(context, force = true) ?: return@withContext Outcome.CheckFailed
         val match = LibraryMatch.match(fresh.map { LibraryMatch.rowOf(it) }, LibraryMatch.candidateOf(game))
         if (match == LibraryMatch.Kind.SAME) return@withContext Outcome.AlreadyOwned(LibraryMatch.owned(fresh, game), fresh)
         val response = try {
@@ -37,20 +42,8 @@ object LibraryAdd {
         Outcome.Added(
             saved = GameStatus.stored(GameStatus.WISHLIST, response.body()),
             possibleDuplicate = match == LibraryMatch.Kind.POSSIBLE,
-            library = fetchLibrary(bearer, username),
+            library = LibraryRepository.load(context, force = true),
         )
-    }
-
-    /** The library, or null when it could not be read. */
-    suspend fun fetchLibrary(bearer: String, username: String): List<Game>? = withContext(Dispatchers.IO) {
-        try {
-            val response = ApiClient.api.getLibrary(bearer, username)
-            if (response.isSuccessful) response.body() ?: emptyList() else null
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
-        }
     }
 
     /** What to tell the user. Fixed text: never a server body or an exception (MOB-27). */

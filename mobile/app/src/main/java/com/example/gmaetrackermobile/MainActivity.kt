@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentManager
 import com.example.gmaetrackermobile.fragments.HomeFragment
 import com.example.gmaetrackermobile.fragments.InsightsFragment
 import com.example.gmaetrackermobile.fragments.LibraryFragment
@@ -66,8 +67,9 @@ class MainActivity : AppCompatActivity() {
             bottomNav.selectedItemId = savedTab
         }
 
-        // Load the correct fragment for the restored/initial tab
-        loadFragmentForTab(savedTab)
+        // A restored activity already has its tabs (and any open details) back from the
+        // FragmentManager; only a fresh one creates the first tab.
+        if (savedInstanceState == null) loadFragmentForTab(savedTab)
 
         // Attach the listener for subsequent user taps
         setupBottomNavigation()
@@ -105,6 +107,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun toLogin(sessionEnded: Boolean) {
         if (isFinishing) return
+        LibraryRepository.clear()
         val intent = Intent(this, LoginActivity::class.java)
             .putExtra(LoginActivity.EXTRA_SESSION_ENDED, sessionEnded)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -134,11 +137,8 @@ class MainActivity : AppCompatActivity() {
         val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_navigation)
         bottomNav.setOnItemSelectedListener { item ->
             when (item.itemId) {
-                R.id.navigation_home     -> { loadFragment(HomeFragment());     true }
-                R.id.navigation_search   -> { loadFragment(SearchFragment());   true }
-                R.id.navigation_library  -> { loadFragment(LibraryFragment());  true }
-                R.id.navigation_insights -> { loadFragment(InsightsFragment()); true }
-                R.id.navigation_profile  -> { loadFragment(ProfileFragment());  true }
+                R.id.navigation_home, R.id.navigation_search, R.id.navigation_library,
+                R.id.navigation_insights, R.id.navigation_profile -> { loadFragmentForTab(item.itemId); true }
                 else -> false
             }
         }
@@ -149,19 +149,55 @@ class MainActivity : AppCompatActivity() {
         findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = tabId
     }
 
-    /** Load the fragment that corresponds to a bottom-nav item ID. */
+    /**
+     * The five tabs are created once and then SHOWN and HIDDEN, never replaced (MOB-19): a new
+     * instance on every tap lost the scroll position, the filter and the search text, and
+     * re-downloaded the library. A restored activity (theme change) finds them by tag.
+     * A tab learns it is visible again from onHiddenChanged, not onResume.
+     */
     private fun loadFragmentForTab(tabId: Int) {
-        loadFragment(
-            when (tabId) {
-                R.id.navigation_search   -> SearchFragment()
-                R.id.navigation_library  -> LibraryFragment()
-                R.id.navigation_insights -> InsightsFragment()
-                R.id.navigation_profile  -> ProfileFragment()
-                else                     -> HomeFragment()
-            }
-        )
+        val fm = supportFragmentManager
+        // A details screen belongs to the tab it was opened from: leaving the tab closes it.
+        if (fm.backStackEntryCount > 0) fm.popBackStackImmediate(null, FragmentManager.POP_BACK_STACK_INCLUSIVE)
+        val tag = TAB_PREFIX + tabId
+        try {
+            val tx = fm.beginTransaction().setReorderingAllowed(true)
+            val target = fm.findFragmentByTag(tag)
+            fm.fragments.filter { it.tag?.startsWith(TAB_PREFIX) == true && it !== target && !it.isHidden }
+                .forEach { tx.hide(it) }
+            if (target == null) tx.add(R.id.fragment_container, newTab(tabId), tag) else tx.show(target)
+            tx.commit()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error showing tab: ${e.message}", e)
+            loadFragment(newTab(tabId))
+        }
     }
 
+    private fun newTab(tabId: Int): Fragment = when (tabId) {
+        R.id.navigation_search   -> SearchFragment()
+        R.id.navigation_library  -> LibraryFragment()
+        R.id.navigation_insights -> InsightsFragment()
+        R.id.navigation_profile  -> ProfileFragment()
+        else                     -> HomeFragment()
+    }
+
+    /**
+     * Game Details over the current tab: the tab is hidden, not destroyed, so Back returns to
+     * it exactly as it was (and onHiddenChanged tells it to re-read the library).
+     */
+    fun openDetails(details: Fragment) {
+        val fm = supportFragmentManager
+        val tx = fm.beginTransaction()
+            .setReorderingAllowed(true)
+            .setCustomAnimations(
+                R.anim.slide_in_right, R.anim.slide_out_left,
+                R.anim.slide_in_left, R.anim.slide_out_right
+            )
+        fm.fragments.filter { it.isAdded && !it.isHidden && it.id == R.id.fragment_container }.forEach { tx.hide(it) }
+        tx.add(R.id.fragment_container, details).addToBackStack(null).commit()
+    }
+
+    /** The last-resort path: one fragment, replacing everything. */
     private fun loadFragment(fragment: Fragment) {
         try {
             supportFragmentManager.beginTransaction()
@@ -206,6 +242,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val KEY_SELECTED_TAB = "selected_tab"
+        private const val TAB_PREFIX = "tab:"
         const val EXTRA_OFFLINE = "offline"
     }
 }

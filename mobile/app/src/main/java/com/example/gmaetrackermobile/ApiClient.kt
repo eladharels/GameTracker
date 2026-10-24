@@ -54,7 +54,7 @@ object ApiClient {
         )
         Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .client(buildClient(BuildConfig.DEBUG, listOf(expiry)))
+            .client(buildClient(BuildConfig.DEBUG, listOf(expiry, LibraryRepository.WriteInterceptor())))
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(GameTrackerApi::class.java)

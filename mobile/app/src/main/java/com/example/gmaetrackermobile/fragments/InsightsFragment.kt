@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.LibraryRepository
 
 class InsightsFragment : Fragment() {
 
@@ -36,24 +37,24 @@ class InsightsFragment : Fragment() {
         loadLibrary()
     }
 
+    // A hidden tab is resumed with the activity too: only the visible one reads (MOB-19).
     override fun onResume() {
         super.onResume()
-        loadLibrary()
+        if (!isHidden) loadLibrary()
     }
 
+    /** Shown again, by a tab tap or by Back from Game Details (MOB-19). */
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (!hidden && view != null) loadLibrary()
+    }
+
+    /** From the shared copy (MOB-19). */
     private fun loadLibrary() {
+        val ctx = context ?: return
+        LibraryRepository.peek(ctx)?.let { bind(it) }
         viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: return@launch
-                val username = prefs.getString("username", null) ?: return@launch
-                val response = withContext(Dispatchers.IO) {
-                    ApiClient.api.getLibrary("Bearer $token", username)
-                }
-                if (response.isSuccessful && isAdded) bind(response.body() ?: emptyList())
-            } catch (e: Exception) {
-                android.util.Log.e("InsightsFragment", "Load error: ${e.message}", e)
-            }
+            LibraryRepository.load(ctx)?.let { if (isAdded) bind(it) }
         }
     }
 
