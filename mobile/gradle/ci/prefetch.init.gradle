@@ -16,10 +16,17 @@ def gtCause = { Throwable t -> while (t.cause != null && t.cause != t) t = t.cau
 gradle.allprojects { p ->
     p.tasks.register('gtPrefetch') {
         doLast {
-            p.configurations.findAll { it.canBeResolved }.each { c ->
-                def view = c.incoming.artifactView { lenient(true) }
-                view.artifacts.artifactFiles.files
-                view.artifacts.failures.each { gtFailures << "${p.path}:${c.name}: ${gtCause(it)}" }
+            // Kotlin/Native's bundle is resolvable but never used by an Android build, and is not
+            // in the metadata: resolving it fails verification. Each configuration is caught, so
+            // one failure is reported and the rest are still fetched.
+            p.configurations.findAll { it.canBeResolved && !(it.name ==~ /(?i).*kotlinNative.*|.*kotlinKlib.*/) }.each { c ->
+                try {
+                    def view = c.incoming.artifactView { lenient(true) }
+                    view.artifacts.artifactFiles.files
+                    view.artifacts.failures.each { gtFailures << "${p.path}:${c.name}: ${gtCause(it)}" }
+                } catch (Exception e) {
+                    gtFailures << "${p.path}:${c.name}: ${gtCause(e)}"
+                }
             }
             if (p != p.rootProject) return
             def meta = new groovy.xml.XmlSlurper().parse(p.file('gradle/verification-metadata.xml'))
