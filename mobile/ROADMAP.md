@@ -546,7 +546,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Add a Dependabot `gradle` entry for `/mobile`, and include `mobile/` in the
     dependency-verification metadata that the CI job enforces.
 
-### [ ] MOB-22 Medium — Dead code: three legacy activities, an unused Compose stack, an unreachable logout menu
+### [~] MOB-22 Medium — Dead code: three legacy activities, an unused Compose stack, an unreachable logout menu
 - **Where:**
   - `GameDetailsActivity.kt`, `GameSearchActivity.kt`, `MyLibraryActivity.kt` (434 lines, not
     in the manifest, so they crash if ever started) and their three layouts.
@@ -566,6 +566,14 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Fix:**
   - Delete all of it.
   - For the display name, either fetch it from `GET /api/user/me` or drop the lookup.
+
+- **Code part done (PR #15):** the three activities were already gone; the Compose theme
+  (`ui/theme`), the hidden toolbar with its unreachable sign-out, `refreshCurrentFragment` and
+  the always-null Details callback are deleted (tabs refresh in `onHiddenChanged`, MOB-19), and
+  the `display_name` reads with MOB-19. The note API is in use since MOB-7. Pinned.
+- **The Compose DEPENDENCIES go with MOB-21:** removing them changes which versions of shared
+  libraries resolve, and strict verification then needs `verification-metadata.xml`
+  regenerated from an empty Gradle home, which MOB-21 does through CI anyway.
 
 ### [ ] MOB-23 Medium — Server URL is hard-coded to production; debug builds use the live backend
 - **Where:** `ApiClient.kt:17`; `mobile/CLAUDE.md:323` ("APK tested against the live

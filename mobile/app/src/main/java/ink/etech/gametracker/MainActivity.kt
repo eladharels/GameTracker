@@ -13,7 +13,6 @@ import ink.etech.gametracker.fragments.LibraryFragment
 import ink.etech.gametracker.fragments.ProfileFragment
 import ink.etech.gametracker.fragments.SearchFragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
-import com.google.android.material.appbar.MaterialToolbar
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -54,8 +53,6 @@ class MainActivity : AppCompatActivity() {
         // AppCompat is initialised, but before setContentView so views pick up the colours)
         theme.applyStyle(ThemeManager.getThemeResId(this), true)
         setContentView(R.layout.activity_main)
-
-        setupToolbar()
 
         // Determine which tab to show: restore from savedInstanceState (e.g. after recreate()
         // triggered by theme change) or default to Home on first launch.
@@ -121,17 +118,6 @@ class MainActivity : AppCompatActivity() {
         outState.putInt(KEY_SELECTED_TAB, bottomNav.selectedItemId)
     }
 
-    private fun setupToolbar() {
-        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
-        setSupportActionBar(toolbar)
-
-        toolbar.setOnMenuItemClickListener { menuItem ->
-            when (menuItem.itemId) {
-                R.id.action_logout -> { logout(); true }
-                else -> false
-            }
-        }
-    }
 
     private fun setupBottomNavigation() {
         val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_navigation)
@@ -230,15 +216,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Sign out: ALWAYS ends the session (MOB-3); see [SignOut]. */
-    private fun logout() = SignOut.start(this)
 
-    fun refreshCurrentFragment() {
-        val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
-        if (current is ink.etech.gametracker.fragments.GameDetailsFragment.GameDetailsCallback) {
-            current.onGameStatusUpdated()
-        }
-    }
 
     companion object {
         private const val KEY_SELECTED_TAB = "selected_tab"

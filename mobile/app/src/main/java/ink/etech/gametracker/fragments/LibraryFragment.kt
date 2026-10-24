@@ -39,7 +39,7 @@ import ink.etech.gametracker.Session
 import ink.etech.gametracker.MainActivity
 import ink.etech.gametracker.LibraryRepository
 
-class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
+class LibraryFragment : Fragment() {
     private lateinit var recyclerView: RecyclerView
     private lateinit var swipeRefreshLayout: SwipeRefreshLayout
     private lateinit var chipGroup: ChipGroup
@@ -602,8 +602,6 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     ) {
         SnackbarHelper.show(this, message, type, duration)
     }
-
-    override fun onGameStatusUpdated() = loadLibrary()
 }
 
 /** How long a removal can be undone before it is sent (MOB-12). */

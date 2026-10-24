@@ -677,6 +677,19 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-22: code that could not run, re-read by every reviewer (and fixed twice for MOB-3).
+  check('Android: the dead Compose theme, toolbar menu and callback stay deleted (MOB-22)', () => {
+    const J = path.join(APP, 'java/ink/etech/gametracker');
+    assert.ok(!fs.existsSync(path.join(J, 'ui')), 'the unused Compose theme (ui/theme) is back');
+    assert.ok(!fs.existsSync(path.join(APP, 'res/menu/main_menu.xml')), 'the unreachable toolbar menu is back');
+    for (const f of ['MainActivity.kt', 'fragments/GameDetailsFragment.kt']) {
+      assert.ok(!/GameDetailsCallback|refreshCurrentFragment|setupToolbar/.test(code(f)), `${f} brings back a dead path`);
+    }
+    for (const f of ['GameDetailsActivity.kt', 'GameSearchActivity.kt', 'MyLibraryActivity.kt']) {
+      assert.ok(!fs.existsSync(path.join(J, f)), `${f}, never in the manifest, is back`);
+    }
+  });
+
   // MOB-19: every screen fetched the whole library in onViewCreated AND onResume, and a tab tap
   // built a new fragment. One cached copy, behind the session; tabs shown and hidden.
   check('Android: one library copy, one credential reader, tabs kept (MOB-19)', () => {
@@ -1039,8 +1052,9 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       assert.ok(!/"search_history"|"(note|rating)_/.test(src), `${f} reads or writes notes, ratings or search history outside UserData`);
       assert.ok(!/"(calendar_id|calendar_sync_enabled|event_map)"/.test(src), `${f} keeps calendar settings outside UserData`);
     }
-    // Both sign-out buttons go through SignOut, which asks about the calendar (owner's decision).
-    assert.ok(/private fun logout\(\) = SignOut\.start\(this\)/.test(code('MainActivity.kt')), 'the menu sign-out bypasses SignOut');
+    // Sign-out goes through SignOut, which asks about the calendar (owner's decision). The
+    // toolbar menu that had a second path was unreachable and is gone (MOB-22).
+    assert.ok(!/fun logout\(/.test(code('MainActivity.kt')), 'MainActivity has its own sign-out again');
     assert.ok(/btnLogout\)\.setOnClickListener \{ SignOut\.start\(requireActivity\(\)\) \}/.test(code('fragments/ProfileFragment.kt')),
       'Profile\'s sign-out bypasses SignOut');
     const calExclude = /<exclude\s+domain="sharedpref"\s+path="calendar\.xml"\s*\/>/;

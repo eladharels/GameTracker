@@ -84,17 +84,6 @@ class GameDetailsFragment : Fragment() {
             }
     }
 
-    interface GameDetailsCallback {
-        fun onGameStatusUpdated()
-    }
-
-    private var callback: GameDetailsCallback? = null
-
-    override fun onAttach(context: Context) {
-        super.onAttach(context)
-        callback = parentFragment as? GameDetailsCallback
-    }
-
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View? = inflater.inflate(R.layout.fragment_game_details, container, false)
@@ -151,7 +140,6 @@ class GameDetailsFragment : Fragment() {
                 currentGame = row
                 inLibrary = true
                 setupStatusChips()
-                callback?.onGameStatusUpdated()   // Search's badges, however the user goes back
                 setupRating()
                 loadNoteForCurrentGame()
                 showLibraryActions()
@@ -281,7 +269,6 @@ class GameDetailsFragment : Fragment() {
         btnRemoveFromLibrary.setOnClickListener { confirmRemove() }
         btnAddToLibrary.setOnClickListener { addToLibrary() }
         btnBack.setOnClickListener {
-            callback?.onGameStatusUpdated()
             requireActivity().supportFragmentManager.popBackStack()
         }
         btnSaveNote.setOnClickListener { saveNoteForCurrentGame() }
@@ -332,7 +319,6 @@ class GameDetailsFragment : Fragment() {
                         showSnackbar(GameStatus.outcome(game, newStatus, answer),
                             if (coerced) SnackbarHelper.Type.DEFAULT else SnackbarHelper.Type.SUCCESS,
                             if (coerced) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT)
-                        callback?.onGameStatusUpdated()
                     } else {
                         setupStatusChips()
                         showSnackbar("Couldn't save the status. Try again.", SnackbarHelper.Type.ERROR)
@@ -364,7 +350,6 @@ class GameDetailsFragment : Fragment() {
                     restoreRefreshButton()
                     if (response.isSuccessful) {
                         showSnackbar("Game data refreshed", SnackbarHelper.Type.SUCCESS)
-                        callback?.onGameStatusUpdated()
                     } else {
                         showSnackbar("Failed to refresh game data", SnackbarHelper.Type.ERROR)
                     }
@@ -415,7 +400,6 @@ class GameDetailsFragment : Fragment() {
                 withContext(Dispatchers.Main) {
                     if (response.isSuccessful) {
                         showSnackbar("${game.displayName} removed")
-                        callback?.onGameStatusUpdated()
                         requireActivity().supportFragmentManager.popBackStack()
                     } else {
                         showSnackbar("Failed to remove game", SnackbarHelper.Type.ERROR)

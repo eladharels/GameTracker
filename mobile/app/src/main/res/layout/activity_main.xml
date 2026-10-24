@@ -5,14 +5,6 @@
     android:layout_height="match_parent"
     android:background="@color/gt_surface_1">
 
-    <!-- Hidden toolbar — required by MainActivity.kt for setSupportActionBar; not visible -->
-    <com.google.android.material.appbar.MaterialToolbar
-        android:id="@+id/toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:visibility="gone"
-        app:menu="@menu/main_menu" />
-
     <!-- Fragment container — full height, bottom padding accounts for nav bar -->
     <FrameLayout
         android:id="@+id/fragment_container"

@@ -25,7 +25,7 @@ import java.util.Calendar
 import ink.etech.gametracker.Session
 import ink.etech.gametracker.LibraryRepository
 
-class HomeFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
+class HomeFragment : Fragment() {
 
     private lateinit var continueAdapter: ContinueAdapter
     private lateinit var upNextAdapter: UpNextAdapter
@@ -53,8 +53,6 @@ class HomeFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         super.onHiddenChanged(hidden)
         if (!hidden && view != null) loadLibrary()
     }
-
-    override fun onGameStatusUpdated() = loadLibrary()
 
     private fun setupHeader(view: View) {
         val session = Session.get(requireContext())

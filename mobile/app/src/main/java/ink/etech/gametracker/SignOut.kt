@@ -10,8 +10,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Sign-out, from the toolbar menu and from Profile. The ONE implementation, so the two
- * cannot drift.
+ * Sign-out, from Profile and from turning fingerprint unlock off. The ONE implementation, so the
+ * two cannot drift.
  *
  * It ALWAYS ends the session (MOB-3). The account's notes, ratings and search history stay on
  * the phone, under that account (MOB-7, owner's decision): notes exist nowhere else. The

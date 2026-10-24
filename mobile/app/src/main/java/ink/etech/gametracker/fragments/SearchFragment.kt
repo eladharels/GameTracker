@@ -37,7 +37,7 @@ import ink.etech.gametracker.SearchResult
 import ink.etech.gametracker.SearchResults
 import ink.etech.gametracker.LibraryAdd
 
-class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
+class SearchFragment : Fragment() {
     private lateinit var searchEditText: EditText
     private lateinit var searchButton: Button
     private lateinit var recyclerView: RecyclerView
@@ -114,10 +114,6 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         viewLifecycleOwner.lifecycleScope.launch {
             fetchLibrary()?.let { library = it; if (view != null) gameAdapter.notifyDataSetChanged() }
         }
-    }
-
-    override fun onGameStatusUpdated() {
-        if (currentQuery.isNotEmpty()) performSearch()
     }
 
     // ── View init ────────────────────────────────────────────────────────────
