@@ -559,7 +559,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   and no verification on the production host. Regenerate locally or on a GitHub-hosted runner.
   The new hashes were checked off that host: 50 Maven Central artifacts by the CISO reviewer,
   three by me, and EVERY hash, Google Maven included, by `verify-maven-hashes.yml` on a
-  GitHub-hosted runner (it runs whenever the file changes). The Gradle wrapper is excluded
+  GitHub-hosted runner (it runs whenever the file changes): **818 of 818 equal** on its first
+  complete run (PR #15, run 40077599743, commit eb6064d). The Gradle wrapper is excluded
   from Dependabot, and `android.yml` refuses a distribution other than its own pinned
   `GRADLE_DISTRIBUTION_SHA256`. Not declared directly: appcompat and activity, which arrive
   transitively; declaring them is a metadata change of its own. Dependabot watches `/mobile` (Gradle only: npm
