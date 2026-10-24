@@ -12,6 +12,9 @@
         <item name="colorOnSurface">@color/gt_text_primary</item>
         <item name="colorOnSurfaceVariant">@color/gt_text_secondary</item>
         <item name="colorOnPrimary">#0C0D11</item>
+        <!-- MOB-31: drawn edge-to-edge (EdgeToEdge.kt); the bars show the screen beneath. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <!-- Chip styling -->
         <item name="chipStyle">@style/Widget.Material3.Chip.Filter</item>
     </style>

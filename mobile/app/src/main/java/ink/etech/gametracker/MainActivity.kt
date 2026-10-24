@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity() {
         // AppCompat is initialised, but before setContentView so views pick up the colours)
         theme.applyStyle(ThemeManager.getThemeResId(this), true)
         setContentView(R.layout.activity_main)
+        layoutEdgeToEdge()
 
         // Determine which tab to show: restore from savedInstanceState (e.g. after recreate()
         // triggered by theme change) or default to Home on first launch.
@@ -133,6 +134,32 @@ class MainActivity : AppCompatActivity() {
     /** Programmatically switch tabs (used by Home shortcuts). */
     fun selectTab(tabId: Int) {
         findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = tabId
+    }
+
+    /**
+     * MOB-31: the screens start below the status bar; the bottom nav grows by the navigation
+     * bar's height (Material pads its own content by it), and the screens end above the nav as
+     * it is actually measured: the old fixed 72dp nav and 80dp padding clipped under a
+     * gesture or 3-button bar.
+     */
+    private fun layoutEdgeToEdge() {
+        EdgeToEdge.enable(this)
+        val container = findViewById<View>(R.id.fragment_container)
+        val nav = findViewById<BottomNavigationView>(R.id.bottom_navigation)
+        val navContent = nav.layoutParams.height
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(container) { v, insets ->
+            val bars = insets.getInsets(
+                androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                    androidx.core.view.WindowInsetsCompat.Type.displayCutout()
+            )
+            v.setPadding(bars.left, bars.top, bars.right, v.paddingBottom)
+            nav.layoutParams = nav.layoutParams.apply { height = navContent + bars.bottom }
+            insets
+        }
+        nav.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val h = bottom - top
+            if (container.paddingBottom != h) container.setPadding(container.paddingLeft, container.paddingTop, container.paddingRight, h)
+        }
     }
 
     /**

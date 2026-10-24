@@ -29,6 +29,9 @@ class LoginActivity : AppCompatActivity() {
         // AppCompat is initialised, but before setContentView so views pick up the colours)
         theme.applyStyle(ThemeManager.getThemeResId(this), true)
         setContentView(R.layout.activity_login)
+        // MOB-31: drawn edge-to-edge; the form stays clear of both bars.
+        EdgeToEdge.enable(this)
+        EdgeToEdge.pad(findViewById<android.view.ViewGroup>(android.R.id.content).getChildAt(0), top = true, bottom = true)
 
         val etUsername = findViewById<EditText>(R.id.etUsername)
         val etPassword = findViewById<EditText>(R.id.etPassword)

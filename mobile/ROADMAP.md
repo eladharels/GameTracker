@@ -789,7 +789,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   had a live region); library rows have "Change status" and, in the reorderable backlog, "Move
   up" / "Move down" actions that save the whole order like a drag. Pinned.
 
-### [ ] MOB-31 Medium — Edge-to-edge is not handled, although `targetSdk = 36`
+### [x] MOB-31 Medium — Edge-to-edge is not handled, although `targetSdk = 36`
 - **Where:** `build.gradle.kts:16`; `activity_main.xml:2-35`. There are no
   `fitsSystemWindows`, `WindowInsets` or `enableEdgeToEdge` references anywhere in `mobile/`.
 - **Why:** from Android 15, apps targeting SDK 35+ are drawn edge-to-edge, and on Android 16
@@ -997,6 +997,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     Changing the id later makes installed copies a different app.
   - **Lose the key and no future APK updates an installed one.** Users would have to
     uninstall, losing the device-only ratings and notes (MOB-11). Back it up (runbook).
+
+- **Done (PR #15), to be checked on a phone:** `EdgeToEdge` (WindowCompat, not
+  androidx.activity, which arrives only through Compose). Both activities draw edge-to-edge
+  with transparent bars. The screens are padded by the status bar and cutout, the bottom nav
+  grows by the navigation bar (Material pads its own content), and the screens end above the
+  nav AS MEASURED instead of a fixed 80dp. The sign-in form is padded on both sides. No
+  emulator here, so the first look is on the owner's Android 15/16 phone with the next APK.
 
 ---
 

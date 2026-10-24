@@ -678,6 +678,17 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-31: targetSdk 36 draws under the system bars; the fixed 72dp nav and 80dp padding clipped.
+  check('Android: both activities lay out edge-to-edge, padded by the real insets (MOB-31)', () => {
+    for (const f of ['MainActivity.kt', 'LoginActivity.kt']) {
+      assert.ok(/EdgeToEdge\.enable\(this\)/.test(code(f)), `${f} is not edge-to-edge`);
+    }
+    const main = code('MainActivity.kt');
+    assert.ok(/setOnApplyWindowInsetsListener\(container\)/.test(main) && /addOnLayoutChangeListener/.test(main),
+      'the screens are not padded by the insets and the measured nav');
+    assert.ok(/EdgeToEdge\.pad\(/.test(code('LoginActivity.kt')), 'the sign-in form can sit under the bars');
+  });
+
   // MOB-30: unlabelled controls, labelled decoration, a silent login error, and two gestures
   // (drag, long-press) with no accessible equivalent.
   check('Android: screen-reader labels, autofill and row actions (MOB-30)', () => {
