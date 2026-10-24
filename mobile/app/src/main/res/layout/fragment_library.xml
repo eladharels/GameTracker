@@ -46,7 +46,7 @@
         <LinearLayout
             android:id="@+id/btnSort"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
+            android:layout_height="48dp"
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:background="@drawable/input_field_bg_pill"
@@ -114,9 +114,9 @@
 
         <ImageView
             android:id="@+id/btnClearSearch"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="11dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="15dp"
             android:src="@drawable/ic_delete"
             android:tint="@color/gt_text_muted"
             android:visibility="gone"

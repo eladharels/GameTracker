@@ -811,7 +811,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     nav (drop the fixed height).
   - Size the fragment container's bottom padding from the nav's measured height.
 
-### [ ] MOB-32 Low — Touch targets under 48 dp, and 9–11 sp text
+### [x] MOB-32 Low — Touch targets under 48 dp, and 9–11 sp text
 - **Where:**
   - Game Details back button, 40×40 dp (`fragment_game_details.xml:36-38`).
   - Library clear-search button, 40×40 dp (`fragment_library.xml:114-116`).
@@ -823,6 +823,10 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Fix:**
   - Use `minWidth`/`minHeight="48dp"`, or `TouchDelegate`, keeping the visual size.
   - Set a floor of 12 sp.
+
+- **Done (PR #15):** Details back, Library clear-search and sort, the drag handle, the Add
+  button, the Search button and the Details buttons are 48dp. Every text size is at least
+  12sp, the Insights donut included (now in sp, so it follows the font scale). Pinned.
 
 ### [ ] MOB-33 Low — Accent palette differs from the web app, and one preset matches a status colour
 - **Where:** `ThemeManager.kt:31-40`, `themes.xml:40-73`, `colors.xml:33`.

@@ -53,7 +53,7 @@
             android:background="@drawable/status_badge_bg"
             android:backgroundTint="@color/gt_status_backlog"
             android:textColor="@color/gt_on_status"
-            android:textSize="9sp"
+            android:textSize="12sp"
             android:textStyle="bold"
             android:paddingStart="6dp"
             android:paddingEnd="6dp"
@@ -101,7 +101,7 @@
                 android:id="@+id/tvStatus"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="10sp"
+                android:textSize="12sp"
                 android:textColor="@color/gt_on_status"
                 android:textStyle="bold"
                 android:textAllCaps="true"
@@ -135,8 +135,8 @@
 
         <ImageView
             android:id="@+id/ivDragHandle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:src="@drawable/ic_drag_handle"
             android:tint="@color/gt_text_muted"
             android:contentDescription="Drag to reorder"
@@ -145,8 +145,8 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnAdd"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:text="+"

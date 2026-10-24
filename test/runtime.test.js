@@ -694,6 +694,29 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-32: 40dp targets and 9-10sp text. Floor of 12sp everywhere; the named controls 48dp.
+  check('Android: no text under 12sp, and the small controls are 48dp (MOB-32)', () => {
+    const dir = path.join(APP, 'res/layout');
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.xml'))) {
+      for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/android:textSize="([\d.]+)sp"/g)) {
+        assert.ok(Number(m[1]) >= 12, `${f}: textSize ${m[1]}sp is under the 12sp floor`);
+      }
+    }
+    const size = (f, id) => {
+      const s = fs.readFileSync(path.join(dir, f), 'utf8');
+      const i = s.indexOf(`android:id="@+id/${id}"`);
+      assert.ok(i >= 0, `${f} has no ${id}`);
+      const tag = s.slice(s.lastIndexOf('<', i), s.indexOf('>', i));
+      return [/layout_width="(\d+)dp"/.exec(tag), /layout_height="(\d+)dp"/.exec(tag)].map((m) => (m ? Number(m[1]) : Infinity));
+    };
+    for (const [f, id] of [['fragment_game_details.xml', 'btnBack'], ['fragment_library.xml', 'btnClearSearch'],
+      ['fragment_library.xml', 'btnSort'], ['item_game.xml', 'ivDragHandle'], ['item_game.xml', 'btnAdd'],
+      ['fragment_search.xml', 'btnSearch'], ['fragment_game_details.xml', 'btnRefreshMetadata']]) {
+      const [w, h] = size(f, id);
+      assert.ok(w >= 48 && h >= 48, `${f} ${id} is ${w}x${h}dp, under 48dp`);
+    }
+  });
+
   // MOB-18: a done or playing game with no date was counted and listed as Unreleased.
   check('Android: the Unreleased filter is the status, never a missing date (MOB-18)', () => {
     assert.ok(!/release_date\.isNullOrBlank\(\)/.test(code('fragments/LibraryFragment.kt')), 'Unreleased is decided by a blank date again');

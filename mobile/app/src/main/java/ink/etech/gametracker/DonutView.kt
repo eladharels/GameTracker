@@ -41,7 +41,7 @@ class DonutView @JvmOverloads constructor(
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#8890A8")
         textAlign = Paint.Align.CENTER
-        textSize = 10f * density
+        textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 12f, resources.displayMetrics)   // 12sp floor, follows font scale (MOB-32)
     }
     private val oval = RectF()
 
