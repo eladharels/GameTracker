@@ -46,6 +46,9 @@ class GameAdapter(
      * handle is unreachable with TalkBack (the web's FE-23). Called after the move, to persist.
      */
     var onReordered: (() -> Unit)? = null
+
+    /** Search: results whose add is in flight (up to three requests, MOB-39): no second tap. */
+    var addingIds: Set<String> = emptySet()
     private var itemTouchHelper: ItemTouchHelper? = null
 
     fun setItemTouchHelper(helper: ItemTouchHelper) {
@@ -150,6 +153,7 @@ class GameAdapter(
             if (status.isNotBlank()) {
                 val label = status.replaceFirstChar { it.uppercase() }
                 tvStatus.text = if (ownedStatus != null) "In library · $label" else label
+                tvStatus.contentDescription = if (ownedStatus != null) "In your library, status $label" else "Status $label"
                 tvStatus.visibility = View.VISIBLE
                 tvStatus.backgroundTintList = ColorStateList.valueOf(statusColor)
             } else {
@@ -198,7 +202,9 @@ class GameAdapter(
             } else {
                 // No Add for a game the user already owns (MOB-10); the badge above says so.
                 btnAdd.visibility = if (ownedStatus != null) View.GONE else View.VISIBLE
-                btnAdd.contentDescription = "Add ${game.displayName} to library"
+                val adding = (game.game_id ?: game.id) in addingIds
+                btnAdd.isEnabled = !adding
+                btnAdd.contentDescription = if (adding) "Adding ${game.displayName}" else "Add ${game.displayName} to library"
                 btnAdd.setOnClickListener { onAddToLibrary(game) }
                 btnDelete.visibility = View.GONE
             }

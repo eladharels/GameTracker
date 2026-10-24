@@ -129,7 +129,10 @@
                 android:paddingEnd="9dp"
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
-                android:visibility="gone" />
+                android:visibility="gone" 
+                android:maxLines="1"
+                android:ellipsize="end"
+                />
 
             <!-- Price chip -->
             <TextView

@@ -26,7 +26,7 @@
     <color name="gt_surface_subtle">#1AFFFFFF</color>
 
     <!-- Status colors -->
-    <!-- MOB-33: the web's status palette (App.css --color-status-*): light tints, each a
+    <!-- MOB-33: the web's status palette (App.css color-status tokens): light tints, each a
          distinct shade from the accent presets, and every badge also carries its label. -->
     <color name="gt_status_wishlist">#38BDF8</color>
     <color name="gt_status_playing">#34D399</color>

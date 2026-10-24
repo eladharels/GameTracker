@@ -22,6 +22,7 @@ import ink.etech.gametracker.Game
 import ink.etech.gametracker.LibraryMatch
 import ink.etech.gametracker.SnackbarHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.content.Context.MODE_PRIVATE
@@ -309,9 +310,11 @@ class SearchFragment : Fragment() {
         }
         searchJob?.cancel()
         searchJob = viewLifecycleOwner.lifecycleScope.launch {
+            // The badges' library copy is read IN PARALLEL with the search (MOB-39), not after.
+            val freshLibrary = async { fetchLibrary() }
             val result = searchAllGames(query)
-            // Refresh the badges' copy of the library; on failure keep the last one.
-            if (result is SearchResult.Found) fetchLibrary()?.let { library = it }
+            // On failure keep the last copy.
+            if (result is SearchResult.Found) freshLibrary.await()?.let { library = it } else freshLibrary.cancel()
             if (!isAdded || view == null || query != currentQuery) return@launch   // superseded
             showResult(result, query)
         }
@@ -366,9 +369,17 @@ class SearchFragment : Fragment() {
 
     private fun addGameToLibrary(game: Game) {
         if (!isAdded) return
+        val id = game.game_id ?: game.id ?: return
+        if (id in gameAdapter.addingIds) return
+        gameAdapter.addingIds = gameAdapter.addingIds + id
+        gameAdapter.notifyDataSetChanged()
         viewLifecycleOwner.lifecycleScope.launch {
             // A fresh library check, then the add: MOB-10, in LibraryAdd (shared with Details).
-            val outcome = LibraryAdd.add(requireContext(), game)
+            val outcome = try {
+                LibraryAdd.add(requireContext(), game)
+            } finally {
+                gameAdapter.addingIds = gameAdapter.addingIds - id
+            }
             when (outcome) {
                 is LibraryAdd.Outcome.Added -> outcome.library?.let { library = it }
                 is LibraryAdd.Outcome.AlreadyOwned -> library = outcome.library
@@ -381,7 +392,13 @@ class SearchFragment : Fragment() {
                 is LibraryAdd.Outcome.AlreadyOwned -> SnackbarHelper.Type.DEFAULT
                 else -> SnackbarHelper.Type.ERROR
             }
-            showSnackbar(LibraryAdd.message(game, outcome), type)
+            if (outcome == LibraryAdd.Outcome.CheckFailed) {
+                // Nothing was posted, so retrying is safe (MOB-39).
+                SnackbarHelper.show(this@SearchFragment, LibraryAdd.message(game, outcome), type,
+                    com.google.android.material.snackbar.Snackbar.LENGTH_LONG, action = "Retry") { addGameToLibrary(game) }
+            } else {
+                showSnackbar(LibraryAdd.message(game, outcome), type)
+            }
             if (outcome is LibraryAdd.Outcome.Added) maybeCreateCalendarEvent(game)
         }
     }

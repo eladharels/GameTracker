@@ -977,7 +977,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Owner / date:** the repository owner, date to be set. Recorded by the CISO re-check of PR
   #6 (74d21bf).
 
-### [ ] MOB-39 Low — Follow-ups from the PR #8 reviews (MOB-10/11/12)
+### [x] MOB-39 Low — Follow-ups from the PR #8 reviews (MOB-10/11/12)
 - **Where and what:**
   - A search result opened in `GameDetailsFragment` falls back to `currentStatus = "Wishlist"`
     (`GameDetailsFragment.kt`, status chips). For a game the user already owns, tapping a chip
@@ -1002,6 +1002,21 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Contrast of 10 sp white on the green and grey status fills, and the 44 dp add button
     (MOB-29, MOB-32).
 - **Source:** CISO and UI/UX reviews of PR #8.
+
+- **Done (PR #15):**
+  - A search result opens Details as the OWNED row, with its real status, or with only "Add"
+    (MOB-16).
+  - The badge reads "In your library, status Done" to TalkBack and keeps to one line.
+  - Add is disabled while its requests run; "Couldn't check your library" has a Retry action
+    (nothing was posted, so retrying is safe).
+  - A refused removal is said by `MainActivity`, on whatever screen is showing
+    (`PendingRemovals.failures`, JVM-tested): the tab that asked may be hidden.
+  - Search reads the badges' library copy in parallel with the search.
+  - Contrast and target size: MOB-29 and MOB-32.
+  - **Not done:** precomputing normalised rows (a 2,000-game library re-normalises on bind;
+    not measured to matter), Insights "completed this year" (needs the stats route on
+    mobile), and the check-then-add race, which only the server can close (v2's
+    `addResolvedGame`; recorded as the move to v2).
 
 ### [x] MOB-40 ✔ Medium — Distribute the app: one signed APK at one URL — *done in PR #9*
 - **Asked for:** "only one copy of the APK on each deploy, served by the server under a

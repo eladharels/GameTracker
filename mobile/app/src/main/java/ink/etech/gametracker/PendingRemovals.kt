@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -38,6 +39,13 @@ class PendingRemovals(
     private val pending = mutableMapOf<Key, Job>()
 
     /**
+     * Every removal the server refused, by the game's name (MOB-39). The screen that scheduled
+     * it may be hidden or gone by then; the activity collects this and says so, wherever the
+     * user is. No replay: a failure nobody is shown is still visible on the next load.
+     */
+    val failures = MutableSharedFlow<String>(extraBufferCapacity = 8)
+
+    /**
      * Removes [gameId] after [delayMs] unless [undo] is called first. [delete] runs once, off
      * any view; it returns true when the server removed the game. [onFailed] is told when it
      * did not, so the caller can put the game back. [onCommitted] runs when the window closes,
@@ -51,6 +59,7 @@ class PendingRemovals(
         delete: suspend () -> Boolean,
         onFailed: (gameId: String) -> Unit = {},
         onCommitted: () -> Unit = {},
+        label: String = gameId,
     ) {
         val key = Key(owner, gameId)
         pending.remove(key)?.cancel()
@@ -68,7 +77,10 @@ class PendingRemovals(
             // TalkBack on, Snackbar stretches its own timeout past the window (UI/UX review).
             onCommitted()
             val ok = try { delete() } catch (e: CancellationException) { throw e } catch (e: Exception) { false }
-            if (!ok) onFailed(gameId)
+            if (!ok) {
+                onFailed(gameId)
+                failures.tryEmit(label)
+            }
         }
         pending[key] = job
         job.start()

@@ -707,6 +707,23 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // A "--" inside an XML comment is not well-formed, and aapt2 fails the whole build on it; this
+  // tree has no XML parser at hand, so it is checked here, in seconds, not in the Android job.
+  check('Android: no "--" inside a resource or manifest XML comment', () => {
+    const files = [path.join(APP, 'AndroidManifest.xml')];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (e.name.endsWith('.xml')) files.push(path.join(d, e.name));
+      }
+    })(path.join(APP, 'res'));
+    for (const f of files) {
+      for (const m of fs.readFileSync(f, 'utf8').matchAll(/<!--([\s\S]*?)-->/g)) {
+        assert.ok(!m[1].includes('--') && !m[1].endsWith('-'), `${path.relative(APP, f)}: "--" inside a comment: ${m[1].trim().slice(0, 60)}`);
+      }
+    }
+  });
+
   // MOB-34: "alice " (autocorrect) failed to sign in, and a password of spaces was refused here.
   check('Android: the username is trimmed, the password sent as typed (MOB-34)', () => {
     const login = code('LoginActivity.kt');

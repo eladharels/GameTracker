@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -61,6 +62,17 @@ class PendingRemovalsTest {
         removals.schedule("jane", "igdb_2", 5000, delete = { throw java.io.IOException("offline") }, onFailed = { failed += it })
         gate.complete(Unit)
         assertEquals(listOf("igdb_1", "igdb_2"), failed.sorted())
+    }
+
+    @Test
+    fun `a refused removal is announced by name, for whichever screen is showing`() {
+        val heard = mutableListOf<String>()
+        val listener = CoroutineScope(Dispatchers.Unconfined).launch { removals.failures.collect { heard += it } }
+        removals.schedule("jane", "igdb_1", 5000, delete = { false }, label = "Hades")
+        removals.schedule("jane", "igdb_2", 5000, delete = { true }, label = "Celeste")
+        gate.complete(Unit)
+        listener.cancel()
+        assertEquals(listOf("Hades"), heard)   // MOB-39: the tab that asked may be hidden
     }
 
     @Test

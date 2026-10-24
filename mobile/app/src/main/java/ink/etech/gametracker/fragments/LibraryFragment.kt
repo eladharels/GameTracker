@@ -569,9 +569,11 @@ class LibraryFragment : Fragment() {
                 if (isAdded && view != null) {
                     if (allGames.none { (it.game_id ?: it.id) == gameId }) allGames.add(game)
                     filterGames()
-                    showSnackbar("Couldn't remove ${game.displayName}. Try again.", SnackbarHelper.Type.ERROR)
                 }
+                // The message comes from MainActivity (PendingRemovals.failures): this tab may
+                // be hidden by now (MOB-39).
             },
+            label = game.displayName,
             // The window has closed, so Undo would do nothing: take it off screen. Snackbar
             // extends its own timeout for accessibility services, past UNDO_WINDOW_MS.
             onCommitted = { snackbar.dismiss() },

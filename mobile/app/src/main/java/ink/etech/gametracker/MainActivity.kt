@@ -79,6 +79,19 @@ class MainActivity : AppCompatActivity() {
                 Session.ended.collect { toLogin(sessionEnded = true) }
             }
         }
+        // A removal the server refused, said on whatever screen is showing (MOB-39).
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                PendingRemovals.app.failures.collect { name ->
+                    val nav = findViewById<View>(R.id.bottom_navigation)
+                    com.google.android.material.snackbar.Snackbar.make(nav, "Couldn't remove $name. It's back in your library.",
+                        com.google.android.material.snackbar.Snackbar.LENGTH_LONG)
+                        .setAnchorView(nav)
+                        .also { SnackbarHelper.applyStyle(it, SnackbarHelper.Type.ERROR) }
+                        .show()
+                }
+            }
+        }
         if (intent.getBooleanExtra(EXTRA_OFFLINE, false)) {
             // A snackbar over the nav, like every other notice in the app (MOB-36; was a Toast).
             val nav = findViewById<View>(R.id.bottom_navigation)
