@@ -1,5 +1,6 @@
 // MOB-37, phase 1 of the Android CI build (android.yml): download, WITH network, exactly the
-// artifacts recorded in gradle/verification-metadata.xml, and run nothing else. Phase 2 then
+// artifacts recorded in gradle/verification-metadata.xml. Configuring the build to get here
+// runs the Gradle plugins (hash-verified); no task of the build itself runs. Phase 2 then
 // builds, tests and lints with --offline under --network none, so dependency code (kapt
 // processors, lint jars, unit tests) never runs with a network.
 //

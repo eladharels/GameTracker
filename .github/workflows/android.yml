@@ -189,7 +189,6 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=1g
             -v "${GITHUB_WORKSPACE}/mobile:/work"
             -v "${ANDROID_DL}:/dl:ro"
-            -v "${APK_OUT}:/out"
             -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk"
             -v "gametracker-android-gradle-${VOLUME_PARTITION}:/gradle"
             -e GT_VERSION_CODE="${GITHUB_RUN_NUMBER}"
@@ -199,7 +198,8 @@ jobs:
             -w /work
           )
 
-          # Phase 1: network, no dependency code.
+          # Phase 1: network. Configuring the build runs the Gradle PLUGINS here (AGP, Kotlin,
+          # kapt), hash-verified; no processor, lint jar or test runs. No /out: it makes nothing.
           docker run --rm --name "gametracker-android-resolve-${VOLUME_PARTITION}" "${gt_build_args[@]}" \
             "${JDK_IMAGE}" bash -euo pipefail -c '
               # Never the root uid, whatever --user says (the runner itself is root).
@@ -238,6 +238,7 @@ jobs:
 
           # Phase 2: NO network. Everything it needs is in the caches phase 1 filled.
           docker run --rm --name "gametracker-android-build-${VOLUME_PARTITION}" --network none "${gt_build_args[@]}" \
+            -v "${APK_OUT}:/out" \
             "${JDK_IMAGE}" bash -euo pipefail -c '
               [ "$(id -u)" != 0 ] || { echo "::error::refusing to build as uid 0"; exit 1; }
               # Phase 1 of THIS job left the verified wrapper distribution; anything else that

@@ -448,6 +448,19 @@ check('android.yml: path-filtered, containerised, pinned, and never a deploy dep
   assert.ok(/-I gradle\/ci\/prefetch\.init\.gradle gtPrefetch\s*$/m.test(phase1) && !/testDebugUnitTest|lintDebug|assemble/.test(phase1),
     'phase 1 (networked) runs more than the prefetch');
   assert.ok(fs.existsSync(path.join(ROOT, 'mobile/gradle/ci/prefetch.init.gradle')), 'the prefetch init script is missing');
+  // Per PHASE, not over the whole step: phase 1 alone satisfied every b.includes above, so
+  // phase 2 could have dropped its hardening or its strict verification (CISO review, PR #15).
+  const argsBlock = (/gt_build_args=\(([\s\S]*?)\n\s*\)/.exec(b) || [])[1] || '';
+  for (const flag of ['--cap-drop ALL', 'no-new-privileges', '--memory', '--pids-limit', '--user "${BUILD_UID}:${BUILD_UID}"', '/tmp:rw,noexec']) {
+    assert.ok(argsBlock.includes(flag), `the shared container arguments lost ${flag}`);
+  }
+  for (const [name, phase] of [['phase 1', phase1], ['phase 2', phase2]]) {
+    assert.ok(/"\$\{gt_build_args\[@\]\}"/.test(phase.split('\n')[0]), `${name}'s docker run does not use the shared hardened arguments`);
+    assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(phase), `${name} does not refuse uid 0`);
+    assert.ok(/bash gradlew [^\n]*--dependency-verification strict/.test(phase), `${name}'s gradlew is not strict`);
+  }
+  assert.ok(!/--network/.test(phase1.split('\n')[0]) && !/--network/.test(argsBlock), 'phase 1 or the shared arguments set a --network');
+  assert.ok(!/\/out/.test(phase1.split("'")[0]) && /-v "\$\{APK_OUT\}:\/out"/.test(phase2), 'only phase 2 may mount /out');
   assert.ok(b.indexOf('find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf') >= 0 && b.indexOf('find /sdk -mindepth 1') < b.indexOf('sdkmanager'),
     'the SDK is not wiped before sdkmanager installs it');
   assert.ok(/\[ "\$\(id -u\)" != 0 \]/.test(b), 'the build container does not refuse uid 0');
@@ -821,7 +834,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     for (const f of files) {
       code(f).split('\n').forEach((line, i) => {
         if (/\bLog\.[ewidv]\(/.test(line)) return;   // logcat may name the exception
-        assert.ok(!/\$\{e\.(message|localizedMessage)\}|\be\.localizedMessage\b|errorBody\(\)/.test(line),
+        // Any exception message or the HTTP reason phrase, not only `${e.message}` (CISO review).
+        assert.ok(!/\b(e|t|err|error|ex|throwable)\.(message|localizedMessage)\b|errorBody\(\)|response\.message\(\)/.test(line),
           `${f}:${i + 1} shows exception text or a server body to the user`);
       });
     }

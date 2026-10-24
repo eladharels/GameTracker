@@ -313,10 +313,14 @@ one-time setup and cannot be done from code, because the key must never be in th
 - **Installing:** phones need "Install unknown apps" allowed for the browser. Play Protect may
   warn about an unrecognised developer; choose "Install anyway". After the first install,
   each new download installs as an update.
-- **Switching from an older copy** (installed from Android Studio or a debug build): it is
-  signed with a different key, so Android refuses the download with "App not installed" or
-  "package conflicts with an existing package". Uninstall the old copy once first. **This
-  deletes the ratings and notes stored on that phone** (MOB-11: they exist only on the
-  device). Tell users before they do it.
+- **Switching from the old app** (`com.example.gmaetrackermobile`, every APK before MOB-20):
+  the new app id makes it a DIFFERENT app, so the new APK installs ALONGSIDE it. The old one
+  keeps working and never updates again, and with fingerprint unlock on it still holds a live
+  30-day library token. Tell users: **sign out in the old app first** (that revokes its token),
+  then uninstall it. If it was uninstalled without signing out, revoke its "Android app"
+  sign-in in My Account on the web. **Its ratings and notes stay with the old app** and are
+  lost when it is uninstalled (MOB-11: they exist only on the device).
+- **A debug or Android Studio build of the NEW id** is signed with a different key: Android
+  refuses the download ("App not installed") until that copy is uninstalled.
 - **Signer certificate SHA-256:** _record it here after step 3._
 
