@@ -171,6 +171,53 @@ jobs:
       # waiting for it (seen on PR #6). The container therefore has a fixed name per partition,
       # any leftover is removed before starting, and the always() step at the end removes it,
       # cancelled or not.
+      # TEMPORARY (MOB-21): regenerate gradle/verification-metadata.xml from an EMPTY Gradle home
+      # over the upgraded dependency set, and print it (gzip+base64) for review. Trust on first
+      # use, as on PR #6; the reviewed file is committed and this step REMOVED in the next commit.
+      - name: TEMPORARY regenerate the dependency verification metadata (MOB-21)
+        run: |
+          GT_REGEN_HOME="$(mktemp -d "${RUNNER_TEMP}/gradle-regen.XXXXXXXX")"
+          chmod 777 "${GT_REGEN_HOME}"
+          docker run --rm --name "gametracker-android-regen-${VOLUME_PARTITION}" \
+            --user "${BUILD_UID}:${BUILD_UID}" \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --memory 4g --cpus 2 --pids-limit 1024 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+            -v "${GITHUB_WORKSPACE}/mobile:/work" \
+            -v "${ANDROID_DL}:/dl:ro" \
+            -v "gametracker-android-sdk-${VOLUME_PARTITION}:/sdk" \
+            -v "${GT_REGEN_HOME}:/gh" \
+            -e HOME=/gh/home -e GRADLE_USER_HOME=/gh -e ANDROID_HOME=/sdk \
+            -e ANDROID_USER_HOME=/gh/android-user -e JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/gh/tmp \
+            -e CMDLINE_TOOLS_ZIP -e CMDLINE_TOOLS_SHA256 -e ANDROID_PLATFORM -e ANDROID_BUILD_TOOLS \
+            -w /work \
+            "${JDK_IMAGE}" bash -euo pipefail -c '
+              [ "$(id -u)" != 0 ] || exit 1
+              mkdir -p /gh/home /gh/android-user /gh/tmp
+              trap "rm -rf /work/build /work/app/build /work/.gradle /work/.kotlin" EXIT
+              echo "${CMDLINE_TOOLS_SHA256}  /dl/${CMDLINE_TOOLS_ZIP}" | sha256sum -c
+              find /sdk -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+              mkdir -p /sdk/cmdline-tools/extract
+              (cd /sdk/cmdline-tools/extract && jar xf "/dl/${CMDLINE_TOOLS_ZIP}")
+              mv /sdk/cmdline-tools/extract/cmdline-tools /sdk/cmdline-tools/latest
+              chmod +x /sdk/cmdline-tools/latest/bin/*
+              (yes || true) | /sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/sdk --licenses >/dev/null
+              /sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/sdk "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}" >/dev/null
+              # From an empty components list: entries for dependencies no longer used drop out.
+              sed -n "1,/<components>/p" gradle/verification-metadata.xml > /gh/meta.xml
+              printf "   </components>\n</verification-metadata>\n" >> /gh/meta.xml
+              cp /gh/meta.xml gradle/verification-metadata.xml
+              bash gradlew --no-daemon --write-verification-metadata sha256 \
+                help testDebugUnitTest testReleaseUnitTest lintDebug assembleRelease
+              echo "GT-METADATA-BEGIN"
+              gzip -9c gradle/verification-metadata.xml | base64 -w0
+              echo
+              echo "GT-METADATA-END"
+            '
+          docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
+            -v "${GT_REGEN_HOME}:/gh" "${JDK_IMAGE}" chown -R "$(id -u):$(id -g)" /gh || true
+          rm -rf --one-file-system "${GT_REGEN_HOME}"
+
       - name: Remove a build container left behind by a cancelled run
         run: docker rm -f "gametracker-android-build-${VOLUME_PARTITION}" "gametracker-android-resolve-${VOLUME_PARTITION}" >/dev/null 2>&1 || true
 

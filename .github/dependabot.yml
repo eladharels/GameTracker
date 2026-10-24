@@ -1,0 +1,18 @@
+# MOB-21: dependency bumps for the Android app. Gradle only, and only mobile/.
+#
+# A Dependabot PR is a same-repo branch, so its CI runs on the self-hosted runner that is the
+# production host. For Gradle that is acceptable: a new version is not in
+# mobile/gradle/verification-metadata.xml, so strict verification fails the build BEFORE any
+# new artifact is loaded, and the PR shows what the bump would need. Accepting one means
+# regenerating the metadata from an empty Gradle home (mobile/CLAUDE.md) and reviewing it.
+# npm is deliberately NOT here: its install runs lifecycle scripts on that host.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /mobile
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      androidx:
+        patterns: ["androidx.*"]

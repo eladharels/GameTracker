@@ -18,8 +18,20 @@ GameTracker Mobile is the **native Android companion app** for the GameTracker p
   plugin and dependencies go with MOB-21
 
 ### Key Libraries
-| Library | Version | Purpose |
-|---|---|---|
+Versions live in `gradle/libs.versions.toml` (MOB-21), the one place to read them; Dependabot
+proposes bumps (`.github/dependabot.yml`). No Compose and no kapt.
+
+| Library | Purpose |
+|---|---|
+| Retrofit + converter-gson | HTTP client / REST API calls; Gson binds `models.kt` by field name |
+| OkHttp logging-interceptor | HTTP logging in **debug builds only**, at BASIC (no headers or bodies). Release builds have none (MOB-1) |
+| Kotlin Coroutines | Async work, scoped to the view (MOB-17) |
+| Glide | Image loading and caching (no annotation processor: there is no AppGlideModule) |
+| AndroidX Biometric | The fingerprint prompt, always with a CryptoObject (MOB-6) |
+| Material Components | UI components and theming |
+| SwipeRefreshLayout, RecyclerView, Fragment KTX | Lists, pull-to-refresh, fragments |
+
+---|---|---|
 | Retrofit | 2.9.0 | HTTP client / REST API calls |
 | OkHttp3 + Logging Interceptor | 4.11.0 | HTTP logging in **debug builds only**, at BASIC (no headers or bodies). Release builds have none (MOB-1) |
 | Gson | — | JSON serialization/deserialization |

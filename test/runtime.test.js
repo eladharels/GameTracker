@@ -886,6 +886,18 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'sign-in failures are not mapped by status (a lockout would read as a wrong password)');
   });
 
+  // MOB-21: versions in one catalog, no Compose and no kapt, and Dependabot watching mobile/ --
+  // Gradle only: an npm Dependabot PR would run lifecycle scripts on the production host.
+  check('Android: dependencies in the version catalog, no Compose or kapt, Dependabot on Gradle only (MOB-21)', () => {
+    const gradle = fs.readFileSync(path.join(ROOT, 'mobile/app/build.gradle.kts'), 'utf8');
+    const deps = gradle.slice(gradle.indexOf('dependencies {'));
+    assert.ok(!/(implementation|testImplementation|androidTestImplementation)\("[^"]+:[^"]+:[^"]+"\)/.test(deps), 'a dependency version is written in build.gradle.kts, not libs.versions.toml');
+    assert.ok(!/compose|kapt\(|org\.jetbrains\.kotlin\.kapt/.test(gradle), 'Compose or kapt is back');
+    const bot = require('js-yaml').load(fs.readFileSync(path.join(ROOT, '.github/dependabot.yml'), 'utf8'));
+    const ecos = bot.updates.map((u) => `${u['package-ecosystem']} ${u.directory}`);
+    assert.deepStrictEqual(ecos, ['gradle /mobile'], `Dependabot watches ${ecos}: only Gradle in /mobile is safe on this runner`);
+  });
+
   // MOB-23: every debug build and test run used to log in to production with real accounts.
   check('Android: the server comes from the build type; release is production, fixed (MOB-23)', () => {
     // Whole-line comments only: a trailing-comment strip would eat the "https://" in a string.

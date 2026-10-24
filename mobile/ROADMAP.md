@@ -531,7 +531,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Signing stays outside Gradle, in CI with a key the build never sees (MOB-40), and
     `versionCode` is the run number. So no Gradle signing config, on purpose.
 
-### [ ] MOB-21 Medium — Outdated dependencies and `kapt`
+### [x] MOB-21 Medium — Outdated dependencies and `kapt`
 - **Where:** `app/build.gradle.kts:63-83`, `gradle/libs.versions.toml:10`.
 - **Why:** several libraries are two or more years behind current stable:
   - `retrofit`/`converter-gson` 2.9.0, `okhttp logging-interceptor` 4.11.0;
@@ -548,7 +548,16 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Add a Dependabot `gradle` entry for `/mobile`, and include `mobile/` in the
     dependency-verification metadata that the CI job enforces.
 
-### [~] MOB-22 Medium — Dead code: three legacy activities, an unused Compose stack, an unreachable logout menu
+- **Done (PR #15):** every version in `libs.versions.toml`; Retrofit 2.11.0, OkHttp 4.12.0,
+  coroutines 1.9.0, Glide 4.16.0, RecyclerView 1.4.0, Material 1.12.0, Fragment 1.8.5
+  (Biometric 1.1.0 is still the latest stable). Glide's kapt compiler is removed rather than
+  moved to KSP: it only generates code for an `AppGlideModule`, which this app has none of, so
+  kapt is gone entirely. The Compose plugin and dependencies are gone too (MOB-22).
+  `verification-metadata.xml` was regenerated from an EMPTY Gradle home by a one-off CI step,
+  reviewed, committed, and the step removed. Dependabot watches `/mobile` (Gradle only: npm
+  installs run lifecycle scripts on the production host).
+
+### [x] MOB-22 Medium — Dead code: three legacy activities, an unused Compose stack, an unreachable logout menu
 - **Where:**
   - `GameDetailsActivity.kt`, `GameSearchActivity.kt`, `MyLibraryActivity.kt` (434 lines, not
     in the manifest, so they crash if ever started) and their three layouts.
@@ -573,9 +582,8 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   (`ui/theme`), the hidden toolbar with its unreachable sign-out, `refreshCurrentFragment` and
   the always-null Details callback are deleted (tabs refresh in `onHiddenChanged`, MOB-19), and
   the `display_name` reads with MOB-19. The note API is in use since MOB-7. Pinned.
-- **The Compose DEPENDENCIES go with MOB-21:** removing them changes which versions of shared
-  libraries resolve, and strict verification then needs `verification-metadata.xml`
-  regenerated from an empty Gradle home, which MOB-21 does through CI anyway.
+- **The Compose dependencies and plugin were removed with MOB-21**, whose metadata
+  regeneration covers the changed resolution.
 
 ### [x] MOB-23 Medium — Server URL is hard-coded to production; debug builds use the live backend
 - **Where:** `ApiClient.kt:17`; `mobile/CLAUDE.md:323` ("APK tested against the live
@@ -597,7 +605,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   trailing `/api/` are required at build time. The login-screen server field is not done: one
   instance is what this app is for today. Pinned in `test/runtime.test.js`.
 
-### [~] MOB-24 Medium — No tests
+### [x] MOB-24 Medium — No tests
 - **Where:** `app/src/test/…/ExampleUnitTest.kt` and `app/src/androidTest/…/ExampleInstrumentedTest.kt`
   (templates only).
 - **Why:** none of the behaviour in this file is pinned: logging in release (MOB-1), logout
@@ -617,8 +625,9 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
     `LibraryCacheTest`, `LibraryWriteInterceptorTest`, `MobileTokenTest`, `UserDataTest`,
     `SafeUrlTest`.
   - The two template tests are deleted.
-- **Robolectric (fragment lifecycle) goes with MOB-21:** it is a new dependency, so it needs
-  the verification metadata regenerated from an empty Gradle home, which MOB-21 does.
+- **Robolectric (fragment lifecycle): not added.** It fetches the Android runtime jars itself
+  at test time, from the network, which the offline phase 2 of the CI build (MOB-37) refuses.
+  The fragment behaviour it would test is pinned from source in `test/runtime.test.js`.
 
 ### [x] MOB-25 Low — Emit the app's API contract from the code instead of regex-parsing Kotlin
 - **Where:** the backend drift gate (`test/mobile-api.js`, added alongside PR #6) reads
