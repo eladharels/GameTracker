@@ -18,7 +18,7 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.example.gmaetrackermobile.ApiClient
 import com.example.gmaetrackermobile.PendingRemovals
-import com.example.gmaetrackermobile.BacklogOrderRequest
+import com.example.gmaetrackermobile.BacklogOrder
 import com.example.gmaetrackermobile.CalendarHelper
 import com.example.gmaetrackermobile.GameAdapter
 import com.example.gmaetrackermobile.GameStatus
@@ -201,7 +201,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0
         ) {
             override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int {
-                return if (currentFilter == "backlog")
+                return if (BacklogOrder.canDrag(currentFilter, searchQuery))
                     makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0)
                 else 0
             }
@@ -226,7 +226,9 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                 val toPos = vh.adapterPosition
                 val id = draggedGameId
                 if (dragFromPos >= 0 && dragFromPos != toPos && id != null) {
-                    persistBacklogMove(id, dragFromPos, toPos)
+                    // The list on screen IS the whole backlog: drag is off while a search
+                    // narrows it (BacklogOrder.canDrag).
+                    persistBacklogOrder(gameAdapter.getGames())
                 }
                 dragFromPos = -1
                 draggedGameId = null
@@ -247,28 +249,25 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         gameAdapter.setItemTouchHelper(helper)
     }
 
-    private fun persistBacklogMove(gameId: String, fromPos: Int, toPos: Int) {
-        val delta = toPos - fromPos
-        val direction = if (delta < 0) "up" else "down"
-        val steps = kotlin.math.abs(delta)
-
+    /**
+     * The whole backlog order in ONE call (MOB-14). It used to be one call per step moved,
+     * none of them checked, so a failure part-way left the backlog half-moved with no error.
+     * On failure the list is reloaded from the server, which still has the old order.
+     */
+    private fun persistBacklogOrder(ordered: List<Game>) {
         viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: return@launch
-                val username = prefs.getString("username", null) ?: return@launch
+            val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
+            val token = Session.get(requireContext()).token ?: return@launch
+            val username = prefs.getString("username", null) ?: return@launch
+            val ok = try {
                 withContext(Dispatchers.IO) {
-                    repeat(steps) {
-                        ApiClient.api.updateBacklogOrder(
-                            "Bearer $token", username, gameId, BacklogOrderRequest(direction)
-                        )
-                    }
+                    ApiClient.api.reorderBacklog("Bearer $token", username, BacklogOrder.request(ordered)).isSuccessful
                 }
-                loadLibrary()
             } catch (e: Exception) {
-                showSnackbar("Failed to save backlog order", SnackbarHelper.Type.ERROR)
-                loadLibrary()
+                false
             }
+            if (!ok) showSnackbar("Couldn't save the new backlog order. It has been put back.", SnackbarHelper.Type.ERROR)
+            loadLibrary()
         }
     }
 
@@ -490,8 +489,7 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
             "wishlist"   -> allGames.filter { it.status?.lowercase() == "wishlist" }
             "playing"    -> allGames.filter { it.status?.lowercase() == "playing" }
             "done"       -> allGames.filter { it.status?.lowercase() == "done" }
-            "backlog"    -> allGames.filter { it.status?.lowercase() == "backlog" }
-                               .sortedBy { it.backlog_order ?: Int.MAX_VALUE }
+            "backlog"    -> BacklogOrder.backlog(allGames)
             "unreleased" -> allGames.filter {
                 it.status?.lowercase() == "unreleased" || it.release_date.isNullOrBlank()
             }
@@ -504,6 +502,9 @@ class LibraryFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
         // Apply sort (skip when backlog — order is fixed there)
         val sorted = if (currentFilter == "backlog") searched else applySortToList(searched)
 
+        // Real positions in the WHOLE backlog, even when a search narrows the list (MOB-14).
+        gameAdapter.backlogPositions = BacklogOrder.positions(allGames)
+        gameAdapter.dragEnabled = BacklogOrder.canDrag(currentFilter, searchQuery)
         gameAdapter.submitList(sorted)
         emptyStateLayout.visibility = if (sorted.isEmpty()) View.VISIBLE else View.GONE
         recyclerView.visibility = if (sorted.isEmpty()) View.GONE else View.VISIBLE

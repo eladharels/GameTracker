@@ -121,7 +121,7 @@ mobile/                                       # inside the GameTracker repo (was
 | GET | `/user/{username}/games` | Fetch user's game library |
 | POST | `/user/{username}/games` | Add / update game in library |
 | DELETE | `/user/{username}/games/{gameId}` | Remove game from library |
-| PUT | `/user/{username}/games/{gameId}/backlog-order` | Move game in backlog |
+| PUT | `/user/{username}/backlog-reorder` | The whole backlog order in one call, one transaction (MOB-14) |
 | POST | `/user/{username}/games/{gameId}/refresh-metadata` | Refresh game info |
 | GET | `/user/me` | After fingerprint unlock: does the stored session still work? (MOB-5) |
 | POST | `/user/me/tokens` | Mint this phone's 30-day library token at a password sign-in (MOB-9) |

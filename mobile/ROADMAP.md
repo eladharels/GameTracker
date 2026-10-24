@@ -357,7 +357,13 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Remove Unreleased from the pickers.
   - Send the lowercase canonical values, and `null` for an unknown date.
 
-### [ ] MOB-14 Medium — Backlog reorder is N unconditional calls with the results ignored
+### [x] MOB-14 ✔ Medium — Backlog reorder is N unconditional calls with the results ignored — *fixed in PR #15*
+- **Fixed:** `BacklogOrder`. A drag sends the WHOLE backlog in one `PUT …/backlog-reorder`,
+  applied in one transaction. A failure reloads the server's order and says so. Drag (and its
+  handle) is off while a search narrows the list. Cards show the game's position in the
+  whole backlog, like Home, never the stored number. Pinned in `BacklogOrderTest`, the
+  api-contract Android gate (the real route, driven with the app's body) and
+  `test/runtime.test.js`.
 - **Where:** `LibraryFragment.kt:248-271`. The drag delta is computed on the filtered list at
   `:490-495`. `GameAdapter.kt:129-131` shows `#backlog_order`; `HomeAdapters.kt:74` shows
   `#position+1`.

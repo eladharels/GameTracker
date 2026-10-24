@@ -846,6 +846,18 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     }
   });
 
+  // MOB-14: a drag sent one unchecked call per step moved, computed on the search-filtered
+  // list, and cards showed the stored number while Home showed the position.
+  check('Android: a backlog drag is ONE whole-order call, never while searching, and positions are real (MOB-14)', () => {
+    const api = code('GameTrackerApi.kt');
+    assert.ok(/@PUT\("user\/\{username\}\/backlog-reorder"\)/.test(api), 'the app no longer sends the whole order in one call');
+    assert.ok(!/backlog-order"/.test(api), 'the app calls the per-step backlog-order route again');
+    const lib = code('fragments/LibraryFragment.kt');
+    assert.ok(/BacklogOrder\.canDrag\(currentFilter, searchQuery\)/.test(lib), 'drag is allowed while a search narrows the backlog');
+    assert.ok(!/repeat\(/.test(lib), 'a drag repeats a call per step again');
+    assert.ok(!/game\.backlog_order\}/.test(code('GameAdapter.kt')), 'cards show the stored backlog number again, not the position');
+  });
+
   // fragments/ is a subpackage: a class from the app's root package needs an import there.
   // Nothing local compiles the app (no SDK), and a missing one failed CI twice (PR #12, #13).
   check('Android: fragments import every root-package class they use', () => {

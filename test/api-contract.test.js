@@ -1872,18 +1872,19 @@ checkAsync('DELETE /api/user/:u/games/:id is {success:true}', async () => {
   });
   assert.deepStrictEqual([res.statusCode, res.body, removed], [200, { success: true }, [7, 'igdb_1']]);
 });
-checkAsync('PUT .../backlog-order reads BacklogOrderRequest.direction; a bad direction is 400', async () => {
-  assert.deepStrictEqual(MOBILE.backlogOrderRequest, ['direction'], 'BacklogOrderRequest changed shape');
-  let moved;
-  const replace = [[libraryService, 'moveBacklogItem', async (u, g, d) => { moved = d; }]];
-  const ok = await callRoute('put', '/api/user/:username/games/:gameId/backlog-order',
-    { params: { username: 'jane', gameId: 'igdb_1' }, body: { [MOBILE.backlogOrderRequest[0]]: 'up' } }, { replace });
-  assert.deepStrictEqual([ok.statusCode, ok.body, moved], [200, { success: true }, 'up']);
-  const bad = await callRoute('put', '/api/user/:username/games/:gameId/backlog-order',
-    { params: { username: 'jane', gameId: 'igdb_1' }, body: { direction: 'sideways' } }, { replace });
+checkAsync('PUT .../backlog-reorder reads BacklogReorderRequest.order in one call; an empty order is 400 (MOB-14)', async () => {
+  assert.deepStrictEqual(MOBILE.backlogReorderRequest, ['order'], 'BacklogReorderRequest changed shape');
+  let got;
+  const replace = [[libraryService, 'reorderBacklog', async (u, order) => { got = order; return { updated: order.length, requested: order.length }; }]];
+  const ok = await callRoute('put', '/api/user/:username/backlog-reorder',
+    { params: { username: 'jane' }, body: { [MOBILE.backlogReorderRequest[0]]: ['igdb_2', 'igdb_1'] } }, { replace });
+  assert.deepStrictEqual([ok.statusCode, ok.body, got], [200, { success: true }, ['igdb_2', 'igdb_1']]);
+  const bad = await callRoute('put', '/api/user/:username/backlog-reorder',
+    { params: { username: 'jane' }, body: { order: [] } }, { replace });
   assert.strictEqual(bad.statusCode, 400);
-  assertKeys(bad.body, ['error'], 'backlog-order 400');
+  assertKeys(bad.body, ['error'], 'backlog-reorder 400');
 });
+
 checkAsync('GET /api/games/search is a BARE array of search items; no q is 400 {error}', async () => {
   const catalogService = require('../services/catalog');
   const item = { id: 'igdb_1', name: 'Hades', releaseDate: '2020-09-17', coverUrl: null, source: 'igdb', steamAppId: null };

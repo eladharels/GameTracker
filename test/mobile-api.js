@@ -98,7 +98,7 @@ function mobileContract() {
     loginResponse: dataClassFields('LoginResponse'),
     loginRequest: dataClassFields('LoginRequest'),
     gameUpdateRequest: dataClassFields('GameUpdateRequest'),
-    backlogOrderRequest: dataClassFields('BacklogOrderRequest'),
+    backlogReorderRequest: dataClassFields('BacklogReorderRequest'),
     createTokenRequest: dataClassFields('CreateTokenRequest'),
     createdToken: dataClassFields('CreatedToken'),
     gameUpsertResult: dataClassFields('GameUpsertResult'),

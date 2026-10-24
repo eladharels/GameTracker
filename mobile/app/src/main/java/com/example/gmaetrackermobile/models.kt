@@ -51,7 +51,9 @@ data class GameUpdateRequest(
     val steamAppId: String?
 )
 
-data class BacklogOrderRequest(val direction: String)
+// PUT /api/user/:u/backlog-reorder: the WHOLE backlog, in order, applied in one transaction
+// (MOB-14). It replaced one `backlog-order {direction}` call per step moved.
+data class BacklogReorderRequest(val order: List<String>)
 
 // The answer to POST /api/user/:u/games (MOB-13): `status` is what the server STORED, which
 // the release date can make different from the request (`coerced`). The app shows this one.

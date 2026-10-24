@@ -27,6 +27,10 @@ class GameAdapter(
 
     private var games: MutableList<Game> = mutableListOf()
     var showBacklogControls: Boolean = false
+    /** Each backlog game's position in the WHOLE backlog (BacklogOrder.positions, MOB-14). */
+    var backlogPositions: Map<String, Int> = emptyMap()
+    /** Off while a search narrows the backlog: no handle that does nothing (MOB-14). */
+    var dragEnabled: Boolean = true
 
     /**
      * Search only (MOB-10): the status of the library game this result IS, or null when it is
@@ -138,10 +142,13 @@ class GameAdapter(
             }
 
             // Backlog controls
-            if (showBacklogControls && game.backlog_order != null) {
-                tvBacklogPosition.text = "#${game.backlog_order}"
+            val position = backlogPositions[game.game_id ?: game.id ?: ""]
+            if (showBacklogControls && position != null) {
+                // The position in the list, as Home shows it: never the stored number, which
+                // can have gaps (MOB-14, the web's FE-24).
+                tvBacklogPosition.text = "#$position"
                 tvBacklogPosition.visibility = View.VISIBLE
-                ivDragHandle.visibility = View.VISIBLE
+                ivDragHandle.visibility = if (dragEnabled) View.VISIBLE else View.GONE
                 ivDragHandle.setOnTouchListener { _, event ->
                     if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                         itemTouchHelper?.startDrag(this)

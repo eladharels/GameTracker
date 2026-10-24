@@ -45,12 +45,12 @@ interface GameTrackerApi {
         @Path("gameId") gameId: String
     ): Response<Unit>
 
-    @PUT("user/{username}/games/{gameId}/backlog-order")
-    suspend fun updateBacklogOrder(
+    // The whole backlog order in one call, one transaction on the server (MOB-14).
+    @PUT("user/{username}/backlog-reorder")
+    suspend fun reorderBacklog(
         @Header("Authorization") token: String,
         @Path("username") username: String,
-        @Path("gameId") gameId: String,
-        @Body body: BacklogOrderRequest
+        @Body body: BacklogReorderRequest
     ): Response<Unit>
 
     @POST("user/{username}/games/{gameId}/refresh-metadata")
