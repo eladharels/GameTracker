@@ -83,19 +83,18 @@ class LoginActivity : AppCompatActivity() {
             tvLoginStatus.setTextColor(errorColor)
             tvLoginStatus.text = ""
 
-            // Client-side validation to prevent empty credentials
-            if (username.trim().isEmpty() || password.trim().isEmpty()) {
-                tvLoginStatus.text = "Username and password are required"
+            // Not a security control (the server decides): it names the empty field (MOB-34).
+            LoginInput.problem(username, password)?.let {
+                tvLoginStatus.text = it
                 return@setOnClickListener
             }
 
             // Disable button and show loading state
             btnLogin.isEnabled = false
-            btnLogin.text = "Logging in..."
+            btnLogin.text = "Signing in…"
             tvLoginStatus.text = ""
 
-            // Normalize username to lowercase to prevent case sensitivity issues
-            val normalizedUsername = username.lowercase()
+            val normalizedUsername = LoginInput.username(username)
 
             // Tied to this screen: a result arriving after it is gone is dropped, not acted on.
             lifecycleScope.launch(Dispatchers.IO) {

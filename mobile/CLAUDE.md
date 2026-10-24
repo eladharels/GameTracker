@@ -200,7 +200,8 @@ MainActivity  (single activity host)
 
 ### Login Flow
 1. User enters username + password in `LoginActivity`
-2. Client checks both fields are non-empty and lowercases the username (whitespace: MOB-34)
+2. `LoginInput`: the username is trimmed and lowercased; the password is sent as typed and only
+   has to be non-empty (MOB-34)
 3. `POST /auth/login` with `LoginRequest`
 4. On success: the token is held IN MEMORY by `SessionStore`; only the username goes to the
    `"auth"` prefs. With fingerprint unlock on, one fingerprint prompt seals the new token

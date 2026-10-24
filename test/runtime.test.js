@@ -707,6 +707,14 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
     assert.ok(/for pair in \$\{R8_KEPT_FIELDS\}/.test(step) && /-e R8_KEPT_FIELDS/.test(step), 'android.yml no longer checks the built dex');
   });
 
+  // MOB-34: "alice " (autocorrect) failed to sign in, and a password of spaces was refused here.
+  check('Android: the username is trimmed, the password sent as typed (MOB-34)', () => {
+    const login = code('LoginActivity.kt');
+    assert.ok(/LoginInput\.problem\(username, password\)/.test(login) && /LoginInput\.username\(username\)/.test(login),
+      'the sign-in form no longer goes through LoginInput');
+    assert.ok(!/password\.trim\(\)/.test(login), 'the password is trimmed before it is checked or sent');
+  });
+
   // MOB-33: the app had five accents (Blue default) where the web has six (Violet default), and
   // three presets WERE status colours. Now both lists are the web's, read from its source.
   check('Android: the web\'s accent presets and status palette, with readable text on each (MOB-29, MOB-33)', () => {

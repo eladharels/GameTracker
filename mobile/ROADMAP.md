@@ -851,7 +851,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   both lists from the web's source and computes `colorOnPrimary` contrast per preset. A
   colour saved by the old picker falls back to Violet.
 
-### [ ] MOB-34 Low — Login input handling
+### [x] MOB-34 Low — Login input handling
 - **Where:** `LoginActivity.kt:81-97`.
 - **Why:**
   - The username is lowercased but not trimmed, so an autocorrect trailing space sends
@@ -861,6 +861,9 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
 - **Fix:**
   - Trim the username.
   - Only check that the password is non-empty.
+
+- **Done (PR #15):** `LoginInput` (JVM-tested) trims and lowercases the username and only
+  requires a non-empty password; the message names the empty field. Pinned.
 
 ### [ ] MOB-35 Low — Smaller UX defects
 - **Where and what:**
