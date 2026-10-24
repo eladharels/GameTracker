@@ -34,6 +34,7 @@ import com.example.gmaetrackermobile.UserData
 import com.example.gmaetrackermobile.GameStatus
 import com.example.gmaetrackermobile.SearchResult
 import com.example.gmaetrackermobile.SearchResults
+import com.example.gmaetrackermobile.LibraryAdd
 
 class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     private lateinit var searchEditText: EditText
@@ -144,7 +145,11 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
                         R.anim.slide_in_right, R.anim.slide_out_left,
                         R.anim.slide_in_left, R.anim.slide_out_right
                     )
-                    .replace(R.id.fragment_container, GameDetailsFragment.newInstance(game))
+                    // Your own row when the game is already in your library, so Details shows
+                    // its real status and library actions (MOB-16, MOB-39); otherwise only Add.
+                    .replace(R.id.fragment_container, LibraryMatch.owned(library, game)
+                        ?.let { GameDetailsFragment.newInstance(it, inLibrary = true) }
+                        ?: GameDetailsFragment.newInstance(game, inLibrary = false))
                     .addToBackStack(null)
                     .commit()
             }
@@ -338,82 +343,34 @@ class SearchFragment : Fragment(), GameDetailsFragment.GameDetailsCallback {
     /** The library, or null when it could not be read. */
     private suspend fun fetchLibrary(): List<Game>? {
         if (!isAdded) return null
-        return try {
-            val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
-            val token = Session.get(requireContext()).token ?: return null
-            val username = prefs.getString("username", null) ?: return null
-            val response = withContext(Dispatchers.IO) {
-                com.example.gmaetrackermobile.ApiClient.api.getLibrary("Bearer $token", username)
-            }
-            if (response.isSuccessful) response.body() ?: emptyList() else null
-        } catch (e: Exception) {
-            android.util.Log.e("SearchFragment", "Library check failed: ${e.message}")
-            null
-        }
+        val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
+        val token = Session.get(requireContext()).token ?: return null
+        val username = prefs.getString("username", null) ?: return null
+        return LibraryAdd.fetchLibrary("Bearer $token", username)
     }
 
     private fun addGameToLibrary(game: Game) {
         if (!isAdded) return
         viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
-                val token = Session.get(requireContext()).token ?: return@launch
-                val username = prefs.getString("username", null) ?: return@launch
-
-                // MOB-10: v1's add OVERWRITES the stored status, so "Add" on a game marked
-                // done demoted it to wishlist, wrote a permanent history row and pushed a
-                // notification. Check a FRESH library first (the badges' copy may be stale),
-                // and never post when the check itself failed: a blind add is the bug.
-                val fresh = fetchLibrary()
-                if (fresh == null) {
-                    withContext(Dispatchers.Main) {
-                        showSnackbar("Couldn't check your library. Try again.", SnackbarHelper.Type.ERROR)
-                    }
-                    return@launch
-                }
-                library = fresh
-                val match = LibraryMatch.match(fresh.map { LibraryMatch.rowOf(it) }, LibraryMatch.candidateOf(game))
-                if (match == LibraryMatch.Kind.SAME) {
-                    val status = LibraryMatch.owned(fresh, game)?.status?.replaceFirstChar { it.uppercase() }
-                    withContext(Dispatchers.Main) {
-                        if (!isAdded) return@withContext
-                        gameAdapter.notifyDataSetChanged()
-                        showSnackbar(
-                            "${game.displayName} is already in your library" + (status?.let { " ($it)" } ?: ""),
-                            SnackbarHelper.Type.DEFAULT
-                        )
-                    }
-                    return@launch
-                }
-
-                // The server stores Unreleased instead when the game is not out (MOB-13).
-                val gameRequest = GameStatus.request(game, GameStatus.WISHLIST)
-                val response = com.example.gmaetrackermobile.ApiClient.api
-                    .addOrUpdateGame("Bearer $token", username, gameRequest)
-                if (response.isSuccessful) fetchLibrary()?.let { library = it }
-
-                withContext(Dispatchers.Main) {
-                    if (!isAdded) return@withContext
-                    if (response.isSuccessful) {
-                        gameAdapter.notifyDataSetChanged()
-                        // A same-named game with an unknown year: added (a remake must not be
-                        // refused), but say so, as the web app does.
-                        val note = if (match == LibraryMatch.Kind.POSSIBLE)
-                            ". A game with the same name is already in your library." else "!"
-                        val saved = GameStatus.stored(GameStatus.WISHLIST, response.body())
-                        val where = if (saved == GameStatus.WISHLIST) "" else " as ${GameStatus.label(saved)}"
-                        showSnackbar("${game.displayName} added to library$where$note", SnackbarHelper.Type.SUCCESS)
-                        maybeCreateCalendarEvent(game)
-                    } else {
-                        showSnackbar("Failed to add game to library", SnackbarHelper.Type.ERROR)
-                    }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    if (!isAdded) return@withContext
-                    showSnackbar("Error: ${e.message}", SnackbarHelper.Type.ERROR)
-                }
+            val prefs = requireContext().getSharedPreferences("auth", MODE_PRIVATE)
+            val token = Session.get(requireContext()).token ?: return@launch
+            val username = prefs.getString("username", null) ?: return@launch
+            // A fresh library check, then the add: MOB-10, in LibraryAdd (shared with Details).
+            val outcome = LibraryAdd.add("Bearer $token", username, game)
+            when (outcome) {
+                is LibraryAdd.Outcome.Added -> outcome.library?.let { library = it }
+                is LibraryAdd.Outcome.AlreadyOwned -> library = outcome.library
+                else -> Unit
             }
+            if (!isAdded || view == null) return@launch
+            gameAdapter.notifyDataSetChanged()
+            val type = when (outcome) {
+                is LibraryAdd.Outcome.Added -> SnackbarHelper.Type.SUCCESS
+                is LibraryAdd.Outcome.AlreadyOwned -> SnackbarHelper.Type.DEFAULT
+                else -> SnackbarHelper.Type.ERROR
+            }
+            showSnackbar(LibraryAdd.message(game, outcome), type)
+            if (outcome is LibraryAdd.Outcome.Added) maybeCreateCalendarEvent(game)
         }
     }
 

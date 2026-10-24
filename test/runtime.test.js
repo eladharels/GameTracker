@@ -589,14 +589,32 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
       'mobile/app/src/test/resources/library-match-vectors.json differs from test/library-match-vectors.js: regenerate it');
   });
 
-  check('Android: search never sends an add without checking a fresh library (MOB-10)', () => {
-    const search = code('fragments/SearchFragment.kt');
-    const add = search.slice(search.indexOf('private fun addGameToLibrary'));
-    assert.ok(add.length > 0 && add.indexOf('LibraryMatch.match(') >= 0, 'addGameToLibrary does not consult LibraryMatch');
-    assert.ok(add.indexOf('fetchLibrary()') < add.indexOf('LibraryMatch.match(')
+  check('Android: an add never posts without checking a fresh library, from Search or Details (MOB-10, MOB-16)', () => {
+    // The rule lives in LibraryAdd, shared by both screens (MOB-16), so one cannot drift.
+    const lib = code('LibraryAdd.kt');
+    const add = lib.slice(lib.indexOf('suspend fun add('));
+    assert.ok(add.length > 0 && add.indexOf('LibraryMatch.match(') >= 0, 'LibraryAdd.add does not consult LibraryMatch');
+    assert.ok(add.indexOf('fetchLibrary(') < add.indexOf('LibraryMatch.match(')
       && add.indexOf('LibraryMatch.match(') < add.indexOf('addOrUpdateGame('),
       'the add is not preceded by a fresh library read and a match check');
-    assert.ok(!/status\s*=\s*"Wishlist"/.test(search), 'search still sends a capitalised status');
+    assert.ok(/\?: return@withContext Outcome\.CheckFailed/.test(add), 'an add proceeds when the library check itself failed');
+    assert.ok(!/addOrUpdateGame\(/.test(code('fragments/SearchFragment.kt')), 'Search posts an add itself instead of through LibraryAdd');
+    for (const f of ['fragments/SearchFragment.kt', 'fragments/GameDetailsFragment.kt']) {
+      assert.ok(/LibraryAdd\.add\(/.test(code(f)), `${f} no longer adds through LibraryAdd`);
+    }
+    assert.ok(!/status\s*=\s*"Wishlist"/.test(code('fragments/SearchFragment.kt')), 'search still sends a capitalised status');
+  });
+
+  // MOB-16: Details offered Remove, Refresh and status chips (which silently ADDED the game)
+  // for search results not in the library, and Remove had no confirmation and no undo.
+  check('Android: Details offers library actions only for library games, and Remove asks first (MOB-16)', () => {
+    const d = code('fragments/GameDetailsFragment.kt');
+    assert.ok(/fun newInstance\(game: Game, inLibrary: Boolean = true\)/.test(d), 'Details no longer knows whether the game is in the library');
+    assert.ok(/btnRemoveFromLibrary\.setOnClickListener \{ confirmRemove\(\) \}/.test(d), 'Remove no longer asks for confirmation');
+    for (const v of ['cardStatus', 'cardRating', 'cardNotes', 'btnRefreshMetadata', 'btnRemoveFromLibrary']) {
+      assert.ok(new RegExp(`${v}\\.visibility = library`).test(d), `${v} is shown for a game that is not in the library`);
+    }
+    assert.ok(/inLibrary = false\)/.test(code('fragments/SearchFragment.kt')), 'Search opens Details for a non-library game as if it were owned');
   });
 
   check('Android: no statistic is invented from a game id (MOB-11)', () => {

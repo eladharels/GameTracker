@@ -407,7 +407,18 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Hold the search `Job` and cancel it before starting another. Alternatively, drop any
     response whose query is not the current one.
 
-### [ ] MOB-16 Medium — Game Details offers library-only actions for games that are not in the library
+### [x] MOB-16 ✔ Medium — Game Details offers library-only actions for games that are not in the library — *fixed in PR #15*
+- **Fixed:**
+  - `GameDetailsFragment.newInstance(game, inLibrary)`. Search passes the user's own
+    library row when the game is owned, so Details shows its real status (this also closes
+    MOB-39's first bullet).
+  - A game that is not in the library gets one action, "Add to library". Status chips,
+    rating, notes, Refresh and Remove are hidden. After the add, the screen becomes the
+    library entry.
+  - The add goes through `LibraryAdd`, now shared with Search, so the MOB-10 fresh-library
+    check cannot be skipped on one screen.
+  - Remove asks for confirmation (this screen has no undo).
+  - Pinned in `test/runtime.test.js`.
 - **Where:** `GameDetailsFragment.kt:111-130`, `:198-206`, opened from search at
   `SearchFragment.kt:121-130`.
 - **Why:** the same screen serves search results and library entries. For a search result it

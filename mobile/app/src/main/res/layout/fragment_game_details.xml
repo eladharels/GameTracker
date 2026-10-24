@@ -107,7 +107,23 @@
             </LinearLayout>
 
             <!-- Status -->
+            <!-- MOB-16: a game that is NOT in the library gets this one action, and none of the
+                 library-only ones below (status, rating, notes, refresh, remove). -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAddToLibrary"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="22dp"
+                android:text="Add to library"
+                android:textAllCaps="false"
+                android:textStyle="bold"
+                android:textSize="15sp"
+                app:cornerRadius="15dp"
+                android:visibility="gone"
+                tools:ignore="HardcodedText" />
+
             <LinearLayout
+                android:id="@+id/cardStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
@@ -183,6 +199,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:id="@+id/cardNotes"
                 android:orientation="vertical"
                 android:background="@drawable/card_surface_20"
                 android:padding="18dp"

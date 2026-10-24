@@ -31,6 +31,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.gmaetrackermobile.Session
+import com.example.gmaetrackermobile.LibraryAdd
+import com.example.gmaetrackermobile.LibraryMatch
 
 class GameDetailsFragment : Fragment() {
 
@@ -46,12 +48,20 @@ class GameDetailsFragment : Fragment() {
     private lateinit var btnBack: View
     private lateinit var etGameNotes: EditText
     private lateinit var btnSaveNote: Button
+    private lateinit var btnAddToLibrary: Button
+    private lateinit var cardStatus: View
+    private lateinit var cardRating: View
+    private lateinit var cardNotes: View
+
+    /** False for a search result not in the library: only "Add to library" is offered (MOB-16). */
+    private var inLibrary = true
 
     private var currentGame: Game? = null
     private var currentStatus: String = ""
 
     companion object {
         private const val ARG_GAME = "game"
+        private const val ARG_IN_LIBRARY = "in_library"
         // Never Unreleased: the server decides that from the date (MOB-13).
         private val STATUS_OPTIONS = GameStatus.PICKABLE
         private val STATUS_COLORS = mapOf(
@@ -59,9 +69,17 @@ class GameDetailsFragment : Fragment() {
             "playing" to "#22B8F6", "done" to "#22C55E"
         )
 
-        fun newInstance(game: Game): GameDetailsFragment =
+        /**
+         * [inLibrary]: whether [game] is the user's own library row. A search result that is
+         * not shows only "Add to library": Remove, Refresh, the status chips (which silently
+         * ADDED the game), rating and notes all belong to a library entry (MOB-16).
+         */
+        fun newInstance(game: Game, inLibrary: Boolean = true): GameDetailsFragment =
             GameDetailsFragment().apply {
-                arguments = Bundle().apply { putParcelable(ARG_GAME, game) }
+                arguments = Bundle().apply {
+                    putParcelable(ARG_GAME, game)
+                    putBoolean(ARG_IN_LIBRARY, inLibrary)
+                }
             }
     }
 
@@ -83,6 +101,7 @@ class GameDetailsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         currentGame = arguments?.getParcelable(ARG_GAME)
+        inLibrary = arguments?.getBoolean(ARG_IN_LIBRARY, true) ?: true
         if (currentGame == null) {
             showSnackbar("Game information not found")
             requireActivity().supportFragmentManager.popBackStack()
@@ -94,6 +113,55 @@ class GameDetailsFragment : Fragment() {
         setupRating()
         setupClickListeners()
         loadNoteForCurrentGame()
+        showLibraryActions()
+    }
+
+    /** Library actions for a library entry; only "Add to library" for anything else (MOB-16). */
+    private fun showLibraryActions() {
+        val library = if (inLibrary) View.VISIBLE else View.GONE
+        cardStatus.visibility = library
+        cardRating.visibility = library
+        cardNotes.visibility = library
+        btnRefreshMetadata.visibility = library
+        btnRemoveFromLibrary.visibility = library
+        btnAddToLibrary.visibility = if (inLibrary) View.GONE else View.VISIBLE
+    }
+
+    private fun addToLibrary() {
+        val game = currentGame ?: return
+        btnAddToLibrary.isEnabled = false
+        viewLifecycleOwner.lifecycleScope.launch {
+            val prefs = requireContext().getSharedPreferences("auth", Context.MODE_PRIVATE)
+            val token = Session.get(requireContext()).token
+            val username = prefs.getString("username", null)
+            if (token == null || username == null) {
+                btnAddToLibrary.isEnabled = true
+                return@launch
+            }
+            // The same fresh-library check as Search (MOB-10), in one place.
+            val outcome = LibraryAdd.add("Bearer $token", username, game)
+            btnAddToLibrary.isEnabled = true
+            val row = when (outcome) {
+                is LibraryAdd.Outcome.Added -> outcome.library?.let { LibraryMatch.owned(it, game) }
+                    ?: game.copy(status = outcome.saved)
+                is LibraryAdd.Outcome.AlreadyOwned -> outcome.owned
+                else -> null
+            }
+            showSnackbar(LibraryAdd.message(game, outcome), when (outcome) {
+                is LibraryAdd.Outcome.Added -> SnackbarHelper.Type.SUCCESS
+                is LibraryAdd.Outcome.AlreadyOwned -> SnackbarHelper.Type.DEFAULT
+                else -> SnackbarHelper.Type.ERROR
+            })
+            if (row != null) {
+                // Now a library entry: its real status, and the library actions.
+                currentGame = row
+                inLibrary = true
+                setupStatusChips()
+                setupRating()
+                loadNoteForCurrentGame()
+                showLibraryActions()
+            }
+        }
     }
 
     private fun initializeViews(view: View) {
@@ -109,6 +177,10 @@ class GameDetailsFragment : Fragment() {
         btnBack = view.findViewById(R.id.btnBack)
         etGameNotes = view.findViewById(R.id.etGameNotes)
         btnSaveNote = view.findViewById(R.id.btnSaveNote)
+        btnAddToLibrary = view.findViewById(R.id.btnAddToLibrary)
+        cardStatus = view.findViewById(R.id.cardStatus)
+        cardRating = view.findViewById(R.id.cardRating)
+        cardNotes = view.findViewById(R.id.cardNotes)
     }
 
     private fun populateGameDetails() {
@@ -201,7 +273,8 @@ class GameDetailsFragment : Fragment() {
 
     private fun setupClickListeners() {
         btnRefreshMetadata.setOnClickListener { refreshMetadata() }
-        btnRemoveFromLibrary.setOnClickListener { removeGameFromLibrary() }
+        btnRemoveFromLibrary.setOnClickListener { confirmRemove() }
+        btnAddToLibrary.setOnClickListener { addToLibrary() }
         btnBack.setOnClickListener {
             callback?.onGameStatusUpdated()
             requireActivity().supportFragmentManager.popBackStack()
@@ -298,6 +371,17 @@ class GameDetailsFragment : Fragment() {
     private fun restoreRefreshButton() {
         btnRefreshMetadata.isEnabled = true
         btnRefreshMetadata.text = "Refresh"
+    }
+
+    /** No undo on this screen, so it asks first (MOB-16); the library list has its 5-second undo. */
+    private fun confirmRemove() {
+        val game = currentGame ?: return
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Remove ${game.displayName}?")
+            .setMessage("It leaves your library, with its status. Your notes and rating on this phone stay.")
+            .setPositiveButton("Remove") { _, _ -> removeGameFromLibrary() }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun removeGameFromLibrary() {
