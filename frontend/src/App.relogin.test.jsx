@@ -90,7 +90,9 @@ it('boot: 401 with an EXPIRED hint explains the ended session; with no hint it s
   writeHint({ username: 'jane', exp: Math.floor(Date.now() / 1000) - 60 })
   renderApp('/library')
   expect(await screen.findByText(/session has ended/)).toBeTruthy()
-  expect(peekSessionEnd()).toBeNull()   // shown, then cleared on mount
+  // Shown, then cleared by a mount EFFECT: the text can be found before that effect has run on
+  // a slow runner (a CI flake on PR #15), so wait for it rather than assert at once.
+  await waitFor(() => expect(peekSessionEnd()).toBeNull())
   cleanup()
   localStorage.clear()
   renderApp('/library')
