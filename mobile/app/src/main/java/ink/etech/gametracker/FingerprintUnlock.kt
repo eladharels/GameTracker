@@ -68,8 +68,8 @@ class CryptoPrompt private constructor(build: (BiometricPrompt.AuthenticationCal
 
 /**
  * Fingerprint unlock (MOB-6): the session token sealed with a biometric-bound Keystore key.
- * The ONE place that turns it on, off, and uses it. LoginActivity, ProfileFragment and
- * SettingsActivity call these; none of them touches the key or the sealed copy directly.
+ * The ONE place that turns it on, off, and uses it. LoginActivity and ProfileFragment call
+ * these; neither touches the key or the sealed copy directly.
  *
  * Any fingerprint enrolled on the phone opens the app: that is how Android biometrics work,
  * and the UI says so when the feature is turned on.
@@ -102,7 +102,7 @@ object FingerprintUnlock {
         object KeyInvalidated : Result()
     }
 
-    /** Turning it on, from Profile or Settings. */
+    /** Turning it on, from Profile or after a password sign-in. */
     val TURN_ON_PROMPT: BiometricPrompt.PromptInfo
         get() = CryptoPrompt.info("Turn on fingerprint unlock", "Confirm your fingerprint", negative = "Cancel")
 

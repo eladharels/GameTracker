@@ -74,7 +74,6 @@ mobile/                                       # inside the GameTracker repo (was
 │   │   │   │                                 #   remove the account's calendar events
 │   │   │   ├── LoginActivity.kt              # Entry point — auth screen
 │   │   │   ├── MainActivity.kt               # Main container — hosts all fragments
-│   │   │   ├── SettingsActivity.kt           # App settings screen
 │   │   │   ├── GameStatus.kt                 # The five statuses, the four a user may PICK, and
 │   │   │   │                                 #   what the server says it stored (MOB-13)
 │   │   │   ├── BacklogOrder.kt               # The backlog's order, positions and the one
@@ -218,7 +217,7 @@ MainActivity  (single activity host)
 - `TokenVault` holds an AES-256-GCM key in the Android Keystore (StrongBox where available):
   `setUserAuthenticationRequired(true)`, per-use STRONG biometric (`setUserAuthenticationParameters(0,
   AUTH_BIOMETRIC_STRONG)`, `-1` validity below API 30), `setInvalidatedByBiometricEnrollment(true)`.
-- Turning it on (Profile switch, Settings button, or after a password sign-in) runs a
+- Turning it on (the Profile switch, or after a password sign-in) runs a
   `BiometricPrompt` with an ENCRYPT `CryptoObject` and stores only the ciphertext, IV and the
   token's `exp` (`token_sealed_*_v1` in `"auth"` prefs).
 - On `LoginActivity` load: prompt ONLY if fingerprint unlock is on AND a sealed copy exists

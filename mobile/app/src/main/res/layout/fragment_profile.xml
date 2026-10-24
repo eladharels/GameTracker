@@ -371,51 +371,16 @@
                 tools:ignore="HardcodedText" />
         </LinearLayout>
 
-        <!-- Settings row -->
-        <LinearLayout
-            android:id="@+id/rowSettings"
+        <!-- The app's real version (MOB-28): the Settings screen it replaces showed "v2.4.0",
+             and rows for notifications and sources this app knows nothing about. -->
+        <TextView
+            android:id="@+id/tvAppVersion"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:background="@drawable/card_surface_16"
-            android:padding="15dp"
-            android:clickable="true"
-            android:focusable="true"
-            android:foreground="?attr/selectableItemBackground">
-
-            <LinearLayout
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:gravity="center"
-                android:background="@drawable/icon_badge_bg"
-                android:layout_marginEnd="14dp">
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_settings"
-                    android:tint="?attr/colorPrimary"
-                    android:contentDescription="Settings" />
-            </LinearLayout>
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Settings"
-                android:textSize="14.5sp"
-                android:textStyle="bold"
-                android:textColor="@color/gt_text_primary"
-                tools:ignore="HardcodedText" />
-
-            <ImageView
-                android:layout_width="18dp"
-                android:layout_height="18dp"
-                android:src="@drawable/ic_arrow_right"
-                android:tint="@color/gt_text_muted"
-                android:contentDescription="Open settings" />
-        </LinearLayout>
+            android:gravity="center"
+            android:textSize="12sp"
+            android:textColor="@color/gt_text_secondary"
+            android:layout_marginBottom="14dp" />
 
         <!-- Sign out -->
         <com.google.android.material.button.MaterialButton

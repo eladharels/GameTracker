@@ -319,8 +319,8 @@ object Session {
      *
      * No replay: an emit with nobody collecting is DROPPED, while [redirecting] stays true and
      * mutes error snackbars. Today MainActivity collects it while STARTED and re-checks the
-     * session in onResume (showing the expiry notice when [redirecting] is set), and the only
-     * other activity, Settings, makes no API calls. A new activity that calls the API must
+     * session in onResume (showing the expiry notice when [redirecting] is set). There is no
+     * other signed-in activity (Settings went with MOB-28). A new activity that calls the API must
      * collect this flow or re-check the session on resume.
      */
     val ended = MutableSharedFlow<Unit>(extraBufferCapacity = 1)

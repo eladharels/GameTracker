@@ -704,7 +704,7 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   server body or exception message reaches the screen (`test/runtime.test.js` scans every
   line outside `Log.*`). The button says "Sign in", as the web does.
 
-### [ ] MOB-28 Medium — Settings screen states things that aren't true
+### [x] MOB-28 Medium — Settings screen states things that aren't true
 - **Where:** `SettingsActivity.kt:86-96`; the biometric toggle is duplicated at
   `SettingsActivity.kt:27-83` and `ProfileFragment.kt:167-212`.
 - **Why:**
@@ -717,6 +717,12 @@ By severity: **Critical 2 · High 7 · Medium 18 · Low 8**.
   - Remove the rows, or back them with real data. `GET /api/capabilities` and the
     notification settings on `/api/user/me` are candidates.
   - Keep one biometric control.
+
+- **Done (PR #15):** the Settings screen is deleted. Everything on it was either the second
+  copy of the fingerprint control or untrue: "Notifications On", "3 connected sources",
+  "Appearance Dark" and "v2.4.0" were literals. Profile keeps the ONE fingerprint switch and
+  now shows the real `versionName`. Notification channels live in My Account on the web,
+  which this app does not reach.
 
 ### [ ] MOB-29 Medium — Text contrast fails WCAG AA across the app
 - **Where and ratios (computed, WCAG 2.x):**

@@ -583,7 +583,8 @@ check('android.yml publishes exactly one signed APK, from main only, served at /
   // first "/>", which inside an activity is a child element's.
   const activities = [...manifest.matchAll(/<activity\b[^>]*?\/>|<activity\b[^>]*>[\s\S]*?<\/activity>/g)].map((m) => m[0]);
   check('Android: only the launcher activity is exported (MOB-2)', () => {
-    assert.ok(activities.length >= 3, `parsed ${activities.length} activities from the manifest -- the scan is broken`);
+    // Two since MOB-28 removed Settings: Login (the launcher) and Main.
+    assert.ok(activities.length >= 2, `parsed ${activities.length} activities from the manifest -- the scan is broken`);
     for (const a of activities) {
       const name = /android:name="([^"]+)"/.exec(a)[1];
       const launcher = /android\.intent\.category\.LAUNCHER/.test(a);

@@ -58,7 +58,7 @@ class ProfileFragment : Fragment() {
         super.onResume()
         // Redraw dots so the correct one shows the selection ring
         view?.let { setupColorPickerDots(it) }
-        // It may have been changed in Settings while this screen was in the back stack.
+        // A sign-out elsewhere, or a new fingerprint invalidating the key, can have turned it off.
         context?.let { showBiometric(FingerprintUnlock.isOn(it)) }
     }
 
@@ -81,9 +81,8 @@ class ProfileFragment : Fragment() {
     }
 
     private fun setupSettingsRow(view: View) {
-        view.findViewById<View>(R.id.rowSettings)?.setOnClickListener {
-            startActivity(Intent(requireContext(), ink.etech.gametracker.SettingsActivity::class.java))
-        }
+        // Settings is gone (MOB-28): its one real control is the fingerprint switch above.
+        view.findViewById<TextView>(R.id.tvAppVersion)?.text = "GameTracker ${ink.etech.gametracker.BuildConfig.VERSION_NAME}"
     }
 
     private fun loadLibraryStats() {
