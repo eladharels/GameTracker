@@ -38,7 +38,10 @@ object ScreenStates {
         )
         filterLabel != null -> State(
             "Nothing in $filterLabel",
-            "Games you mark as $filterLabel show up here.",
+            // Unreleased is the server's conclusion from the release date, never a status a
+            // user picks (MOB-18), so "games you mark as" would be wrong for it.
+            if (filterLabel == "Unreleased") "Games with a release date still ahead show up here."
+            else "Games you mark as $filterLabel show up here.",
             Action.SHOW_ALL,
             "Show all games",
         )

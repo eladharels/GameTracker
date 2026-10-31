@@ -51,6 +51,7 @@ class HomeFragment : Fragment() {
     /** Shown again, by a tab tap or by Back from Game Details (MOB-19). */
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
+        if (hidden) loadError?.dismiss()
         if (!hidden && view != null) loadLibrary()
     }
 
@@ -98,6 +99,18 @@ class HomeFragment : Fragment() {
         (activity as? MainActivity)?.openDetails(GameDetailsFragment.newInstance(game))
     }
 
+    /**
+     * The indefinite "couldn't load" snackbar. It sits on the activity, not this tab, so the
+     * tab dismisses it when hidden or destroyed: it must not follow the user to another tab.
+     */
+    private var loadError: com.google.android.material.snackbar.Snackbar? = null
+
+    override fun onDestroyView() {
+        loadError?.dismiss()
+        loadError = null
+        super.onDestroyView()
+    }
+
     /** From the shared copy (MOB-19): opening the tab no longer downloads the library twice. */
     private fun loadLibrary() {
         val ctx = context ?: return
@@ -106,10 +119,13 @@ class HomeFragment : Fragment() {
             val games = LibraryRepository.load(ctx)
             if (!isAdded) return@launch
             if (games != null) {
+                loadError?.dismiss()
+                loadError = null
                 bind(games)
             } else {
                 // It used to fail in silence: zeros everywhere, as if the library were empty.
-                ink.etech.gametracker.SnackbarHelper.show(
+                loadError?.dismiss()
+                loadError = ink.etech.gametracker.SnackbarHelper.show(
                     this@HomeFragment,
                     "Couldn't load your library",
                     ink.etech.gametracker.SnackbarHelper.Type.ERROR,

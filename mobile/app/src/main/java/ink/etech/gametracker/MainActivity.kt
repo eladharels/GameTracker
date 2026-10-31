@@ -148,7 +148,6 @@ class MainActivity : AppCompatActivity() {
             when (item.itemId) {
                 R.id.navigation_home, R.id.navigation_search, R.id.navigation_library,
                 R.id.navigation_insights, R.id.navigation_profile -> {
-                    bottomNav.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                     loadFragmentForTab(item.itemId); true
                 }
                 else -> false

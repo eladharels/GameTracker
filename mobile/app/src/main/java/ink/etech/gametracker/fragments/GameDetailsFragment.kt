@@ -181,6 +181,13 @@ class GameDetailsFragment : Fragment() {
         tvPrice.text = if (!price.isNullOrBlank()) price else "No price"   // "TBA" read as a release date (MOB-35)
 
         val coverUrl = SafeUrl.https(game.cover)   // https only (MOB-8)
+        // Only a cover that can be shown full screen says so to TalkBack (it does nothing otherwise).
+        androidx.core.view.ViewCompat.replaceAccessibilityAction(
+            ivGameCover,
+            androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK,
+            if (coverUrl != null) "View full screen" else null,
+            null,
+        )
         if (coverUrl != null) {
             Glide.with(this)
                 .load(coverUrl)
@@ -279,7 +286,16 @@ class GameDetailsFragment : Fragment() {
         }
         btnSaveNote.setOnClickListener { saveNoteForCurrentGame() }
         ivGameCover.setOnClickListener { showCoverFullScreen() }
-        ivGameCover.contentDescription = "Cover art. Tap to view full screen"
+        ivGameCover.contentDescription = "Cover art"
+    }
+
+    /** The open full-screen cover, dismissed with the view so its window cannot leak. */
+    private var coverDialog: android.app.Dialog? = null
+
+    override fun onDestroyView() {
+        coverDialog?.dismiss()
+        coverDialog = null
+        super.onDestroyView()
     }
 
     /**
@@ -289,14 +305,33 @@ class GameDetailsFragment : Fragment() {
     private fun showCoverFullScreen() {
         val url = SafeUrl.https(currentGame?.cover) ?: return   // https only (MOB-8)
         val ctx = requireContext()
+        coverDialog?.dismiss()
         val dialog = android.app.Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        coverDialog = dialog
+        val density = resources.displayMetrics.density
         val image = ImageView(ctx).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(android.graphics.Color.BLACK)
             contentDescription = "${currentGame?.displayName ?: "Game"} cover art"
             setOnClickListener { dialog.dismiss() }
         }
-        dialog.setContentView(image)
+        // A visible, 48dp close target as well as tap-anywhere and Back: TalkBack users and
+        // anyone who does not guess "tap the picture" get an obvious way out.
+        val close = android.widget.ImageButton(ctx).apply {
+            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            contentDescription = "Close"
+            setOnClickListener { dialog.dismiss() }
+        }
+        val frame = android.widget.FrameLayout(ctx).apply {
+            addView(image, android.widget.FrameLayout.LayoutParams(-1, -1))
+            val size = (48 * density).toInt()
+            addView(close, android.widget.FrameLayout.LayoutParams(size, size, android.view.Gravity.TOP or android.view.Gravity.END).apply {
+                topMargin = (24 * density).toInt()
+                marginEnd = (8 * density).toInt()
+            })
+        }
+        dialog.setContentView(frame)
         dialog.show()
         Glide.with(image).load(url).transition(DrawableTransitionOptions.withCrossFade(200)).into(image)
     }
@@ -392,8 +427,9 @@ class GameDetailsFragment : Fragment() {
                         // The server updated the row; read it back and draw it. This used to
                         // say "refreshed" and keep showing the old title, cover and price.
                         // The write already dropped the shared copy (LibraryWriteInterceptor).
-                        val fresh = LibraryRepository.load(requireContext(), force = true)
+                        val fresh = context?.let { LibraryRepository.load(it, force = true) }
                             ?.let { LibraryMatch.owned(it, game) }
+                        if (!isAdded || view == null) return@withContext
                         restoreRefreshButton()
                         if (fresh != null) {
                             currentGame = fresh
@@ -452,6 +488,7 @@ class GameDetailsFragment : Fragment() {
                 withContext(Dispatchers.Main) {
                     if (response.isSuccessful) {
                         showSnackbar("${game.displayName} removed")
+                        inLibrary = false   // so leaving does not save a note for a removed game
                         requireActivity().supportFragmentManager.popBackStack()
                     } else {
                         showSnackbar("Couldn't remove the game. Try again.", SnackbarHelper.Type.ERROR)

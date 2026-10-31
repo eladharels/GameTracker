@@ -214,8 +214,6 @@ class GameAdapter(
 
             itemView.setOnClickListener { onItemClick?.invoke(game) }
             itemView.setOnLongClickListener {
-                // A long press opens the status sheet: the buzz says it registered.
-                it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                 onLongPress?.invoke(game)
                 true
             }

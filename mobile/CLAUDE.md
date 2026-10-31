@@ -296,7 +296,14 @@ a fixed colour. Status colours are `gt_status_*`, the web's `--color-status-*` (
 - Snackbar for feedback; a dialog only to confirm something that cannot be undone (Remove, sign-out)
 - Loading progress indicators on async operations
 - Empty state messages with guidance
-- Slide animations (200ms) on fragment transitions (`slide_in_right`, `slide_out_left`)
+- Game Details slides in over its tab (250ms, `slide_in_right` / `slide_out_left`). Tabs are
+  siblings, not a stack, so switching tabs is a Material fade-through instead (90ms out, then
+  210ms in from 96% scale: `fade_through_out` / `fade_through_in`). Tapping the current tab
+  scrolls it to the top, or closes Game Details
+- Haptics only where a gesture needs confirming: drag start in the backlog, a status change on
+  Game Details. A long press buzzes by itself (the platform does it); tab taps do not
+- An empty or failed list says which it is and offers one action (`ScreenStates`): Try again,
+  Discover games, Clear search or Show all games. Never "Your library is empty" for a load that failed
 
 ---
 

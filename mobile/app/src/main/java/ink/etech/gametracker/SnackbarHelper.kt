@@ -18,11 +18,11 @@ object SnackbarHelper {
         duration: Int = Snackbar.LENGTH_SHORT,
         action: String? = null,
         onAction: (() -> Unit)? = null,
-    ) {
+    ): Snackbar? {
         // While an expired session is on its way to the login screen, the screen's own
         // "failed to load" error is noise on top of the real reason (MOB-5).
-        if (type == Type.ERROR && Session.redirecting) return
-        val view = fragment.view ?: return
+        if (type == Type.ERROR && Session.redirecting) return null
+        val view = fragment.view ?: return null
         val snackbar = Snackbar.make(view, message, duration)
         // Anchor above the bottom nav bar so it's never hidden behind it
         fragment.activity?.findViewById<android.view.View>(R.id.bottom_navigation)
@@ -30,6 +30,7 @@ object SnackbarHelper {
         if (action != null && onAction != null) snackbar.setAction(action) { onAction() }
         applyStyle(snackbar, type)
         snackbar.show()
+        return snackbar
     }
 
     /**

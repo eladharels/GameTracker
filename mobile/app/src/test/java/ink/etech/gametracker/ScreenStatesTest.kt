@@ -40,4 +40,10 @@ class ScreenStatesTest {
         val s = ScreenStates.library(12, "Done", "", failed = true)
         assertEquals("Nothing in Done", s.title)
     }
+
+    @Test fun unreleasedIsNotAStatusAUserMarks() {
+        // The server decides Unreleased from the date (MOB-18).
+        val s = ScreenStates.library(12, "Unreleased", "", failed = false)
+        assertEquals("Games with a release date still ahead show up here.", s.body)
+    }
 }
