@@ -46,6 +46,12 @@ class LibraryFragment : Fragment() {
     private lateinit var chipGroup: ChipGroup
     private lateinit var gameAdapter: GameAdapter
     private lateinit var emptyStateLayout: View
+    private lateinit var emptyTitle: TextView
+    private lateinit var emptyBody: TextView
+    private lateinit var emptyAction: com.google.android.material.button.MaterialButton
+
+    /** The last load reached nobody and nothing is held: the empty state must not say "empty". */
+    private var loadFailed = false
     private lateinit var librarySearchEditText: EditText
     private lateinit var btnClearSearch: ImageView
 
@@ -102,6 +108,9 @@ class LibraryFragment : Fragment() {
         swipeRefreshLayout = view.findViewById(R.id.swipeRefreshLayout)
         chipGroup = view.findViewById(R.id.chipGroup)
         emptyStateLayout = view.findViewById(R.id.tvEmptyState)
+        emptyTitle = view.findViewById(R.id.tvEmptyTitle)
+        emptyBody = view.findViewById(R.id.tvEmptyBody)
+        emptyAction = view.findViewById(R.id.btnEmptyAction)
         librarySearchEditText = view.findViewById(R.id.etLibrarySearch)
         btnClearSearch = view.findViewById(R.id.btnClearSearch)
     }
@@ -214,6 +223,7 @@ class LibraryFragment : Fragment() {
             override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, actionState: Int) {
                 super.onSelectedChanged(vh, actionState)
                 if (actionState == ItemTouchHelper.ACTION_STATE_DRAG && vh != null) {
+                    vh.itemView.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                     dragFromPos = vh.adapterPosition
                     val g = gameAdapter.getGames().getOrNull(dragFromPos)
                     draggedGameId = g?.game_id ?: g?.id
@@ -480,7 +490,18 @@ class LibraryFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val username = Session.get(ctx).username ?: return@launch
-                val games = LibraryRepository.load(ctx, force) ?: return@launch
+                val games = LibraryRepository.load(ctx, force)
+                if (games == null) {
+                    // Not reached: say so. With games already on screen they stay, and a
+                    // snackbar reports it; with none, the empty state offers a retry.
+                    loadFailed = allGames.isEmpty()
+                    if (allGames.isNotEmpty()) {
+                        showSnackbar("Couldn't refresh your library", SnackbarHelper.Type.ERROR)
+                    }
+                    filterGames()
+                    return@launch
+                }
+                loadFailed = false
                 allGames.clear()
                 // A removal still inside its undo window has not reached the server yet,
                 // so the server still lists it. Keep it hidden until it lands or is undone.
@@ -519,9 +540,28 @@ class LibraryFragment : Fragment() {
         gameAdapter.backlogPositions = BacklogOrder.positions(allGames)
         gameAdapter.dragEnabled = BacklogOrder.canDrag(currentFilter, searchQuery)
         gameAdapter.submitList(sorted)
+        if (sorted.isEmpty()) bindEmptyState()
         emptyStateLayout.visibility = if (sorted.isEmpty()) View.VISIBLE else View.GONE
         recyclerView.visibility = if (sorted.isEmpty()) View.GONE else View.VISIBLE
         updateStats()
+    }
+
+    /** Which kind of nothing this is, and the one action that helps (ScreenStates). */
+    private fun bindEmptyState() {
+        val label = filterLabels.firstOrNull { it.lowercase() == currentFilter }?.takeIf { currentFilter != "all" }
+        val state = ink.etech.gametracker.ScreenStates.library(allGames.size, label, searchQuery, loadFailed)
+        emptyTitle.text = state.title
+        emptyBody.text = state.body
+        emptyAction.text = state.actionLabel
+        emptyAction.setOnClickListener {
+            when (state.action) {
+                ink.etech.gametracker.ScreenStates.Action.RETRY -> loadLibrary(force = true)
+                ink.etech.gametracker.ScreenStates.Action.DISCOVER ->
+                    (activity as? MainActivity)?.selectTab(R.id.navigation_search)
+                ink.etech.gametracker.ScreenStates.Action.CLEAR_SEARCH -> librarySearchEditText.setText("")
+                ink.etech.gametracker.ScreenStates.Action.SHOW_ALL -> filterChips["all"]?.isChecked = true
+            }
+        }
     }
 
     // ── Delete with undo ──────────────────────────────────────────────────────

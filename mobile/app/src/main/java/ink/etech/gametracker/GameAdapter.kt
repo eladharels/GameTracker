@@ -146,7 +146,10 @@ class GameAdapter(
                 "done" -> ContextCompat.getColor(itemView.context, R.color.gt_status_done)
                 "backlog" -> ContextCompat.getColor(itemView.context, R.color.gt_status_backlog)
                 "unreleased" -> ContextCompat.getColor(itemView.context, R.color.gt_status_unreleased)
-                else -> ContextCompat.getColor(itemView.context, R.color.gt_status_wishlist)
+                "wishlist" -> ContextCompat.getColor(itemView.context, R.color.gt_status_wishlist)
+                // A search result that is not in the library has no status. It used to get the
+                // Wishlist sky-blue edge, which read as "already on your wishlist".
+                else -> ContextCompat.getColor(itemView.context, R.color.gt_border_strong)
             }
             viewStatusBorder.setBackgroundColor(statusColor)
 

@@ -1,7 +1,7 @@
 package ink.etech.gametracker.fragments
 
 import android.content.Context
-import android.graphics.Color
+import ink.etech.gametracker.GameStatus
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
@@ -47,7 +47,20 @@ class InsightsFragment : Fragment() {
     /** Shown again, by a tab tap or by Back from Game Details (MOB-19). */
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
+        if (hidden) loadError?.dismiss()
         if (!hidden && view != null) loadLibrary()
+    }
+
+    /**
+     * The indefinite "couldn't load" snackbar. It sits on the activity, not this tab, so the
+     * tab dismisses it when hidden or destroyed: it must not follow the user to another tab.
+     */
+    private var loadError: com.google.android.material.snackbar.Snackbar? = null
+
+    override fun onDestroyView() {
+        loadError?.dismiss()
+        loadError = null
+        super.onDestroyView()
     }
 
     /** From the shared copy (MOB-19). */
@@ -55,7 +68,24 @@ class InsightsFragment : Fragment() {
         val ctx = context ?: return
         LibraryRepository.peek(ctx)?.let { bind(it) }
         viewLifecycleOwner.lifecycleScope.launch {
-            LibraryRepository.load(ctx)?.let { if (isAdded) bind(it) }
+            val games = LibraryRepository.load(ctx)
+            if (!isAdded) return@launch
+            if (games != null) {
+                loadError?.dismiss()
+                loadError = null
+                bind(games)
+            } else {
+                // It used to fail in silence: zeros everywhere, as if the library were empty.
+                loadError?.dismiss()
+                loadError = ink.etech.gametracker.SnackbarHelper.show(
+                    this@InsightsFragment,
+                    "Couldn't load your library",
+                    ink.etech.gametracker.SnackbarHelper.Type.ERROR,
+                    com.google.android.material.snackbar.Snackbar.LENGTH_INDEFINITE,
+                    action = "Retry",
+                    onAction = { loadLibrary() },
+                )
+            }
         }
     }
 
@@ -92,6 +122,10 @@ class InsightsFragment : Fragment() {
         addBar(statusContainer, "Backlog", backlog, total, ContextCompat.getColor(requireContext(), R.color.gt_status_backlog))
         addBar(statusContainer, "Completed", done, total, ContextCompat.getColor(requireContext(), R.color.gt_status_done))
         addBar(statusContainer, "Wishlist", wishlist, total, ContextCompat.getColor(requireContext(), R.color.gt_status_wishlist))
+        // The fifth status was missing, so the bars did not add up to the total (MOB-18:
+        // unreleased is the status, not a date guess).
+        val unreleased = games.count { GameStatus.canonical(it.status) == GameStatus.UNRELEASED }
+        addBar(statusContainer, "Unreleased", unreleased, total, ContextCompat.getColor(requireContext(), R.color.gt_status_unreleased))
 
         // Release years (was "Top genres", drawn from random labels: MOB-11). The year is
         // the one descriptive fact every library row carries; undated games are left out
@@ -128,7 +162,7 @@ class InsightsFragment : Fragment() {
 
         val labelView = TextView(requireContext()).apply {
             text = label
-            setTextColor(Color.parseColor("#C3C8D8"))
+            setTextColor(ContextCompat.getColor(context, R.color.gt_text_light))
             textSize = 12.5f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(dp(70f), ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -137,12 +171,17 @@ class InsightsFragment : Fragment() {
         val track = LinearLayout(requireContext()).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(5f).toFloat()
-                setColor(Color.parseColor("#10FFFFFF"))
+                setColor(ContextCompat.getColor(context, R.color.gt_border))
             }
             layoutParams = LinearLayout.LayoutParams(0, dp(9f), 1f)
                 .apply { marginStart = dp(12f); marginEnd = dp(12f) }
         }
-        val fraction = if (max > 0) (value.toFloat() / max).coerceIn(0.02f, 1f) else 0.02f
+        // Zero is an empty track, not a 2% sliver that reads as "a few". A non-zero count
+        // keeps a visible minimum so one game out of 300 still shows.
+        val fraction = when {
+            value <= 0 || max <= 0 -> 0f
+            else -> (value.toFloat() / max).coerceIn(0.02f, 1f)
+        }
         val fill = View(requireContext()).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(5f).toFloat()
@@ -158,7 +197,7 @@ class InsightsFragment : Fragment() {
 
         val valueView = TextView(requireContext()).apply {
             text = value.toString()
-            setTextColor(Color.parseColor("#F0F1F8"))
+            setTextColor(ContextCompat.getColor(context, R.color.gt_text_primary))
             textSize = 13f
             gravity = Gravity.END
             setTypeface(typeface, android.graphics.Typeface.BOLD)

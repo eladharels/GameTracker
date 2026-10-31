@@ -251,29 +251,45 @@ class ProfileFragment : Fragment() {
         updateCalendarUi(switchCalendar.isChecked, btnSync, tvStatus)
 
         switchCalendar.setOnCheckedChangeListener { _, isChecked ->
+            if (settingCalendarSwitchQuietly) return@setOnCheckedChangeListener
             if (isChecked) {
                 val activity = requireActivity() as? MainActivity ?: return@setOnCheckedChangeListener
                 activity.requestCalendarPermissions { granted ->
                     if (!granted) {
                         showSnackbar("Calendar permission required", SnackbarHelper.Type.ERROR)
-                        switchCalendar.isChecked = false
+                        // Quietly: sync was never on, so this must not ask to turn it off.
+                        setCalendarSwitchQuietly(switchCalendar, false)
                         return@requestCalendarPermissions
                     }
                     CalendarHelper.setSyncEnabled(ctx, true)
                     updateCalendarUi(true, btnSync, tvStatus)
                     showSnackbar("Calendar sync on — press Sync to link your games", SnackbarHelper.Type.SUCCESS)
                 }
-            } else {
+            } else if (!CalendarHelper.isSyncEnabled(ctx)) {
+                // Sync is not on, so there is nothing to remove and nothing to ask.
                 updateCalendarUi(false, btnSync, tvStatus)
-                viewLifecycleOwner.lifecycleScope.launch {
-                    val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
-                    if (!isAdded) return@launch
-                    if (left == 0) showSnackbar("Calendar sync off — all events removed")
-                    else showSnackbar(
-                        "Calendar sync off, but $left ${if (left == 1) "event" else "events"} couldn't be removed. Allow calendar access, then try again.",
-                        SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
-                    )
-                }
+            } else {
+                // Turning sync off deletes every event it put in the user's calendar, which
+                // cannot be undone. It used to happen on the switch alone: one stray tap
+                // emptied the calendar. Now it asks; Cancel puts the switch back.
+                MaterialAlertDialogBuilder(ctx)
+                    .setTitle("Turn off calendar sync?")
+                    .setMessage("This removes every release date GameTracker added to your calendar. Your library is not affected.")
+                    .setNegativeButton("Cancel") { _, _ -> setCalendarSwitchQuietly(switchCalendar, true) }
+                    .setOnCancelListener { setCalendarSwitchQuietly(switchCalendar, true) }
+                    .setPositiveButton("Turn off and remove") { _, _ ->
+                        updateCalendarUi(false, btnSync, tvStatus)
+                        viewLifecycleOwner.lifecycleScope.launch {
+                            val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
+                            if (!isAdded) return@launch
+                            if (left == 0) showSnackbar("Calendar sync off — all events removed")
+                            else showSnackbar(
+                                "Calendar sync off, but $left ${if (left == 1) "event" else "events"} couldn't be removed. Allow calendar access, then try again.",
+                                SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
+                            )
+                        }
+                    }
+                    .show()
             }
         }
 
@@ -297,6 +313,19 @@ class ProfileFragment : Fragment() {
                 }
             }
         }
+    }
+
+    /** Set while the code moves the switch itself, so neither the on nor the off path runs. */
+    private var settingCalendarSwitchQuietly = false
+
+    /**
+     * Move the switch without acting on it: Cancel on the "turn off?" question puts it back
+     * on, and a refused permission puts it back off. Neither is the user asking for a change.
+     */
+    private fun setCalendarSwitchQuietly(switch: SwitchMaterial, checked: Boolean) {
+        settingCalendarSwitchQuietly = true
+        switch.isChecked = checked
+        settingCalendarSwitchQuietly = false
     }
 
     private fun updateCalendarUi(enabled: Boolean, btnSync: MaterialButton, tvStatus: TextView) {

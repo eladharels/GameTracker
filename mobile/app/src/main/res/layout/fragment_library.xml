@@ -173,6 +173,7 @@
                 android:padding="24dp">
 
                 <ImageView
+                    android:id="@+id/ivEmptyIcon"
                     android:layout_width="60dp"
                     android:layout_height="60dp"
                     android:src="@drawable/ic_library"
@@ -183,8 +184,12 @@
                 android:importantForAccessibility="no" />
 
                 <TextView
+                    android:id="@+id/tvEmptyTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:accessibilityHeading="true"
+                    android:accessibilityLiveRegion="polite"
+                    tools:targetApi="p"
                     android:textStyle="bold"
                     android:text="Your library is empty"
                     android:textAlignment="center"
@@ -194,13 +199,26 @@
                     tools:ignore="HardcodedText" />
 
                 <TextView
-                    android:layout_width="220dp"
+                    android:id="@+id/tvEmptyBody"
+                    android:layout_width="240dp"
                     android:layout_height="wrap_content"
                     android:text="Discover games and add them to start tracking."
                     android:textAlignment="center"
                     android:textColor="@color/gt_text_secondary"
                     android:textSize="14sp"
                     android:lineSpacingMultiplier="1.4"
+                    tools:ignore="HardcodedText" />
+
+                <!-- The one action that helps: retry, discover, clear the search or show all
+                     (ScreenStates.library). -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnEmptyAction"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_marginTop="20dp"
+                    android:text="Discover games"
                     tools:ignore="HardcodedText" />
             </LinearLayout>
         </FrameLayout>

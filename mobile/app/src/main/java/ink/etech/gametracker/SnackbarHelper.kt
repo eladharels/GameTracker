@@ -1,6 +1,6 @@
 package ink.etech.gametracker
 
-import android.graphics.Color
+import androidx.core.content.ContextCompat
 import android.graphics.drawable.GradientDrawable
 import android.widget.TextView
 import androidx.fragment.app.Fragment
@@ -18,11 +18,11 @@ object SnackbarHelper {
         duration: Int = Snackbar.LENGTH_SHORT,
         action: String? = null,
         onAction: (() -> Unit)? = null,
-    ) {
+    ): Snackbar? {
         // While an expired session is on its way to the login screen, the screen's own
         // "failed to load" error is noise on top of the real reason (MOB-5).
-        if (type == Type.ERROR && Session.redirecting) return
-        val view = fragment.view ?: return
+        if (type == Type.ERROR && Session.redirecting) return null
+        val view = fragment.view ?: return null
         val snackbar = Snackbar.make(view, message, duration)
         // Anchor above the bottom nav bar so it's never hidden behind it
         fragment.activity?.findViewById<android.view.View>(R.id.bottom_navigation)
@@ -30,6 +30,7 @@ object SnackbarHelper {
         if (action != null && onAction != null) snackbar.setAction(action) { onAction() }
         applyStyle(snackbar, type)
         snackbar.show()
+        return snackbar
     }
 
     /**
@@ -44,9 +45,9 @@ object SnackbarHelper {
 
         // Rounded dark card background
         snackView.background = GradientDrawable().apply {
-            setColor(Color.parseColor("#2D3142"))
+            setColor(ContextCompat.getColor(snackView.context, R.color.gt_snackbar_bg))
             cornerRadius = dp(14).toFloat()
-            setStroke(dp(1), Color.parseColor("#3E4258"))
+            setStroke(dp(1), ContextCompat.getColor(snackView.context, R.color.gt_snackbar_stroke))
         }
 
         // Floating: add horizontal margins so it doesn't span the full width
@@ -57,9 +58,9 @@ object SnackbarHelper {
 
         // Message text — color conveys type
         val textColor = when (type) {
-            Type.SUCCESS -> Color.parseColor("#22C55E")   // success green (not a status colour)
+            Type.SUCCESS -> ContextCompat.getColor(snackView.context, R.color.gt_success_text)   // not a status colour
             Type.ERROR   -> androidx.core.content.ContextCompat.getColor(snackView.context, R.color.gt_error_text)   // 4.6:1 here (MOB-29)
-            Type.DEFAULT -> Color.parseColor("#F5F6FA")   // gt_text_main
+            Type.DEFAULT -> ContextCompat.getColor(snackView.context, R.color.gt_text_primary)
         }
         snackView.findViewById<TextView>(com.google.android.material.R.id.snackbar_text)?.apply {
             setTextColor(textColor)

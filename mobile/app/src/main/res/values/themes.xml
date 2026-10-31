@@ -12,6 +12,30 @@
         <item name="colorOnSurface">@color/gt_text_primary</item>
         <item name="colorOnSurfaceVariant">@color/gt_text_secondary</item>
         <item name="colorOnPrimary">#0C0D11</item>
+        <!-- Material 3's other roles. Unset, every component that reads one (selected chips,
+             tonal buttons, switches, progress tracks, dialogs, menus) fell back to the
+             library's baseline violet and grey, which do not follow the accent or the
+             palette. The primary container follows the accent through each overlay below. -->
+        <!-- Opaque, as M3 container roles must be: the accent at 20% over gt_surface_2, with
+             light text on it (10.6:1 at the lowest, Amber). An alpha container with accent
+             text measured 3.3:1 for Violet, under MOB-29's 4.5:1 (UI/UX review, PR #21). -->
+        <item name="colorPrimaryContainer">#2F274C</item>
+        <item name="colorOnPrimaryContainer">@color/gt_text_primary</item>
+        <item name="colorSecondary">@color/gt_text_light</item>
+        <item name="colorOnSecondary">@color/gt_surface_0</item>
+        <item name="colorSecondaryContainer">@color/gt_surface_4</item>
+        <item name="colorOnSecondaryContainer">@color/gt_text_primary</item>
+        <item name="colorError">@color/gt_error_text</item>
+        <item name="colorOnError">@color/gt_surface_0</item>
+        <item name="colorOutline">@color/gt_text_muted</item>
+        <item name="colorOutlineVariant">@color/gt_border_strong</item>
+        <item name="colorSurfaceContainerLowest">@color/gt_surface_0</item>
+        <item name="colorSurfaceContainerLow">@color/gt_surface_card</item>
+        <item name="colorSurfaceContainer">@color/gt_surface_2</item>
+        <item name="colorSurfaceContainerHigh">@color/gt_surface_3</item>
+        <item name="colorSurfaceContainerHighest">@color/gt_surface_4</item>
+        <item name="colorSurfaceInverse">@color/gt_text_primary</item>
+        <item name="colorOnSurfaceInverse">@color/gt_surface_1</item>
         <!-- MOB-31: drawn edge-to-edge (EdgeToEdge.kt); the bars show the screen beneath. -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
@@ -45,6 +69,8 @@
          wins on all six (Violet 4.59:1, the lowest). test/runtime.test.js computes it. -->
     <style name="ThemeOverlay.GameTracker.Violet" parent="">
         <item name="colorPrimary">#8B5CF6</item>
+        <item name="colorPrimaryContainer">#2F274C</item>
+        <item name="colorOnPrimaryContainer">@color/gt_text_primary</item>
         <item name="colorPrimaryDark">#7C3AED</item>
         <item name="colorAccent">#8B5CF6</item>
         <item name="colorOnPrimary">#0C0D11</item>
@@ -52,6 +78,8 @@
 
     <style name="ThemeOverlay.GameTracker.Blue" parent="">
         <item name="colorPrimary">#3B82F6</item>
+        <item name="colorPrimaryContainer">#1F2F4C</item>
+        <item name="colorOnPrimaryContainer">@color/gt_text_primary</item>
         <item name="colorPrimaryDark">#2563EB</item>
         <item name="colorAccent">#3B82F6</item>
         <item name="colorOnPrimary">#0C0D11</item>
@@ -59,6 +87,8 @@
 
     <style name="ThemeOverlay.GameTracker.Emerald" parent="">
         <item name="colorPrimary">#10B981</item>
+        <item name="colorPrimaryContainer">#163A35</item>
+        <item name="colorOnPrimaryContainer">@color/gt_text_primary</item>
         <item name="colorPrimaryDark">#059669</item>
         <item name="colorAccent">#10B981</item>
         <item name="colorOnPrimary">#0C0D11</item>
@@ -66,6 +96,8 @@
 
     <style name="ThemeOverlay.GameTracker.Amber" parent="">
         <item name="colorPrimary">#F59E0B</item>
+        <item name="colorPrimaryContainer">#44341D</item>
+        <item name="colorOnPrimaryContainer">@color/gt_text_primary</item>
         <item name="colorPrimaryDark">#D97706</item>
         <item name="colorAccent">#F59E0B</item>
         <item name="colorOnPrimary">#0C0D11</item>
@@ -73,6 +105,8 @@
 
     <style name="ThemeOverlay.GameTracker.Rose" parent="">
         <item name="colorPrimary">#F43F5E</item>
+        <item name="colorPrimaryContainer">#44212E</item>
+        <item name="colorOnPrimaryContainer">@color/gt_text_primary</item>
         <item name="colorPrimaryDark">#E11D48</item>
         <item name="colorAccent">#F43F5E</item>
         <item name="colorOnPrimary">#0C0D11</item>
@@ -80,6 +114,8 @@
 
     <style name="ThemeOverlay.GameTracker.Cyan" parent="">
         <item name="colorPrimary">#06B6D4</item>
+        <item name="colorPrimaryContainer">#143946</item>
+        <item name="colorOnPrimaryContainer">@color/gt_text_primary</item>
         <item name="colorPrimaryDark">#0891B2</item>
         <item name="colorAccent">#06B6D4</item>
         <item name="colorOnPrimary">#0C0D11</item>

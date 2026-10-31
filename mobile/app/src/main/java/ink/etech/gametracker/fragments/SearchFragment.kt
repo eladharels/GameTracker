@@ -282,6 +282,7 @@ class SearchFragment : Fragment() {
 
     private fun clearSearch() {
         searchJob?.cancel()
+        view?.findViewById<View>(R.id.searchProgress)?.visibility = View.GONE
         currentQuery = ""
         searchResultsHeader.visibility = View.GONE
         errorState.visibility = View.GONE
@@ -308,6 +309,8 @@ class SearchFragment : Fragment() {
             tvStateBody.text = ""
             btnRetry.isEnabled = false
         }
+        val progress = view?.findViewById<View>(R.id.searchProgress)
+        progress?.visibility = View.VISIBLE
         searchJob?.cancel()
         searchJob = viewLifecycleOwner.lifecycleScope.launch {
             // The badges' library copy is read IN PARALLEL with the search (MOB-39), not after.
@@ -316,6 +319,7 @@ class SearchFragment : Fragment() {
             // On failure keep the last copy.
             if (result is SearchResult.Found) freshLibrary.await()?.let { library = it } else freshLibrary.cancel()
             if (!isAdded || view == null || query != currentQuery) return@launch   // superseded
+            progress?.visibility = View.GONE
             showResult(result, query)
         }
     }
