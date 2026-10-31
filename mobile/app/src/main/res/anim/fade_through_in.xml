@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material "fade through" for switching tabs: the old tab fades out first (fade_through_out,
+     90 ms), then the new one fades in while settling up from 96% scale. Tabs are siblings,
+     not a stack, so they do not slide (the slide is for Game Details, which IS on top). -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/decelerate_cubic">
+    <alpha
+        android:fromAlpha="0"
+        android:toAlpha="1"
+        android:startOffset="90"
+        android:duration="210" />
+    <scale
+        android:fromXScale="0.96"
+        android:toXScale="1"
+        android:fromYScale="0.96"
+        android:toYScale="1"
+        android:pivotX="50%"
+        android:pivotY="50%"
+        android:startOffset="90"
+        android:duration="210" />
+</set>

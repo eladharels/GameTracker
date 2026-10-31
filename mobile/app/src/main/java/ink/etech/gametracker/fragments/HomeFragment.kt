@@ -103,7 +103,21 @@ class HomeFragment : Fragment() {
         val ctx = context ?: return
         LibraryRepository.peek(ctx)?.let { bind(it) }
         viewLifecycleOwner.lifecycleScope.launch {
-            LibraryRepository.load(ctx)?.let { if (isAdded) bind(it) }
+            val games = LibraryRepository.load(ctx)
+            if (!isAdded) return@launch
+            if (games != null) {
+                bind(games)
+            } else {
+                // It used to fail in silence: zeros everywhere, as if the library were empty.
+                ink.etech.gametracker.SnackbarHelper.show(
+                    this@HomeFragment,
+                    "Couldn't load your library",
+                    ink.etech.gametracker.SnackbarHelper.Type.ERROR,
+                    com.google.android.material.snackbar.Snackbar.LENGTH_INDEFINITE,
+                    action = "Retry",
+                    onAction = { loadLibrary() },
+                )
+            }
         }
     }
 

@@ -35,6 +35,7 @@ import ink.etech.gametracker.Session
 import ink.etech.gametracker.ErrorText
 import ink.etech.gametracker.LibraryAdd
 import ink.etech.gametracker.LibraryMatch
+import ink.etech.gametracker.LibraryRepository
 
 class GameDetailsFragment : Fragment() {
 
@@ -277,6 +278,27 @@ class GameDetailsFragment : Fragment() {
             requireActivity().supportFragmentManager.popBackStack()
         }
         btnSaveNote.setOnClickListener { saveNoteForCurrentGame() }
+        ivGameCover.setOnClickListener { showCoverFullScreen() }
+        ivGameCover.contentDescription = "Cover art. Tap to view full screen"
+    }
+
+    /**
+     * The cover, whole and as large as the screen allows, on black. The header crops it to
+     * fit; this is the only place the full art is visible. Tap anywhere or Back to close.
+     */
+    private fun showCoverFullScreen() {
+        val url = SafeUrl.https(currentGame?.cover) ?: return   // https only (MOB-8)
+        val ctx = requireContext()
+        val dialog = android.app.Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val image = ImageView(ctx).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(android.graphics.Color.BLACK)
+            contentDescription = "${currentGame?.displayName ?: "Game"} cover art"
+            setOnClickListener { dialog.dismiss() }
+        }
+        dialog.setContentView(image)
+        dialog.show()
+        Glide.with(image).load(url).transition(DrawableTransitionOptions.withCrossFade(200)).into(image)
     }
 
     // ── Personal Notes ───────────────────────────────────────────────────────
@@ -294,10 +316,24 @@ class GameDetailsFragment : Fragment() {
         showSnackbar("Note saved", SnackbarHelper.Type.SUCCESS)
     }
 
+    /**
+     * A note typed and then left with Back used to be lost: only the Save button stored it.
+     * Leaving the screen now keeps it, silently, when it changed. The note lives on this
+     * phone only (MOB-7), so there is no request to fail.
+     */
+    override fun onPause() {
+        super.onPause()
+        val game = currentGame ?: return
+        if (!inLibrary || view == null) return
+        val typed = etGameNotes.text.toString()
+        if (typed != GameExtras.note(requireContext(), game)) GameExtras.setNote(requireContext(), game, typed)
+    }
+
     // ── Status update ────────────────────────────────────────────────────────
 
     private fun updateGameStatus(newStatus: String) {
         if (newStatus == currentStatus) return
+        chipGroupStatus.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
         val game = currentGame ?: return
         viewLifecycleOwner.lifecycleScope.launch {
             try {
@@ -341,7 +377,7 @@ class GameDetailsFragment : Fragment() {
     private fun refreshMetadata() {
         val game = currentGame ?: return
         btnRefreshMetadata.isEnabled = false
-        btnRefreshMetadata.text = "…"
+        btnRefreshMetadata.text = "Refreshing…"
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val session = Session.get(requireContext())
@@ -352,10 +388,21 @@ class GameDetailsFragment : Fragment() {
                     ApiClient.api.refreshGameMetadata("Bearer $token", username, gameId)
                 }
                 withContext(Dispatchers.Main) {
-                    restoreRefreshButton()
                     if (response.isSuccessful) {
+                        // The server updated the row; read it back and draw it. This used to
+                        // say "refreshed" and keep showing the old title, cover and price.
+                        // The write already dropped the shared copy (LibraryWriteInterceptor).
+                        val fresh = LibraryRepository.load(requireContext(), force = true)
+                            ?.let { LibraryMatch.owned(it, game) }
+                        restoreRefreshButton()
+                        if (fresh != null) {
+                            currentGame = fresh
+                            populateGameDetails()
+                            setupStatusChips()
+                        }
                         showSnackbar("Game data refreshed", SnackbarHelper.Type.SUCCESS)
                     } else {
+                        restoreRefreshButton()
                         showSnackbar("Couldn't refresh the game data. Try again.", SnackbarHelper.Type.ERROR)
                     }
                 }

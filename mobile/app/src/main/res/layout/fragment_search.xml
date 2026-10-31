@@ -159,6 +159,20 @@
             tools:ignore="HardcodedText" />
     </LinearLayout>
 
+    <!-- MOB-UI: a first search showed nothing until the answer came. A thin indeterminate
+         bar says "working" without moving anything on screen. -->
+    <com.google.android.material.progressindicator.LinearProgressIndicator
+        android:id="@+id/searchProgress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="20dp"
+        android:layout_marginTop="4dp"
+        android:indeterminate="true"
+        android:visibility="gone"
+        app:indicatorColor="?attr/colorPrimary"
+        app:trackColor="@color/gt_surface_3"
+        app:trackCornerRadius="2dp" />
+
     <!-- Results label -->
     <TextView
         android:id="@+id/tvSearchResultsHeader"

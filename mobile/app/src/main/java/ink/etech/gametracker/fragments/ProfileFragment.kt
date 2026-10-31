@@ -251,6 +251,7 @@ class ProfileFragment : Fragment() {
         updateCalendarUi(switchCalendar.isChecked, btnSync, tvStatus)
 
         switchCalendar.setOnCheckedChangeListener { _, isChecked ->
+            if (restoringCalendarSwitch) return@setOnCheckedChangeListener
             if (isChecked) {
                 val activity = requireActivity() as? MainActivity ?: return@setOnCheckedChangeListener
                 activity.requestCalendarPermissions { granted ->
@@ -264,16 +265,27 @@ class ProfileFragment : Fragment() {
                     showSnackbar("Calendar sync on — press Sync to link your games", SnackbarHelper.Type.SUCCESS)
                 }
             } else {
-                updateCalendarUi(false, btnSync, tvStatus)
-                viewLifecycleOwner.lifecycleScope.launch {
-                    val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
-                    if (!isAdded) return@launch
-                    if (left == 0) showSnackbar("Calendar sync off — all events removed")
-                    else showSnackbar(
-                        "Calendar sync off, but $left ${if (left == 1) "event" else "events"} couldn't be removed. Allow calendar access, then try again.",
-                        SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
-                    )
-                }
+                // Turning sync off deletes every event it put in the user's calendar, which
+                // cannot be undone. It used to happen on the switch alone: one stray tap
+                // emptied the calendar. Now it asks; Cancel puts the switch back.
+                MaterialAlertDialogBuilder(ctx)
+                    .setTitle("Turn off calendar sync?")
+                    .setMessage("This removes every release date GameTracker added to your calendar. Your library is not affected.")
+                    .setNegativeButton("Cancel") { _, _ -> restoreCalendarSwitch(switchCalendar) }
+                    .setOnCancelListener { restoreCalendarSwitch(switchCalendar) }
+                    .setPositiveButton("Turn off and remove") { _, _ ->
+                        updateCalendarUi(false, btnSync, tvStatus)
+                        viewLifecycleOwner.lifecycleScope.launch {
+                            val left = withContext(Dispatchers.IO) { CalendarHelper.disableSync(ctx) }
+                            if (!isAdded) return@launch
+                            if (left == 0) showSnackbar("Calendar sync off — all events removed")
+                            else showSnackbar(
+                                "Calendar sync off, but $left ${if (left == 1) "event" else "events"} couldn't be removed. Allow calendar access, then try again.",
+                                SnackbarHelper.Type.ERROR, Snackbar.LENGTH_LONG,
+                            )
+                        }
+                    }
+                    .show()
             }
         }
 
@@ -297,6 +309,16 @@ class ProfileFragment : Fragment() {
                 }
             }
         }
+    }
+
+    /** Set while Cancel puts the switch back, so the "turn on" path does not run again. */
+    private var restoringCalendarSwitch = false
+
+    /** Back on, without running the "turn on" path again (no permission prompt, no snackbar). */
+    private fun restoreCalendarSwitch(switch: SwitchMaterial) {
+        restoringCalendarSwitch = true
+        switch.isChecked = true
+        restoringCalendarSwitch = false
     }
 
     private fun updateCalendarUi(enabled: Boolean, btnSync: MaterialButton, tvStatus: TextView) {

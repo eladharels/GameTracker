@@ -147,8 +147,22 @@ class MainActivity : AppCompatActivity() {
         bottomNav.setOnItemSelectedListener { item ->
             when (item.itemId) {
                 R.id.navigation_home, R.id.navigation_search, R.id.navigation_library,
-                R.id.navigation_insights, R.id.navigation_profile -> { loadFragmentForTab(item.itemId); true }
+                R.id.navigation_insights, R.id.navigation_profile -> {
+                    bottomNav.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                    loadFragmentForTab(item.itemId); true
+                }
                 else -> false
+            }
+        }
+        // Tapping the tab you are on takes you to its top, as in every Google app. It did nothing.
+        bottomNav.setOnItemReselectedListener {
+            val fm = supportFragmentManager
+            if (fm.backStackEntryCount > 0) {
+                // On Game Details: the tab is underneath, so go back to it.
+                fm.popBackStack()
+            } else {
+                fm.fragments.firstOrNull { it.isVisible && it.tag?.startsWith(TAB_PREFIX) == true }
+                    ?.view?.let(::scrollToTop)
             }
         }
     }
@@ -202,6 +216,7 @@ class MainActivity : AppCompatActivity() {
         val tag = TAB_PREFIX + tabId
         try {
             val tx = fm.beginTransaction().setReorderingAllowed(true)
+                .setCustomAnimations(R.anim.fade_through_in, R.anim.fade_through_out)
             val target = fm.findFragmentByTag(tag)
             fm.fragments.filter { it.tag?.startsWith(TAB_PREFIX) == true && it !== target && !it.isHidden }
                 .forEach { tx.hide(it) }
@@ -211,6 +226,26 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.e("MainActivity", "Error showing tab: ${e.message}", e)
             loadFragment(newTab(tabId))
         }
+    }
+
+    /** The first scrolling container in [root], smooth-scrolled to its top. */
+    private fun scrollToTop(root: View) {
+        when (root) {
+            is androidx.recyclerview.widget.RecyclerView -> { root.smoothScrollToPosition(0); return }
+            is androidx.core.widget.NestedScrollView -> { root.smoothScrollTo(0, 0); return }
+            is android.widget.ScrollView -> { root.smoothScrollTo(0, 0); return }
+            is ViewGroup -> for (i in 0 until root.childCount) {
+                val child = root.getChildAt(i)
+                if (child.visibility == View.VISIBLE && containsScroller(child)) { scrollToTop(child); return }
+            }
+        }
+    }
+
+    private fun containsScroller(v: View): Boolean = when (v) {
+        is androidx.recyclerview.widget.RecyclerView, is androidx.core.widget.NestedScrollView,
+        is android.widget.ScrollView -> true
+        is ViewGroup -> (0 until v.childCount).any { v.getChildAt(it).visibility == View.VISIBLE && containsScroller(v.getChildAt(it)) }
+        else -> false
     }
 
     private fun newTab(tabId: Int): Fragment = when (tabId) {
