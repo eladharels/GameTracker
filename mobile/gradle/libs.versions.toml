@@ -1,7 +1,7 @@
 [versions]
 agp = "8.11.0"
 kotlin = "2.0.21"
-coreKtx = "1.16.0"
+coreKtx = "1.19.1"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
@@ -13,8 +13,8 @@ coroutines = "1.9.0"
 glide = "4.16.0"
 recyclerview = "1.4.0"
 material = "1.12.0"
-swiperefreshlayout = "1.1.0"
-fragmentKtx = "1.8.5"
+swiperefreshlayout = "1.2.0"
+fragmentKtx = "1.9.1"
 # 1.1.0 is still the latest STABLE androidx.biometric; 1.2 is alpha.
 biometric = "1.1.0"
 
